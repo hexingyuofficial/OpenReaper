@@ -187,6 +187,49 @@ describe("Alpha4 Shard B Recipe truth", () => {
     }
   });
 
+  it("preserves structured dispatcher throw truth through stage normalization", async () => {
+    const fixture = makeRuntime();
+    try {
+      const draft = makeDraft();
+      const saved = await saveDraft(fixture.runtime, draft);
+      const thrown = Object.assign(new Error("Bridge liveness became stale during dispatch."), {
+        code: "BRIDGE_NOT_RUNNING",
+        details: {
+          zero_write: true,
+          liveness_status: "stale",
+          recovery_required: true,
+        },
+      });
+      const runtime = createCallRecipeRuntime({
+        store: fixture.runtime.store,
+        catalog: fixture.catalog,
+        evidenceStore: fixture.evidenceStore,
+        runStore: fixture.runStore,
+        undoController: fixture.undoController,
+        dispatchers: {
+          macro: async () => { throw thrown; },
+          template: async ({ stage }) => templateSuccess(stage),
+        },
+        runtimeFactsProvider: async ({ revision }) => runtimeFacts(revision, fixture.catalog),
+      });
+      const failed = await runtime.call_recipe({
+        operation: "run",
+        ...identity(saved),
+        inputs: { track_name: "Dialog" },
+      });
+      assert.equal(failed.ok, false, JSON.stringify(failed));
+      assert.equal(failed.error.code, "BRIDGE_NOT_RUNNING");
+      assert.deepEqual(failed.error.details, thrown.details);
+      assert.equal(failed.execution_truth.mutation, "not_applied");
+      assert.equal(failed.execution_truth.transport_call_count, 1);
+      const evidence = fixture.evidenceStore.get(failed.evidence_ref);
+      assert.equal(evidence.items.find((item) => item.stage_id === "run_macro").status, "failed");
+      assert.equal(Object.hasOwn(evidence.items.find((item) => item.stage_id === "run_macro"), "error"), false);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
   it("retains output, mutation, run, Undo, recovery, and evidence identity when response projection overflows", async () => {
     const fixture = makeRuntime({
       undoController: {

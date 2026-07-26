@@ -351,6 +351,7 @@ function opList(request, options, budget) {
       validation_result_id: item.validation_result_id,
       lifecycle: "validated",
       executable: true,
+      immutable: item.immutable === true,
       discovery: compactRevisionDiscovery(item.payload ?? item),
     }));
     const limit = clampInteger(
@@ -889,6 +890,7 @@ async function opRun(request, options, { startedAt, resume, budget }) {
     }
     const stageInputs = hydratedStage.inputs;
     let outcome;
+    let dispatcherThrew = false;
     const stageStartedAt = Date.now();
     try {
       outcome = await dispatcher({
@@ -901,6 +903,7 @@ async function opRun(request, options, { startedAt, resume, budget }) {
         signal: options.signal,
       });
     } catch (error) {
+      dispatcherThrew = true;
       outcome = {
         ok: false,
         verified: false,
@@ -909,11 +912,14 @@ async function opRun(request, options, { startedAt, resume, budget }) {
         error: {
           code: error?.code ?? "STAGE_FAILED",
           message: error?.message ?? "stage dispatcher threw",
+          ...(isPlainObject(error?.details) ? { details: error.details } : {}),
         },
       };
     }
 
-    const normalized = normalizeStageOutcome(stage, outcome, revision);
+    const normalized = dispatcherThrew
+      ? normalizeDispatcherErrorOutcome(stage, outcome)
+      : normalizeStageOutcome(stage, outcome, revision);
     const stageTelemetry = recordStageTelemetry(telemetry, stage, outcome, normalized, Date.now() - stageStartedAt);
     const stageTruth = stageMutationTruth(stage, normalized, stageTelemetry);
     processed += 1;
@@ -1227,6 +1233,20 @@ function normalizeStageOutcome(stage, outcome, revision) {
   if (stage.kind === "get_state") return normalizeGetStateStageOutcome(stage, outcome);
   if (stage.kind === "checkpoint") return normalizeCheckpointStageOutcome(stage, outcome, revision);
   return invalidStageOutcome(stage, `unsupported stage kind ${stage.kind}`);
+}
+
+function normalizeDispatcherErrorOutcome(stage, outcome) {
+  return normalizedStageResult(stage, {
+    contract: null,
+    ok: false,
+    verified: false,
+    outputMap: {},
+    summary: outcome.error?.message ?? `Stage ${stage.id} dispatcher threw.`,
+    evidenceRefs: [],
+    provenChanges: [],
+    zeroWrite: outcome.error?.details?.zero_write === true,
+    error: outcome.error,
+  });
 }
 
 function normalizeMacroStageOutcome(stage, outcome) {

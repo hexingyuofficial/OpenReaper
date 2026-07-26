@@ -33,7 +33,13 @@ test("official live harness discovers and one-calls all four Recipes with Recipe
     if (args.operation === "get" && args.evidence_ref) return fakeEvidencePage(args.evidence_ref);
     if (args.operation === "get") return { ok: true, source: "official", payload: { draft: { stages: [{ id: "stage" }] } }, ...identities.get(args.recipe_id) };
     if (args.operation === "run" && args.inputs.variation_count === 65) {
-      return { ok: false, status: "failed", error: { code: "OFFICIAL_VARIATION_ROW_LIMIT", details: { zero_write: true } }, undo: { claimed: false, status: "not_opened" } };
+      return {
+        ok: false,
+        status: "failed",
+        error: { code: "OFFICIAL_VARIATION_ROW_LIMIT", details: { zero_write: true } },
+        undo: { claimed: true, status: "closed", proven: true },
+        execution_truth: { mutation: "not_applied", native_mutation_count: 0, readback_count: 0 },
+      };
     }
     const successful = fakeSuccessfulRun(args);
     if (args.recipe_id === "recipe.mix.create_bus_processing") {
@@ -103,6 +109,106 @@ test("official live harness discovers and one-calls all four Recipes with Recipe
   assert.deepEqual(persisted.capacity.map((row) => [row.count, row.batch_proven, row.fail_closed]), [
     [1, true, false], [8, true, false], [64, true, false], [65, false, true],
   ]);
+});
+
+test("official live harness proves public validate/save/reconnect/list/get/run for every generic fork", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "openreaper-alpha345-official-fork-harness-"));
+  roots.push(root);
+  const wrapper = path.join(root, "openreaper-mcp.sh");
+  await writeFile(wrapper, "#!/bin/sh\n", { mode: 0o700 });
+  const fixtureValue = fixture();
+  const calls = [];
+  const officialIdentities = new Map(ALPHA3_45_OFFICIAL_RECIPE_IDS.map((recipe_id, index) => [recipe_id, {
+    recipe_id,
+    version: "1.0.0",
+    revision: 1,
+    content_hash: `official-${String(index + 1).repeat(64)}`,
+    validation_result_id: `validation:${index + 1}`,
+  }]));
+  const userForks = new Map();
+  const userToOfficial = new Map();
+  const callRecipe = async (args) => {
+    calls.push(structuredClone(args));
+    if (args.operation === "list") {
+      return {
+        ok: true,
+        items: [
+          ...[...officialIdentities.entries()].map(([recipe_id, identity]) => ({ ...identity, recipe_id, source: "official" })),
+          ...[...userForks.entries()].map(([recipe_id, identity]) => ({ ...identity, recipe_id, source: "user", immutable: true })),
+        ],
+      };
+    }
+    if (args.operation === "validate") return { ok: true, status: "validated", operation: "validate" };
+    if (args.operation === "save") {
+      const recipe_id = args.draft.id;
+      const identity = {
+        recipe_id,
+        version: "1.0.0",
+        revision: 1,
+        content_hash: `user-${recipe_id}`,
+        validation_result_id: `validation:user:${recipe_id}`,
+      };
+      userForks.set(recipe_id, identity);
+      userToOfficial.set(recipe_id, ALPHA3_45_OFFICIAL_RECIPE_IDS[userForks.size - 1]);
+      return { ok: true, status: "saved", operation: "save", immutable: true, identity, ...identity };
+    }
+    if (args.operation === "get" && args.evidence_ref) return fakeEvidencePage(args.evidence_ref);
+    if (args.operation === "get") {
+      const userIdentity = userForks.get(args.recipe_id);
+      if (userIdentity) {
+        return {
+          ok: true,
+          status: "loaded",
+          source: "user",
+          immutable: true,
+          identity: userIdentity,
+          draft: { contract: "recipe.executable.draft.v1", id: args.recipe_id },
+          ...userIdentity,
+        };
+      }
+      const official = officialIdentities.get(args.recipe_id);
+      return {
+        ok: true,
+        status: "loaded",
+        source: "official",
+        immutable: true,
+        draft: { contract: "recipe.executable.draft.v1", id: args.recipe_id },
+        ...official,
+      };
+    }
+    if (args.operation === "run" && args.inputs?.variation_count === 65) {
+      return {
+        ok: false,
+        status: "failed",
+        error: { code: "OFFICIAL_VARIATION_ROW_LIMIT", details: { zero_write: true } },
+        undo: { claimed: true, status: "closed", proven: true },
+        execution_truth: { mutation: "not_applied", native_mutation_count: 0, readback_count: 0 },
+      };
+    }
+    const semanticId = userToOfficial.get(args.recipe_id) ?? args.recipe_id;
+    return fakeSuccessfulRun({ ...args, recipe_id: semanticId });
+  };
+
+  const report = await runAlpha345OfficialRecipesHarness({
+    installedWrapper: wrapper,
+    evidenceRoot: path.join(root, "evidence"),
+    fixture: fixtureValue,
+    callRecipe,
+    runForkProof: true,
+  });
+  assert.equal(report.ok, true, JSON.stringify(report));
+  assert.equal(report.fork_proof.ok, true, JSON.stringify(report.fork_proof));
+  assert.equal(report.fork_proof.reconnected, true);
+  assert.equal(report.fork_proof.forks.length, ALPHA3_45_OFFICIAL_RECIPE_IDS.length);
+  assert.equal(report.fork_proof.forks.every((row) => row.fork_truth === true), true);
+  assert.deepEqual(report.fork_proof.forks.map((row) => row.semantic_recipe_id), ALPHA3_45_OFFICIAL_RECIPE_IDS);
+  assert.equal(calls.filter((call) => call.operation === "validate").length, 4);
+  assert.equal(calls.filter((call) => call.operation === "save").length, 4);
+  assert.equal(calls.filter((call) => call.operation === "list").length, 2);
+  assert.equal(calls.filter((call) => call.operation === "run").some((call) => /^recipe\.user\.forked_4_[a-f0-9]{8}$/u.test(call.recipe_id)), true);
+  const persisted = JSON.parse(await readFile(path.join(root, "evidence", "alpha3-45-official-recipes.json"), "utf8"));
+  assert.equal(persisted.fork_proof.forks.every((row) => Object.hasOwn(row, "output_values") === false), true);
+  assert.equal(persisted.project.changes.some((row) => /^recipe\.user\.forked_4_[a-f0-9]{8}$/u.test(row.recipe_id)), true);
 });
 
 test("official live harness fails when count 65 is not explicit zero-write", async () => {

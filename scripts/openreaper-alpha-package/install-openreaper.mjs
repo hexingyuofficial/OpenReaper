@@ -457,8 +457,29 @@ function conditionalStartupHookSource() {
 do
   local bridge_script = os.getenv("OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH")
   local transport_dir = os.getenv("OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR")
-  if bridge_script and bridge_script ~= "" and transport_dir and transport_dir ~= "" then
-    pcall(dofile, bridge_script)
+  local function write_startup_status(stage)
+    if not transport_dir or transport_dir == "" then
+      return
+    end
+    local status_path = transport_dir .. "/openreaper-startup-status-v1.json"
+    local temp_path = status_path .. ".tmp"
+    local file = io.open(temp_path, "w")
+    if not file then return end
+    file:write("{\\"contract\\":\\"openreaper.startup_status.v1\\",\\"stage\\":\\"" .. stage .. "\\"}\\n")
+    file:close()
+    os.remove(status_path)
+    os.rename(temp_path, status_path)
+  end
+  write_startup_status("hook_seen")
+  if not bridge_script or bridge_script == "" or not transport_dir or transport_dir == "" then
+    write_startup_status("environment_missing")
+  else
+    local ok = pcall(dofile, bridge_script)
+    if ok then
+      write_startup_status("bridge_dofile_succeeded")
+    else
+      write_startup_status("bridge_dofile_failed")
+    end
   end
 end
 ${STARTUP_END}`;
@@ -705,13 +726,11 @@ MCP client.
 }
 
 function upsertMarkedBlock(existing, begin, end, block) {
-  const start = existing.indexOf(begin);
-  const finish = existing.indexOf(end);
-  if (start !== -1 && finish !== -1 && finish > start) {
-    const after = finish + end.length;
-    return `${existing.slice(0, start).trimEnd()}\n\n${block.trimEnd()}\n${existing.slice(after).trimStart()}`;
-  }
-  return existing.trimEnd() === "" ? block : `${existing.trimEnd()}\n\n${block}`;
+  // REAPER runs this file top-to-bottom. Keep the managed bridge hook ahead of
+  // user startup scripts so a long-running user action cannot block readiness.
+  const withoutExistingBlock = removeMarkedBlock(existing, begin, end);
+  const remaining = withoutExistingBlock.trim();
+  return remaining === "" ? block.trimEnd() : `${block.trimEnd()}\n\n${remaining}`;
 }
 
 function removeMarkedBlocks(existing, blocks) {

@@ -58,6 +58,7 @@ export async function runAlpha345OfficialRecipesHarness({
   liveEnvironment = null,
   callRecipe = null,
   connectFactory = connectInstalledWrapperAlpha345,
+  runForkProof = executeLive === true,
 } = {}) {
   assertAbsolute(installedWrapper, "installedWrapper");
   assertAbsolute(evidenceRoot, "evidenceRoot");
@@ -83,6 +84,7 @@ export async function runAlpha345OfficialRecipesHarness({
     official_runs: [],
     capacity: [],
     recipe04_truth: null,
+    fork_proof: null,
     recovery: { source_media_preserved: true, whole_recipe_undo_required: true, recovery_required: false },
     timings: { total_ms: 0, successful_run_ms: [], maximum_ms: 0 },
     error: null,
@@ -98,6 +100,7 @@ export async function runAlpha345OfficialRecipesHarness({
     const listed = await timedCall(invoke, { operation: "list" });
     const officialItems = (listed.value?.items ?? []).filter((item) => item.source === "official");
     const byId = new Map(officialItems.map((item) => [item.recipe_id, item]));
+    const officialDetails = new Map();
     for (const id of OFFICIAL_IDS) if (!byId.has(id)) throw coded("OFFICIAL_RECIPE_NOT_DISCOVERED", `${id} was not discoverable.`);
     report.discovery = { count: officialItems.length, ids: OFFICIAL_IDS, duration_ms: listed.duration_ms };
 
@@ -105,6 +108,7 @@ export async function runAlpha345OfficialRecipesHarness({
       const identity = exactIdentity(byId.get(id));
       const got = await timedCall(invoke, { operation: "get", ...identity });
       if (got.value?.ok !== true || got.value?.source !== "official") throw coded("OFFICIAL_RECIPE_GET_FAILED", `${id} exact expansion failed.`);
+      officialDetails.set(id, got.value);
       const run = await timedCall(invoke, { operation: "run", ...identity, inputs: fixture.inputs[id], budget: { max_response_bytes: 65_536 } });
       const row = summarizeRun(id, run, identity);
       report.official_runs.push(row);
@@ -157,6 +161,24 @@ export async function runAlpha345OfficialRecipesHarness({
     ) {
       throw coded("OFFICIAL_RECIPE04_TRUTH_INCOMPLETE", "Recipe 04 lacks verified feature, one-call, or whole-Recipe Undo truth.");
     }
+    if (runForkProof) {
+      report.fork_proof = await runOfficialForkProof({
+        invoke,
+        executeLive,
+        client,
+        connectFactory,
+        installedWrapper,
+        liveEnvironment,
+        fixture,
+        officialDetails,
+        evidenceRoot,
+        onClientReplaced: (nextClient) => { client = nextClient; },
+      });
+      if (executeLive && report.fork_proof.reconnected !== true) {
+        throw coded("OFFICIAL_FORK_RECONNECT_REQUIRED", "Live fork proof did not reconnect the installed wrapper before list/get/run.");
+      }
+      if (report.fork_proof.ok !== true) throw coded("OFFICIAL_FORK_PROOF_FAILED", "Official Recipe fork proof did not complete.");
+    }
     report.ok = true;
     report.project.final_state = "completed";
   } catch (error) {
@@ -168,22 +190,158 @@ export async function runAlpha345OfficialRecipesHarness({
   } finally {
     if (client) await client.close().catch(() => { report.recovery.recovery_required = true; });
     report.timings.total_ms = roundMs(performance.now() - started);
-    report.timings.successful_run_ms = [...report.official_runs, ...report.capacity].filter((row) => row.ok).map((row) => row.duration_ms);
+    report.timings.successful_run_ms = [
+      ...report.official_runs,
+      ...report.capacity,
+      ...(report.fork_proof?.forks ?? []),
+    ].filter((row) => row.ok).map((row) => row.duration_ms);
     report.timings.maximum_ms = Math.max(0, ...report.timings.successful_run_ms);
-    report.project.changes = report.official_runs.flatMap((row) => row.changes);
-    report.project.output_files = unique(report.official_runs.flatMap((row) => row.output_files));
+    report.project.changes = [
+      ...report.official_runs,
+      ...(report.fork_proof?.forks ?? []),
+    ].flatMap((row) => row.changes);
+    report.project.output_files = unique([
+      ...report.official_runs,
+      ...(report.fork_proof?.forks ?? []),
+    ].flatMap((row) => row.output_files));
     await writeBoundedReport(path.join(evidenceRoot, REPORT_NAME), persistedTruthSummary(report));
   }
   return report;
 }
 
-function summarizeRun(recipeId, call, identity) {
+async function runOfficialForkProof({
+  invoke,
+  executeLive,
+  client,
+  connectFactory,
+  installedWrapper,
+  liveEnvironment,
+  fixture,
+  officialDetails,
+  evidenceRoot,
+  onClientReplaced,
+} = {}) {
+  const proof = {
+    ok: false,
+    reconnected: executeLive !== true,
+    reconnect_mode: executeLive === true ? "installed_wrapper" : "fake_call_recipe",
+    reconnect_count: 0,
+    listed_user_count: 0,
+    forks: [],
+    error: null,
+  };
+  const prepared = [];
+  const forkNonce = createHash("sha256").update(path.resolve(evidenceRoot)).digest("hex").slice(0, 8);
+  let activeInvoke = invoke;
+  try {
+    for (const [index, officialId] of OFFICIAL_IDS.entries()) {
+      const detail = officialDetails.get(officialId);
+      const sourceDraft = detail?.draft ?? detail?.payload?.draft;
+      if (!sourceDraft || typeof sourceDraft !== "object") {
+        throw coded("OFFICIAL_FORK_DRAFT_MISSING", `${officialId} get did not return a draft.`);
+      }
+      const draft = structuredClone(sourceDraft);
+      const userRecipeId = `recipe.user.forked_${index + 1}_${forkNonce}`;
+      draft.id = userRecipeId;
+      const validated = await timedCall(activeInvoke, { operation: "validate", draft });
+      if (validated.value?.ok !== true || validated.value?.status !== "validated") {
+        throw coded("OFFICIAL_FORK_VALIDATE_FAILED", `${officialId} fork validation failed.`);
+      }
+      const saved = await timedCall(activeInvoke, {
+        operation: "save",
+        draft,
+        version: detail.version,
+        revision: 1,
+      });
+      if (saved.value?.ok !== true || saved.value?.status !== "saved") {
+        throw coded("OFFICIAL_FORK_SAVE_FAILED", `${officialId} fork save failed.`);
+      }
+      const identity = exactIdentity(saved.value.identity ?? saved.value);
+      if (identity.recipe_id !== userRecipeId) {
+        throw coded("OFFICIAL_FORK_IDENTITY_MISMATCH", `${officialId} fork save returned the wrong recipe identity.`);
+      }
+      prepared.push({
+        official_id: officialId,
+        recipe_id: userRecipeId,
+        official_identity: exactIdentity(detail),
+        identity,
+        inputs: fixture.inputs[officialId],
+        validate_ms: validated.duration_ms,
+        save_ms: saved.duration_ms,
+      });
+    }
+
+    if (executeLive === true) {
+      if (client) await client.close().catch(() => {});
+      const nextClient = await connectFactory({
+        installedWrapper,
+        liveEnvironment,
+        clientName: "official-fork-proof",
+      });
+      onClientReplaced?.(nextClient);
+      activeInvoke = (args) => callPublicRecipe(nextClient, args);
+      proof.reconnected = true;
+      proof.reconnect_count = 1;
+    }
+
+    const listed = await timedCall(activeInvoke, { operation: "list" });
+    const listedItems = Array.isArray(listed.value?.items) ? listed.value.items : [];
+    const listedById = new Map(listedItems.map((item) => [item.recipe_id, item]));
+    proof.listed_user_count = prepared.filter((fork) => {
+      const item = listedById.get(fork.recipe_id);
+      return item?.source === "user";
+    }).length;
+    if (proof.listed_user_count !== prepared.length) {
+      throw coded("OFFICIAL_FORK_LIST_FAILED", "Reconnect list did not expose every saved user fork.");
+    }
+
+    for (const fork of prepared) {
+      const listedItem = listedById.get(fork.recipe_id);
+      if (listedItem.content_hash === fork.official_identity.content_hash
+        || listedItem.content_hash !== fork.identity.content_hash
+        || listedItem.immutable !== true) {
+        throw coded("OFFICIAL_FORK_IDENTITY_NOT_DISTINCT", `${fork.recipe_id} was not listed as a distinct immutable user revision.`);
+      }
+      const got = await timedCall(activeInvoke, { operation: "get", ...fork.identity });
+      if (got.value?.ok !== true || got.value?.source !== "user" || got.value?.immutable !== true) {
+        throw coded("OFFICIAL_FORK_GET_FAILED", `${fork.recipe_id} exact get failed after reconnect.`);
+      }
+      const gotIdentity = exactIdentity(got.value.identity ?? got.value);
+      if (JSON.stringify(gotIdentity) !== JSON.stringify(fork.identity)
+        || got.value.draft?.id !== fork.recipe_id) {
+        throw coded("OFFICIAL_FORK_GET_IDENTITY_MISMATCH", `${fork.recipe_id} exact get changed immutable identity.`);
+      }
+      const run = await timedCall(activeInvoke, {
+        operation: "run",
+        ...fork.identity,
+        inputs: fork.inputs,
+        budget: { max_response_bytes: 65_536 },
+      });
+      const row = summarizeRun(fork.recipe_id, run, fork.identity, fork.official_id);
+      row.official_recipe_id = fork.official_id;
+      row.validation_ms = fork.validate_ms;
+      row.save_ms = fork.save_ms;
+      row.fork_truth = hasOfficialRunTruth(row, fork.inputs, fork.official_id);
+      proof.forks.push(row);
+      if (!row.ok || !row.fork_truth) {
+        throw coded("OFFICIAL_FORK_RUN_TRUTH_INCOMPLETE", `${fork.recipe_id} did not prove generic mutation/readback and Whole-Recipe Undo truth.`);
+      }
+    }
+    proof.ok = true;
+  } catch (error) {
+    proof.error = { code: error?.code ?? "OFFICIAL_FORK_PROOF_FAILED", message: error?.message ?? "Official Recipe fork proof failed." };
+  }
+  return proof;
+}
+
+function summarizeRun(recipeId, call, identity, semanticRecipeId = recipeId) {
   const value = call.value ?? {};
   const verifiedOutputs = Array.isArray(value.verified_outputs)
     ? value.verified_outputs.filter((output) => output?.verified === true && typeof output?.id === "string")
     : [];
   return {
     recipe_id: recipeId,
+    semantic_recipe_id: semanticRecipeId,
     identity,
     ok: value.ok === true && ["completed", "succeeded"].includes(value.status ?? value.execution?.status ?? "completed"),
     public_call_count: 1,
@@ -203,11 +361,11 @@ function summarizeRun(recipeId, call, identity) {
   };
 }
 
-function hasOfficialRunTruth(run, inputs) {
-  const expected = OFFICIAL_OUTPUTS[run.recipe_id] ?? [];
+function hasOfficialRunTruth(run, inputs, semanticRecipeId = run.semantic_recipe_id ?? run.recipe_id) {
+  const expected = OFFICIAL_OUTPUTS[semanticRecipeId] ?? [];
   if (expected.length === 0 || !expected.every((id) => (
     hasNonEmptyOutput(run, id)
-    || hasEvidenceBackedOmission(run, id)
+    || hasEvidenceBackedOmission(run, id, semanticRecipeId)
   ))) return false;
   if (run.evidence_refs.length === 0
     || run.undo?.claimed !== true
@@ -221,11 +379,11 @@ function hasOfficialRunTruth(run, inputs) {
     const value = run.output_values?.[id];
     if (Array.isArray(value)) return value.length > 0 && value.every(provenOutputRow);
     return (typeof value === "string" && value.length > 0)
-      || hasEvidenceBackedOmission(run, id);
+      || hasEvidenceBackedOmission(run, id, semanticRecipeId);
   });
   if (!outputsProven) return false;
-  if (run.recipe_id === "recipe.items.create_sound_variations") {
-    return concreteRecipe04Features(run, inputs).linked_output_rows > 0;
+  if (semanticRecipeId === "recipe.items.create_sound_variations") {
+    return concreteRecipe04Features(run, inputs, semanticRecipeId).linked_output_rows > 0;
   }
   return true;
 }
@@ -254,9 +412,9 @@ function hasNonEmptyOutput(run, id) {
     && run.output_counts[id] > 0;
 }
 
-function hasEvidenceBackedOmission(run, id) {
+function hasEvidenceBackedOmission(run, id, semanticRecipeId = run.semantic_recipe_id ?? run.recipe_id) {
   const value = run.output_values?.[id];
-  return run.recipe_id !== "recipe.items.create_sound_variations"
+  return semanticRecipeId !== "recipe.items.create_sound_variations"
     && run.outputs.includes(id)
     && run.output_omitted?.[id] === true
     && value?.omitted === true
@@ -264,7 +422,15 @@ function hasEvidenceBackedOmission(run, id) {
     && run.evidence_refs.length > 0;
 }
 
-function concreteRecipe04Features(run, inputs) {
+function concreteRecipe04Features(run, inputs, semanticRecipeId = run.semantic_recipe_id ?? run.recipe_id) {
+  if (semanticRecipeId !== "recipe.items.create_sound_variations") {
+    return {
+      position_volume_pan_pitch_playrate: false,
+      take_tone_fx: false,
+      automation_envelope: false,
+      linked_output_rows: 0,
+    };
+  }
   const variation = outputRows(run, "variation_changes");
   const controls = outputRows(run, "control_changes");
   const tone = outputRows(run, "tone_changes");
@@ -347,11 +513,13 @@ function summarizeCapacity(count, call, requiredMutationRows, evidence, inputs) 
   const value = call.value ?? {};
   const ok = value.ok === true;
   const zeroWrite = value.error?.details?.zero_write === true || value.details?.zero_write === true;
+  // Public Recipe execution truth uses `not_applied`; `not_run` is the
+  // internal Bridge Undo wire value and must not be required at this layer.
   const undoZeroWriteSafe = value.undo?.claimed !== true || (
     value.undo?.claimed === true
     && value.undo?.status === "closed"
     && value.undo?.proven === true
-    && value.execution_truth?.mutation === "not_run"
+    && ["not_applied", "not_run"].includes(value.execution_truth?.mutation)
   );
   const stageCounters = Object.fromEntries((evidence?.items ?? [])
     .filter((item) => typeof item?.stage_id === "string")
@@ -511,8 +679,15 @@ async function writeBoundedReport(target, report) {
 }
 
 function persistedTruthSummary(report) {
+  const persistedForkProof = report.fork_proof == null
+    ? null
+    : {
+      ...report.fork_proof,
+      forks: (report.fork_proof.forks ?? []).map(persistedRunSummary),
+    };
   return {
     ...report,
+    fork_proof: persistedForkProof,
     report_storage: {
       mode: "bounded_truth_summary",
       full_evidence: "follow official_runs[].evidence_refs and recipe04_truth.evidence_refs",
@@ -520,16 +695,24 @@ function persistedTruthSummary(report) {
     project: {
       ...report.project,
       change_count: report.project.changes.length,
-      changes: report.official_runs.map((row) => ({
+      changes: [
+        ...report.official_runs,
+        ...(report.fork_proof?.forks ?? []),
+      ].map((row) => ({
         recipe_id: row.recipe_id,
+        semantic_recipe_id: row.semantic_recipe_id,
         verified_change_count: row.changes.length,
         evidence_refs: row.evidence_refs,
       })),
     },
-    official_runs: report.official_runs.map(({ output_values: _outputValues, changes, ...row }) => ({
-      ...row,
-      verified_change_count: changes.length,
-    })),
+    official_runs: report.official_runs.map(persistedRunSummary),
+  };
+}
+
+function persistedRunSummary({ output_values: _outputValues, changes, ...row }) {
+  return {
+    ...row,
+    verified_change_count: changes.length,
   };
 }
 

@@ -160,6 +160,8 @@ for key in OPENREAPER_SESSION_ROOT OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR OPENREAP
   if (( \${+parameters[\$key]} )); then print -r -- "\$key=\${(P)key}"; else print -r -- "\$key=<unset>"; fi
 done > ${shellQuote(capturePath)}
 mkdir -p "$OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR"
+printf '{"contract":"openreaper.startup_status.v1","stage":"bridge_dofile_succeeded"}\n' \\
+  > "$OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR/openreaper-startup-status-v1.json"
 heartbeat_now="$(date +%s)"
 printf '{"contract":"openreaper.bridge_liveness.v1","active_owner":"%s","active_generation":%s,"sequence":1,"refreshed_at_unix_s":%s}\n' \\
   "$OPENREAPER_LIVE_BRIDGE_OWNER" "$OPENREAPER_LIVE_BRIDGE_GENERATION" "$heartbeat_now" \\

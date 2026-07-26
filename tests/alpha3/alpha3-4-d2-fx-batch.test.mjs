@@ -490,6 +490,31 @@ describe("Alpha3.4-D2 exact_assignments multi-target FX batch", () => {
     assert.equal(resolveFail.error.code, "FX_ASSIGNMENTS_RESOLVE_REF_REQUIRED");
   });
 
+  it("preserves a typed native preflight blocker instead of reporting invalid readback", async () => {
+    const calls = [];
+    const executor = makeExecutor({});
+    const response = await executeAlpha3_2_5CControlMacro({
+      request: request({
+        mode: "exact_assignments",
+        dry_run: false,
+        assignments: [{ id: "probeFail01", fx_ref: fxRef(1, 0), param_index: 0, normalized_value: 0.5 }],
+      }),
+      executeAtomic: async (child) => {
+        calls.push(child);
+        if (child.id === "template.fx.read_fx_parameter" && Object.hasOwn(child.input, "probe_normalized_value")) {
+          return execution(child.id, {}, false);
+        }
+        return executor.executeAtomic(child);
+      },
+      projectIndexRuntime: fakeIndex(),
+    });
+    assert.equal(response.ok, false);
+    assert.equal(response.error.code, "ATOMIC_FAILED");
+    assert.notEqual(response.error.code, "FX_ASSIGNMENTS_PREFLIGHT_INVALID");
+    assert.equal(calls.some((child) => child.id === "template.fx.set_fx_parameter_normalized"), false);
+    assert.equal(response.result.data.calls.mutation, 0);
+  });
+
   it("uses discrete formatted truth and injectable mono timing", async () => {
     const rows = [{
       id: "discRow00001",

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { mkdir, mkdtemp, readdir } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -188,6 +188,7 @@ describe("First-Real-Fixture-A A1 live handler expansion", () => {
   it("writes only A1 request shapes to transport when opted in but no REAPER answers", async () => {
     const artifactRoot = await mkdtemp(join(tmpdir(), "openreaper-a1-timeout-artifacts-"));
     const transportDir = await createTransportDir("openreaper-a1-timeout-transport-");
+    await writeReadyHeartbeat(transportDir);
     const report = runSmokeExpectingFailure([A1_FLAG, "--live"], {
       [A1_ARTIFACT_ROOT_ENV]: artifactRoot,
       [LIVE_BRIDGE_EXECUTOR_ENV.transport_dir]: transportDir,
@@ -404,6 +405,17 @@ async function createTransportDir(prefix) {
   await mkdir(join(transportDir, "requests"));
   await mkdir(join(transportDir, "results"));
   return transportDir;
+}
+
+async function writeReadyHeartbeat(transportDir) {
+  await writeFile(join(transportDir, "openreaper-bridge-liveness-v1.json"), `${JSON.stringify({
+    active_generation: Number(process.env.OPENREAPER_LIVE_BRIDGE_GENERATION || 1),
+    active_owner: process.env.OPENREAPER_LIVE_BRIDGE_OWNER || "openreaper-live-smoke",
+    contract: "openreaper.bridge_liveness.v1",
+    interval_ms: 500,
+    refreshed_at_unix_s: Math.floor(Date.now() / 1_000),
+    sequence: 1,
+  })}\n`);
 }
 
 async function readTransportRequests(transportDir) {

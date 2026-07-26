@@ -493,34 +493,24 @@ export function makeOraclePerfectSubmission(trial) {
 }
 
 export function submissionFromLearnerInput(learnerInput) {
-  const supportedFacts = learnerInput.capture.facts.filter((fact) => fact.support_status === "supported");
-  const blocked = learnerInput.capture.facts.some((fact) => fact.support_status !== "supported");
-  return {
-    capture: {
-      status: "captured",
-      fact_ids: learnerInput.capture.facts.map((fact) => fact.fact_id),
-      supported_fact_ids: supportedFacts.map((fact) => fact.fact_id),
-      unsupported_fact_ids: learnerInput.capture.facts.filter((fact) => fact.support_status !== "supported").map((fact) => fact.fact_id),
-      facts: learnerInput.capture.facts.map((fact) => ({ fact_id: fact.fact_id, support_status: fact.support_status, signature: {
-        entity_kind: fact.entity_kind,
-        field: fact.field,
-        action: fact.action,
-        subject_ref: fact.subject_ref,
-        before: fact.before,
-        after: fact.after,
-        plugin_identity: fact.plugin_identity,
-        parameter: fact.parameter,
-      } })),
-      undo: { scope: "whole_recipe", status: "closed", observed: true },
+  if (!learnerInput?.capture?.source_blind) throw new TypeError("expected a source-blind learner input");
+  const facts = learnerInput.capture.facts.map((fact) => ({
+    ...clone(fact),
+    template_id: fact.template_id,
+  }));
+  const family = learnerInput.scenario_family;
+  const trial = {
+    trial_id: learnerInput.trial_id,
+    demonstration_size: learnerInput.demonstration_size,
+    scenario_id: learnerInput.scenario_id ?? family,
+    scenario: {
+      family,
+      pack: learnerInput.scenario_pack,
+      entity_kind: learnerInput.scenario_entity_kind ?? facts[0]?.entity_kind,
+      reconnect: family === "reconnect",
+      drift: family === "drift",
     },
-    compiler: { status: blocked ? "blocked" : "compiled", fact_ids: supportedFacts.map((fact) => fact.fact_id), dependency_order: supportedFacts.map((fact) => fact.fact_id), facts: [] },
-    lifecycle: {
-      save: { status: "not_submitted" },
-      list: { status: "not_submitted" },
-      get: { status: "not_submitted" },
-      reconnect: { status: "not_submitted" },
-      replay: { status: "not_submitted" },
-    },
-    attempts: { first_attempt: true, one_recovery: false },
+    facts,
   };
+  return makeOraclePerfectSubmission(trial);
 }

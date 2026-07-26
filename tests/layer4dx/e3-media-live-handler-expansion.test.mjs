@@ -143,6 +143,7 @@ describe("E3 media live handler expansion", () => {
   it("writes the exact E3 route requests to transport without starting REAPER", async () => {
     const fixture = await createE3Fixture();
     const transportDir = await createTransportDir("openreaper-e3-timeout-");
+    await writeReadyHeartbeat(transportDir);
     const report = runSmokeExpectingFailure([E3_FLAG, "--live"], {
       [LIVE_BRIDGE_EXECUTOR_ENV.transport_dir]: transportDir,
       [LIVE_BRIDGE_EXECUTOR_ENV.timeout_ms]: "1",
@@ -277,13 +278,15 @@ async function createTransportDir(prefix) {
   return transportDir;
 }
 
-async function createE3Fixture() {
-  const folderRoot = await mkdtemp(join(tmpdir(), "openreaper-e3-media-"));
-  const sourcePath = join(folderRoot, "source.wav");
-  const relinkPath = join(folderRoot, "relink.wav");
-  await writeFile(sourcePath, "RIFF....WAVEfmt ");
-  await writeFile(relinkPath, "RIFF....WAVEfmt ");
-  return { folderRoot, sourcePath, relinkPath };
+async function writeReadyHeartbeat(transportDir) {
+  await writeFile(join(transportDir, "openreaper-bridge-liveness-v1.json"), `${JSON.stringify({
+    active_generation: Number(process.env.OPENREAPER_LIVE_BRIDGE_GENERATION || 1),
+    active_owner: process.env.OPENREAPER_LIVE_BRIDGE_OWNER || "openreaper-live-smoke",
+    contract: "openreaper.bridge_liveness.v1",
+    interval_ms: 500,
+    refreshed_at_unix_s: Math.floor(Date.now() / 1_000),
+    sequence: 1,
+  })}\n`);
 }
 
 async function readTransportRequests(transportDir) {
@@ -293,6 +296,15 @@ async function readTransportRequests(transportDir) {
     .filter((name) => name.endsWith(".json"))
     .sort()
     .map((name) => JSON.parse(readFileSync(join(requestDir, name), "utf8")));
+}
+
+async function createE3Fixture() {
+  const folderRoot = await mkdtemp(join(tmpdir(), "openreaper-e3-media-"));
+  const sourcePath = join(folderRoot, "source.wav");
+  const relinkPath = join(folderRoot, "relink.wav");
+  await writeFile(sourcePath, "RIFF....WAVEfmt ");
+  await writeFile(relinkPath, "RIFF....WAVEfmt ");
+  return { folderRoot, sourcePath, relinkPath };
 }
 
 function runSmoke(args, env) {

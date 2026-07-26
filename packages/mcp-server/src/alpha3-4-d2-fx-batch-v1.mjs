@@ -322,6 +322,17 @@ export async function executeExactAssignmentsBatch({
         data: compactBatchData(state, { dry_run: dryRun, unique_fx_count: inventories.size }),
       });
     }
+    if (probeExecution?.ok !== true) {
+      const code = probeExecution?.error?.code ?? "FX_ASSIGNMENTS_PREFLIGHT_FAILED";
+      const message = probeExecution?.error?.message ?? "Native preflight probe failed.";
+      return failureEnvelope({
+        entry, request, startedAt, now, stages, state, activeBudget,
+        code,
+        message,
+        blockers: probeExecution?.blockers ?? [blocker(code, message)],
+        data: compactBatchData(state, { dry_run: dryRun, unique_fx_count: inventories.size }),
+      });
+    }
     const probe = executionReadback(probeExecution);
     const probeIndexMatches = probe?.param_index === change.param_index;
     const probeIdentMatches = !change.param_ident || probe?.param_ident === change.param_ident;

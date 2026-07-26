@@ -6,6 +6,7 @@ INSTALL_ROOT="${SCRIPT_DIR:h}"
 BRIDGE_SCRIPT="${INSTALL_ROOT}/vendor/openreaper-kernel/reaper/bridge/openreaper-live-bridge.lua"
 REAPER_BIN="/Applications/REAPER.app/Contents/MacOS/REAPER"
 REAPER_APP=""
+DIRECT_BINARY=false
 SESSION_ROOT="${INSTALL_ROOT}/session"
 SESSION_ROOT_EXPLICIT=false
 RENDER_ROOT=""
@@ -17,6 +18,7 @@ PROJECT_INDEX_STATE_ROOT=""
 BRIDGE_OWNER=""
 BRIDGE_GENERATION=""
 START_WAIT_SECONDS="${OPENREAPER_START_WAIT_SECONDS:-20}"
+STARTUP_DIALOG_TIMEOUT_SECONDS="${OPENREAPER_STARTUP_DIALOG_TIMEOUT_SECONDS:-5}"
 STARTUP_DIALOG_ASSIST=true
 IGNORE_MISSING_MEDIA=false
 STARTUP_DIALOG_CONSENT=""
@@ -117,6 +119,10 @@ while [[ $# -gt 0 ]]; do
       REAPER_BIN="$2"
       shift 2
       ;;
+    --direct-binary|--no-launchservices)
+      DIRECT_BINARY=true
+      shift
+      ;;
     --reaper-app)
       require_option_value "$1" "$#" "${2-}"
       REAPER_APP="$2"
@@ -201,6 +207,7 @@ OpenReaper start helper
 Usage:
   openreaper-start [--project-path /path/to/project.RPP]
   openreaper-start --reaper-binary /path/to/REAPER [--project-path /path/to/project.RPP]
+  openreaper-start --direct-binary --reaper-binary /path/to/REAPER [--project-path /path/to/project.RPP]
   openreaper-start --reaper-app /path/to/REAPER.app [--project-path /path/to/project.RPP]
   openreaper-start --session-root /path/to/session [--project-path /path/to/project.RPP]
   openreaper-start --render-root /absolute/path/to/renders [--project-path /path/to/project.RPP]
@@ -209,8 +216,9 @@ Usage:
 REAPER must be started through this helper for OpenReaper MCP to connect.
 The helper starts REAPER with the OpenReaper bridge environment and returns only
 after a matching Bridge heartbeat and real bounded public read probe succeed.
-On macOS it uses LaunchServices so REAPER is not a child of the agent command
-session.
+On macOS it uses LaunchServices by default so REAPER is not a child of the
+agent command session. Use --direct-binary for a headless/direct binary launch;
+the same startup hook, heartbeat, and public read probe gates still apply.
 The helper defaults to its installed session directory and ignores stale
 OPENREAPER_SESSION_ROOT / OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR /
 OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT / OPENREAPER_LIVE_SMOKE_RENDER_ROOT /
@@ -258,6 +266,11 @@ HELP
       ;;
   esac
 done
+
+if [[ ! "${STARTUP_DIALOG_TIMEOUT_SECONDS}" =~ '^[1-9][0-9]*$' ]] || (( STARTUP_DIALOG_TIMEOUT_SECONDS > 120 )); then
+  echo "[OpenReaper] OPENREAPER_STARTUP_DIALOG_TIMEOUT_SECONDS must be an integer from 1 to 120" >&2
+  exit 2
+fi
 
 if [[ "${RECOVER_EXISTING}" == "true" && ( -n "${PROJECT_PATH}" || ${#ARGS[@]} -gt 0 ) ]]; then
   echo "[OpenReaper] --recover-existing cannot be combined with a project path or REAPER arguments." >&2
@@ -808,6 +821,10 @@ resolve_reaper_locations() {
     return
   fi
 
+  if [[ "${DIRECT_BINARY}" == "true" ]]; then
+    return
+  fi
+
   if [[ "${REAPER_BIN}" == *.app/Contents/MacOS/* ]]; then
     local inferred_app="${REAPER_BIN%%.app/Contents/MacOS/*}.app"
     if [[ -d "${inferred_app}" ]]; then
@@ -842,7 +859,7 @@ mkdir -p "${TRANSPORT_DIR}/requests" "${TRANSPORT_DIR}/results" "${ARTIFACT_ROOT
 mkdir -p "${SESSION_ROOT}" "${LOG_DIR}"
 
 USE_LAUNCHSERVICES=false
-if [[ "$(uname -s)" == "Darwin" && -n "${REAPER_APP}" && -d "${REAPER_APP}" && -x "${OPEN_BIN}" && -x "${LAUNCHCTL_BIN}" ]]; then
+if [[ "${DIRECT_BINARY}" != "true" && "$(uname -s)" == "Darwin" && -n "${REAPER_APP}" && -d "${REAPER_APP}" && -x "${OPEN_BIN}" && -x "${LAUNCHCTL_BIN}" ]]; then
   USE_LAUNCHSERVICES=true
 fi
 
@@ -867,11 +884,15 @@ if [[ "${USE_LAUNCHSERVICES}" == "true" ]]; then
   echo "[OpenReaper] reaper-app=${REAPER_APP}"
 else
   echo "[OpenReaper] launch-method=direct_binary_fallback"
+  if [[ "${DIRECT_BINARY}" == "true" ]]; then
+    echo "[OpenReaper] launchservices=disabled_by_direct_binary"
+  fi
 fi
 echo "[OpenReaper] bridge-action-fallback=OpenReaper: Start MCP bridge"
 echo "[OpenReaper] bridge-status=starting_automatically"
 echo "[OpenReaper] startup-dialog-consent=${STARTUP_DIALOG_CONSENT};policy=${STARTUP_DIALOG_POLICY_FILE}"
 echo "[OpenReaper] startup-dialog-assist=exact_safe_allowlist;missing_media_consent=${IGNORE_MISSING_MEDIA}"
+echo "[OpenReaper] startup-dialog-timeout-seconds=${STARTUP_DIALOG_TIMEOUT_SECONDS}"
 
 launch_reaper() {
   local -a reaper_args
@@ -889,6 +910,10 @@ launch_reaper() {
       echo "[OpenReaper] LaunchServices environment setup failed; restoration will be attempted." >&2
       exit 1
     fi
+    if ! prepare_startup_status_for_new_launch; then
+      echo "[OpenReaper] startup status preparation failed; restoration will be attempted." >&2
+      exit 1
+    fi
     if ! "${OPEN_BIN}" -na "${REAPER_APP}" --args "${reaper_args[@]}" >> "${START_LOG}" 2>&1; then
       echo "[OpenReaper] LaunchServices failed to start REAPER. See log: ${START_LOG}" >&2
       exit 1
@@ -897,14 +922,28 @@ launch_reaper() {
       echo "[OpenReaper] LaunchServices did not expose a new REAPER pid in time. See log: ${START_LOG}" >&2
       exit 1
     fi
+    echo "${reaper_pid}" > "${PID_FILE}"
+    if ! wait_for_startup_hook "${reaper_pid}"; then
+      echo "[OpenReaper] REAPER startup hook did not publish a valid startup stage before LaunchServices restoration." >&2
+      exit 1
+    fi
     if ! restore_launchservices_env; then
       echo "[OpenReaper] LaunchServices environment restoration failed; startup is not successful." >&2
       exit 1
     fi
   else
+    if ! prepare_startup_status_for_new_launch; then
+      echo "[OpenReaper] startup status preparation failed for direct launch." >&2
+      exit 1
+    fi
     nohup "${REAPER_BIN}" "${reaper_args[@]}" >> "${START_LOG}" 2>&1 &
     reaper_pid="$!"
     disown "${reaper_pid}" 2>/dev/null || true
+    echo "${reaper_pid}" > "${PID_FILE}"
+    if ! wait_for_startup_hook "${reaper_pid}"; then
+      echo "[OpenReaper] direct REAPER startup hook did not publish a valid startup stage." >&2
+      exit 1
+    fi
   fi
   echo "${reaper_pid}" > "${PID_FILE}"
   echo "[OpenReaper] reaper-pid=${reaper_pid}"
@@ -1365,6 +1404,86 @@ try {
 NODE
 }
 
+startup_status_summary() {
+  local status_path="${TRANSPORT_DIR}/openreaper-startup-status-v1.json"
+  if [[ ! -f "${status_path}" || -L "${status_path}" ]]; then
+    return 0
+  fi
+  node --input-type=module - "${status_path}" <<'NODE'
+import { readFile } from "node:fs/promises";
+const [statusPath] = process.argv.slice(2);
+try {
+  const status = JSON.parse(await readFile(statusPath, "utf8"));
+  const stage = typeof status?.stage === "string" ? status.stage : "invalid";
+  const detail = typeof status?.detail === "string" ? status.detail.replace(/[\r\n]+/gu, " ").slice(0, 240) : "";
+  console.error(`[OpenReaper] startup-hook-stage=${stage}${detail ? ` detail=${detail}` : ""}`);
+} catch {
+  console.error(`[OpenReaper] startup-hook-stage=invalid status_file=${statusPath}`);
+}
+NODE
+}
+
+startup_status_stage_ready() {
+  local status_path="${TRANSPORT_DIR}/openreaper-startup-status-v1.json"
+  node --input-type=module - "${status_path}" <<'NODE'
+import { readFile } from "node:fs/promises";
+const [statusPath] = process.argv.slice(2);
+try {
+  const status = JSON.parse(await readFile(statusPath, "utf8"));
+  const stages = new Set(["hook_seen", "environment_missing", "bridge_dofile_succeeded", "bridge_dofile_failed"]);
+  process.exit(status?.contract === "openreaper.startup_status.v1" && stages.has(status?.stage) ? 0 : 1);
+} catch {
+  process.exit(1);
+}
+NODE
+}
+
+prepare_startup_status_for_new_launch() {
+  local status_path="${TRANSPORT_DIR}/openreaper-startup-status-v1.json"
+  if [[ ! -e "${status_path}" && ! -L "${status_path}" ]]; then
+    return 0
+  fi
+  if [[ ! -f "${status_path}" || -L "${status_path}" ]]; then
+    echo "[OpenReaper] startup status path is not a regular file: ${status_path}" >&2
+    return 1
+  fi
+  if ! rm -f -- "${status_path}"; then
+    echo "[OpenReaper] could not clear the previous startup status: ${status_path}" >&2
+    return 1
+  fi
+}
+
+wait_for_startup_hook() {
+  local reaper_pid="$1"
+  local max_ticks=$(( START_WAIT_SECONDS * 4 ))
+  local tick dialog_result
+  for (( tick = 1; tick <= max_ticks; tick++ )); do
+    if ! kill -0 "${reaper_pid}" 2>/dev/null; then
+      echo "[OpenReaper] REAPER exited before its startup hook published a stage. pid=${reaper_pid}" >&2
+      return 1
+    fi
+    # A project-load dialog can prevent REAPER from reaching __startup.lua.
+    # Reuse the exact safe classifier while LaunchServices still carries the
+    # session environment; unknown and decision-bearing dialogs stay blocked.
+    dialog_result="$(run_startup_dialog_assist)"
+    record_dialog_result "${dialog_result}"
+    if ! startup_dialog_result_is_safe "${dialog_result}"; then
+      echo "[OpenReaper] startup-dialog-blocker=${dialog_result}" >&2
+      return 2
+    fi
+    if [[ "${dialog_result}" != "no_safe_dialog" ]]; then
+      sleep 0.25
+      continue
+    fi
+    if startup_status_stage_ready; then
+      return 0
+    fi
+    sleep 0.25
+  done
+  startup_status_summary
+  return 1
+}
+
 verify_public_bridge_read() {
   local doctor="${INSTALL_ROOT}/bin/openreaper-doctor"
   local doctor_log="${START_LOG%.log}-doctor.log"
@@ -1373,6 +1492,13 @@ verify_public_bridge_read() {
     return 1
   fi
   if OPENREAPER_SESSION_ROOT="${SESSION_ROOT}" \
+      OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR="${TRANSPORT_DIR}" \
+      OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH="${BRIDGE_SCRIPT}" \
+      OPENREAPER_ARTIFACT_ROOT="${ARTIFACT_ROOT}" \
+      OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT="${ARTIFACT_ROOT}" \
+      OPENREAPER_LIVE_SMOKE_RENDER_ROOT="${RENDER_ROOT}" \
+      OPENREAPER_LIVE_BRIDGE_OWNER="${BRIDGE_OWNER}" \
+      OPENREAPER_LIVE_BRIDGE_GENERATION="${BRIDGE_GENERATION}" \
       OPENREAPER_DOCTOR_SMOKE_TIMEOUT_MS=10000 \
       OPENREAPER_DOCTOR_READ_PROBE_TIMEOUT_MS=3000 \
       "${doctor}" --wait-bridge=2 > "${doctor_log}" 2>&1; then
@@ -1417,9 +1543,11 @@ run_startup_dialog_assist() {
     echo "unavailable"
     return 0
   fi
-  local reaper_pid
+  local reaper_pid assist_status=0
   reaper_pid="$(cat "${PID_FILE}")"
-  /usr/bin/osascript - "${STARTUP_DIALOG_ASSIST}" "${IGNORE_MISSING_MEDIA}" "${reaper_pid}" <<'APPLESCRIPT' 2>> "${START_LOG}" || {
+  if /usr/bin/perl -e 'my $seconds = shift @ARGV; alarm $seconds; exec @ARGV or die "exec failed: $!"' \
+      "${STARTUP_DIALOG_TIMEOUT_SECONDS}" \
+      /usr/bin/osascript - "${STARTUP_DIALOG_ASSIST}" "${IGNORE_MISSING_MEDIA}" "${reaper_pid}" <<'APPLESCRIPT' 2>> "${START_LOG}"
 on uiElementNamed(theWindow, targetName)
   tell application "System Events"
     try
@@ -1564,8 +1692,16 @@ end tell
 return "no_safe_dialog"
 end run
 APPLESCRIPT
-    echo "failed"
-  }
+  then
+    :
+  else
+    assist_status=$?
+  fi
+  if (( assist_status == 142 )); then
+    echo "blocked_dialog_inspection_timeout:seconds=${STARTUP_DIALOG_TIMEOUT_SECONDS}"
+  elif (( assist_status != 0 )); then
+    echo "blocked_dialog_inspection_failed:status=${assist_status}"
+  fi
 }
 
 startup_dialog_result_is_safe() {
@@ -1608,6 +1744,7 @@ wait_for_startup_readiness() {
     fi
     sleep 0.25
   done
+  startup_status_summary
   if [[ "${RECOVER_EXISTING}" == "true" ]]; then
     echo "[OpenReaper] startup-status=blocked_same_instance_bridge_not_ready" >&2
     echo "[OpenReaper] blocker-code=SAME_INSTANCE_BRIDGE_ACTION_REQUIRED" >&2

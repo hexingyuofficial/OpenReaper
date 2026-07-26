@@ -3119,8 +3119,18 @@ local function e5_automation_fx_parameter_ident(owner_kind, owner, slot_index, p
 end
 
 local function e5_automation_get_fx_envelope(owner_kind, owner, slot_index, param_index, create)
-  local api = owner_kind == "take" and "TakeFX_GetEnvelope" or "GetFXEnvelope"
-  return call_reaper(api, owner, slot_index, param_index, create)
+  if owner_kind == "take" then
+    local take = owner
+    if create then
+      return call_reaper("TakeFX_GetEnvelope", take, slot_index, param_index, true)
+    end
+    return call_reaper("TakeFX_GetEnvelope", take, slot_index, param_index, false)
+  end
+  local track = owner
+  if create then
+    return call_reaper("GetFXEnvelope", track, slot_index, param_index, true)
+  end
+  return call_reaper("GetFXEnvelope", track, slot_index, param_index, false)
 end
 
 local function ensure_fx_parameter_envelope(request)

@@ -125,6 +125,13 @@ describe("Alpha3.2-B2 managed render root", () => {
     assert.match(installed, /OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH/);
     assert.match(installed, /OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR/);
     assert.match(installed, /pcall\(dofile, bridge_script\)/);
+    assert.match(installed, /openreaper-startup-status-v1\.json/);
+    assert.match(installed, /bridge_dofile_failed/);
+    assert.ok(
+      installed.indexOf("-- >>> OpenReaper alpha MCP startup hook >>>")
+        < installed.indexOf("-- user startup content"),
+      "managed startup hook must run before existing user startup content",
+    );
     assert.equal(await readFile(firstReport.startup_hook.backup_path, "utf8"), original);
 
     const second = await runInstallerWithStartupHook(fixture);
@@ -968,6 +975,33 @@ describe("Alpha3.2-B2 managed render root", () => {
     assert.equal(harness.activeCleanupCount(), 0);
   });
 
+  it("keeps LaunchServices values until a delayed startup hook has seen them", async () => {
+    const harness = await makeLaunchServicesHarness("startup-hook-race", { startupHookEnvRace: true });
+    await harness.seedDistinctStates();
+    const selectedRoot = path.join(harness.root, "startup-hook-race-selected");
+    const result = await harness.run(["--render-root", selectedRoot], { waitSeconds: 2 });
+
+    assert.equal(result.code, 0, result.stderr || result.stdout);
+    assert.match(result.stdout, /reaper-pid=/);
+    assert.equal(await readFile(harness.capturePath, "utf8"), `${selectedRoot}\n`);
+    assert.match(await readFile(harness.startupStatusPath, "utf8"), /"stage":"bridge_dofile_succeeded"/);
+    await harness.assertSeededStatesRestored();
+    await harness.assertLockRemoved();
+  });
+
+  it("checks matching Bridge readiness before repeating dialog inspection", async () => {
+    const source = await readFile(START_SOURCE, "utf8");
+    const functionStart = source.indexOf("wait_for_startup_readiness() {");
+    const functionEnd = source.indexOf("\n}\n\ntrap 'launchservices_cleanup_on_exit'", functionStart);
+    assert.ok(functionStart >= 0 && functionEnd > functionStart, "startup readiness function must remain inspectable");
+    const readinessSource = source.slice(functionStart, functionEnd);
+    const heartbeatCheck = readinessSource.indexOf("if bridge_heartbeat_ready; then");
+    const dialogCheck = readinessSource.indexOf('dialog_result="$(run_startup_dialog_assist)"');
+    assert.ok(heartbeatCheck >= 0, "readiness must check the matching Bridge heartbeat");
+    assert.ok(dialogCheck < heartbeatCheck, "startup must classify dialogs before accepting a ready Bridge");
+    assert.ok(readinessSource.indexOf("verify_public_bridge_read || return 1", heartbeatCheck) > heartbeatCheck);
+  });
+
   it("serializes staggered LaunchServices starts with one stable installed-scope lock", async () => {
     const harness = await makeLaunchServicesHarness("staggered-lock");
     await harness.seedDistinctStates();
@@ -1434,9 +1468,11 @@ async function runFakeStartResult({ fixture, label, extraArgs, staleRoot = null 
   await writeFile(fakeBinary, `#!/bin/zsh
 print -rn -- "$$" > ${shellQuote(fakePidPath)}
 print -r -- "$${RENDER_ENV}" > ${shellQuote(capturePath)}
-print -r -- "$OPENREAPER_PROJECT_INDEX_STATE_ROOT" > ${shellQuote(projectIndexCapturePath)}
-mkdir -p "$OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR"
-heartbeat_now="$(date +%s)"
+  print -r -- "$OPENREAPER_PROJECT_INDEX_STATE_ROOT" > ${shellQuote(projectIndexCapturePath)}
+  mkdir -p "$OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR"
+  printf '{"contract":"openreaper.startup_status.v1","stage":"bridge_dofile_succeeded"}\n' \\
+    > "$OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR/openreaper-startup-status-v1.json"
+  heartbeat_now="$(date +%s)"
 printf '{"contract":"openreaper.bridge_liveness.v1","active_owner":"%s","active_generation":%s,"sequence":1,"refreshed_at_unix_s":%s}\n' \
   "$OPENREAPER_LIVE_BRIDGE_OWNER" "$OPENREAPER_LIVE_BRIDGE_GENERATION" "$heartbeat_now" \
   > "$OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR/openreaper-bridge-liveness-v1.json"
@@ -1465,6 +1501,7 @@ print -rn -- "exited" > ${shellQuote(fakeExitedPath)}
   await rm(fakePidPath, { force: true });
   await rm(fakeReleasePath, { force: true });
   await rm(fakeExitedPath, { force: true });
+  await rm(path.join(fixture.installRoot, "session", "reaper.pid"), { force: true });
   return { result, capturePath, projectIndexCapturePath, fixturePid };
 }
 
@@ -1515,7 +1552,7 @@ async function writeInvalidRecord(recordPath, kind, root) {
   throw new Error(`unknown record kind ${kind}`);
 }
 
-async function makeLaunchServicesHarness(label, { source = null, fakePidDelayMs = 0 } = {}) {
+async function makeLaunchServicesHarness(label, { source = null, fakePidDelayMs = 0, startupHookEnvRace = false } = {}) {
   const root = await freshTmp(`openreaper-b2-launchservices-${label}-`);
   const home = path.join(root, "home");
   const installRoot = path.join(root, "install");
@@ -1528,6 +1565,7 @@ async function makeLaunchServicesHarness(label, { source = null, fakePidDelayMs 
   const openPath = path.join(binRoot, "open");
   const unamePath = path.join(binRoot, "uname");
   const startPath = path.join(installRoot, "bin", "openreaper-start");
+  const startupStatusPath = path.join(installRoot, "session", "transport", "openreaper-startup-status-v1.json");
   const lockPath = path.join(installRoot, "session", ".openreaper-launchservices-env.lock");
   const fakeApp = path.join(root, "FakeREAPER.app");
   const fakeBinary = path.join(fakeApp, "Contents", "MacOS", "REAPER");
@@ -1564,11 +1602,28 @@ if [[ -n "\${OPENREAPER_B2_FAKE_PID_DELAY_SECONDS:-}" ]]; then
 fi
 print -rn -- "$$" > "$pid_path"
 print -r -- "$${RENDER_ENV}" > ${shellQuote(capturePath)}
-mkdir -p "$OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR"
-heartbeat_now="$(date +%s)"
-printf '{"contract":"openreaper.bridge_liveness.v1","active_owner":"%s","active_generation":%s,"sequence":1,"refreshed_at_unix_s":%s}\n' \
-  "$OPENREAPER_LIVE_BRIDGE_OWNER" "$OPENREAPER_LIVE_BRIDGE_GENERATION" "$heartbeat_now" \
-  > "$OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR/openreaper-bridge-liveness-v1.json"
+if [[ "\${OPENREAPER_B2_FAKE_STARTUP_HOOK_ENV_RACE:-false}" == "true" ]]; then
+  sleep 0.25
+  mkdir -p "$OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR"
+  if [[ -f "$OPENREAPER_B2_FAKE_LAUNCHSERVICES_STATE_ROOT/OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR.presence" ]] && \
+      [[ "$(cat "$OPENREAPER_B2_FAKE_LAUNCHSERVICES_STATE_ROOT/OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR.presence")" == "set" ]]; then
+    printf '{"contract":"openreaper.startup_status.v1","stage":"hook_seen"}\n' > "$OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR/openreaper-startup-status-v1.json"
+    printf '{"contract":"openreaper.startup_status.v1","stage":"bridge_dofile_succeeded"}\n' > "$OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR/openreaper-startup-status-v1.json"
+    heartbeat_now="$(date +%s)"
+    printf '{"contract":"openreaper.bridge_liveness.v1","active_owner":"%s","active_generation":%s,"sequence":1,"refreshed_at_unix_s":%s}\n' \
+      "$OPENREAPER_LIVE_BRIDGE_OWNER" "$OPENREAPER_LIVE_BRIDGE_GENERATION" "$heartbeat_now" \
+      > "$OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR/openreaper-bridge-liveness-v1.json"
+  else
+    printf '{"contract":"openreaper.startup_status.v1","stage":"environment_missing"}\n' > "$OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR/openreaper-startup-status-v1.json"
+  fi
+else
+  mkdir -p "$OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR"
+  printf '{"contract":"openreaper.startup_status.v1","stage":"bridge_dofile_succeeded"}\n' > "$OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR/openreaper-startup-status-v1.json"
+  heartbeat_now="$(date +%s)"
+  printf '{"contract":"openreaper.bridge_liveness.v1","active_owner":"%s","active_generation":%s,"sequence":1,"refreshed_at_unix_s":%s}\n' \
+    "$OPENREAPER_LIVE_BRIDGE_OWNER" "$OPENREAPER_LIVE_BRIDGE_GENERATION" "$heartbeat_now" \
+    > "$OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR/openreaper-bridge-liveness-v1.json"
+fi
 fixture_wait_attempt=0
 while [[ ! -f "$release_path" && \${fixture_wait_attempt} -lt 200 ]]; do
   sleep 0.05
@@ -1592,6 +1647,8 @@ print -rn -- "exited" > "$exited_path"
     OPENREAPER_B2_FAKE_RELEASE_PATH: state.releasePath,
     OPENREAPER_B2_FAKE_EXITED_PATH: state.exitedPath,
     OPENREAPER_B2_FAKE_PID_DELAY_SECONDS: fakePidDelayMs > 0 ? (fakePidDelayMs / 1000).toFixed(3) : "",
+    OPENREAPER_B2_FAKE_STARTUP_HOOK_ENV_RACE: startupHookEnvRace ? "true" : "false",
+    OPENREAPER_B2_FAKE_LAUNCHSERVICES_STATE_ROOT: stateRoot,
   });
 
   async function prepareFakeReaperRun() {
@@ -1689,6 +1746,7 @@ print -rn -- "exited" > "$exited_path"
     controlRoot,
     logPath,
     capturePath,
+    startupStatusPath,
     lockPath,
     snapshotPath: path.join(lockPath, "snapshot"),
     keys,

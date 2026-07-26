@@ -49,6 +49,8 @@ describe("E5 routing write live handler expansion", () => {
     assert.match(HANDLER_SOURCE, /GetOutputChannelName/);
     assert.match(HANDLER_SOURCE, /SetTrackSendInfo_Value/);
     assert.match(HANDLER_SOURCE, /SetMediaTrackInfo_Value/);
-    assert.doesNotMatch(HANDLER_SOURCE, /\b(?:Main_OnCommand|Main_OnCommandEx|os\.execute|io\.popen|loadstring)\b/);
+    assert.match(HANDLER_SOURCE, /Main_OnCommandEx\", ALPHA3_3_B1D_DELETE_AUTOMATION_ITEM_ACTION_ID, 0, 0/);
+    assert.doesNotMatch(HANDLER_SOURCE, /\b(?:Main_OnCommand(?!Ex)|NamedCommandLookup|os\.execute|io\.popen|loadstring)\b/);
+    assert.doesNotMatch(HANDLER_SOURCE, /Main_OnCommandEx\",(?! ALPHA3_3_B1D_DELETE_AUTOMATION_ITEM_ACTION_ID)/);
   });
 });

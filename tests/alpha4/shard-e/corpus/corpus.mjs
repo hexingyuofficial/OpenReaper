@@ -466,6 +466,7 @@ function makeTrial(seed, number, operationCount, scenarioId) {
     subject_ref,
     field,
     action,
+    template_id: facts.find((fact) => fact.fact_id === fact_id).template_id,
     dependency,
     before: clone(factBefore),
     after: clone(factAfter),
@@ -481,7 +482,10 @@ function makeTrial(seed, number, operationCount, scenarioId) {
     contract: LEARNER_INPUT_CONTRACT,
     trial_id: trialId,
     demonstration_size: operationCount,
+    scenario_id: scenarioId,
     scenario_family: scenarioDefinition.family,
+    scenario_pack: scenarioDefinition.pack,
+    scenario_entity_kind: scenarioDefinition.entity_kind,
     installed_manual: {
       capture: "Use identity-aware typed before/after facts; unknown facts are never defaults.",
       compilation: "Compile net semantic transformations in dependency order and preserve every boundary fact.",

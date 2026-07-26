@@ -121,7 +121,20 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
     assert.match(source, /if windowSubrole is "AXDialog" or windowSubrole is "AXSheet" then/u);
     assert.match(source, /if windowSubrole is "AXDialog" or windowSubrole is "AXSheet" then\s+if windowTitle contains "Evaluation"/u);
     assert.match(source, /if windowSubrole is not "AXWindow" and windowSubrole is not "AXStandardWindow" and windowSubrole is not "" then\s+return "blocked_unknown_dialog:title="/u);
-    assert.match(source, /osascript - "\$\{STARTUP_DIALOG_ASSIST\}" "\$\{IGNORE_MISSING_MEDIA\}" "\$\{reaper_pid\}"/u);
+    assert.match(source, /STARTUP_DIALOG_TIMEOUT_SECONDS="\$\{OPENREAPER_STARTUP_DIALOG_TIMEOUT_SECONDS:-5\}"/u);
+    assert.match(source, /perl -e 'my \$seconds = shift @ARGV; alarm \$seconds; exec @ARGV or die/u);
+    assert.match(source, /"\$\{STARTUP_DIALOG_TIMEOUT_SECONDS\}"[\s\\]+\/usr\/bin\/osascript - "\$\{STARTUP_DIALOG_ASSIST\}" "\$\{IGNORE_MISSING_MEDIA\}" "\$\{reaper_pid\}"/u);
+    assert.match(source, /blocked_dialog_inspection_timeout:seconds=/u);
+    assert.match(source, /blocked_dialog_inspection_failed:status=/u);
+    const directLaunchStart = source.indexOf('nohup "${REAPER_BIN}"');
+    const directLaunchEnd = source.indexOf("\n  fi\n  echo \"${reaper_pid}\" > \"${PID_FILE}\"", directLaunchStart);
+    assert.ok(directLaunchStart >= 0 && directLaunchEnd > directLaunchStart, "direct launch branch must remain inspectable");
+    const directLaunchSource = source.slice(directLaunchStart, directLaunchEnd);
+    assert.ok(
+      directLaunchSource.indexOf('echo "${reaper_pid}" > "${PID_FILE}"')
+        < directLaunchSource.indexOf("wait_for_startup_hook"),
+      "dialog classification must receive the direct launch PID",
+    );
     assert.match(source, /set launchedPid to item 3 of argv as integer/u);
     assert.match(source, /every process whose unix id is launchedPid/u);
     assert.match(source, /if \(count of matchingProcesses\) is not 1 then return "blocked_reaper_identity:pid="/u);
@@ -153,6 +166,8 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
 
     for (const result of [
       "unavailable",
+      "blocked_dialog_inspection_timeout:seconds=5",
+      "blocked_dialog_inspection_failed:status=1",
       "failed",
       "no_reaper_process",
       "blocked_reaper_identity:pid=123",

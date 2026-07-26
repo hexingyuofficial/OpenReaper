@@ -52,7 +52,7 @@ describe("Alpha3.4-E3 installed recipe closure", () => {
     assert.equal(await exists(path.join(recipeRoot, "user", ".gitkeep")), true);
   });
 
-  it("treats inherited empty optional identity values as absent while preserving non-empty overrides", async () => {
+  it("treats inherited empty optional values as absent while restoring the default identity", async () => {
     const fixture = await makeFixture();
     const capturePath = path.join(fixture.root, "captured-env.json");
     const serverPath = path.join(
@@ -96,10 +96,14 @@ describe("Alpha3.4-E3 installed recipe closure", () => {
     const captured = JSON.parse(await readFile(capturePath, "utf8"));
     for (const key of keys.filter((key) => ![
       "OPENREAPER_LIVE_SMOKE_RENDER_ROOT",
+      "OPENREAPER_LIVE_BRIDGE_OWNER",
+      "OPENREAPER_LIVE_BRIDGE_GENERATION",
       "OPENREAPER_CURRENT_PROJECT_REF",
       "OPENREAPER_EXECUTABLE_RECIPE_RISK_GRANTS_JSON",
     ].includes(key))) assert.equal(captured[key], "<unset>", key);
     assert.equal(captured.OPENREAPER_LIVE_SMOKE_RENDER_ROOT, await realpath(fixture.renderRoot));
+    assert.equal(captured.OPENREAPER_LIVE_BRIDGE_OWNER, "openreaper-alpha");
+    assert.equal(captured.OPENREAPER_LIVE_BRIDGE_GENERATION, "1");
     assert.equal(captured.OPENREAPER_CURRENT_PROJECT_REF, "project:explicit");
     assert.equal(captured.OPENREAPER_EXECUTABLE_RECIPE_RISK_GRANTS_JSON, '["read","write","destructive"]');
   });
@@ -155,6 +159,7 @@ describe("Alpha3.4-E3 installed recipe closure", () => {
       assert.equal(listedBefore.count, 5);
       assert.equal(listedBefore.items.filter((item) => item.source === "official").length, 4);
       assert.equal(listedBefore.items.filter((item) => item.source === "user").length, 1);
+      assert.equal(listedBefore.items.every((item) => item.immutable === true), true);
       const discovered = await callJson(firstClient, "list_recipes", { limit: 25 });
       assert.deepEqual(
         discovered.items.filter((item) => OFFICIAL_RECIPE_IDS.includes(item.id)).map((item) => item.id).sort(),
@@ -217,6 +222,7 @@ describe("Alpha3.4-E3 installed recipe closure", () => {
       assert.equal(listedAfter.count, 5);
       assert.equal(listedAfter.items.filter((item) => item.source === "official").length, 4);
       assert.equal(listedAfter.items.filter((item) => item.source === "user").length, 1);
+      assert.equal(listedAfter.items.every((item) => item.immutable === true), true);
 
       const got = await callRecipe(secondClient, {
         operation: "get",

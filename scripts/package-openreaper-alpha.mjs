@@ -482,6 +482,7 @@ Start REAPER:
   ~/.openreaper/current/bin/openreaper-start
   ~/.openreaper/current/bin/openreaper-start --project-path /path/to/project.RPP
   ~/.openreaper/current/bin/openreaper-start --render-root /absolute/path/to/renders
+  ~/.openreaper/current/bin/openreaper-start --direct-binary --reaper-binary /path/to/REAPER
 For a bounded new session, --session-root /absolute/path/to/session derives
 that session's own renders child unless --render-root is also supplied. New
 session and render roots must be absolute writable directories.
@@ -501,6 +502,9 @@ Startup lifetime: openreaper-start launches REAPER detached from the agent
 shell, with the OpenReaper bridge environment prepared, and returns with a
 pid/log path only after verified Bridge readiness. This keeps REAPER
 open if a terminal, MCP client, or agent command session ends.
+On macOS, LaunchServices is the default activation path. In a headless or
+locked development session, --direct-binary explicitly skips LaunchServices;
+the startup hook, heartbeat, and public read probe gates remain mandatory.
 
 Startup dialogs: before the first assisted launch, openreaper-start asks the
 agent to obtain one explicit user choice: safe assistance once, always, or
@@ -511,6 +515,9 @@ license/evaluation, recovery, plugin, version, ambiguous, and unknown windows
 always fail closed.
 Manual mode never clicks startup windows; it inspects read-only and waits for
 the user to clear every blocker before readiness can pass.
+Each System Events inspection is bounded by
+OPENREAPER_STARTUP_DIALOG_TIMEOUT_SECONDS (default 5 seconds); timeout or
+inspection failure is a typed blocker and never a ready result.
 
 Uninstall:
   ./uninstall.command
@@ -1516,7 +1523,7 @@ async function smokePackagedRuntimeDoctorReadiness() {
         ? pingRenderRoot
         : path.join(pingRoot, fixture.name, "missing-renders");
       const ping = await callActualPackagedStdioPing({
-        serverScript,
+        serverScript: await realpath(serverScript),
         transportDir,
         renderRoot: selectedRenderRoot,
         bridgeScript,
@@ -2469,7 +2476,7 @@ async function smokePackagedOpenReaperStartHelper() {
   if (source.includes("OPENREAPER_LIVE_SMOKE_RENDER_ROOT:-")) {
     throw new Error("openreaper-start must not inherit stale OPENREAPER_LIVE_SMOKE_RENDER_ROOT by default");
   }
-  for (const required of ["--session-root", "--render-root", "--transport-dir", "--artifact-root", "--bridge-owner", "--bridge-generation", "--reaper-app"]) {
+  for (const required of ["--session-root", "--render-root", "--transport-dir", "--artifact-root", "--bridge-owner", "--bridge-generation", "--reaper-app", "--direct-binary"]) {
     if (!source.includes(required)) {
       throw new Error(`openreaper-start missing explicit bounded evidence option ${required}`);
     }
@@ -2637,7 +2644,7 @@ async function smokePackagedOpenReaperStartHelper() {
     pid_file: "package_root/session/reaper.pid",
     log_dir: "package_root/session/logs",
     sws_required: false,
-    explicit_override_options: ["--session-root", "--render-root", "--transport-dir", "--artifact-root", "--bridge-owner", "--bridge-generation", "--reaper-app"],
+    explicit_override_options: ["--session-root", "--render-root", "--transport-dir", "--artifact-root", "--bridge-owner", "--bridge-generation", "--reaper-app", "--direct-binary"],
   };
 }
 
@@ -2811,6 +2818,8 @@ async function runFakeStart({ startPath, fixtureRoot, capturePath, args, env }) 
 print -rn -- "$$" > ${shellQuote(fakePidPath)}
 print -r -- "$OPENREAPER_LIVE_SMOKE_RENDER_ROOT" > ${shellQuote(capturePath)}
 mkdir -p "$OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR"
+printf '{"contract":"openreaper.startup_status.v1","stage":"bridge_dofile_succeeded"}\n' \\
+  > "$OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR/openreaper-startup-status-v1.json"
 heartbeat_now="$(date +%s)"
 printf '{"contract":"openreaper.bridge_liveness.v1","active_owner":"%s","active_generation":%s,"sequence":1,"refreshed_at_unix_s":%s}\n' \
   "$OPENREAPER_LIVE_BRIDGE_OWNER" "$OPENREAPER_LIVE_BRIDGE_GENERATION" "$heartbeat_now" \
@@ -3003,10 +3012,12 @@ nohup "$app/Contents/MacOS/REAPER" "$@" >/dev/null 2>&1 &
 print -rn -- "$$" > ${shellQuote(fakePidPath)}
 print -r -- "$OPENREAPER_LIVE_SMOKE_RENDER_ROOT" > ${shellQuote(capturePath)}
 mkdir -p "$OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR"
-heartbeat_now="$(date +%s)"
+  heartbeat_now="$(date +%s)"
 printf '{"contract":"openreaper.bridge_liveness.v1","active_owner":"%s","active_generation":%s,"sequence":1,"refreshed_at_unix_s":%s}\n' \
   "$OPENREAPER_LIVE_BRIDGE_OWNER" "$OPENREAPER_LIVE_BRIDGE_GENERATION" "$heartbeat_now" \
   > "$OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR/openreaper-bridge-liveness-v1.json"
+printf '{"contract":"openreaper.startup_status.v1","stage":"hook_seen"}\n' \
+  > "$OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR/openreaper-startup-status-v1.json"
 for key in ${scrubKeys.map(shellQuote).join(" ")}; do
   if (( \${+parameters[\$key]} )); then
     print -r -- "\$key=\${(P)key}"
