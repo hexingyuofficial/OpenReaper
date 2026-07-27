@@ -114,11 +114,11 @@ function row(path, { active = false, dirty = 0, unsaved = false, tab_index = 0 }
 }
 
 describe("Alpha3.4-D3 upper macro.project.file highway", () => {
-  it("exposes six operations in discovery and keeps 235 product live templates", () => {
+  it("exposes six operations in discovery and keeps 237 product live templates", () => {
     const items = createAlpha3_2C3DProjectFileMacroDiscoveryItems();
     assert.equal(items.length, 1);
     assert.deepEqual(items[0].inputSchema.properties.operation.enum, SIX_OPS);
-    assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 235);
+    assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 237);
     assert.equal(ALPHA3_2C3D_PROJECT_FILE_MACRO_VERSION, "1.2.0");
     assert.equal(ALPHA3_2C3D_PROJECT_FILE_MACRO_ID, "macro.project.file");
   });

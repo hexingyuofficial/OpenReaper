@@ -1152,6 +1152,10 @@ export const WAVE1A_PROJECT_TEMPLATES = deepFreeze([
       operation_name: "project.list_open_projects",
       capability: "project.list_open_projects",
       idempotency: "none",
+      // Native EnumProjects inventory may scan a large FX/project graph. Keep
+      // the transport allowance aligned with the product's sub-30s atom gate;
+      // user deadlines still shorten this value at runtime.
+      timeout_ms: 30_000,
     }),
     inputSchema: objectSchema({
       cursor: {

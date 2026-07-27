@@ -154,6 +154,14 @@ describe("Alpha3.3 media.place_assets registered Macro", () => {
     assert.equal(firstMutation > fixture.calls.findLastIndex((call) => call.id === "template.tracks.resolve_track_ref"), true);
     assert.deepEqual(response.result.changes.map((row) => row.status), ["applied", "applied"]);
     assert.equal(response.result.changes.every((row) => row.live_readback.status === "passed"), true);
+    const batchCalls = fixture.calls.filter((call) => call.id === "template.media.import_files_batch");
+    assert.equal(batchCalls.length, 1);
+    assert.deepEqual(batchCalls[0].input.batch.map((row) => row.id), ["a", "b"]);
+    assert.deepEqual(batchCalls[0].refs.source_file_refs.map((ref) => ref.ref), ["file:path:/a.wav", "file:path:/b.wav"]);
+    assert.deepEqual(batchCalls[0].refs.track_refs.map((ref) => ref.ref), [TRACK_A, TRACK_B]);
+    assert.equal(response.result.data.batch_timings.runner, "e3_native_serial_batch");
+    assert.equal(response.result.data.batch_timings.native_mutation_count, 2);
+    assert.equal(response.result.data.batch_timings.native_readback_count, 2);
     assert.equal(fixture.items[0].length_seconds, 1);
     assert.equal(fixture.items[1].length_seconds, 1);
     assert.deepEqual(index.scopes, ["tracks", "items", "takes", "media"]);
@@ -505,6 +513,28 @@ function mediaFixture(seed = {}, { mismatchFirstReadback = false, failTrackCreat
         const ref = call.refs.track_ref.ref;
         const rows = tracks[ref] ?? [];
         return ok(call.id, { track_ref: ref, items: structuredClone(rows.slice(0, 128)), item_count: rows.length, truncated: rows.length > 128 }, [objectRef("track", ref)]);
+      }
+      if (call.id === "template.media.import_files_batch") {
+        const rows = [];
+        const refs = [];
+        for (const [index, batchRow] of call.input.batch.entries()) {
+          importSerial += 1;
+          if (importSerial === failImportAt) return fail(call.id, "MEDIA_IMPORT_FAILED_AT_SOURCE");
+          const trackRef = call.refs.track_refs[index].ref;
+          const path = call.refs.source_file_refs[index].identity.value;
+          const fullLength = files[path];
+          const length = batchRow.start_percent === undefined
+            ? fullLength
+            : fullLength * (batchRow.end_percent - batchRow.start_percent);
+          const itemRef = `item:guid:{MEDIA-ITEM-${++itemSerial}}`;
+          const takeRef = `take:guid:{MEDIA-TAKE-${itemSerial}}`;
+          const row = { id: batchRow.id, item_ref: itemRef, take_ref: takeRef, track_ref: trackRef, position_seconds: mismatchPending ? batchRow.position_seconds + 1 : batchRow.position_seconds, length_seconds: length, source_length_seconds: fullLength, source_file_ref: `file:path:${path}`, source_type: "audio" };
+          mismatchPending = false;
+          items.push(row); tracks[trackRef].push(row); takes[takeRef] = row.source_file_ref;
+          rows.push(row);
+          refs.push(objectRef("item", itemRef), objectRef("take", takeRef), fileRef(path));
+        }
+        return ok(call.id, { rows, source_footprints: rows.map((row) => ({ id: row.id, source_file_ref: row.source_file_ref, source_type: row.source_type, source_length_seconds: row.source_length_seconds })), batch_timings: { preflight_ms: 1, mutation_ms: 2, readback_ms: 3, evidence_ms: 1, transport_ms: 0, total_native_ms: 7, native_mutation_count: rows.length, native_readback_count: rows.length, rows: rows.length, completed_rows: rows.length, chunk_size: 8, chunks: Math.ceil(rows.length / 8), runner: "e3_native_serial_batch" }, selection_restored: call.input.preserve_selection }, refs);
       }
       if (["template.media.import_file_to_track", "template.media.import_file_section_to_track"].includes(call.id)) {
         importSerial += 1;

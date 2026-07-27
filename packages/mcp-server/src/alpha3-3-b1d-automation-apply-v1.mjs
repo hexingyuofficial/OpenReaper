@@ -587,6 +587,17 @@ async function executeOperations({ request, executeAtomic, state }) {
       return childFailure;
     }
     change.mutation = { status: "completed", template_id: operation.template_id };
+    if (operation.mode === "insert_points") {
+      const verified = verifyInsertPointsBatchAggregate(mutation, operation);
+      if (!verified.ok) {
+        change.status = "readback_failed";
+        change.live_readback = { status: "failed", source: verified.source ?? "insert_envelope_points_batch_aggregate_readback" };
+        return { ...verified, phase: "readback" };
+      }
+      change.status = "applied";
+      change.live_readback = { status: "passed", source: verified.source, ...verified.facts };
+      continue;
+    }
     const verified = await verifyOperation({ operation, request, executeAtomic, state });
     if (!verified.ok) {
       change.status = "readback_failed";
@@ -597,6 +608,37 @@ async function executeOperations({ request, executeAtomic, state }) {
     change.live_readback = { status: "passed", source: verified.source, ...verified.facts };
   }
   return null;
+}
+
+function verifyInsertPointsBatchAggregate(mutation, operation) {
+  const summary = executionSummary(mutation);
+  const expected = operation.overlay_facts;
+  if (!expected || typeof expected !== "object") {
+    return failed("AUTOMATION_READBACK_MISMATCH", `Batch aggregate readback missing preflight overlay facts for ${operation.target_ref}.`, [
+      blocker("AUTOMATION_READBACK_MISMATCH", "Preflight overlay facts were absent for insert_points aggregate readback."),
+    ]);
+  }
+  if (summary.envelope_ref !== undefined && summary.envelope_ref !== operation.target_ref) {
+    return failed("AUTOMATION_TARGET_IDENTITY_MISMATCH", `Batch aggregate readback did not round-trip ${operation.target_ref}.`);
+  }
+  for (const field of ["requested", "replaced", "net_new", "before", "after"]) {
+    if (!Number.isInteger(summary[field]) || summary[field] !== expected[field]) {
+      return failed("AUTOMATION_READBACK_MISMATCH", `Exact point batch aggregate did not match the complete overlay on ${operation.target_ref}.`, [
+        blocker("AUTOMATION_READBACK_MISMATCH", `Batch aggregate field ${field} did not equal the expected point overlay.`),
+      ]);
+    }
+  }
+  return {
+    ok: true,
+    source: "insert_envelope_points_batch_aggregate_readback",
+    facts: {
+      requested: expected.requested,
+      replaced: expected.replaced,
+      net_new: expected.net_new,
+      before: expected.before,
+      after: expected.after,
+    },
+  };
 }
 
 async function executeFxOperation({ operation, change, request, executeAtomic, state }) {

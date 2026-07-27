@@ -1,5 +1,5 @@
 -- OpenReaper generated live bridge.
--- Handler registry: reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json (235 registered template handler row(s); 0 legacy_monolith row(s); 235 extracted handler row(s); 91 handler module file(s)).
+-- Handler registry: reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json (237 registered template handler row(s); 0 legacy_monolith row(s); 237 extracted handler row(s); 91 handler module file(s)).
 
 -- OpenReaper 4D.x minimal live bridge loop.
 -- Manual REAPER-side script: polls file transport requests and writes
@@ -1505,6 +1505,7 @@ local SAFE_WRITE_A_CAPABILITIES = {
 local E3_MEDIA_ROUTE_CAPABILITIES = {
   ["media.import_file_to_track"] = { pack = "media", risk = "write" },
   ["media.import_file_section_to_track"] = { pack = "media", risk = "write" },
+  ["media.import_files_batch"] = { pack = "media", risk = "write" },
   ["media.relink_take_source"] = { pack = "media", risk = "write" },
 }
 
@@ -1677,6 +1678,7 @@ local E2_FX_B1_WRITE_CAPABILITIES = {
   ["fx.add_take"] = { pack = "fx", risk = "write" },
   ["fx.set_bypass"] = { pack = "fx", risk = "write" },
   ["fx.set_parameter_normalized"] = { pack = "fx", risk = "write" },
+  ["fx.set_parameter_assignments_batch"] = { pack = "fx", risk = "write" },
   ["fx.set_preset_by_name"] = { pack = "fx", risk = "write" },
   ["fx.set_preset_by_index"] = { pack = "fx", risk = "write" },
   ["fx.reorder"] = { pack = "fx", risk = "write" },
@@ -2832,15 +2834,15 @@ __openreaper_register_handler_module("core/read_template_catalog_summary.lua", f
 -- Extracted Wave 1A handler: template.core.read_template_catalog_summary.
 
 local READ_TEMPLATE_CATALOG_SUMMARY_COUNTS = {
-  template_count = 235,
+  template_count = 237,
   by_pack = {
     actions = 8,
     analysis = 7,
     automation = 22,
     core = 3,
-    fx = 17,
+    fx = 18,
     items = 35,
-    media = 7,
+    media = 8,
     midi = 14,
     project = 33,
     render = 26,
@@ -2853,10 +2855,10 @@ local READ_TEMPLATE_CATALOG_SUMMARY_COUNTS = {
     destructive = 15,
     read = 82,
     safe = 13,
-    write = 125,
+    write = 127,
   },
   by_lifecycle = {
-    experimental = 235,
+    experimental = 237,
   },
   by_entity_kind = {
     action = 4,
@@ -2942,15 +2944,15 @@ local READ_TEMPLATE_CATALOG_SUMMARY_COUNTS = {
 }
 
 local READ_TEMPLATE_CATALOG_SUMMARY_LIVE_HANDLER_COUNTS = {
-  template_count = 235,
+  template_count = 237,
   by_pack = {
     actions = 8,
     analysis = 7,
     automation = 22,
     core = 3,
-    fx = 17,
+    fx = 18,
     items = 35,
-    media = 7,
+    media = 8,
     midi = 14,
     project = 33,
     render = 26,
@@ -12737,6 +12739,283 @@ local function set_fx_parameter_normalized(request)
   }), nil, json_array({}), json_array({}), e2_fx_read_refs(ref)
 end
 
+local E2_FX_PARAMETER_ASSIGNMENTS_BATCH_MAX_ROWS = 64
+local E2_FX_PARAMETER_ASSIGNMENTS_BATCH_CHUNK_SIZE = 8
+
+local function e2_fx_batch_finite(value)
+  return type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge
+end
+
+local function e2_fx_batch_error(code, message, details)
+  local _, failure = e2_fx_read_error(code, message, details)
+  return nil, failure
+end
+
+local function e2_fx_batch_exact_ref(ref)
+  if not is_object(ref) or ref.kind ~= "fx" or not is_string(ref.ref) then
+    return nil
+  end
+  local owner_kind
+  local owner_ref, slot_text = ref.ref:match("^fx:(track:[^:]+:.+):(%d+)$")
+  if owner_ref then
+    owner_kind = "track"
+  else
+    owner_ref, slot_text = ref.ref:match("^fx:(take:[^:]+:.+):(%d+)$")
+    if owner_ref then
+      owner_kind = "take"
+    end
+  end
+  if not owner_kind or not owner_ref or not slot_text then
+    return nil
+  end
+  local identity = is_object(ref.identity) and ref.identity or {}
+  local expected_scheme = owner_kind .. "_fx"
+  local expected_value = owner_ref .. ":" .. slot_text
+  if identity.scheme ~= expected_scheme or identity.value ~= expected_value then
+    return nil
+  end
+  return owner_kind, owner_ref, math.floor(tonumber(slot_text))
+end
+
+local function e2_fx_batch_ref_map(request)
+  if not is_json_array(request.refs) then
+    return e2_fx_batch_error("PARAMS_INVALID", "FX assignment batch requires an exact FX ref array.", { zero_write = true })
+  end
+  local refs = {}
+  for index = 1, #request.refs do
+    local ref = request.refs[index]
+    if not e2_fx_batch_exact_ref(ref) then
+      return e2_fx_batch_error("FX_REF_INVALID", "FX assignment batch rejected a malformed or contradictory FX object ref.", { ref_index = index, zero_write = true })
+    end
+    if refs[ref.ref] then
+      return e2_fx_batch_error("FX_REF_DUPLICATE", "FX assignment batch received a duplicate FX object ref.", { ref = ref.ref, zero_write = true })
+    end
+    refs[ref.ref] = ref
+  end
+  return refs
+end
+
+local function e2_fx_batch_row_failure(code, message, index, details)
+  details = details or {}
+  details.row_index = index
+  details.zero_write = details.zero_write ~= false
+  local _, failure = e2_fx_read_error(code, message, details)
+  return failure
+end
+
+local function e2_fx_batch_validate_rows(request, ref_map)
+  local params = request.params or {}
+  local batch = params.batch
+  if not is_json_array(batch) or #batch < 1 or #batch > E2_FX_PARAMETER_ASSIGNMENTS_BATCH_MAX_ROWS then
+    return e2_fx_batch_error("BATCH_LIMIT_EXCEEDED", "FX assignment batch accepts 1-64 rows.", { row_count = is_json_array(batch) and #batch or 0, zero_write = true })
+  end
+  if type(params.dry_run) ~= "boolean" then
+    return e2_fx_batch_error("PARAMS_INVALID", "FX assignment batch dry_run must be boolean.", { zero_write = true })
+  end
+  local seen = {}
+  local prepared = {}
+  for index = 1, #batch do
+    local row = batch[index]
+    if not is_object(row) then
+      return nil, e2_fx_batch_row_failure("PARAMS_INVALID", "FX assignment batch rows must be objects.", index)
+    end
+    for key in pairs(row) do
+      if key ~= "id" and key ~= "fx_ref" and key ~= "param_index" and key ~= "param_ident"
+          and key ~= "param_name" and key ~= "normalized_value" and key ~= "requested_formatted_value" then
+        return nil, e2_fx_batch_row_failure("PARAMS_INVALID", "FX assignment batch row contains an unsupported field.", index, { field = key })
+      end
+    end
+    if not is_string(row.id) or row.id == "" or #row.id > 12 or seen[row.id] then
+      return nil, e2_fx_batch_row_failure("PARAMS_INVALID", "FX assignment batch row id must be unique and bounded.", index)
+    end
+    seen[row.id] = true
+    if not is_string(row.fx_ref) or not ref_map[row.fx_ref] then
+      return nil, e2_fx_batch_row_failure("FX_REF_NOT_FOUND", "FX assignment batch row requires a matching exact FX object ref.", index, { fx_ref = row.fx_ref })
+    end
+    local has_index = row.param_index ~= nil
+    local has_ident = is_string(row.param_ident) and row.param_ident ~= ""
+    local has_name = is_string(row.param_name) and row.param_name ~= ""
+    if (has_index and has_name) or (has_ident and has_name) or (not has_index and not has_ident and not has_name) then
+      return nil, e2_fx_batch_row_failure("PARAMS_INVALID", "FX assignment batch row requires exactly one parameter selector.", index)
+    end
+    local param_index = has_index and tonumber(row.param_index) or nil
+    if has_index and (not param_index or param_index < 0 or param_index ~= math.floor(param_index)) then
+      return nil, e2_fx_batch_row_failure("PARAMS_INVALID", "FX assignment batch param_index must be a non-negative integer.", index)
+    end
+    local normalized_value = tonumber(row.normalized_value)
+    if not e2_fx_batch_finite(normalized_value) or normalized_value < 0 or normalized_value > 1 then
+      return nil, e2_fx_batch_row_failure("PARAMS_INVALID", "FX assignment batch normalized_value must be finite and between 0 and 1.", index)
+    end
+    if row.requested_formatted_value ~= nil and (not is_string(row.requested_formatted_value) or row.requested_formatted_value == "") then
+      return nil, e2_fx_batch_row_failure("PARAMS_INVALID", "FX assignment batch requested_formatted_value must be a non-empty string.", index)
+    end
+    local owner_kind, owner, slot_index = e2_fx_read_fx_owner_from_ref_object(ref_map[row.fx_ref], request)
+    if not owner or not owner_kind or slot_index == nil then
+      return nil, e2_fx_batch_row_failure("FX_REF_NOT_FOUND", "FX assignment batch could not resolve the exact FX owner.", index, { fx_ref = row.fx_ref })
+    end
+    local parameter_count = e2_fx_read_param_count(owner_kind, owner, slot_index)
+    if param_index == nil then
+      for candidate = 0, parameter_count - 1 do
+        local candidate_ident = e2_fx_read_param_ident(owner_kind, owner, slot_index, candidate)
+        local candidate_name = e2_fx_read_param_name(owner_kind, owner, slot_index, candidate)
+        if (has_ident and candidate_ident == row.param_ident)
+            or (has_name and type(candidate_name) == "string" and string.lower(candidate_name) == string.lower(row.param_name)) then
+          param_index = candidate
+          break
+        end
+      end
+    end
+    if param_index == nil or param_index >= parameter_count then
+      return nil, e2_fx_batch_row_failure("FX_PARAMETER_NOT_FOUND", "FX assignment batch selector did not resolve to a live parameter.", index, { parameter_count = parameter_count })
+    end
+    local live_ident = e2_fx_read_param_ident(owner_kind, owner, slot_index, param_index)
+    local live_name = e2_fx_read_param_name(owner_kind, owner, slot_index, param_index)
+    if not live_ident then
+      return nil, e2_fx_batch_row_failure("FX_PARAMETER_IDENTITY_UNAVAILABLE", "FX assignment batch could not prove stable native parameter identity.", index, { param_index = param_index })
+    end
+    if has_ident and live_ident ~= row.param_ident then
+      return nil, e2_fx_batch_row_failure("FX_PARAMETER_IDENTITY_MISMATCH", "FX assignment batch param_ident does not match native identity.", index, { live_param_ident = live_ident })
+    end
+    if has_name and (type(live_name) ~= "string" or string.lower(live_name) ~= string.lower(row.param_name)) then
+      return nil, e2_fx_batch_row_failure("FX_PARAMETER_NAME_MISMATCH", "FX assignment batch param_name does not match native name.", index, { live_param_name = live_name })
+    end
+    local formatted = e2_fx_format_param_normalized(owner_kind, owner, slot_index, param_index, normalized_value)
+    if not is_string(formatted) or formatted == "" then
+      return nil, e2_fx_batch_row_failure("API_UNAVAILABLE", "FX assignment batch could not format the native target value.", index)
+    end
+    if is_string(row.requested_formatted_value) and row.requested_formatted_value ~= formatted then
+      return nil, e2_fx_batch_row_failure("FX_ASSIGNMENTS_FORMATTED_TARGET_MISMATCH", "FX assignment batch requested formatted value does not match native formatting.", index, { requested_formatted_value = row.requested_formatted_value, native_formatted_value = formatted })
+    end
+    local step_sizes = e2_fx_read_param_step_sizes(owner_kind, owner, slot_index, param_index)
+    prepared[#prepared + 1] = {
+      row = row,
+      owner_kind = owner_kind,
+      owner = owner,
+      slot_index = slot_index,
+      param_index = param_index,
+      param_ident = live_ident,
+      name = live_name,
+      normalized_value = normalized_value,
+      requested_formatted_value = formatted,
+      step_sizes = step_sizes,
+      tolerance = step_sizes.is_discrete == true and 0 or 0.001,
+    }
+  end
+  return prepared
+end
+
+local function e2_fx_parameter_assignments_batch(request)
+  local ref_map, ref_failure = e2_fx_batch_ref_map(request)
+  if not ref_map then return nil, ref_failure end
+  local prepared, validation_failure = e2_fx_batch_validate_rows(request, ref_map)
+  if not prepared then return nil, validation_failure end
+  local dry_run = request.params.dry_run == true
+  local result_rows = json_array({})
+  local refs = json_array({})
+  for ref in pairs(ref_map) do
+    local object_ref = ref_map[ref]
+    refs[#refs + 1] = object_ref
+  end
+  local batch_timings = { preflight_ms = 0, mutation_ms = 0, readback_ms = 0, transport_ms = 0, rows = #prepared, chunk_size = E2_FX_PARAMETER_ASSIGNMENTS_BATCH_CHUNK_SIZE, chunks = math.ceil(#prepared / E2_FX_PARAMETER_ASSIGNMENTS_BATCH_CHUNK_SIZE), runner = "e2_generic_fx_native_serial_batch", native_mutation_count = 0, native_readback_count = 0 }
+  local preflight_started = os.clock()
+  batch_timings.preflight_ms = (os.clock() - preflight_started) * 1000
+  if dry_run then
+    for index = 1, #prepared do
+      local item = prepared[index]
+      result_rows[#result_rows + 1] = {
+        id = item.row.id,
+        fx_ref = item.row.fx_ref,
+        param_index = item.param_index,
+        param_ident = item.param_ident,
+        name = item.name,
+        normalized_value = item.normalized_value,
+        formatted_value = item.requested_formatted_value,
+        requested_normalized_value = item.normalized_value,
+        requested_formatted_value = item.requested_formatted_value,
+        tolerance = item.tolerance,
+        verification_mode = item.tolerance == 0 and "native_discrete_format" or "numeric_tolerance",
+        updated = true,
+        readback_status = "preflight_passed",
+      }
+    end
+    return e2_fx_read_summary(request, { rows = result_rows, mutation_attempted = false, batch_timings = batch_timings }), nil, json_array({}), json_array({}), refs
+  end
+
+  local mutation_started = os.clock()
+  local mutation_failure = nil
+  for chunk_start = 1, #prepared, E2_FX_PARAMETER_ASSIGNMENTS_BATCH_CHUNK_SIZE do
+    local chunk_end = math.min(#prepared, chunk_start + E2_FX_PARAMETER_ASSIGNMENTS_BATCH_CHUNK_SIZE - 1)
+    for index = chunk_start, chunk_end do
+      local item = prepared[index]
+      batch_timings.native_mutation_count = batch_timings.native_mutation_count + 1
+      if not e2_fx_set_param_normalized(item.owner_kind, item.owner, item.slot_index, item.param_index, item.normalized_value) then
+        mutation_failure = e2_fx_batch_row_failure("COMMAND_FAILED", "REAPER rejected an FX assignment batch setter.", index, { mutation_attempted = true, zero_write = false })
+        break
+      end
+    end
+    if mutation_failure then break end
+  end
+  batch_timings.mutation_ms = (os.clock() - mutation_started) * 1000
+
+  local readback_started = os.clock()
+  local readback_failure = nil
+  for index = 1, #prepared do
+    local item = prepared[index]
+    local normalized_value = e2_fx_read_param_normalized(item.owner_kind, item.owner, item.slot_index, item.param_index)
+    local formatted_value = e2_fx_read_param_formatted(item.owner_kind, item.owner, item.slot_index, item.param_index)
+    local values = e2_fx_read_param_value(item.owner_kind, item.owner, item.slot_index, item.param_index)
+    local updated = item.tolerance == 0
+      and formatted_value == item.requested_formatted_value
+      or e2_fx_batch_finite(normalized_value) and math.abs(normalized_value - item.normalized_value) <= item.tolerance
+    if not e2_fx_batch_finite(normalized_value) or not is_string(formatted_value) or formatted_value == "" or not updated then
+      readback_failure = e2_fx_batch_row_failure("VERIFY_FAILED", "FX assignment batch aggregate readback did not match native identity or value truth.", index, { mutation_attempted = batch_timings.native_mutation_count > 0, zero_write = false })
+      break
+    end
+    batch_timings.native_readback_count = batch_timings.native_readback_count + 1
+    result_rows[#result_rows + 1] = {
+      id = item.row.id,
+      fx_ref = item.row.fx_ref,
+      owner_kind = item.owner_kind,
+      slot_index = item.slot_index,
+      param_index = item.param_index,
+      param_ident = item.param_ident,
+      name = item.name,
+      value = values.value,
+      min_value = values.min_value,
+      max_value = values.max_value,
+      normalized_value = normalized_value,
+      formatted_value = formatted_value,
+      requested_normalized_value = item.normalized_value,
+      requested_formatted_value = item.requested_formatted_value,
+      tolerance = item.tolerance,
+      verification_mode = item.tolerance == 0 and "native_discrete_format" or "numeric_tolerance",
+      step_sizes_available = item.step_sizes.step_sizes_available,
+      step_size = item.step_sizes.step_size,
+      small_step_size = item.step_sizes.small_step_size,
+      large_step_size = item.step_sizes.large_step_size,
+      is_toggle = item.step_sizes.is_toggle,
+      is_discrete = item.step_sizes.is_discrete,
+      updated = true,
+      readback_status = "aggregate_passed",
+    }
+  end
+  batch_timings.readback_ms = (os.clock() - readback_started) * 1000
+  if mutation_failure then
+    local failure = mutation_failure[2] or mutation_failure
+    failure.details = failure.details or {}
+    failure.details.mutation_attempted = true
+    failure.details.completed_rows = batch_timings.native_readback_count
+    return nil, failure
+  end
+  if readback_failure then
+    local failure = readback_failure[2] or readback_failure
+    failure.details = failure.details or {}
+    failure.details.mutation_attempted = batch_timings.native_mutation_count > 0
+    return nil, failure
+  end
+  return e2_fx_write_summary(request, { rows = result_rows, mutation_attempted = true, batch_timings = batch_timings }), nil, json_array({}), json_array({}), refs
+end
+
 local function reorder_fx(request)
   local owner_kind, owner, slot_index = e2_fx_read_fx_from_request_refs(request)
   if not owner then
@@ -12924,7 +13203,7 @@ local function parameter_to_envelope_mapping(request)
   return summary, nil, json_array({}), json_array({}), e2_fx_read_refs(fx_ref, envelope_ref)
 end
 return {
-  exports = { read_video_processor_code = read_video_processor_code, resolve_fx_ref = resolve_fx_ref, list_track_fx_chain = list_track_fx_chain, list_take_fx_chain = list_take_fx_chain, read_fx_summary = read_fx_summary, list_fx_parameters = list_fx_parameters, read_fx_parameter = read_fx_parameter, parameter_to_envelope_mapping = parameter_to_envelope_mapping, add_track_fx = add_track_fx, add_take_fx = add_take_fx, set_fx_bypass = set_fx_bypass, set_fx_parameter_normalized = set_fx_parameter_normalized, set_fx_preset_by_name = set_fx_preset_by_name, set_fx_preset_by_index = set_fx_preset_by_index, reorder_fx = reorder_fx, search_installed_fx = search_installed_fx },
+  exports = { read_video_processor_code = read_video_processor_code, resolve_fx_ref = resolve_fx_ref, list_track_fx_chain = list_track_fx_chain, list_take_fx_chain = list_take_fx_chain, read_fx_summary = read_fx_summary, list_fx_parameters = list_fx_parameters, read_fx_parameter = read_fx_parameter, parameter_to_envelope_mapping = parameter_to_envelope_mapping, add_track_fx = add_track_fx, add_take_fx = add_take_fx, set_fx_bypass = set_fx_bypass, set_fx_parameter_normalized = set_fx_parameter_normalized, e2_fx_parameter_assignments_batch = e2_fx_parameter_assignments_batch, set_fx_preset_by_name = set_fx_preset_by_name, set_fx_preset_by_index = set_fx_preset_by_index, reorder_fx = reorder_fx, search_installed_fx = search_installed_fx },
   shared = {  },
 }
 end)
@@ -23729,6 +24008,394 @@ local function e3_media_set_item_source(track, path_value, position, start_perce
   return item, nil
 end
 
+local E3_MEDIA_BATCH_MAX_ROWS = 64
+local E3_MEDIA_BATCH_CHUNK_SIZE = 8
+
+local function e3_media_batch_error(code, message, row_index, details, recoverable)
+  local failure_details = details or {}
+  if row_index then failure_details.row_index = row_index end
+  return e3_media_handler_error(code, message, failure_details, recoverable)
+end
+
+local function e3_media_batch_finite(value)
+  return type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge
+end
+
+local function e3_media_batch_row_refs(request, row_count)
+  local file_refs = json_array({})
+  local track_refs = json_array({})
+  if not is_json_array(request.refs) then
+    return nil, nil, e3_media_handler_error("PARAMS_INVALID", "E3 media batch requires a JSON ref array.", { zero_write = true })
+  end
+  for index = 1, #request.refs do
+    local ref = request.refs[index]
+    if is_object(ref) and ref.kind == "file" then
+      file_refs[#file_refs + 1] = ref
+    elseif is_object(ref) and ref.kind == "track" then
+      track_refs[#track_refs + 1] = ref
+    else
+      return nil, nil, e3_media_handler_error("PARAMS_INVALID", "E3 media batch refs must contain only File and Track refs.", { zero_write = true })
+    end
+  end
+  if #file_refs ~= row_count or #track_refs ~= row_count then
+    return nil, nil, e3_media_handler_error("PARAMS_INVALID", "E3 media batch requires one exact File ref and one exact Track ref per row.", {
+      file_ref_count = #file_refs,
+      track_ref_count = #track_refs,
+      row_count = row_count,
+      zero_write = true,
+    })
+  end
+  return file_refs, track_refs
+end
+
+local function e3_media_batch_prepare(request)
+  local params = is_object(request.params) and request.params or {}
+  local batch = params.batch
+  if not is_json_array(batch) or #batch < 1 or #batch > E3_MEDIA_BATCH_MAX_ROWS then
+    return nil, e3_media_handler_error("BATCH_LIMIT_EXCEEDED", "E3 media batch accepts 1-64 rows.", {
+      row_count = is_json_array(batch) and #batch or 0,
+      max_rows = E3_MEDIA_BATCH_MAX_ROWS,
+      zero_write = true,
+    })
+  end
+  if params.preserve_selection ~= true and params.preserve_selection ~= false then
+    return nil, e3_media_handler_error("PARAMS_INVALID", "E3 media batch preserve_selection must be boolean.", { zero_write = true })
+  end
+  local file_refs, track_refs, ref_failure = e3_media_batch_row_refs(request, #batch)
+  if ref_failure then return nil, ref_failure end
+  local ids = {}
+  local prepared = json_array({})
+  local started = os.clock()
+  for index = 1, #batch do
+    local row = batch[index]
+    if not is_object(row) then
+      return nil, e3_media_batch_error("PARAMS_INVALID", "E3 media batch rows must be objects.", index, { zero_write = true })
+    end
+    for key in pairs(row) do
+      if key ~= "id" and key ~= "position_seconds" and key ~= "start_percent" and key ~= "end_percent" then
+        return nil, e3_media_batch_error("PARAMS_INVALID", "E3 media batch row contains an unsupported field.", index, { field = key, zero_write = true })
+      end
+    end
+    if not is_string(row.id) or #row.id < 1 or #row.id > 64 or row.id:find("[%c]") or ids[row.id] then
+      return nil, e3_media_batch_error("PARAMS_INVALID", "E3 media batch row id must be unique and bounded.", index, { zero_write = true })
+    end
+    if not e3_media_batch_finite(row.position_seconds) or row.position_seconds < 0 then
+      return nil, e3_media_batch_error("PARAMS_INVALID", "E3 media batch position_seconds must be finite and non-negative.", index, { zero_write = true })
+    end
+    local has_start = row.start_percent ~= nil
+    local has_end = row.end_percent ~= nil
+    if has_start ~= has_end
+        or has_start and (not e3_media_batch_finite(row.start_percent) or not e3_media_batch_finite(row.end_percent)
+          or row.start_percent < 0 or row.end_percent > 1 or row.end_percent <= row.start_percent) then
+      return nil, e3_media_batch_error("PARAMS_INVALID", "E3 media batch section bounds must satisfy 0 <= start_percent < end_percent <= 1.", index, { zero_write = true })
+    end
+    ids[row.id] = true
+    local file_ref = file_refs[index]
+    local path, path_reason = e3_media_file_path_from_ref(file_ref)
+    if not path then
+      return nil, e3_media_batch_error("PARAMS_INVALID", "E3 media batch rejected a malformed or contradictory File ref.", index, { blocker = path_reason or "invalid_file_ref", zero_write = true })
+    end
+    local budget_path, budget_error = READ_B_MEDIA.ensure_mutation_path_budget(request, path)
+    if not budget_path then
+      budget_error.details = budget_error.details or {}
+      budget_error.details.row_index = index
+      budget_error.details.zero_write = true
+      return nil, budget_error
+    end
+    path = budget_path
+    local file_object_ref = READ_B_MEDIA.file_object_ref(path)
+    if not file_object_ref or file_ref.ref ~= file_object_ref.ref
+        or not is_object(file_ref.identity) or file_ref.identity.scheme ~= "path"
+        or file_ref.identity.value ~= path then
+      return nil, e3_media_batch_error("PARAMS_INVALID", "E3 media batch rejected contradictory File ref identity.", index, { blocker = "contradictory_file_ref", zero_write = true })
+    end
+    if not file_exists(path) then
+      return nil, e3_media_batch_error("FILE_NOT_FOUND", "E3 media batch source file does not exist.", index, { file_ref = file_object_ref.ref, zero_write = true })
+    end
+    local track_ref = track_refs[index]
+    local track = READ_B_MEDIA.resolve_track_from_ref_object(track_ref)
+    local observed_track_ref = track and READ_B_MEDIA.track_ref_string(track) or nil
+    if not track or not observed_track_ref or observed_track_ref ~= track_ref.ref then
+      return nil, e3_media_batch_error("TRACK_NOT_FOUND", "E3 media batch could not prove the exact target Track identity.", index, { blocker = "track_identity_mismatch", zero_write = true })
+    end
+    local source, source_code, source_message = e3_media_create_source(path)
+    if not source then
+      return nil, e3_media_batch_error(source_code or "FILE_NOT_FOUND", source_message or "E3 media batch source could not be decoded.", index, { file_ref = file_object_ref.ref, zero_write = true })
+    end
+    local source_length, length_is_quarter_notes = READ_B_MEDIA.source_length(source)
+    local source_type = READ_B_MEDIA.source_type(source)
+    call_reaper("PCM_Source_Destroy", source)
+    if length_is_quarter_notes or not e3_media_batch_finite(source_length) or source_length <= 0 then
+      return nil, e3_media_batch_error("SOURCE_LENGTH_UNREADABLE", "E3 media batch source length must be finite and positive.", index, {
+        file_ref = file_object_ref.ref,
+        source_type = source_type,
+        zero_write = true,
+      })
+    end
+    prepared[#prepared + 1] = {
+      id = row.id,
+      position_seconds = row.position_seconds,
+      start_percent = row.start_percent,
+      end_percent = row.end_percent,
+      path = path,
+      file_ref = file_object_ref.ref,
+      file_object_ref = file_object_ref,
+      track = track,
+      track_ref = observed_track_ref,
+      source_length_seconds = source_length,
+      source_type = source_type,
+    }
+  end
+  local preflight_ms = (os.clock() - started) * 1000
+  local projected_rows = json_array({})
+  local projected_refs = json_array({})
+  local source_footprints = json_array({})
+  for index = 1, #prepared do
+    local row = prepared[index]
+    projected_rows[#projected_rows + 1] = {
+      id = row.id,
+      item_ref = "item:guid:{E3-BATCH-ITEM-" .. tostring(index) .. "}",
+      take_ref = "take:guid:{E3-BATCH-TAKE-" .. tostring(index) .. "}",
+      source_file_ref = row.file_ref,
+      track_ref = row.track_ref,
+      position_seconds = row.position_seconds,
+      length_seconds = row.source_length_seconds * ((row.start_percent and row.end_percent) and (row.end_percent - row.start_percent) or 1),
+      source_type = row.source_type,
+    }
+    source_footprints[#source_footprints + 1] = {
+      id = row.id,
+      source_file_ref = row.file_ref,
+      source_type = row.source_type,
+      source_length_seconds = row.source_length_seconds,
+    }
+    projected_refs[#projected_refs + 1] = {
+      kind = "item",
+      ref = "item:guid:{E3-BATCH-ITEM-" .. tostring(index) .. "}",
+      identity = { scheme = "guid", value = "{E3-BATCH-ITEM-" .. tostring(index) .. "}" },
+    }
+    projected_refs[#projected_refs + 1] = {
+      kind = "take",
+      ref = "take:guid:{E3-BATCH-TAKE-" .. tostring(index) .. "}",
+      identity = { scheme = "guid", value = "{E3-BATCH-TAKE-" .. tostring(index) .. "}" },
+    }
+    projected_refs[#projected_refs + 1] = row.file_object_ref
+  end
+  local projected_summary = e3_media_summary(request, {
+    rows = projected_rows,
+    source_footprints = source_footprints,
+    selection_restored = params.preserve_selection == true,
+    batch_timings = {
+      preflight_ms = preflight_ms,
+      mutation_ms = 0,
+      readback_ms = 0,
+      evidence_ms = 0,
+      transport_ms = 0,
+      native_mutation_count = #prepared,
+      native_readback_count = #prepared,
+      rows = #prepared,
+      completed_rows = #prepared,
+      chunk_size = E3_MEDIA_BATCH_CHUNK_SIZE,
+      chunks = math.ceil(#prepared / E3_MEDIA_BATCH_CHUNK_SIZE),
+      runner = "e3_native_serial_batch",
+    },
+  })
+  local fits, required_response_bytes, budget = READ_B_MEDIA.complete_success_envelope_fits(request, projected_summary, projected_refs, {
+    undo_opened = true,
+    undo_closed = true,
+    verification_status = "passed",
+  })
+  if not fits then
+    return nil, e3_media_handler_error("RESPONSE_TOO_LARGE", "E3 media batch success envelope cannot fit before mutation.", {
+      blocker = "success_envelope_budget_insufficient",
+      required_response_bytes = required_response_bytes,
+      max_response_bytes = budget.max_response_bytes,
+      row_count = #prepared,
+      zero_write = true,
+    })
+  end
+  prepared.preflight_ms = preflight_ms
+  return prepared
+end
+
+local function e3_media_batch_take_object_ref(take)
+  local take_ref = READ_B_MEDIA.take_ref_string(take)
+  if not take_ref then return nil end
+  return {
+    kind = "take",
+    ref = take_ref,
+    identity = {
+      scheme = take_ref:match("^take:([^:]+):") or "index",
+      value = take_ref:match("^take:[^:]+:(.+)$") or "0",
+    },
+  }
+end
+
+local function e3_media_batch_row_readback(row, item, take, preserve_selection)
+  local item_ref = e3_media_item_object_ref(item)
+  local take_ref = e3_media_batch_take_object_ref(take)
+  if not item_ref or not take_ref then
+    return nil, e3_media_handler_error("VERIFY_FAILED", "E3 media batch could not prove a truthful Item or Take identity after mutation.", {
+      blocker = "native_identity_unavailable",
+      zero_write = false,
+    }, false)
+  end
+  local ok_position, position = call_reaper("GetMediaItemInfo_Value", item, "D_POSITION")
+  local ok_length, item_length = call_reaper("GetMediaItemInfo_Value", item, "D_LENGTH")
+  local ok_source, source = call_reaper("GetMediaItemTake_Source", take)
+  local source_filename = ok_source and source and READ_B_MEDIA.source_filename_raw(source) or ""
+  local source_length, source_is_quarter_notes = ok_source and source and READ_B_MEDIA.source_length(source) or 0, false
+  local source_type = ok_source and source and READ_B_MEDIA.source_type(source) or ""
+  if not ok_position or not ok_length or not ok_source or not source or source_filename ~= row.path
+      or source_is_quarter_notes or not e3_media_batch_finite(source_length) or source_length <= 0 then
+    return nil, e3_media_handler_error("VERIFY_FAILED", "E3 media batch native source or Item readback did not match preflight identity.", {
+      blocker = "native_readback_mismatch",
+      zero_write = false,
+    }, false)
+  end
+  local expected_length = row.source_length_seconds
+  if row.start_percent ~= nil then expected_length = expected_length * (row.end_percent - row.start_percent) end
+  if not e3_media_batch_finite(position) or not e3_media_batch_finite(item_length)
+      or math.abs(position - row.position_seconds) > 0.000001 or math.abs(item_length - expected_length) > 0.000001 then
+    return nil, e3_media_handler_error("VERIFY_FAILED", "E3 media batch Item position or length readback did not match the requested row.", {
+      blocker = "item_position_or_length_mismatch",
+      zero_write = false,
+    }, false)
+  end
+  return {
+    id = row.id,
+    batch_index = row.batch_index,
+    item_ref = item_ref.ref,
+    take_ref = take_ref.ref,
+    source_file_ref = row.file_ref,
+    track_ref = row.track_ref,
+    position_seconds = position,
+    length_seconds = item_length,
+    source_length_seconds = source_length,
+    source_type = source_type,
+    selection_restored = preserve_selection,
+    source_section = row.start_percent ~= nil and { start_percent = row.start_percent, end_percent = row.end_percent } or nil,
+  }, item_ref, take_ref
+end
+
+local function import_files_batch(request, preflight_only)
+  local prepared = request.__openreaper_media_batch_prepared
+  if not is_json_array(prepared) then
+    local failure
+    prepared, failure = e3_media_batch_prepare(request)
+    if not prepared then return nil, failure end
+    request.__openreaper_media_batch_prepared = prepared
+  end
+  if preflight_only == true then return true end
+  local preserve_selection = request.params.preserve_selection == true
+  local previous_selection = preserve_selection and e3_media_selected_items() or nil
+  local result_rows = json_array({})
+  local source_footprints = json_array({})
+  local refs = json_array({})
+  local mutation_started = os.clock()
+  local mutation_ms = 0
+  local readback_ms = 0
+  local native_mutations = 0
+  local native_readbacks = 0
+  local last_item = nil
+  local function fail_batch(failure, index)
+    failure.details = failure.details or {}
+    failure.details.row_index = index
+    failure.details.completed_rows = #result_rows
+    failure.details.native_mutation_count = native_mutations
+    failure.details.native_readback_count = native_readbacks
+    failure.details.zero_write = native_mutations == 0
+    if preserve_selection then e3_media_restore_selected_items(previous_selection) elseif last_item then e3_media_select_only_item(last_item) end
+    return nil, failure
+  end
+  for chunk_start = 1, #prepared, E3_MEDIA_BATCH_CHUNK_SIZE do
+    local chunk_end = math.min(#prepared, chunk_start + E3_MEDIA_BATCH_CHUNK_SIZE - 1)
+    for index = chunk_start, chunk_end do
+      local row = prepared[index]
+      row.batch_index = index
+      local source, source_code, source_message = e3_media_create_source(row.path)
+      if not source then
+        return fail_batch(e3_media_handler_error(source_code or "FILE_NOT_FOUND", source_message or "E3 media batch source could not be decoded.", { file_ref = row.file_ref }), index)
+      end
+      local start_offset = row.start_percent and row.source_length_seconds * row.start_percent or 0
+      local item_length = row.start_percent and row.source_length_seconds * (row.end_percent - row.start_percent) or row.source_length_seconds
+      local mutation_phase = os.clock()
+      local ok_item, item = call_reaper("AddMediaItemToTrack", row.track)
+      if not ok_item or not item then
+        call_reaper("PCM_Source_Destroy", source)
+        return fail_batch(e3_media_handler_error("COMMAND_FAILED", "E3 media batch could not create a media item.", {}, false), index)
+      end
+      native_mutations = native_mutations + 1
+      local ok_position, position_accepted = call_reaper("SetMediaItemInfo_Value", item, "D_POSITION", row.position_seconds)
+      local ok_length, length_accepted = call_reaper("SetMediaItemInfo_Value", item, "D_LENGTH", item_length)
+      local ok_take, take = call_reaper("AddTakeToMediaItem", item)
+      local position_ok = position_accepted == nil or position_accepted == true
+      local length_ok = length_accepted == nil or length_accepted == true
+      if not ok_position or not position_ok or not ok_length or not length_ok or not ok_take or not take then
+        call_reaper("PCM_Source_Destroy", source)
+        return fail_batch(e3_media_handler_error("COMMAND_FAILED", "E3 media batch could not configure a media item and take.", { blocker = "native_item_setup_failed" }, false), index)
+      end
+      local ok_source_set, source_set_accepted = call_reaper("SetMediaItemTake_Source", take, source)
+      local ok_assigned_source, assigned_source = call_reaper("GetMediaItemTake_Source", take)
+      local source_attached = ok_assigned_source and assigned_source == source
+      local setter_accepted = source_set_accepted == nil or source_set_accepted == true
+      if not ok_source_set or not setter_accepted or not source_attached then
+        if not source_attached then call_reaper("PCM_Source_Destroy", source) end
+        return fail_batch(e3_media_handler_error("COMMAND_FAILED", "E3 media batch could not attach the decoded source.", { blocker = "native_source_attach_failed" }, false), index)
+      end
+      if start_offset > 0 then
+        local ok_start, start_accepted = call_reaper("SetMediaItemTakeInfo_Value", take, "D_STARTOFFS", start_offset)
+        if not ok_start or (start_accepted ~= nil and start_accepted ~= true) then
+          return fail_batch(e3_media_handler_error("COMMAND_FAILED", "E3 media batch could not set the requested source section offset.", { blocker = "native_start_offset_set_failed" }, false), index)
+        end
+      end
+      call_reaper("UpdateItemInProject", item)
+      mutation_ms = mutation_ms + ((os.clock() - mutation_phase) * 1000)
+      last_item = item
+      local readback_phase = os.clock()
+      local result, item_ref, take_ref = e3_media_batch_row_readback(row, item, take, preserve_selection)
+      readback_ms = readback_ms + ((os.clock() - readback_phase) * 1000)
+      if not result then
+        return fail_batch(item_ref, index)
+      end
+      native_readbacks = native_readbacks + 1
+      result_rows[#result_rows + 1] = result
+      source_footprints[#source_footprints + 1] = {
+        id = row.id,
+        source_file_ref = row.file_ref,
+        source_type = result.source_type,
+        source_length_seconds = result.source_length_seconds,
+      }
+      refs[#refs + 1] = item_ref
+      refs[#refs + 1] = take_ref
+      refs[#refs + 1] = row.file_object_ref
+    end
+  end
+  if preserve_selection then e3_media_restore_selected_items(previous_selection) elseif last_item then e3_media_select_only_item(last_item) end
+  local evidence_started = os.clock()
+  local evidence_ms = (os.clock() - evidence_started) * 1000
+  local total_ms = (os.clock() - mutation_started) * 1000
+  return e3_media_summary(request, {
+    rows = result_rows,
+    source_footprints = source_footprints,
+    selection_restored = preserve_selection,
+    batch_timings = {
+      preflight_ms = prepared.preflight_ms or 0,
+      mutation_ms = mutation_ms,
+      readback_ms = readback_ms,
+      evidence_ms = evidence_ms,
+      transport_ms = 0,
+      total_native_ms = total_ms,
+      native_mutation_count = native_mutations,
+      native_readback_count = native_readbacks,
+      rows = #result_rows,
+      completed_rows = #result_rows,
+      chunk_size = E3_MEDIA_BATCH_CHUNK_SIZE,
+      chunks = math.ceil(#result_rows / E3_MEDIA_BATCH_CHUNK_SIZE),
+      runner = "e3_native_serial_batch",
+    },
+  }), nil, nil, nil, refs
+end
+
 local function e3_media_import_to_track(request, section)
   local target = is_object(request.__openreaper_media_target) and request.__openreaper_media_target or nil
   local track = target and target.track or e3_media_track_from_request_refs(request)
@@ -23871,7 +24538,7 @@ local function relink_take_source(request)
   }, file_object_ref)
 end
 return {
-  exports = { list_folder_media_files = list_folder_media_files, import_file_to_track = import_file_to_track, import_file_section_to_track = import_file_section_to_track, relink_take_source = relink_take_source },
+  exports = { list_folder_media_files = list_folder_media_files, import_file_to_track = import_file_to_track, import_file_section_to_track = import_file_section_to_track, import_files_batch = import_files_batch, relink_take_source = relink_take_source },
   shared = {  },
 }
 end)
@@ -23880,6 +24547,13 @@ end)
 __openreaper_register_handler_module("items/e4_item_route.lua", function()
 local READ_B_MEDIA = __openreaper_shared_table("READ_B_MEDIA")
 -- Extracted E4 item route handlers.
+
+local function e4_item_monotonic_now()
+  if reaper and type(reaper.time_precise) == "function" then
+    return reaper.time_precise()
+  end
+  return os.clock()
+end
 
 local function e4_item_handler_error(code, message, details, recoverable)
   return nil, {
@@ -24569,8 +25243,13 @@ local function e4_item_preflight_copy_budget(request, source_snapshot, target_tr
   return nil
 end
 
-local function e4_item_clone_active_take_footprint(footprint, target_item)
+local function e4_item_clone_active_take_footprint(footprint, target_item, source_entry)
+  local source_is_reused = source_entry and source_entry.source ~= nil
+  local created_source = source_is_reused and source_entry.source or nil
   local function destroy_unowned_source(source, failure)
+    if source_entry and source_entry.attached == true then
+      return failure
+    end
     local ok_destroy = call_reaper("PCM_Source_Destroy", source)
     if ok_destroy then return failure end
     local _, cleanup_failure = e4_item_handler_error("RESTORE_FAILED", "E4 copy_item_to_track could not release an unowned source after failure.", {
@@ -24579,14 +25258,17 @@ local function e4_item_clone_active_take_footprint(footprint, target_item)
     }, false)
     return cleanup_failure
   end
-  local ok_created, created_source = call_reaper("PCM_Source_CreateFromFile", footprint.canonical_source_path)
-  if not ok_created or not created_source then
-    local _, failure = e4_item_handler_error("FILE_NOT_FOUND", "E4 copy_item_to_track could not create an independent source from the verified media file.", {
-      blocker = "source_file_create_failed",
-    }, false)
-    return nil, false, failure
+  if not source_is_reused then
+    local ok_created
+    ok_created, created_source = call_reaper("PCM_Source_CreateFromFile", footprint.canonical_source_path)
+    if not ok_created or not created_source then
+      local _, failure = e4_item_handler_error("FILE_NOT_FOUND", "E4 copy_item_to_track could not create an independent source from the verified media file.", {
+        blocker = "source_file_create_failed",
+      }, false)
+      return nil, false, failure
+    end
   end
-  if not e4_item_source_matches(created_source, footprint) then
+  if not source_is_reused and not e4_item_source_matches(created_source, footprint) then
     local _, failure = e4_item_handler_error("VERIFY_FAILED", "E4 copy_item_to_track rejected an imported source whose footprint did not match preflight.", {
       blocker = "created_source_footprint_mismatch",
     }, false)
@@ -24605,6 +25287,7 @@ local function e4_item_clone_active_take_footprint(footprint, target_item)
   if not ok_source_set or not setter_accepted or not source_attached then
     local _, failure = e4_item_handler_error("COMMAND_FAILED", "E4 copy_item_to_track could not verify the assigned target take source.", { blocker = "target_source_set_failed" }, false)
     if source_may_be_attached then
+      if source_entry then source_entry.attached = true end
       return nil, true, failure
     end
     return nil, true, destroy_unowned_source(created_source, failure)
@@ -24636,35 +25319,34 @@ local function e4_item_clone_active_take_footprint(footprint, target_item)
     local _, failure = e4_item_handler_error("VERIFY_FAILED", "E4 copy_item_to_track target take did not read back with the verified source footprint.", { blocker = "target_footprint_readback_failed" }, false)
     return nil, true, failure
   end
+  if source_entry then source_entry.attached = true end
   return target_take, true
 end
 
-local function copy_item_to_track(request)
-  local source_item = e4_item_from_request_refs(request)
-  if not source_item then
-    return e4_item_handler_error("ITEM_NOT_FOUND", "E4 copy_item_to_track requires a resolvable source item ref.", {})
+local function e4_item_release_unattached_batch_source(source_entry, failure)
+  if not source_entry or source_entry.attached == true then return failure end
+  local ok_destroy = call_reaper("PCM_Source_Destroy", source_entry.source)
+  if ok_destroy then return failure end
+  local _, cleanup_failure = e4_item_handler_error("RESTORE_FAILED", "E4 copy_item_to_track could not release an unowned batch source after failure.", {
+    original_code = failure.code,
+    blocker = "unowned_source_cleanup_failed",
+    source_key = source_entry.source_key,
+  }, false)
+  return cleanup_failure
+end
+
+local function copy_item_to_track_prepared(request, source_snapshot, target_track, target_track_ref, footprint, phase_timings, source_entry)
+  local native_started = e4_item_monotonic_now()
+  local function record_native_phase()
+    if phase_timings then
+      phase_timings.mutation_ms = phase_timings.mutation_ms + ((e4_item_monotonic_now() - native_started) * 1000)
+    end
   end
-  local target_track = e4_item_track_from_request_refs(request)
-  if not target_track then
-    return e4_item_handler_error("TRACK_NOT_FOUND", "E4 copy_item_to_track requires a resolvable target track ref.", {})
-  end
-  local source_snapshot = e4_item_read_strict_snapshot(source_item)
-  local target_track_ref = e4_item_strict_track_ref(target_track)
-  if not source_snapshot or not target_track_ref then
-    return e4_item_handler_error("VERIFY_FAILED", "E4 copy_item_to_track could not establish canonical source or target identities before mutation.", {
-      blocker = "copy_identity_unreadable",
-    }, false)
-  end
-  local footprint, preflight_failure = e4_item_read_source_footprint(source_item)
-  if preflight_failure then return nil, preflight_failure end
-  if source_snapshot.length_seconds ~= footprint.item_length_seconds then
-    return e4_item_handler_error("VERIFY_FAILED", "E4 copy_item_to_track source item changed during preflight.", { blocker = "source_snapshot_changed" }, false)
-  end
-  local budget_failure = e4_item_preflight_copy_budget(request, source_snapshot, target_track_ref, footprint)
-  if budget_failure then return nil, budget_failure end
   local ok_item, new_item = call_reaper("AddMediaItemToTrack", target_track)
   if not ok_item or not new_item then
-    return e4_item_handler_error("COMMAND_FAILED", "E4 copy_item_to_track could not create a target item.", {}, false)
+    local _, failure = e4_item_handler_error("COMMAND_FAILED", "E4 copy_item_to_track could not create a target item.", {}, false)
+    record_native_phase()
+    return nil, e4_item_release_unattached_batch_source(source_entry, failure)
   end
   local position = e4_item_finite_number(request.params.position_seconds, 0)
   local function fail_after_mutation(failure)
@@ -24678,16 +25360,27 @@ local function copy_item_to_track(request)
   local ok_length, length_set = call_reaper("SetMediaItemInfo_Value", new_item, "D_LENGTH", footprint.item_length_seconds)
   if not ok_position or position_set ~= true or not ok_length or length_set ~= true then
     local _, failure = e4_item_handler_error("COMMAND_FAILED", "E4 copy_item_to_track REAPER rejected target item bounds.", { blocker = "target_item_bounds_set_failed" }, false)
+    record_native_phase()
+    failure = e4_item_release_unattached_batch_source(source_entry, failure)
     return fail_after_mutation(failure)
   end
-  local target_take, _, failure = e4_item_clone_active_take_footprint(footprint, new_item)
+  local target_take, _, failure = e4_item_clone_active_take_footprint(footprint, new_item, source_entry)
   if failure then
+    record_native_phase()
     return fail_after_mutation(failure)
   end
   local ok_update = call_reaper("UpdateItemInProject", new_item)
   if not ok_update then
     local _, failure = e4_item_handler_error("COMMAND_FAILED", "E4 copy_item_to_track could not update the target item.", { blocker = "target_item_update_failed" }, false)
+    record_native_phase()
     return fail_after_mutation(failure)
+  end
+  record_native_phase()
+  local readback_started = e4_item_monotonic_now()
+  local function record_readback_phase()
+    if phase_timings then
+      phase_timings.readback_ms = phase_timings.readback_ms + ((e4_item_monotonic_now() - readback_started) * 1000)
+    end
   end
   local new_snapshot = e4_item_read_strict_snapshot(new_item)
   if not new_snapshot or new_snapshot.track ~= target_track or new_snapshot.track_ref ~= target_track_ref
@@ -24697,8 +25390,10 @@ local function copy_item_to_track(request)
       or not e4_item_snapshot_matches(source_snapshot) or not e4_item_footprint_matches(source_snapshot.active_take, footprint, true)
       or not e4_item_take_fx_snapshot_matches(source_snapshot.active_take, footprint.take_fx) then
     local _, failure = e4_item_handler_error("VERIFY_FAILED", "E4 copy_item_to_track source or target readback did not preserve the verified footprint.", { blocker = "copy_footprint_readback_failed" }, false)
+    record_readback_phase()
     return fail_after_mutation(failure)
   end
+  record_readback_phase()
   local source_ref = e4_item_ref_object("item", source_snapshot.item_ref)
   local new_ref = e4_item_ref_object("item", new_snapshot.item_ref)
   local target_ref = e4_item_ref_object("track", target_track_ref)
@@ -24730,7 +25425,366 @@ local function copy_item_to_track(request)
     new_item = { item_ref = new_snapshot.item_ref, track_ref = new_snapshot.track_ref,
       position_seconds = new_snapshot.position_seconds, length_seconds = new_snapshot.length_seconds,
       active_take_ref = new_snapshot.active_take_ref, active_take_available = true },
-  }), nil, nil, nil, e4_item_refs(new_ref, source_ref, target_ref, take_ref, table.unpack(target_fx_refs))
+  }), nil, nil, nil, e4_item_refs(new_ref, source_ref, target_ref, take_ref, table.unpack(target_fx_refs)), new_item, target_take
+end
+
+local function copy_item_to_track_single(request)
+  local source_item = e4_item_from_request_refs(request)
+  if not source_item then
+    return e4_item_handler_error("ITEM_NOT_FOUND", "E4 copy_item_to_track requires a resolvable source item ref.", {})
+  end
+  local target_track = e4_item_track_from_request_refs(request)
+  if not target_track then
+    return e4_item_handler_error("TRACK_NOT_FOUND", "E4 copy_item_to_track requires a resolvable target track ref.", {})
+  end
+  local source_snapshot = e4_item_read_strict_snapshot(source_item)
+  local target_track_ref = e4_item_strict_track_ref(target_track)
+  if not source_snapshot or not target_track_ref then
+    return e4_item_handler_error("VERIFY_FAILED", "E4 copy_item_to_track could not establish canonical source or target identities before mutation.", {
+      blocker = "copy_identity_unreadable",
+    }, false)
+  end
+  local footprint, preflight_failure = e4_item_read_source_footprint(source_item)
+  if preflight_failure then return nil, preflight_failure end
+  if source_snapshot.length_seconds ~= footprint.item_length_seconds then
+    return e4_item_handler_error("VERIFY_FAILED", "E4 copy_item_to_track source item changed during preflight.", { blocker = "source_snapshot_changed" }, false)
+  end
+  local budget_failure = e4_item_preflight_copy_budget(request, source_snapshot, target_track_ref, footprint)
+  if budget_failure then return nil, budget_failure end
+  return copy_item_to_track_prepared(request, source_snapshot, target_track, target_track_ref, footprint)
+end
+
+local E4_ITEM_COPY_BATCH_MAX_ROWS = 64
+local E4_ITEM_COPY_BATCH_CHUNK_SIZE = 128
+
+local function e4_item_batch_source_key(footprint)
+  return table.concat({
+    footprint.canonical_source_identity,
+    footprint.source_type,
+    tostring(footprint.source_length_seconds),
+  }, "|")
+end
+
+-- SetMediaItemTake_Source binds the source to the target Take.  A source
+-- handle must therefore be created per target; reusing one handle across
+-- Takes can leave REAPER blocked after the first attachment.
+local function e4_item_batch_prepare_source(footprint)
+  local key = e4_item_batch_source_key(footprint)
+  local ok_created, source = call_reaper("PCM_Source_CreateFromFile", footprint.canonical_source_path)
+  if not ok_created or not source then
+    return nil, e4_item_handler_error("FILE_NOT_FOUND", "E4 copy_item_to_track batch could not create the verified media source.", {
+      blocker = "source_file_create_failed",
+      source_key = key,
+      zero_write = true,
+    }, false)
+  end
+  if not e4_item_source_matches(source, footprint) then
+    local ok_destroy = call_reaper("PCM_Source_Destroy", source)
+    if not ok_destroy then
+      return nil, e4_item_handler_error("RESTORE_FAILED", "E4 copy_item_to_track batch could not release a mismatched source.", {
+        blocker = "unowned_source_cleanup_failed",
+        original_code = "VERIFY_FAILED",
+        source_key = key,
+        zero_write = true,
+      }, false)
+    end
+    return nil, e4_item_handler_error("VERIFY_FAILED", "E4 copy_item_to_track batch rejected an imported source whose footprint did not match preflight.", {
+      blocker = "created_source_footprint_mismatch",
+      source_key = key,
+      zero_write = true,
+    }, false)
+  end
+  local entry = { source = source, attached = false, source_key = key }
+  return entry, true
+end
+
+local function e4_item_batch_error(code, message, row_index, extra)
+  local details = extra or {}
+  details.zero_write = true
+  if row_index then details.row_index = row_index end
+  return e4_item_handler_error(code, message, details)
+end
+
+local function e4_item_batch_row_request(request, row)
+  return {
+    pack = request.pack,
+    params = { position_seconds = row.position_seconds },
+    refs = json_array({
+      e4_item_ref_object("item", row.source_item_ref),
+      e4_item_ref_object("track", row.target_track_ref),
+    }),
+    budget = request.budget,
+    bridge = request.bridge,
+    operation = request.operation,
+  }
+end
+
+local function e4_item_validate_batch_rows(request)
+  local batch = request.params and request.params.batch or nil
+  if not is_json_array(batch) then
+    return e4_item_handler_error("PARAMS_INVALID", "E4 copy_item_to_track batch requires a JSON array payload.", { zero_write = true })
+  end
+  if #batch < 1 or #batch > E4_ITEM_COPY_BATCH_MAX_ROWS then
+    return e4_item_handler_error("BATCH_LIMIT_EXCEEDED", "E4 copy_item_to_track batch accepts 1-64 rows.", {
+      row_count = #batch,
+      max_rows = E4_ITEM_COPY_BATCH_MAX_ROWS,
+      zero_write = true,
+    })
+  end
+  local ids = {}
+  local rows = json_array({})
+  for index = 1, #batch do
+    local row = batch[index]
+    if not is_object(row) then
+      return e4_item_batch_error("PARAMS_INVALID", "E4 copy_item_to_track batch rows must be objects.", index)
+    end
+    for key in pairs(row) do
+      if key ~= "id" and key ~= "source_item_ref" and key ~= "target_track_ref"
+          and key ~= "position_seconds" and key ~= "source_offset_seconds" then
+        return e4_item_batch_error("PARAMS_INVALID", "E4 copy_item_to_track batch row contains an unsupported field.", index, { field = key })
+      end
+    end
+    if not is_string(row.id) or #row.id > 12 or not row.id:match("^[A-Za-z0-9_-]+$") or ids[row.id] then
+      return e4_item_batch_error("PARAMS_INVALID", "E4 copy_item_to_track batch row id must be unique and bounded.", index)
+    end
+    ids[row.id] = true
+    if not e4_item_ref_object("item", row.source_item_ref) or not e4_item_ref_object("track", row.target_track_ref) then
+      return e4_item_batch_error("PARAMS_INVALID", "E4 copy_item_to_track batch rows require exact Item and Track GUID refs.", index)
+    end
+    if not e4_item_finite_native_number(row.position_seconds) or row.position_seconds < 0 then
+      return e4_item_batch_error("PARAMS_INVALID", "E4 copy_item_to_track batch position_seconds must be finite and non-negative.", index)
+    end
+    if row.source_offset_seconds ~= nil
+        and (not e4_item_finite_native_number(row.source_offset_seconds) or row.source_offset_seconds < 0) then
+      return e4_item_batch_error("PARAMS_INVALID", "E4 copy_item_to_track batch source_offset_seconds must be finite and non-negative.", index)
+    end
+    rows[#rows + 1] = {
+      id = row.id,
+      source_item_ref = row.source_item_ref,
+      target_track_ref = row.target_track_ref,
+      position_seconds = row.position_seconds,
+      source_offset_seconds = row.source_offset_seconds,
+    }
+  end
+  return rows
+end
+
+local function e4_item_batch_preflight_budget(request, prepared_rows)
+  local budget = is_object(request.budget) and request.budget or {}
+  local max_response = math.floor(tonumber(budget.max_response_bytes) or 65536)
+  local max_inline = math.floor(tonumber(budget.max_inline_value_bytes) or 65536)
+  local required = 4096
+  local unique_sources = {}
+  local unique_source_count = 0
+  local unique_fx_slots = 0
+  for index = 1, #prepared_rows do
+    local prepared = prepared_rows[index]
+    local footprint = prepared.footprint
+    if #footprint.canonical_source_identity + #prepared.row.source_item_ref + #prepared.row.target_track_ref > max_inline then
+      return e4_item_handler_error("RESPONSE_TOO_LARGE", "E4 copy_item_to_track batch source identity exceeds the inline-value budget before mutation.", {
+        blocker = "source_identity_exceeds_inline_budget",
+        row_index = index,
+        max_inline_value_bytes = max_inline,
+        zero_write = true,
+      })
+    end
+    -- The batch result is compact per row. A complete source footprint is
+    -- retained once per unique source in the aggregate evidence object below;
+    -- counting it once avoids rejecting 64 variations of one source before
+    -- the generic runner has a chance to execute them.
+    required = required + 720
+    if not unique_sources[prepared.row.source_item_ref] then
+      unique_sources[prepared.row.source_item_ref] = true
+      unique_source_count = unique_source_count + 1
+      unique_fx_slots = unique_fx_slots + (#footprint.take_fx.chain * 160)
+    end
+  end
+  required = required + unique_source_count * 900 + unique_fx_slots + (#prepared_rows * 180)
+  if required > max_response then
+    return e4_item_handler_error("RESPONSE_TOO_LARGE", "E4 copy_item_to_track batch success envelope cannot fit before mutation.", {
+      blocker = "success_envelope_budget_insufficient",
+      required_response_bytes = required,
+      max_response_bytes = max_response,
+      zero_write = true,
+    })
+  end
+  return nil
+end
+
+local function e4_item_copy_batch_set_offset(item, take, offset)
+  if offset == nil then return true, false end
+  local ok_set, accepted = call_reaper("SetMediaItemTakeInfo_Value", take, "D_STARTOFFS", offset)
+  if not ok_set or accepted ~= true then return false, true end
+  call_reaper("UpdateItemInProject", item)
+  local ok_read, readback = call_reaper("GetMediaItemTakeInfo_Value", take, "D_STARTOFFS")
+  return ok_read and e4_item_finite_native_number(first_number(readback)) and first_number(readback) == offset, true
+end
+
+local function copy_item_to_track_batch(request)
+  local rows, validation_failure = e4_item_validate_batch_rows(request)
+  if validation_failure then return nil, validation_failure end
+  local preflight_started = e4_item_monotonic_now()
+  local prepared_rows = {}
+  local source_cache = {}
+  local track_cache = {}
+  for index = 1, #rows do
+    local row = rows[index]
+    local source_item = source_cache[row.source_item_ref] and source_cache[row.source_item_ref].item
+      or e4_item_resolve_item_from_ref_object(e4_item_ref_object("item", row.source_item_ref))
+    local target_track = track_cache[row.target_track_ref]
+      or e4_item_resolve_track_from_ref_object(e4_item_ref_object("track", row.target_track_ref))
+    if not source_item then
+      return e4_item_batch_error("ITEM_NOT_FOUND", "E4 copy_item_to_track batch source Item could not be resolved.", index)
+    end
+    if not target_track then
+      return e4_item_batch_error("TRACK_NOT_FOUND", "E4 copy_item_to_track batch target Track could not be resolved.", index)
+    end
+    local source_entry = source_cache[row.source_item_ref]
+    if not source_entry then
+      local source_snapshot = e4_item_read_strict_snapshot(source_item)
+      local target_track_ref = e4_item_strict_track_ref(target_track)
+      local footprint, footprint_failure = e4_item_read_source_footprint(source_item)
+      if footprint_failure then
+        footprint_failure.details = footprint_failure.details or {}
+        footprint_failure.details.row_index = index
+        footprint_failure.details.zero_write = true
+        return nil, footprint_failure
+      end
+      if not source_snapshot or not target_track_ref or source_snapshot.length_seconds ~= footprint.item_length_seconds then
+        return e4_item_batch_error("VERIFY_FAILED", "E4 copy_item_to_track batch source identity or footprint changed during preflight.", index, { blocker = "source_snapshot_changed" })
+      end
+      source_entry = { item = source_item, snapshot = source_snapshot, footprint = footprint }
+      source_cache[row.source_item_ref] = source_entry
+    end
+    local target_track_ref = track_cache[row.target_track_ref] and row.target_track_ref or e4_item_strict_track_ref(target_track)
+    if not target_track_ref then
+      return e4_item_batch_error("VERIFY_FAILED", "E4 copy_item_to_track batch target Track GUID could not be read.", index, { blocker = "target_identity_unreadable" })
+    end
+    track_cache[row.target_track_ref] = target_track
+    prepared_rows[#prepared_rows + 1] = {
+      row = row,
+      source_item = source_entry.item,
+      source_snapshot = source_entry.snapshot,
+      target_track = target_track,
+      target_track_ref = target_track_ref,
+      footprint = source_entry.footprint,
+    }
+  end
+  local budget_failure = e4_item_batch_preflight_budget(request, prepared_rows)
+  if budget_failure then return nil, budget_failure end
+  local preflight_ms = (e4_item_monotonic_now() - preflight_started) * 1000
+  local result_rows = json_array({})
+  local source_footprints = json_array({})
+  local source_footprint_seen = {}
+  local phase_timings = { mutation_ms = 0, readback_ms = 0 }
+  local native_mutations = 0
+  local native_readbacks = 0
+  local native_source_create_count = 0
+  local native_source_reuse_count = 0
+  for chunk_start = 1, #prepared_rows, E4_ITEM_COPY_BATCH_CHUNK_SIZE do
+    local chunk_end = math.min(#prepared_rows, chunk_start + E4_ITEM_COPY_BATCH_CHUNK_SIZE - 1)
+    for index = chunk_start, chunk_end do
+      local prepared = prepared_rows[index]
+      local row_request = e4_item_batch_row_request(request, prepared.row)
+      local source_entry, source_created_or_failure = e4_item_batch_prepare_source(prepared.footprint)
+      if not source_entry then
+        local source_failure = source_created_or_failure
+        source_failure.details = source_failure.details or {}
+        source_failure.details.row_index = index
+        source_failure.details.completed_rows = #result_rows
+        source_failure.details.native_mutations = native_mutations
+        source_failure.details.zero_write = #result_rows == 0
+        return nil, source_failure
+      end
+      if source_created_or_failure == true then
+        native_source_create_count = native_source_create_count + 1
+      else
+        native_source_reuse_count = native_source_reuse_count + 1
+      end
+      local summary, failure, _, _, refs, new_item, target_take = copy_item_to_track_prepared(
+        row_request, prepared.source_snapshot, prepared.target_track, prepared.target_track_ref, prepared.footprint, phase_timings, source_entry)
+      if failure then
+        failure.details = failure.details or {}
+        failure.details.row_index = index
+        failure.details.completed_rows = #result_rows
+        failure.details.native_mutations = native_mutations
+        failure.details.zero_write = false
+        return nil, failure
+      end
+      native_mutations = native_mutations + 1
+      local offset_started = e4_item_monotonic_now()
+      local offset_ok = e4_item_copy_batch_set_offset(new_item, target_take, prepared.row.source_offset_seconds)
+      phase_timings.readback_ms = phase_timings.readback_ms + ((e4_item_monotonic_now() - offset_started) * 1000)
+      if not offset_ok then
+        local ok_delete, deleted = call_reaper("DeleteTrackMediaItem", prepared.target_track, new_item)
+        local code = ok_delete and deleted == true and "VERIFY_FAILED" or "RESTORE_FAILED"
+        return e4_item_handler_error(code, "E4 copy_item_to_track batch source-offset writeback failed.", {
+          blocker = "source_offset_readback_failed",
+          row_index = index,
+          completed_rows = #result_rows,
+          native_mutations = native_mutations,
+          zero_write = false,
+        }, false)
+      end
+      native_readbacks = native_readbacks + 1
+      summary.id = prepared.row.id
+      summary.source_offset_seconds = prepared.row.source_offset_seconds
+      summary.batch_index = index
+      result_rows[#result_rows + 1] = summary
+      if not source_footprint_seen[prepared.row.source_item_ref] then
+        source_footprint_seen[prepared.row.source_item_ref] = true
+        source_footprints[#source_footprints + 1] = {
+          source_item_ref = prepared.row.source_item_ref,
+          source_footprint = {
+            canonical_source_identity = prepared.footprint.canonical_source_identity,
+            source_type = prepared.footprint.source_type,
+            source_length_seconds = prepared.footprint.source_length_seconds,
+            item_length_seconds = prepared.footprint.item_length_seconds,
+            start_offset_seconds = prepared.footprint.start_offset_seconds,
+            playrate = prepared.footprint.playrate,
+            pitch = prepared.footprint.pitch,
+            preserve_pitch = prepared.footprint.preserve_pitch == 1,
+            take_fx = e4_item_take_fx_evidence(prepared.footprint.take_fx),
+          },
+        }
+      end
+    end
+  end
+  local evidence_started = e4_item_monotonic_now()
+  local refs = json_array({})
+  for index = 1, #result_rows do
+    local row = result_rows[index]
+    refs[#refs + 1] = e4_item_ref_object("item", row.new_item_ref)
+    for fx_index, slot in ipairs(row.take_fx_copy and row.take_fx_copy.slots or {}) do
+      refs[#refs + 1] = e4_item_take_fx_object_ref(row.active_take_ref, fx_index - 1, slot.name)
+    end
+  end
+  local evidence_ms = (e4_item_monotonic_now() - evidence_started) * 1000
+  return e4_item_summary(request, {
+    rows = result_rows,
+    source_footprints = source_footprints,
+    copy_depth = "active_take_footprint",
+    new_item_ref = #result_rows == 1 and result_rows[1].new_item_ref or nil,
+    source_item_ref = #result_rows == 1 and result_rows[1].source_item_ref or nil,
+    target_track_ref = #result_rows == 1 and result_rows[1].target_track_ref or nil,
+    position_seconds = #result_rows == 1 and result_rows[1].position_seconds or nil,
+    source_footprint = #result_rows == 1 and result_rows[1].source_footprint or nil,
+    batch_timings = {
+      preflight_ms = preflight_ms,
+      mutation_ms = phase_timings.mutation_ms,
+      readback_ms = phase_timings.readback_ms,
+      evidence_ms = evidence_ms,
+      transport_ms = 0,
+      native_mutation_count = native_mutations,
+      native_readback_count = native_readbacks,
+      native_source_create_count = native_source_create_count,
+      native_source_reuse_count = native_source_reuse_count,
+      rows = #result_rows,
+      chunk_size = E4_ITEM_COPY_BATCH_CHUNK_SIZE,
+      chunks = math.ceil(#result_rows / E4_ITEM_COPY_BATCH_CHUNK_SIZE),
+      runner = "e4_generic_copy_batch",
+    },
+  }), nil, nil, nil, refs
 end
 
 local function split_item_at_time(request)
@@ -24799,6 +25853,19 @@ local function set_take_playrate(request)
     preserve_pitch = request.params.preserve_pitch == true,
     item = e4_item_summary_for_item(item),
   }), nil, nil, nil, e4_item_refs(item_ref)
+end
+
+local function copy_item_to_track(request, resume_continuation)
+  if request.params and request.params.batch ~= nil then
+    if resume_continuation ~= nil then
+      return e4_item_handler_error("INTERNAL_ERROR", "E4 copy_item_to_track batch does not accept an unexpected continuation.", {
+        blocker = "batch_continuation_not_supported",
+        zero_write = true,
+      }, false)
+    end
+    return copy_item_to_track_batch(request)
+  end
+  return copy_item_to_track_single(request)
 end
 return {
   exports = { copy_item_to_track = copy_item_to_track, split_item_at_time = split_item_at_time, set_take_playrate = set_take_playrate },
@@ -34444,6 +35511,7 @@ local SAFE_WRITE_A_HANDLERS = {
 local E3_MEDIA_ROUTE_HANDLERS = {
   ["media.import_file_to_track"] = OPENREAPER_HANDLER_EXPORTS.import_file_to_track,
   ["media.import_file_section_to_track"] = OPENREAPER_HANDLER_EXPORTS.import_file_section_to_track,
+  ["media.import_files_batch"] = OPENREAPER_HANDLER_EXPORTS.import_files_batch,
   ["media.relink_take_source"] = OPENREAPER_HANDLER_EXPORTS.relink_take_source,
 }
 
@@ -34490,6 +35558,7 @@ local E2_FX_B1_WRITE_HANDLERS = {
   ["fx.add_take"] = OPENREAPER_HANDLER_EXPORTS.add_take_fx,
   ["fx.set_bypass"] = OPENREAPER_HANDLER_EXPORTS.set_fx_bypass,
   ["fx.set_parameter_normalized"] = OPENREAPER_HANDLER_EXPORTS.set_fx_parameter_normalized,
+  ["fx.set_parameter_assignments_batch"] = OPENREAPER_HANDLER_EXPORTS.e2_fx_parameter_assignments_batch,
   ["fx.set_preset_by_name"] = OPENREAPER_HANDLER_EXPORTS.set_fx_preset_by_name,
   ["fx.set_preset_by_index"] = OPENREAPER_HANDLER_EXPORTS.set_fx_preset_by_index,
   ["fx.reorder"] = OPENREAPER_HANDLER_EXPORTS.reorder_fx,
@@ -34617,7 +35686,7 @@ local function dispatch_template_execute(request, resume_continuation)
   end
   handler = E4_ITEM_ROUTE_HANDLERS[request.pack.capability]
   if handler then
-    return handler(request)
+    return handler(request, resume_continuation)
   end
   handler = E5_ROUTING_WRITE_HANDLERS[request.pack.capability]
   if handler then
@@ -35498,9 +36567,16 @@ local function dispatch_request(request, fallback_id, resume_continuation, runti
   -- or REAPER mutation. Pure validation only (no EnumProjects / Undo_*).
   local e3_media_write_capability = capability == "media.import_file_to_track"
     or capability == "media.import_file_section_to_track"
+    or capability == "media.import_files_batch"
     or capability == "media.relink_take_source"
+  local e3_media_batch_capability = capability == "media.import_files_batch"
   if e3_media_write_capability and phase_may_mutate then
-    local preflight_ok, preflight_result = READ_B_MEDIA.preflight_mutation_write(request)
+    local preflight_ok, preflight_result
+    if e3_media_batch_capability then
+      preflight_ok, preflight_result = OPENREAPER_HANDLER_EXPORTS.import_files_batch(request, true)
+    else
+      preflight_ok, preflight_result = READ_B_MEDIA.preflight_mutation_write(request)
+    end
     if preflight_ok ~= true then
       local failure = preflight_result or {
         code = "PARAMS_INVALID",
@@ -36029,8 +37105,13 @@ local function poll_once()
   end
   table.sort(request_filenames)
   for _, filename in ipairs(request_filenames) do
-    if not completed_request_files[filename] and process_request_file(filename) then
-      completed_request_files[filename] = true
+    if not completed_request_files[filename] then
+      if process_request_file(filename) then
+        completed_request_files[filename] = true
+      end
+      -- Process one request per defer tick so the bridge heartbeat can refresh
+      -- between queued native calls instead of going stale for the whole batch.
+      return
     end
   end
 end

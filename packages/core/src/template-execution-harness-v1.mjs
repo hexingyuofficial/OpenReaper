@@ -13,6 +13,10 @@ import {
   TemplateDescriptorValidationError,
   normalizeTemplateDescriptor,
 } from "./template-descriptor-v1.mjs";
+import {
+  addExecutionPerformancePhase,
+  recordExecutionPerformanceBridgeResult,
+} from "./execution-performance-v1.mjs";
 
 export const TEMPLATE_EXECUTION_HARNESS_CONTRACT = "template.execution.v1";
 
@@ -24,6 +28,7 @@ export const TEMPLATE_EXECUTION_HARNESS_ERROR_CODES = Object.freeze([
   "TEMPLATE_CONTEXT_INVALID",
   "TEMPLATE_REFS_INVALID",
   "TEMPLATE_IDEMPOTENCY_INVALID",
+  "TEMPLATE_DEADLINE_INVALID",
   "TEMPLATE_EXECUTOR_INVALID",
   "BRIDGE_RESULT_INVALID",
   "RESPONSE_TOO_LARGE",
@@ -55,13 +60,36 @@ export function buildTemplateBridgeRequest(options = {}) {
 
 export async function executeTemplate(options = {}) {
   let prepared;
+  let dispatchElapsedMs = 0;
+  const performance = options.performance;
   try {
+    const validationStartedAt = Date.now();
     prepared = prepareTemplateExecution(options);
+    addExecutionPerformancePhase(performance, "validation", Date.now() - validationStartedAt);
     const dispatch = resolveExecutor(options.executor);
-    const bridgeResult = await dispatch(prepared.request);
+    const transportStartedAt = Date.now();
+    let bridgeResult;
+    try {
+      bridgeResult = await dispatch(prepared.request, {
+        signal: options.signal ?? null,
+        performance,
+      });
+    } finally {
+      dispatchElapsedMs = Date.now() - transportStartedAt;
+    }
+    // Record the raw bridge envelope before schema validation so a malformed
+    // failure response still contributes any counters it truthfully exposes.
+    recordExecutionPerformanceBridgeResult(performance, prepared.request, bridgeResult, {
+      dispatch_elapsed_ms: dispatchElapsedMs,
+    });
     validateBridgeResult(prepared.request, bridgeResult);
-    return mapBridgeResult(prepared, bridgeResult);
+    const evidenceStartedAt = Date.now();
+    const mapped = mapBridgeResult(prepared, bridgeResult);
+    addExecutionPerformancePhase(performance, "evidence", Date.now() - evidenceStartedAt);
+    return mapped;
   } catch (error) {
+    if (dispatchElapsedMs > 0) addExecutionPerformancePhase(performance, "transport", dispatchElapsedMs);
+    addExecutionPerformancePhase(performance, "validation", 0);
     return templateErrorEnvelope({
       prepared,
       descriptor: options.descriptor,
@@ -105,7 +133,21 @@ function prepareTemplateExecution(options) {
   const context = normalizeExecutionContext(options.context);
   const refs = normalizeExecutionRefs(options.refs ?? [], descriptor.refs);
   const budget = normalizeBudget(options.budget);
-  const dispatchTimeoutMs = resolveDispatchTimeoutMs(options.dispatchTimeoutMs, descriptor.bridge.timeout_ms);
+  const baseDispatchTimeoutMs = resolveDispatchTimeoutMs(options.dispatchTimeoutMs, descriptor.bridge.timeout_ms);
+  const deadlineMs = options.deadlineMs ?? null;
+  if (
+    deadlineMs !== null
+    && (!Number.isSafeInteger(deadlineMs) || deadlineMs < 1)
+  ) {
+    throw new TemplateExecutionHarnessError(
+      "TEMPLATE_DEADLINE_INVALID",
+      "Template deadlineMs must be a positive safe integer when supplied.",
+      { recoverable: true, details: { deadline_ms: deadlineMs } },
+    );
+  }
+  const dispatchTimeoutMs = deadlineMs === null
+    ? baseDispatchTimeoutMs
+    : Math.min(baseDispatchTimeoutMs, deadlineMs);
   const idempotencyKey = resolveIdempotencyKey({
     descriptor,
     input,

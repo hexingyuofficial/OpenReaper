@@ -195,6 +195,14 @@ const E3_MEDIA_ROUTE_TEMPLATE_SPECS = Object.freeze([
     ref_group: "source_track",
   }),
   Object.freeze({
+    id: "template.media.import_files_batch",
+    operation: "run_command:template.execute",
+    pack: "media",
+    risk: "write",
+    capability: "media.import_files_batch",
+    ref_group: "source_track_batch",
+  }),
+  Object.freeze({
     id: "template.media.relink_take_source",
     operation: "run_command:template.execute",
     pack: "media",
@@ -3568,6 +3576,13 @@ function e3MediaRouteInput(spec, fixtureInputsForRun) {
       end_percent: 0.75,
       preserve_selection: true,
     },
+    "template.media.import_files_batch": {
+      batch: [
+        { id: "e3-batch-a", position_seconds: 4 },
+        { id: "e3-batch-b", position_seconds: 6, start_percent: 0.25, end_percent: 0.75 },
+      ],
+      preserve_selection: true,
+    },
     "template.media.relink_take_source": {
       verify_source_type: true,
     },
@@ -3582,6 +3597,13 @@ function e3MediaRouteRefs(spec, fixtureInputsForRun) {
     if (!sourceFileRef) return { blocker: "media_source_ref_unavailable" };
     if (!trackRef) return { blocker: "target_track_ref_unavailable" };
     return { value: { source_file_ref: sourceFileRef, track_ref: trackRef } };
+  }
+  if (spec.ref_group === "source_track_batch") {
+    const sourceFileRef = fileObjectRefFromPath(fixtureInputsForRun.source_path);
+    const trackRef = trackObjectRefFromFixture(fixtureInputsForRun.target_track_ref);
+    if (!sourceFileRef) return { blocker: "media_source_ref_unavailable" };
+    if (!trackRef) return { blocker: "target_track_ref_unavailable" };
+    return { value: { source_file_refs: [sourceFileRef, sourceFileRef], track_refs: [trackRef, trackRef] } };
   }
   if (spec.ref_group === "take_relink") {
     const relinkFileRef = fileObjectRefFromPath(fixtureInputsForRun.relink_path);
@@ -5112,6 +5134,13 @@ function fakeE3MediaRouteRefs(request, spec) {
     return [
       createObjectRef("item", { scheme: "guid", value: "{E3-MEDIA-SECTION-ITEM}" }, { ref: "item:guid:{E3-MEDIA-SECTION-ITEM}" }),
       ...request.refs.filter((ref) => ref.kind === "file").slice(0, 1),
+    ];
+  }
+  if (spec.id === "template.media.import_files_batch") {
+    return [
+      createObjectRef("item", { scheme: "guid", value: "{E3-MEDIA-BATCH-ITEM-1}" }, { ref: "item:guid:{E3-MEDIA-BATCH-ITEM-1}" }),
+      createObjectRef("take", { scheme: "guid", value: "{E3-MEDIA-BATCH-TAKE-1}" }, { ref: "take:guid:{E3-MEDIA-BATCH-TAKE-1}" }),
+      ...request.refs.filter((ref) => ref.kind === "file").slice(0, 2),
     ];
   }
   if (spec.id === "template.media.relink_take_source") {

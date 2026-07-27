@@ -77,7 +77,7 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
       "validate", "save", "list", "get", "delete", "run", "resume",
     ]);
     assert.equal(ALPHA3_3_B1_VISIBLE_EXECUTABLE_IDS.length, 15);
-    assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 235);
+    assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 237);
 
     const stdio = readFileSync(new URL("../../packages/mcp-server/src/openreaper-mcp-stdio.mjs", import.meta.url), "utf8");
     assert.equal((stdio.match(/server\.tool\(/g) ?? []).length, 6);
@@ -157,6 +157,44 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
     assert.equal(deleted.deleted, true);
     assert.equal((await runtime.call_recipe({ operation: "list" })).count, 0);
     assert.equal(catalog.macros.length > 0, true);
+  });
+
+  it("uses the full default get budget for every official revision while preserving explicit compact budgets", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "openreaper-e2-official-get-budget-"));
+    const binding = createStdioCallRecipeRuntime({
+      env: {
+        OPENREAPER_EXECUTABLE_RECIPE_ROOT: root,
+        OPENREAPER_EXECUTABLE_RECIPE_SOURCE: "user",
+        OPENREAPER_EXECUTABLE_RECIPE_RISK_GRANTS_JSON: JSON.stringify(["read", "write"]),
+      },
+    });
+    try {
+      assert.ok(binding);
+      const listed = await binding.runtime.call_recipe({ operation: "list", limit: 16 });
+      const official = listed.items.filter((item) => item.source === "official");
+      assert.equal(official.length, 4);
+
+      for (const item of official) {
+        const loaded = await binding.runtime.call_recipe({ operation: "get", ...exactIdentity(item) });
+        assert.equal(loaded.ok, true, item.recipe_id);
+        assert.equal(loaded.source, "official", item.recipe_id);
+        assert.equal(loaded.response_compacted, undefined, item.recipe_id);
+        assert.equal(loaded.draft.id, item.recipe_id, item.recipe_id);
+      }
+
+      const recipe04 = official.find((item) => item.recipe_id === "recipe.items.create_sound_variations");
+      const compact = await binding.runtime.call_recipe({
+        operation: "get",
+        ...exactIdentity(recipe04),
+        budget: { max_response_bytes: 16_384 },
+      });
+      assert.equal(compact.ok, true);
+      assert.equal(compact.response_compacted, true);
+      assert.equal(compact.draft, undefined);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(`${root}.official`, { recursive: true, force: true });
+    }
   });
 
   it("rejects inline draft/graph execution and incomplete identity before dispatch", async () => {
@@ -307,7 +345,7 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
     assert.deepEqual(page.run_summary.counters, {
       counter_scope: "recipe_stage_dispatch_and_accepted_native_proof",
       counter_source: "call_recipe_runtime",
-      transport_call_count: 2,
+      transport_call_count: 0,
       native_mutation_count: 1,
       readback_count: 2,
     });
@@ -666,8 +704,15 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
     const events = [];
     const draft = makeComposedDraft();
     const productRuntime = {
-      async call_template({ id, input }) {
-        events.push([id.startsWith("macro.") ? "macro" : "template", id, input]);
+      async call_template(request, execution) {
+        const { id, input } = request;
+        events.push([
+          id.startsWith("macro.") ? "macro" : "template",
+          id,
+          input,
+          execution,
+          request[CALL_TEMPLATE_INTERNAL_RECIPE_UNDO],
+        ]);
         return id.startsWith("macro.")
           ? macroEnvelope({ project_summary: { name: input.track_name } })
           : templateEnvelope({ track_ref: "track:index:4" });
@@ -685,6 +730,14 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
     };
     const { runtime } = makeRuntime({
       facts: (saved) => completeFacts(saved, draft),
+      undoController: {
+        async begin(request) {
+          return { ok: true, opened: true, handle: "object-runtime-undo", project_ref: request.project_ref };
+        },
+        async end(request) {
+          return { ok: true, closed: true, verified: true, handle: request.handle, project_ref: request.project_ref };
+        },
+      },
       dispatchers: {
         macro: productRuntime,
         template: productRuntime,
@@ -726,6 +779,10 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
     assert.equal(ran.counts.processed, 4);
     assert.equal(ran.counts.applied, 4);
     assert.deepEqual(events.map((entry) => entry[0]), ["macro", "template", "get_state", "checkpoint"]);
+    assert.equal(events[0][3].signal?.aborted, false);
+    assert.equal(typeof events[0][3].deadline?.isExpired, "function");
+    assert.equal(typeof events[0][3].performance?.counters, "object");
+    assert.equal(events[0][4]?.suppress_child_undo, true);
     assert.equal(ran.latest_checkpoint.stage_id, "checkpoint_proof");
     assert.equal(ran.latest_checkpoint.proof.explicit_checkpoint_proof, true);
   });

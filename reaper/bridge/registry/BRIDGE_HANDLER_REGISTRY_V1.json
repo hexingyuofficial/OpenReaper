@@ -2235,6 +2235,23 @@
       ]
     },
     {
+      "template_id": "template.media.import_files_batch",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "media.import_files_batch",
+      "pack": "media",
+      "risk": "write",
+      "route": "e3-media-live-handlers",
+      "handler_file": "media/e3_media_route.lua",
+      "handler_export": "import_files_batch",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e3-media-live-handler-expansion.test.mjs"
+      ]
+    },
+    {
       "template_id": "template.media.relink_take_source",
       "operation": {
         "family": "run_command",
@@ -3094,7 +3111,8 @@
       "handler_export": "add_track_fx",
       "artifact_policy": "none",
       "tests": [
-        "tests/layer4dx/e2-fx-l1-read-handler-expansion.test.mjs"
+        "tests/layer4dx/e2-fx-l1-read-handler-expansion.test.mjs",
+        "tests/layer4dx/e2-fx-native-batch-handler.test.mjs"
       ]
     },
     {
@@ -3111,7 +3129,8 @@
       "handler_export": "add_take_fx",
       "artifact_policy": "none",
       "tests": [
-        "tests/layer4dx/e2-fx-l1-read-handler-expansion.test.mjs"
+        "tests/layer4dx/e2-fx-l1-read-handler-expansion.test.mjs",
+        "tests/layer4dx/e2-fx-native-batch-handler.test.mjs"
       ]
     },
     {
@@ -3128,7 +3147,8 @@
       "handler_export": "set_fx_bypass",
       "artifact_policy": "none",
       "tests": [
-        "tests/layer4dx/e2-fx-l1-read-handler-expansion.test.mjs"
+        "tests/layer4dx/e2-fx-l1-read-handler-expansion.test.mjs",
+        "tests/layer4dx/e2-fx-native-batch-handler.test.mjs"
       ]
     },
     {
@@ -3145,7 +3165,26 @@
       "handler_export": "set_fx_parameter_normalized",
       "artifact_policy": "none",
       "tests": [
-        "tests/layer4dx/e2-fx-l1-read-handler-expansion.test.mjs"
+        "tests/layer4dx/e2-fx-l1-read-handler-expansion.test.mjs",
+        "tests/layer4dx/e2-fx-native-batch-handler.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.fx.set_parameter_assignments_batch",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "fx.set_parameter_assignments_batch",
+      "pack": "fx",
+      "risk": "write",
+      "route": "e2-fx-b1-write-handlers",
+      "handler_file": "fx/e2_fx_l1_read_route.lua",
+      "handler_export": "e2_fx_parameter_assignments_batch",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e2-fx-l1-read-handler-expansion.test.mjs",
+        "tests/layer4dx/e2-fx-native-batch-handler.test.mjs"
       ]
     },
     {
@@ -3162,7 +3201,8 @@
       "handler_export": "set_fx_preset_by_name",
       "artifact_policy": "none",
       "tests": [
-        "tests/layer4dx/e2-fx-l1-read-handler-expansion.test.mjs"
+        "tests/layer4dx/e2-fx-l1-read-handler-expansion.test.mjs",
+        "tests/layer4dx/e2-fx-native-batch-handler.test.mjs"
       ]
     },
     {
@@ -3179,7 +3219,8 @@
       "handler_export": "set_fx_preset_by_index",
       "artifact_policy": "none",
       "tests": [
-        "tests/layer4dx/e2-fx-l1-read-handler-expansion.test.mjs"
+        "tests/layer4dx/e2-fx-l1-read-handler-expansion.test.mjs",
+        "tests/layer4dx/e2-fx-native-batch-handler.test.mjs"
       ]
     },
     {
@@ -3196,7 +3237,8 @@
       "handler_export": "reorder_fx",
       "artifact_policy": "none",
       "tests": [
-        "tests/layer4dx/e2-fx-l1-read-handler-expansion.test.mjs"
+        "tests/layer4dx/e2-fx-l1-read-handler-expansion.test.mjs",
+        "tests/layer4dx/e2-fx-native-batch-handler.test.mjs"
       ]
     },
     {

@@ -56,6 +56,7 @@ import {
   normalizeFoundationBridgeRequest,
   validateFoundationBridgeResult,
 } from "../../core/src/foundation-bridge-v1.mjs";
+import { EXECUTION_DEADLINE_MAX_MS } from "../../core/src/execution-deadline-v1.mjs";
 import {
   createExecutableRecipeRevisionStore,
 } from "../../core/src/executable-recipe-revision-store-v1.mjs";
@@ -258,6 +259,7 @@ async function main() {
       context: z.record(z.unknown()).optional(),
       budget: z.record(z.unknown()).optional(),
       idempotency_key: z.string().optional(),
+      deadline_ms: z.number().int().positive().max(EXECUTION_DEADLINE_MAX_MS).optional(),
     },
     async (request, extra) => {
       let normalized;
@@ -343,6 +345,7 @@ async function main() {
       limit: z.number().int().positive().optional(),
       cursor: z.string().optional().nullable(),
       budget: z.record(z.unknown()).optional(),
+      deadline_ms: z.number().int().positive().max(EXECUTION_DEADLINE_MAX_MS).optional(),
       relative_path: z.string().optional(),
       saved_at: z.string().optional(),
     },
@@ -661,7 +664,7 @@ export function createStdioCallRecipeRuntime({ env, callTemplateRuntime, artifac
 }
 
 function createStdioRecipeDispatchers({ callTemplateRuntime, artifactRuntime, callContext }) {
-  const callTemplateStage = async ({ stage, inputs, refs, recipe_undo, signal }) => {
+  const callTemplateStage = async ({ stage, inputs, refs, recipe_undo, signal, deadline, performance }) => {
     if (typeof callTemplateRuntime?.call_template !== "function" || typeof callContext?.allocate !== "function") {
       throw new Error("Recipe Macro/Template stage runtime is not configured.");
     }
@@ -678,6 +681,8 @@ function createStdioRecipeDispatchers({ callTemplateRuntime, artifactRuntime, ca
     }
     return callTemplateRuntime.call_template(request, {
       signal,
+      deadline,
+      performance,
       dispatchTimeoutMs: CALL_RECIPE_STAGE_DISPATCH_TIMEOUT_MS,
     });
   };

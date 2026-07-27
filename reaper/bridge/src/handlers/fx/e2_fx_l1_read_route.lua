@@ -1285,6 +1285,283 @@ local function set_fx_parameter_normalized(request)
   }), nil, json_array({}), json_array({}), e2_fx_read_refs(ref)
 end
 
+local E2_FX_PARAMETER_ASSIGNMENTS_BATCH_MAX_ROWS = 64
+local E2_FX_PARAMETER_ASSIGNMENTS_BATCH_CHUNK_SIZE = 8
+
+local function e2_fx_batch_finite(value)
+  return type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge
+end
+
+local function e2_fx_batch_error(code, message, details)
+  local _, failure = e2_fx_read_error(code, message, details)
+  return nil, failure
+end
+
+local function e2_fx_batch_exact_ref(ref)
+  if not is_object(ref) or ref.kind ~= "fx" or not is_string(ref.ref) then
+    return nil
+  end
+  local owner_kind
+  local owner_ref, slot_text = ref.ref:match("^fx:(track:[^:]+:.+):(%d+)$")
+  if owner_ref then
+    owner_kind = "track"
+  else
+    owner_ref, slot_text = ref.ref:match("^fx:(take:[^:]+:.+):(%d+)$")
+    if owner_ref then
+      owner_kind = "take"
+    end
+  end
+  if not owner_kind or not owner_ref or not slot_text then
+    return nil
+  end
+  local identity = is_object(ref.identity) and ref.identity or {}
+  local expected_scheme = owner_kind .. "_fx"
+  local expected_value = owner_ref .. ":" .. slot_text
+  if identity.scheme ~= expected_scheme or identity.value ~= expected_value then
+    return nil
+  end
+  return owner_kind, owner_ref, math.floor(tonumber(slot_text))
+end
+
+local function e2_fx_batch_ref_map(request)
+  if not is_json_array(request.refs) then
+    return e2_fx_batch_error("PARAMS_INVALID", "FX assignment batch requires an exact FX ref array.", { zero_write = true })
+  end
+  local refs = {}
+  for index = 1, #request.refs do
+    local ref = request.refs[index]
+    if not e2_fx_batch_exact_ref(ref) then
+      return e2_fx_batch_error("FX_REF_INVALID", "FX assignment batch rejected a malformed or contradictory FX object ref.", { ref_index = index, zero_write = true })
+    end
+    if refs[ref.ref] then
+      return e2_fx_batch_error("FX_REF_DUPLICATE", "FX assignment batch received a duplicate FX object ref.", { ref = ref.ref, zero_write = true })
+    end
+    refs[ref.ref] = ref
+  end
+  return refs
+end
+
+local function e2_fx_batch_row_failure(code, message, index, details)
+  details = details or {}
+  details.row_index = index
+  details.zero_write = details.zero_write ~= false
+  local _, failure = e2_fx_read_error(code, message, details)
+  return failure
+end
+
+local function e2_fx_batch_validate_rows(request, ref_map)
+  local params = request.params or {}
+  local batch = params.batch
+  if not is_json_array(batch) or #batch < 1 or #batch > E2_FX_PARAMETER_ASSIGNMENTS_BATCH_MAX_ROWS then
+    return e2_fx_batch_error("BATCH_LIMIT_EXCEEDED", "FX assignment batch accepts 1-64 rows.", { row_count = is_json_array(batch) and #batch or 0, zero_write = true })
+  end
+  if type(params.dry_run) ~= "boolean" then
+    return e2_fx_batch_error("PARAMS_INVALID", "FX assignment batch dry_run must be boolean.", { zero_write = true })
+  end
+  local seen = {}
+  local prepared = {}
+  for index = 1, #batch do
+    local row = batch[index]
+    if not is_object(row) then
+      return nil, e2_fx_batch_row_failure("PARAMS_INVALID", "FX assignment batch rows must be objects.", index)
+    end
+    for key in pairs(row) do
+      if key ~= "id" and key ~= "fx_ref" and key ~= "param_index" and key ~= "param_ident"
+          and key ~= "param_name" and key ~= "normalized_value" and key ~= "requested_formatted_value" then
+        return nil, e2_fx_batch_row_failure("PARAMS_INVALID", "FX assignment batch row contains an unsupported field.", index, { field = key })
+      end
+    end
+    if not is_string(row.id) or row.id == "" or #row.id > 12 or seen[row.id] then
+      return nil, e2_fx_batch_row_failure("PARAMS_INVALID", "FX assignment batch row id must be unique and bounded.", index)
+    end
+    seen[row.id] = true
+    if not is_string(row.fx_ref) or not ref_map[row.fx_ref] then
+      return nil, e2_fx_batch_row_failure("FX_REF_NOT_FOUND", "FX assignment batch row requires a matching exact FX object ref.", index, { fx_ref = row.fx_ref })
+    end
+    local has_index = row.param_index ~= nil
+    local has_ident = is_string(row.param_ident) and row.param_ident ~= ""
+    local has_name = is_string(row.param_name) and row.param_name ~= ""
+    if (has_index and has_name) or (has_ident and has_name) or (not has_index and not has_ident and not has_name) then
+      return nil, e2_fx_batch_row_failure("PARAMS_INVALID", "FX assignment batch row requires exactly one parameter selector.", index)
+    end
+    local param_index = has_index and tonumber(row.param_index) or nil
+    if has_index and (not param_index or param_index < 0 or param_index ~= math.floor(param_index)) then
+      return nil, e2_fx_batch_row_failure("PARAMS_INVALID", "FX assignment batch param_index must be a non-negative integer.", index)
+    end
+    local normalized_value = tonumber(row.normalized_value)
+    if not e2_fx_batch_finite(normalized_value) or normalized_value < 0 or normalized_value > 1 then
+      return nil, e2_fx_batch_row_failure("PARAMS_INVALID", "FX assignment batch normalized_value must be finite and between 0 and 1.", index)
+    end
+    if row.requested_formatted_value ~= nil and (not is_string(row.requested_formatted_value) or row.requested_formatted_value == "") then
+      return nil, e2_fx_batch_row_failure("PARAMS_INVALID", "FX assignment batch requested_formatted_value must be a non-empty string.", index)
+    end
+    local owner_kind, owner, slot_index = e2_fx_read_fx_owner_from_ref_object(ref_map[row.fx_ref], request)
+    if not owner or not owner_kind or slot_index == nil then
+      return nil, e2_fx_batch_row_failure("FX_REF_NOT_FOUND", "FX assignment batch could not resolve the exact FX owner.", index, { fx_ref = row.fx_ref })
+    end
+    local parameter_count = e2_fx_read_param_count(owner_kind, owner, slot_index)
+    if param_index == nil then
+      for candidate = 0, parameter_count - 1 do
+        local candidate_ident = e2_fx_read_param_ident(owner_kind, owner, slot_index, candidate)
+        local candidate_name = e2_fx_read_param_name(owner_kind, owner, slot_index, candidate)
+        if (has_ident and candidate_ident == row.param_ident)
+            or (has_name and type(candidate_name) == "string" and string.lower(candidate_name) == string.lower(row.param_name)) then
+          param_index = candidate
+          break
+        end
+      end
+    end
+    if param_index == nil or param_index >= parameter_count then
+      return nil, e2_fx_batch_row_failure("FX_PARAMETER_NOT_FOUND", "FX assignment batch selector did not resolve to a live parameter.", index, { parameter_count = parameter_count })
+    end
+    local live_ident = e2_fx_read_param_ident(owner_kind, owner, slot_index, param_index)
+    local live_name = e2_fx_read_param_name(owner_kind, owner, slot_index, param_index)
+    if not live_ident then
+      return nil, e2_fx_batch_row_failure("FX_PARAMETER_IDENTITY_UNAVAILABLE", "FX assignment batch could not prove stable native parameter identity.", index, { param_index = param_index })
+    end
+    if has_ident and live_ident ~= row.param_ident then
+      return nil, e2_fx_batch_row_failure("FX_PARAMETER_IDENTITY_MISMATCH", "FX assignment batch param_ident does not match native identity.", index, { live_param_ident = live_ident })
+    end
+    if has_name and (type(live_name) ~= "string" or string.lower(live_name) ~= string.lower(row.param_name)) then
+      return nil, e2_fx_batch_row_failure("FX_PARAMETER_NAME_MISMATCH", "FX assignment batch param_name does not match native name.", index, { live_param_name = live_name })
+    end
+    local formatted = e2_fx_format_param_normalized(owner_kind, owner, slot_index, param_index, normalized_value)
+    if not is_string(formatted) or formatted == "" then
+      return nil, e2_fx_batch_row_failure("API_UNAVAILABLE", "FX assignment batch could not format the native target value.", index)
+    end
+    if is_string(row.requested_formatted_value) and row.requested_formatted_value ~= formatted then
+      return nil, e2_fx_batch_row_failure("FX_ASSIGNMENTS_FORMATTED_TARGET_MISMATCH", "FX assignment batch requested formatted value does not match native formatting.", index, { requested_formatted_value = row.requested_formatted_value, native_formatted_value = formatted })
+    end
+    local step_sizes = e2_fx_read_param_step_sizes(owner_kind, owner, slot_index, param_index)
+    prepared[#prepared + 1] = {
+      row = row,
+      owner_kind = owner_kind,
+      owner = owner,
+      slot_index = slot_index,
+      param_index = param_index,
+      param_ident = live_ident,
+      name = live_name,
+      normalized_value = normalized_value,
+      requested_formatted_value = formatted,
+      step_sizes = step_sizes,
+      tolerance = step_sizes.is_discrete == true and 0 or 0.001,
+    }
+  end
+  return prepared
+end
+
+local function e2_fx_parameter_assignments_batch(request)
+  local ref_map, ref_failure = e2_fx_batch_ref_map(request)
+  if not ref_map then return nil, ref_failure end
+  local prepared, validation_failure = e2_fx_batch_validate_rows(request, ref_map)
+  if not prepared then return nil, validation_failure end
+  local dry_run = request.params.dry_run == true
+  local result_rows = json_array({})
+  local refs = json_array({})
+  for ref in pairs(ref_map) do
+    local object_ref = ref_map[ref]
+    refs[#refs + 1] = object_ref
+  end
+  local batch_timings = { preflight_ms = 0, mutation_ms = 0, readback_ms = 0, transport_ms = 0, rows = #prepared, chunk_size = E2_FX_PARAMETER_ASSIGNMENTS_BATCH_CHUNK_SIZE, chunks = math.ceil(#prepared / E2_FX_PARAMETER_ASSIGNMENTS_BATCH_CHUNK_SIZE), runner = "e2_generic_fx_native_serial_batch", native_mutation_count = 0, native_readback_count = 0 }
+  local preflight_started = os.clock()
+  batch_timings.preflight_ms = (os.clock() - preflight_started) * 1000
+  if dry_run then
+    for index = 1, #prepared do
+      local item = prepared[index]
+      result_rows[#result_rows + 1] = {
+        id = item.row.id,
+        fx_ref = item.row.fx_ref,
+        param_index = item.param_index,
+        param_ident = item.param_ident,
+        name = item.name,
+        normalized_value = item.normalized_value,
+        formatted_value = item.requested_formatted_value,
+        requested_normalized_value = item.normalized_value,
+        requested_formatted_value = item.requested_formatted_value,
+        tolerance = item.tolerance,
+        verification_mode = item.tolerance == 0 and "native_discrete_format" or "numeric_tolerance",
+        updated = true,
+        readback_status = "preflight_passed",
+      }
+    end
+    return e2_fx_read_summary(request, { rows = result_rows, mutation_attempted = false, batch_timings = batch_timings }), nil, json_array({}), json_array({}), refs
+  end
+
+  local mutation_started = os.clock()
+  local mutation_failure = nil
+  for chunk_start = 1, #prepared, E2_FX_PARAMETER_ASSIGNMENTS_BATCH_CHUNK_SIZE do
+    local chunk_end = math.min(#prepared, chunk_start + E2_FX_PARAMETER_ASSIGNMENTS_BATCH_CHUNK_SIZE - 1)
+    for index = chunk_start, chunk_end do
+      local item = prepared[index]
+      batch_timings.native_mutation_count = batch_timings.native_mutation_count + 1
+      if not e2_fx_set_param_normalized(item.owner_kind, item.owner, item.slot_index, item.param_index, item.normalized_value) then
+        mutation_failure = e2_fx_batch_row_failure("COMMAND_FAILED", "REAPER rejected an FX assignment batch setter.", index, { mutation_attempted = true, zero_write = false })
+        break
+      end
+    end
+    if mutation_failure then break end
+  end
+  batch_timings.mutation_ms = (os.clock() - mutation_started) * 1000
+
+  local readback_started = os.clock()
+  local readback_failure = nil
+  for index = 1, #prepared do
+    local item = prepared[index]
+    local normalized_value = e2_fx_read_param_normalized(item.owner_kind, item.owner, item.slot_index, item.param_index)
+    local formatted_value = e2_fx_read_param_formatted(item.owner_kind, item.owner, item.slot_index, item.param_index)
+    local values = e2_fx_read_param_value(item.owner_kind, item.owner, item.slot_index, item.param_index)
+    local updated = item.tolerance == 0
+      and formatted_value == item.requested_formatted_value
+      or e2_fx_batch_finite(normalized_value) and math.abs(normalized_value - item.normalized_value) <= item.tolerance
+    if not e2_fx_batch_finite(normalized_value) or not is_string(formatted_value) or formatted_value == "" or not updated then
+      readback_failure = e2_fx_batch_row_failure("VERIFY_FAILED", "FX assignment batch aggregate readback did not match native identity or value truth.", index, { mutation_attempted = batch_timings.native_mutation_count > 0, zero_write = false })
+      break
+    end
+    batch_timings.native_readback_count = batch_timings.native_readback_count + 1
+    result_rows[#result_rows + 1] = {
+      id = item.row.id,
+      fx_ref = item.row.fx_ref,
+      owner_kind = item.owner_kind,
+      slot_index = item.slot_index,
+      param_index = item.param_index,
+      param_ident = item.param_ident,
+      name = item.name,
+      value = values.value,
+      min_value = values.min_value,
+      max_value = values.max_value,
+      normalized_value = normalized_value,
+      formatted_value = formatted_value,
+      requested_normalized_value = item.normalized_value,
+      requested_formatted_value = item.requested_formatted_value,
+      tolerance = item.tolerance,
+      verification_mode = item.tolerance == 0 and "native_discrete_format" or "numeric_tolerance",
+      step_sizes_available = item.step_sizes.step_sizes_available,
+      step_size = item.step_sizes.step_size,
+      small_step_size = item.step_sizes.small_step_size,
+      large_step_size = item.step_sizes.large_step_size,
+      is_toggle = item.step_sizes.is_toggle,
+      is_discrete = item.step_sizes.is_discrete,
+      updated = true,
+      readback_status = "aggregate_passed",
+    }
+  end
+  batch_timings.readback_ms = (os.clock() - readback_started) * 1000
+  if mutation_failure then
+    local failure = mutation_failure[2] or mutation_failure
+    failure.details = failure.details or {}
+    failure.details.mutation_attempted = true
+    failure.details.completed_rows = batch_timings.native_readback_count
+    return nil, failure
+  end
+  if readback_failure then
+    local failure = readback_failure[2] or readback_failure
+    failure.details = failure.details or {}
+    failure.details.mutation_attempted = batch_timings.native_mutation_count > 0
+    return nil, failure
+  end
+  return e2_fx_write_summary(request, { rows = result_rows, mutation_attempted = true, batch_timings = batch_timings }), nil, json_array({}), json_array({}), refs
+end
+
 local function reorder_fx(request)
   local owner_kind, owner, slot_index = e2_fx_read_fx_from_request_refs(request)
   if not owner then

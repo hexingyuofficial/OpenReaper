@@ -185,7 +185,7 @@ describe("Wave 1A project template descriptors", () => {
     assert.equal(createProjectTab.bridge.timeout_ms, 30_000);
     assert.equal(openProjectInTab.bridge.timeout_ms, 30_000);
     assert.equal(activateProjectTab.bridge.timeout_ms, 5_000);
-    assert.equal(listOpenProjects.bridge.timeout_ms, 5_000);
+    assert.equal(listOpenProjects.bridge.timeout_ms, 30_000);
     assert.equal(Object.hasOwn(createSubproject.inputSchema.properties, "raw_action"), false);
     assert.equal(Object.hasOwn(createProjectTab.inputSchema.properties, "project_file_path"), false);
     assert.equal(listOpenProjects.risk, "read");

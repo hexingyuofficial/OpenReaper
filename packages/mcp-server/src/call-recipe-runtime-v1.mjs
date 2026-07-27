@@ -47,6 +47,24 @@ import {
   MACRO_EXECUTION_CONTRACT,
   validateMacroExecutionEnvelope,
 } from "./macro-runtime-contract-v1.mjs";
+import {
+  createExecutionDeadline,
+  mergeDeadlineDetails,
+  normalizeExecutionDeadlineMs,
+} from "../../core/src/execution-deadline-v1.mjs";
+import {
+  addExecutionPerformanceCounter,
+  addExecutionPerformancePhase,
+  attachExecutionPerformance,
+  createExecutionPerformance,
+  finishExecutionPerformance,
+  snapshotExecutionPerformance,
+} from "../../core/src/execution-performance-v1.mjs";
+import {
+  CALL_TEMPLATE_INTERNAL_CHILD_DISPATCH_TIMEOUT_MS,
+  CALL_TEMPLATE_INTERNAL_DISPATCH_TIMEOUT,
+  CALL_TEMPLATE_INTERNAL_RECIPE_UNDO,
+} from "./call-template-runtime-v1.mjs";
 
 export const CALL_RECIPE_RUNTIME_CONTRACT = "call_recipe.runtime.v1";
 export const CALL_RECIPE_TOOL_NAME = "call_recipe";
@@ -202,6 +220,9 @@ export function createAuthoritativeRuntimeFactsProvider(options = {}) {
 
 export async function callRecipe(request = {}, options = {}) {
   const startedAt = Date.now();
+  const performance = createExecutionPerformance();
+  let deadline = null;
+  let runtimeOptions = { ...options, performance };
   try {
     if (!isPlainObject(request)) {
       throw new CallRecipeRuntimeError("call_recipe request must be an object.", "PARAMS_INVALID");
@@ -223,7 +244,19 @@ export async function callRecipe(request = {}, options = {}) {
       );
     }
 
-    const budget = normalizeCallRecipeBudget(request.budget);
+    let deadlineMs;
+    try {
+      deadlineMs = normalizeExecutionDeadlineMs(request.deadline_ms);
+    } catch (error) {
+      throw new CallRecipeRuntimeError(
+        error.message,
+        "PARAMS_INVALID",
+        { field: "deadline_ms" },
+      );
+    }
+    deadline = createExecutionDeadline({ deadlineMs, signal: options.signal });
+    runtimeOptions = { ...options, signal: deadline.signal, deadline, performance };
+    const budget = normalizeCallRecipeBudget(request.budget, { operation });
     if (["save", "delete", "run", "resume"].includes(operation)) {
       assertMutationResponseBudget(budget, operation);
     }
@@ -231,35 +264,43 @@ export async function callRecipe(request = {}, options = {}) {
     let response;
     switch (operation) {
       case "validate":
-        response = opValidate(request, options);
+        response = opValidate(request, runtimeOptions);
         break;
       case "save":
-        response = opSave(request, options);
+        response = opSave(request, runtimeOptions);
         break;
       case "list":
-        response = opList(request, options, budget);
+        response = opList(request, runtimeOptions, budget);
         break;
       case "get":
-        response = opGet(request, options);
+        response = opGet(request, runtimeOptions);
         break;
       case "delete":
-        response = opDelete(request, options);
+        response = opDelete(request, runtimeOptions);
         break;
       case "run":
-        response = await opRun(request, options, { startedAt, resume: false, budget });
+        response = await opRun(request, runtimeOptions, { startedAt, resume: false, budget });
         break;
       case "resume":
-        response = await opRun(request, options, { startedAt, resume: true, budget });
+        response = await opRun(request, runtimeOptions, { startedAt, resume: true, budget });
         break;
       default:
         throw new CallRecipeRuntimeError("Unsupported operation.", "OPERATION_INVALID");
     }
-    return enforceCallRecipeResponseBudget(response, budget, { operation });
+    return enforceCallRecipeResponseBudget(
+      attachExecutionPerformance(response, performance, Date.now() - startedAt),
+      budget,
+      { operation },
+    );
   } catch (error) {
-    const response = finalizeError(error, request, options, startedAt);
-    return enforceCallRecipeResponseBudget(response, safeCallRecipeBudget(request?.budget), {
-      operation: request?.operation,
-    });
+    const response = finalizeError(error, request, runtimeOptions, startedAt);
+    return enforceCallRecipeResponseBudget(
+      attachExecutionPerformance(response, performance, Date.now() - startedAt),
+      safeCallRecipeBudget(request?.budget, { operation: request?.operation }),
+      { operation: request?.operation },
+    );
+  } finally {
+    deadline?.cleanup();
   }
 }
 
@@ -503,7 +544,7 @@ function opDelete(request, options) {
 }
 
 async function opRun(request, options, { startedAt, resume, budget }) {
-  assertRecipeRequestActive(options.signal);
+  assertRecipeRequestActive(options.signal, options.deadline);
   rejectInlineExecutionPayload(request, resume ? "resume" : "run");
   if (!resume && (request.run_id !== undefined || request.runId !== undefined)) {
     throw new CallRecipeRuntimeError(
@@ -590,13 +631,15 @@ async function opRun(request, options, { startedAt, resume, budget }) {
   }, { catalog });
   const revision = matched.payload;
   assertRunMutationResponseBudget(budget, resume ? "resume" : "run", revision);
+  const livePreflightStartedAt = Date.now();
   const runtimeFacts = await loadAuthoritativeRuntimeFacts(options.runtimeFactsProvider, {
     operation: resume ? "resume" : "run",
     revision,
     run_id: runId,
     latest_checkpoint: resumeState?.latest_checkpoint ?? null,
   });
-  assertRecipeRequestActive(options.signal);
+  addExecutionPerformancePhase(options.performance, "live_preflight", Date.now() - livePreflightStartedAt);
+  assertRecipeRequestActive(options.signal, options.deadline);
   const requestedInputs = resume
     ? cloneJson(resumeState.inputs ?? {})
     : (isPlainObject(request.inputs) ? request.inputs : {});
@@ -608,7 +651,7 @@ async function opRun(request, options, { startedAt, resume, budget }) {
     runtime_facts: runtimeFacts,
     retained: resumeState?.run_hydration ?? null,
   });
-  assertRecipeRequestActive(options.signal);
+  assertRecipeRequestActive(options.signal, options.deadline);
   if (!hydration.ok) {
     const retained = retainedFailureTruth(revision, resumeState, runId);
     return withRunExecutionTruth(projectRunFailureEnvelope({
@@ -678,12 +721,14 @@ async function opRun(request, options, { startedAt, resume, budget }) {
     });
   }
 
+  const validationStartedAt = Date.now();
   const preflight = preflightExecutableRecipeRevision(revision, {
     catalog,
     dispatchers,
     runtime_facts: trustRuntimeFacts,
     inputs,
   });
+  addExecutionPerformancePhase(options.performance, "validation", Date.now() - validationStartedAt);
   if (!preflight.ok) {
     const retained = retainedFailureTruth(revision, resumeState, runId);
     return withRunExecutionTruth(projectRunFailureEnvelope({
@@ -722,15 +767,16 @@ async function opRun(request, options, { startedAt, resume, budget }) {
   let processed = resumeState?.counts?.processed ?? 0;
   const provenPartialChanges = [...(resumeState?.proven_partial_changes ?? [])];
   const telemetry = createRunTelemetry(resumeState?.telemetry);
+  telemetry.performance = options.performance;
   const attempt = (resumeState?.attempt_count ?? 0) + 1;
-  assertRecipeRequestActive(options.signal);
-  let undo = await beginRecipeUndo(options.undoController, {
+  assertRecipeRequestActive(options.signal, options.deadline);
+  let undo = await measureRecipeUndoCall(options.performance, () => beginRecipeUndo(options.undoController, {
     revision,
     runId,
     attempt,
     stages: stages.filter((stage) => !completed.has(stage.id)),
     projectRef: runtimeFacts.project_identity,
-  });
+  }));
   if (undo.status === "open_failed" || undo.status === "open_unknown") {
     const openUnknown = undo.status === "open_unknown";
     const mutationTruth = openUnknown ? "unknown" : "not_applied";
@@ -771,9 +817,9 @@ async function opRun(request, options, { startedAt, resume, budget }) {
       continue;
     }
 
-    if (options.signal?.aborted === true) {
+    if (requestExecutionInactive(options.signal, options.deadline)) {
       const mutationTruth = summarizeMutationTruth(telemetry, evidenceItems);
-      undo = await closeRecipeUndo(options.undoController, undo, mutationTruth);
+      undo = await measureRecipeUndoCall(options.performance, () => closeRecipeUndo(options.undoController, undo, mutationTruth));
       return failPartial({
         operation: resume ? "resume" : "run",
         revision,
@@ -791,7 +837,10 @@ async function opRun(request, options, { startedAt, resume, budget }) {
         counts: { processed, applied, skipped },
         options,
         resumeSafe: false,
-        details: { request_cancelled: true, zero_write: mutationTruth === "not_applied" },
+        details: mergeDeadlineDetails(options.deadline, {
+          request_cancelled: true,
+          zero_write: mutationTruth === "not_applied",
+        }),
         startedAt,
         telemetry,
         undo,
@@ -803,7 +852,7 @@ async function opRun(request, options, { startedAt, resume, budget }) {
     const dispatcher = selectDispatcher(dispatchers, stage.kind);
     if (typeof dispatcher !== "function") {
       const mutationTruth = summarizeMutationTruth(telemetry, evidenceItems);
-      undo = await closeRecipeUndo(options.undoController, undo, mutationTruth);
+      undo = await measureRecipeUndoCall(options.performance, () => closeRecipeUndo(options.undoController, undo, mutationTruth));
       return failPartial({
         operation: resume ? "resume" : "run",
         revision,
@@ -863,7 +912,7 @@ async function opRun(request, options, { startedAt, resume, budget }) {
     }
     if (hydratedStage.ok !== true) {
       const mutationTruth = summarizeMutationTruth(telemetry, evidenceItems);
-      undo = await closeRecipeUndo(options.undoController, undo, mutationTruth);
+      undo = await measureRecipeUndoCall(options.performance, () => closeRecipeUndo(options.undoController, undo, mutationTruth));
       return failPartial({
         operation: resume ? "resume" : "run",
         revision,
@@ -891,6 +940,7 @@ async function opRun(request, options, { startedAt, resume, budget }) {
     const stageInputs = hydratedStage.inputs;
     let outcome;
     let dispatcherThrew = false;
+    const transportCallsBeforeStage = executionPerformanceCounter(options.performance, "transport_call_count");
     const stageStartedAt = Date.now();
     try {
       outcome = await dispatcher({
@@ -901,6 +951,8 @@ async function opRun(request, options, { startedAt, resume, budget }) {
         recipe_inputs: inputs,
         recipe_undo: dispatcherRecipeUndoContext(undo),
         signal: options.signal,
+        deadline: options.deadline,
+        performance: options.performance,
       });
     } catch (error) {
       dispatcherThrew = true;
@@ -917,10 +969,27 @@ async function opRun(request, options, { startedAt, resume, budget }) {
       };
     }
 
+    if (options.deadline?.isExpired?.()) {
+      const hadEnvelopeContract = typeof outcome?.contract === "string";
+      outcome = outcomeAfterRecipeDeadline(outcome, options.deadline, stage);
+      dispatcherThrew = !hadEnvelopeContract;
+    }
+
     const normalized = dispatcherThrew
       ? normalizeDispatcherErrorOutcome(stage, outcome)
       : normalizeStageOutcome(stage, outcome, revision);
-    const stageTelemetry = recordStageTelemetry(telemetry, stage, outcome, normalized, Date.now() - stageStartedAt);
+    const transportCallsAfterStage = executionPerformanceCounter(options.performance, "transport_call_count");
+    const stageTransportCallCount = transportCallsBeforeStage === null || transportCallsAfterStage === null
+      ? 0
+      : Math.max(0, transportCallsAfterStage - transportCallsBeforeStage);
+    const stageTelemetry = recordStageTelemetry(
+      telemetry,
+      stage,
+      outcome,
+      normalized,
+      Date.now() - stageStartedAt,
+      stageTransportCallCount,
+    );
     const stageTruth = stageMutationTruth(stage, normalized, stageTelemetry);
     processed += 1;
     evidenceItems.push(freeze({
@@ -937,9 +1006,9 @@ async function opRun(request, options, { startedAt, resume, budget }) {
     if (Array.isArray(normalized.proven_changes)) {
       provenPartialChanges.push(...normalized.proven_changes);
     }
-    if (options.signal?.aborted === true) {
+    if (requestExecutionInactive(options.signal, options.deadline)) {
       const mutationTruth = summarizeMutationTruth(telemetry, evidenceItems);
-      undo = await closeRecipeUndo(options.undoController, undo, mutationTruth);
+      undo = await measureRecipeUndoCall(options.performance, () => closeRecipeUndo(options.undoController, undo, mutationTruth));
       return failPartial({
         operation: resume ? "resume" : "run",
         revision,
@@ -957,7 +1026,10 @@ async function opRun(request, options, { startedAt, resume, budget }) {
         counts: { processed, applied, skipped },
         options,
         resumeSafe: false,
-        details: { request_cancelled: true, zero_write: mutationTruth === "not_applied" },
+        details: mergeDeadlineDetails(options.deadline, {
+          request_cancelled: true,
+          zero_write: mutationTruth === "not_applied",
+        }),
         startedAt,
         telemetry,
         undo,
@@ -966,7 +1038,7 @@ async function opRun(request, options, { startedAt, resume, budget }) {
     }
     if (!normalized.ok || normalized.verified !== true) {
       const mutationTruth = summarizeMutationTruth(telemetry, evidenceItems);
-      undo = await closeRecipeUndo(options.undoController, undo, mutationTruth);
+      undo = await measureRecipeUndoCall(options.performance, () => closeRecipeUndo(options.undoController, undo, mutationTruth));
       return failPartial({
         operation: resume ? "resume" : "run",
         revision,
@@ -1007,33 +1079,63 @@ async function opRun(request, options, { startedAt, resume, budget }) {
     );
     latestCheckpoint = buildVerifiedCheckpoint(revision, stage, normalized);
 
-    options.runStore.put(runId, {
-      run_id: runId,
-      identity: {
-        recipe_id: revision.recipe_id,
-        version: revision.version,
-        revision: revision.revision,
-        content_hash: revision.content_hash,
-        validation_result_id: revision.validation_result_id,
-      },
-      inputs,
-      completed_stage_ids: [...completed],
-      binding_values: bindingValues,
-      latest_checkpoint: latestCheckpoint,
-      evidence_items: evidenceItems,
-      proven_partial_changes: provenPartialChanges,
-      counts: { processed, applied, skipped },
-      resume_safe: true,
-      telemetry: snapshotRunTelemetry(telemetry),
-      undo,
-      attempt_count: attempt,
-      run_hydration: hydration.context,
-      runtime_binding: runtimeBinding,
-    });
+    try {
+      options.runStore.put(runId, {
+        run_id: runId,
+        identity: {
+          recipe_id: revision.recipe_id,
+          version: revision.version,
+          revision: revision.revision,
+          content_hash: revision.content_hash,
+          validation_result_id: revision.validation_result_id,
+        },
+        inputs,
+        completed_stage_ids: [...completed],
+        binding_values: bindingValues,
+        latest_checkpoint: latestCheckpoint,
+        evidence_items: evidenceItems,
+        proven_partial_changes: provenPartialChanges,
+        counts: { processed, applied, skipped },
+        resume_safe: true,
+        telemetry: snapshotRunTelemetry(telemetry),
+        undo,
+        attempt_count: attempt,
+        run_hydration: hydration.context,
+        runtime_binding: runtimeBinding,
+      });
+    } catch (error) {
+      const mutationTruth = summarizeMutationTruth(telemetry, evidenceItems);
+      undo = await measureRecipeUndoCall(options.performance, () => closeRecipeUndo(options.undoController, undo, mutationTruth));
+      return failPartial({
+        operation: resume ? "resume" : "run",
+        revision,
+        runId,
+        code: "STORE_ERROR",
+        message: "Recipe run state could not be persisted after a completed stage; inspect the preserved mutation before retrying.",
+        stage,
+        stages,
+        completed,
+        evidenceItems,
+        provenPartialChanges,
+        latestCheckpoint,
+        bindingValues,
+        inputs,
+        counts: { processed, applied, skipped },
+        options,
+        resumeSafe: false,
+        details: persistenceFailureDetails("run_store", error, mutationTruth),
+        startedAt,
+        telemetry,
+        undo,
+        mutationTruth,
+        failedStageAlreadyCompleted: true,
+        persistRun: false,
+      });
+    }
   }
 
   const successMutationTruth = summarizeMutationTruth(telemetry, evidenceItems);
-  undo = await closeRecipeUndo(options.undoController, undo, successMutationTruth);
+  undo = await measureRecipeUndoCall(options.performance, () => closeRecipeUndo(options.undoController, undo, successMutationTruth));
   if (undo.status === "close_unknown") {
     return failPartial({
       operation: resume ? "resume" : "run",
@@ -1061,10 +1163,44 @@ async function opRun(request, options, { startedAt, resume, budget }) {
     });
   }
 
+  // A user deadline is allowed to expire during the final stage or Undo close.
+  // Preserve the completed-stage evidence and return the same partial truth
+  // instead of reporting success after the atomic Recipe budget has elapsed.
+  if (requestExecutionInactive(options.signal, options.deadline)) {
+    return failPartial({
+      operation: resume ? "resume" : "run",
+      revision,
+      runId,
+      code: "STAGE_FAILED",
+      message: "Recipe completed its stages after the user deadline; inspect the preserved evidence before retrying.",
+      stage: stages.at(-1),
+      stages,
+      completed,
+      evidenceItems,
+      provenPartialChanges,
+      latestCheckpoint,
+      bindingValues,
+      inputs,
+      counts: { processed, applied, skipped },
+      options,
+      resumeSafe: false,
+      details: mergeDeadlineDetails(options.deadline, {
+        request_cancelled: true,
+        deadline_expired_after_stage_completion: true,
+        zero_write: successMutationTruth === "not_applied",
+      }),
+      startedAt,
+      telemetry,
+      undo,
+      mutationTruth: successMutationTruth,
+      failedStageAlreadyCompleted: true,
+    });
+  }
+
   const verifiedOutputs = collectRecipeOutputs(revision.draft, bindingValues, inputs);
   const runSummary = buildRunSummaryEvidence({ startedAt, telemetry, undo, mutationTruth: successMutationTruth });
   const evidenceRef = createExecutableRecipeEvidenceRef(runId, 0);
-  options.evidenceStore.put(evidenceRef, {
+  const evidencePayload = {
     run_id: runId,
     recipe_id: revision.recipe_id,
     version: revision.version,
@@ -1072,31 +1208,115 @@ async function opRun(request, options, { startedAt, resume, budget }) {
     content_hash: revision.content_hash,
     run_summary: runSummary,
     items: evidenceItems,
-  });
-  options.runStore.put(runId, {
-    run_id: runId,
-    identity: {
-      recipe_id: revision.recipe_id,
-      version: revision.version,
-      revision: revision.revision,
-      content_hash: revision.content_hash,
-      validation_result_id: revision.validation_result_id,
-    },
-    inputs,
-    completed_stage_ids: [...completed],
-    binding_values: bindingValues,
-    latest_checkpoint: latestCheckpoint,
-    evidence_items: evidenceItems,
-    proven_partial_changes: provenPartialChanges,
-    counts: { processed, applied, skipped },
-    resume_safe: false,
-    status: "succeeded",
-    telemetry: snapshotRunTelemetry(telemetry),
-    undo,
-    run_summary: runSummary,
-    attempt_count: attempt,
-    runtime_binding: runtimeBinding,
-  });
+  };
+  try {
+    putRecipeEvidence(options.evidenceStore, evidenceRef, evidencePayload, options.performance);
+  } catch (error) {
+    return recipePersistenceFailure({
+      operation: resume ? "resume" : "run",
+      revision,
+      runId,
+      stage: stages.at(-1),
+      stages,
+      completed,
+      evidenceItems,
+      provenPartialChanges,
+      latestCheckpoint,
+      bindingValues,
+      inputs,
+      counts: { processed, applied, skipped },
+      options,
+      startedAt,
+      telemetry,
+      undo,
+      mutationTruth: successMutationTruth,
+      store: "evidence_store",
+      error,
+    });
+  }
+  finalizeRunSummaryPerformance(runSummary, options.performance, startedAt, telemetry);
+  if (requestExecutionInactive(options.signal, options.deadline)) {
+    return failPartial({
+      operation: resume ? "resume" : "run",
+      revision,
+      runId,
+      code: "STAGE_FAILED",
+      message: "Recipe evidence was persisted after the user deadline; inspect the preserved evidence before retrying.",
+      stage: stages.at(-1),
+      stages,
+      completed,
+      evidenceItems,
+      provenPartialChanges,
+      latestCheckpoint,
+      bindingValues,
+      inputs,
+      counts: { processed, applied, skipped },
+      options,
+      resumeSafe: false,
+      details: mergeDeadlineDetails(options.deadline, {
+        request_cancelled: true,
+        deadline_expired_during_evidence: true,
+        zero_write: successMutationTruth === "not_applied",
+      }),
+      startedAt,
+      telemetry,
+      undo,
+      mutationTruth: successMutationTruth,
+      failedStageAlreadyCompleted: true,
+    });
+  }
+  try {
+    options.runStore.put(runId, {
+      run_id: runId,
+      identity: {
+        recipe_id: revision.recipe_id,
+        version: revision.version,
+        revision: revision.revision,
+        content_hash: revision.content_hash,
+        validation_result_id: revision.validation_result_id,
+      },
+      inputs,
+      completed_stage_ids: [...completed],
+      binding_values: bindingValues,
+      latest_checkpoint: latestCheckpoint,
+      evidence_items: evidenceItems,
+      proven_partial_changes: provenPartialChanges,
+      counts: { processed, applied, skipped },
+      resume_safe: false,
+      status: "succeeded",
+      telemetry: snapshotRunTelemetry(telemetry),
+      undo,
+      run_summary: runSummary,
+      attempt_count: attempt,
+      runtime_binding: runtimeBinding,
+    });
+  } catch (error) {
+    return failPartial({
+      operation: resume ? "resume" : "run",
+      revision,
+      runId,
+      code: "STORE_ERROR",
+      message: "Recipe completion state could not be persisted; inspect the preserved evidence before retrying.",
+      stage: stages.at(-1),
+      stages,
+      completed,
+      evidenceItems,
+      provenPartialChanges,
+      latestCheckpoint,
+      bindingValues,
+      inputs,
+      counts: { processed, applied, skipped },
+      options,
+      resumeSafe: false,
+      details: persistenceFailureDetails("run_store", error, successMutationTruth),
+      startedAt,
+      telemetry,
+      undo,
+      mutationTruth: successMutationTruth,
+      failedStageAlreadyCompleted: true,
+      persistRun: false,
+    });
+  }
 
   return withRunExecutionTruth(projectRunSuccessEnvelope({
     operation: resume ? "resume" : "run",
@@ -1140,6 +1360,8 @@ function failPartial({
   undo = defaultRecipeUndoTruth(),
   mutationTruth = "not_applied",
   failedStageAlreadyCompleted = false,
+  persistEvidence = true,
+  persistRun = true,
 }) {
   const failed = failedStageAlreadyCompleted ? [] : [stage.id];
   const completedIds = [...completed];
@@ -1148,7 +1370,7 @@ function failPartial({
     .filter((id) => !completed.has(id) && (failedStageAlreadyCompleted || id !== stage.id));
   const runSummary = buildRunSummaryEvidence({ startedAt, telemetry, undo, mutationTruth });
   const evidenceRef = createExecutableRecipeEvidenceRef(runId, 0);
-  options.evidenceStore.put(evidenceRef, {
+  const evidencePayload = {
     run_id: runId,
     recipe_id: revision.recipe_id,
     version: revision.version,
@@ -1156,33 +1378,66 @@ function failPartial({
     content_hash: revision.content_hash,
     run_summary: runSummary,
     items: evidenceItems,
-  });
-  options.runStore.put(runId, {
-    run_id: runId,
-    identity: {
-      recipe_id: revision.recipe_id,
-      version: revision.version,
-      revision: revision.revision,
-      content_hash: revision.content_hash,
-      validation_result_id: revision.validation_result_id,
-    },
-    inputs,
-    completed_stage_ids: completedIds,
-    binding_values: bindingValues,
-    latest_checkpoint: latestCheckpoint,
-    evidence_items: evidenceItems,
-    proven_partial_changes: provenPartialChanges,
-    counts,
-    resume_safe: resumeSafe === true,
-    resume_blocked_reason: resumeSafe ? null : code,
-    status: completedIds.length > 0 ? "partial" : "failed",
-    telemetry: snapshotRunTelemetry(telemetry),
-    undo,
-    run_summary: runSummary,
-    attempt_count: Math.max(1, options.runStore.get(runId)?.attempt_count ?? 1),
-    run_hydration: options.runStore.get(runId)?.run_hydration ?? null,
-    runtime_binding: options.runStore.get(runId)?.runtime_binding ?? null,
-  });
+  };
+  let failureDetails = isPlainObject(details) ? { ...details } : {};
+  let retainedEvidenceRef = evidenceRef;
+  let canPersistRun = persistRun;
+  if (persistEvidence) {
+    try {
+      putRecipeEvidence(options.evidenceStore, evidenceRef, evidencePayload, options.performance);
+    } catch (error) {
+      retainedEvidenceRef = null;
+      canPersistRun = false;
+      failureDetails = {
+        ...failureDetails,
+        ...persistenceFailureDetails("evidence_store", error, mutationTruth),
+      };
+    }
+  } else {
+    retainedEvidenceRef = null;
+  }
+  finalizeRunSummaryPerformance(runSummary, options.performance, startedAt, telemetry);
+  if (canPersistRun) {
+    let previousRun = null;
+    try {
+      previousRun = options.runStore.get(runId);
+    } catch {
+      previousRun = null;
+    }
+    try {
+      options.runStore.put(runId, {
+        run_id: runId,
+        identity: {
+          recipe_id: revision.recipe_id,
+          version: revision.version,
+          revision: revision.revision,
+          content_hash: revision.content_hash,
+          validation_result_id: revision.validation_result_id,
+        },
+        inputs,
+        completed_stage_ids: completedIds,
+        binding_values: bindingValues,
+        latest_checkpoint: latestCheckpoint,
+        evidence_items: evidenceItems,
+        proven_partial_changes: provenPartialChanges,
+        counts,
+        resume_safe: resumeSafe === true,
+        resume_blocked_reason: resumeSafe ? null : code,
+        status: completedIds.length > 0 ? "partial" : "failed",
+        telemetry: snapshotRunTelemetry(telemetry),
+        undo,
+        run_summary: runSummary,
+        attempt_count: Math.max(1, previousRun?.attempt_count ?? 1),
+        run_hydration: previousRun?.run_hydration ?? null,
+        runtime_binding: previousRun?.runtime_binding ?? null,
+      });
+    } catch (error) {
+      failureDetails = {
+        ...failureDetails,
+        ...persistenceFailureDetails("run_store", error, mutationTruth),
+      };
+    }
+  }
 
   const nextCall = resumeSafe && latestCheckpoint
     ? buildExactNextCall("resume", {
@@ -1219,9 +1474,68 @@ function failPartial({
     undo,
     resumeSafe,
     nextCall,
-    evidenceRef,
-    details,
+    evidenceRef: retainedEvidenceRef,
+    details: Object.keys(failureDetails).length > 0 ? failureDetails : null,
   }), { startedAt, telemetry, undo, mutationTruth });
+}
+
+function recipePersistenceFailure({
+  operation,
+  revision,
+  runId,
+  stage,
+  stages,
+  completed,
+  evidenceItems,
+  provenPartialChanges,
+  latestCheckpoint,
+  bindingValues,
+  inputs,
+  counts,
+  options,
+  startedAt,
+  telemetry,
+  undo,
+  mutationTruth,
+  store,
+  error,
+}) {
+  return failPartial({
+    operation,
+    revision,
+    runId,
+    code: "STORE_ERROR",
+    message: `Recipe ${store === "evidence_store" ? "evidence" : "run state"} could not be persisted after execution; inspect the preserved mutation before retrying.`,
+    stage,
+    stages,
+    completed,
+    evidenceItems,
+    provenPartialChanges,
+    latestCheckpoint,
+    bindingValues,
+    inputs,
+    counts,
+    options,
+    resumeSafe: false,
+    details: persistenceFailureDetails(store, error, mutationTruth),
+    startedAt,
+    telemetry,
+    undo,
+    mutationTruth,
+    failedStageAlreadyCompleted: true,
+    persistEvidence: false,
+    persistRun: false,
+  });
+}
+
+function persistenceFailureDetails(store, error, mutationTruth = "unknown") {
+  return {
+    persistence_failure: store,
+    persistence_error: boundedText(error?.message ?? "store write failed", 240),
+    mutation_truth: mutationTruth,
+    recovery_required: true,
+    zero_write: false,
+  };
 }
 
 function normalizeStageOutcome(stage, outcome, revision) {
@@ -1676,17 +1990,27 @@ function normalizeDispatchers(value) {
 function wrapDispatcher(value, kind) {
   if (typeof value === "function") return value;
   if (value && typeof value.call_template === "function" && (kind === "macro" || kind === "template")) {
-    return async ({ stage, inputs }) => {
-      const result = await value.call_template({
+    return async ({ stage, inputs, refs, recipe_undo, signal, deadline, performance }) => {
+      const request = {
         id: stage.dependency?.id,
         input: inputs,
+        ...(refs == null ? {} : { refs }),
+      };
+      request[CALL_TEMPLATE_INTERNAL_DISPATCH_TIMEOUT] = CALL_TEMPLATE_INTERNAL_CHILD_DISPATCH_TIMEOUT_MS;
+      if (recipe_undo?.suppress_child_undo === true) {
+        request[CALL_TEMPLATE_INTERNAL_RECIPE_UNDO] = recipe_undo;
+      }
+      return value.call_template(request, {
+        signal,
+        deadline,
+        performance,
+        dispatchTimeoutMs: CALL_TEMPLATE_INTERNAL_CHILD_DISPATCH_TIMEOUT_MS,
       });
-      return result;
     };
   }
   if (value && typeof value.get_state === "function" && kind === "get_state") {
-    return async ({ stage, inputs }) => {
-      const result = await value.get_state(inputs);
+    return async ({ inputs, signal, deadline, performance }) => {
+      const result = await value.get_state(inputs, { signal, deadline, performance });
       return result;
     };
   }
@@ -1907,19 +2231,54 @@ function dispatcherRecipeUndoContext(undo) {
   });
 }
 
-function assertRecipeRequestActive(signal) {
-  if (signal?.aborted !== true) return;
+function assertRecipeRequestActive(signal, deadline = null) {
+  if (!requestExecutionInactive(signal, deadline)) return;
   throw new CallRecipeRuntimeError(
     "Recipe request was cancelled before execution.",
     "STAGE_FAILED",
-    { request_cancelled: true, zero_write: true },
+    mergeDeadlineDetails(deadline, { request_cancelled: true, zero_write: true }),
   );
+}
+
+function requestExecutionInactive(signal, deadline = null) {
+  return signal?.aborted === true || deadline?.isExpired?.() === true;
+}
+
+function outcomeAfterRecipeDeadline(outcome, deadline, stage = null) {
+  const base = isPlainObject(outcome) ? outcome : {
+    ok: false,
+    verified: false,
+    status: "failed",
+  };
+  const existingDetails = isPlainObject(base.error?.details) ? base.error.details : {};
+  const mutationTruth = stage?.risk === "read"
+    ? "not_applied"
+    : existingDetails.mutation_truth
+    ?? (base.ok === true ? "applied_unverified" : null)
+    ?? (existingDetails.zero_write === true ? "not_applied" : "unknown");
+  return {
+    ...base,
+    ok: false,
+    error: {
+      ...(isPlainObject(base.error) ? base.error : {}),
+      code: "STAGE_FAILED",
+      message: "Recipe stage returned after cancellation or deadline expiry; inspect the preserved stage evidence before retrying.",
+      details: mergeDeadlineDetails(deadline, {
+        ...existingDetails,
+        request_cancelled: true,
+        result_available_after_cancellation: base.ok === true || base.result !== undefined,
+        mutation_truth: mutationTruth,
+        zero_write: mutationTruth === "not_applied",
+      }),
+    },
+  };
 }
 
 function createRunTelemetry(existing = null) {
   return {
     counter_scope: "recipe_stage_dispatch_and_accepted_native_proof",
     counter_source: "call_recipe_runtime",
+    stage_dispatch_count: nonNegativeInteger(existing?.stage_dispatch_count ?? existing?.transport_call_count),
     transport_call_count: nonNegativeInteger(existing?.transport_call_count),
     native_mutation_count: nonNegativeInteger(existing?.native_mutation_count),
     readback_count: nonNegativeInteger(existing?.readback_count),
@@ -1933,6 +2292,7 @@ function snapshotRunTelemetry(telemetry) {
   return freeze({
     counter_scope: telemetry.counter_scope,
     counter_source: telemetry.counter_source,
+    stage_dispatch_count: telemetry.stage_dispatch_count,
     transport_call_count: telemetry.transport_call_count,
     native_mutation_count: telemetry.native_mutation_count,
     readback_count: telemetry.readback_count,
@@ -1940,18 +2300,20 @@ function snapshotRunTelemetry(telemetry) {
   });
 }
 
-function recordStageTelemetry(telemetry, stage, outcome, normalized, durationMs) {
+function recordStageTelemetry(telemetry, stage, outcome, normalized, durationMs, transportCallCount = 0) {
   const nativeMutationCount = provenNativeMutationCount(stage, outcome, normalized);
   const readbackCount = acceptedReadbackCount(stage, outcome, normalized);
+  const actualTransportCallCount = nonNegativeInteger(transportCallCount);
   const item = freeze({
     stage_id: stage.id,
     kind: stage.kind,
     duration_ms: Math.max(0, nonNegativeInteger(durationMs)),
-    transport_call_count: 1,
+    transport_call_count: actualTransportCallCount,
     native_mutation_count: nativeMutationCount,
     readback_count: readbackCount,
   });
-  telemetry.transport_call_count += 1;
+  telemetry.stage_dispatch_count += 1;
+  telemetry.transport_call_count += actualTransportCallCount;
   telemetry.native_mutation_count += nativeMutationCount;
   telemetry.readback_count += readbackCount;
   telemetry.stage_timings.push(item);
@@ -2001,7 +2363,7 @@ function summarizeMutationTruth(telemetry, evidenceItems = []) {
 }
 
 function buildRunSummaryEvidence({ startedAt, telemetry, undo, mutationTruth }) {
-  return freeze({
+  return {
     contract: "call_recipe.run_summary.v1",
     stage_id: "__run_summary__",
     kind: "summary",
@@ -2013,13 +2375,31 @@ function buildRunSummaryEvidence({ startedAt, telemetry, undo, mutationTruth }) 
     counters: {
       counter_scope: telemetry.counter_scope,
       counter_source: telemetry.counter_source,
+      stage_dispatch_count: telemetry.stage_dispatch_count,
       transport_call_count: telemetry.transport_call_count,
       native_mutation_count: telemetry.native_mutation_count,
       readback_count: telemetry.readback_count,
     },
+    performance: telemetry.performance
+      ? snapshotExecutionPerformance(telemetry.performance)
+      : null,
     mutation_truth: mutationTruth,
     undo: cloneJson(undo),
-  });
+  };
+}
+
+function finalizeRunSummaryPerformance(runSummary, performance, startedAt, telemetry) {
+  if (!performance) return;
+  finishExecutionPerformance(performance, Date.now() - startedAt);
+  if (!runSummary || typeof runSummary !== "object") return;
+  // Evidence stores retain the payload object in-process. Refresh the summary
+  // after the final evidence write so its total/gate matches the public result.
+  runSummary.performance = snapshotExecutionPerformance(performance);
+  runSummary.timing = {
+    ...runSummary.timing,
+    duration_ms: Math.max(0, Date.now() - startedAt),
+    stages: telemetry.stage_timings.map((item) => cloneJson(item)),
+  };
 }
 
 function withRunExecutionTruth(response, {
@@ -2040,15 +2420,39 @@ function withRunExecutionTruth(response, {
       mutation: mutationTruth,
       counter_scope: snapshot.counter_scope,
       counter_source: snapshot.counter_source,
+      stage_dispatch_count: snapshot.stage_dispatch_count,
       transport_call_count: snapshot.transport_call_count,
       native_mutation_count: snapshot.native_mutation_count,
       readback_count: snapshot.readback_count,
+      performance: telemetry.performance
+        ? snapshotExecutionPerformance(telemetry.performance)
+        : null,
     },
     recovery: response.recovery ?? (response.ok === true
       ? { strategy: "no_recovery_needed", rollback_claimed: false, outcome: "not_needed" }
       : recipeRecoveryTruth(false, mutationTruth, undo)),
     undo: compactRecipeUndoTruth(undo),
   });
+}
+
+async function measureRecipeUndoCall(performance, operation) {
+  const startedAt = Date.now();
+  try {
+    return await operation();
+  } finally {
+    addExecutionPerformancePhase(performance, "undo", Date.now() - startedAt);
+    addExecutionPerformanceCounter(performance, "undo_call_count", 1);
+  }
+}
+
+function putRecipeEvidence(store, evidenceRef, payload, performance) {
+  const startedAt = Date.now();
+  try {
+    store.put(evidenceRef, payload);
+  } finally {
+    addExecutionPerformancePhase(performance, "evidence", Date.now() - startedAt);
+    addExecutionPerformanceCounter(performance, "evidence_count", 1);
+  }
 }
 
 function compactRecipeUndoTruth(undo) {
@@ -2126,6 +2530,11 @@ function exactRevisionIdentity(revision) {
 
 function nonNegativeInteger(value) {
   return Number.isSafeInteger(value) && value >= 0 ? value : 0;
+}
+
+function executionPerformanceCounter(performance, counter) {
+  const value = performance?.counters?.[counter];
+  return Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
 
 function allocateRunId(runStore) {
@@ -2368,12 +2777,14 @@ async function loadAuthoritativeRuntimeFacts(provider, context) {
   return cloneJson(facts);
 }
 
-function normalizeCallRecipeBudget(input) {
+function normalizeCallRecipeBudget(input, { operation } = {}) {
   if (input !== undefined && !isPlainObject(input)) {
     throw new CallRecipeRuntimeError("budget must be an object.", "PARAMS_INVALID");
   }
   const maxResponseBytes = input?.max_response_bytes
-    ?? EXECUTABLE_RECIPE_RUN_BUDGETS.response_default_bytes;
+    ?? (operation === "get"
+      ? EXECUTABLE_RECIPE_RUN_BUDGETS.response_max_bytes
+      : EXECUTABLE_RECIPE_RUN_BUDGETS.response_default_bytes);
   if (
     !Number.isInteger(maxResponseBytes)
     || maxResponseBytes < 512
@@ -2387,11 +2798,15 @@ function normalizeCallRecipeBudget(input) {
   return freeze({ max_response_bytes: maxResponseBytes });
 }
 
-function safeCallRecipeBudget(input) {
+function safeCallRecipeBudget(input, { operation } = {}) {
   try {
-    return normalizeCallRecipeBudget(input);
+    return normalizeCallRecipeBudget(input, { operation });
   } catch {
-    return freeze({ max_response_bytes: EXECUTABLE_RECIPE_RUN_BUDGETS.response_default_bytes });
+    return freeze({
+      max_response_bytes: operation === "get"
+        ? EXECUTABLE_RECIPE_RUN_BUDGETS.response_max_bytes
+        : EXECUTABLE_RECIPE_RUN_BUDGETS.response_default_bytes,
+    });
   }
 }
 
@@ -2460,6 +2875,7 @@ function requiredRunMutationResponseBytes(revision, operation) {
     mutation: "unknown",
     counter_scope: "recipe_stage_dispatch_and_accepted_native_proof",
     counter_source: "call_recipe_runtime",
+    stage_dispatch_count: Number.MAX_SAFE_INTEGER,
     transport_call_count: Number.MAX_SAFE_INTEGER,
     native_mutation_count: Number.MAX_SAFE_INTEGER,
     readback_count: Number.MAX_SAFE_INTEGER,

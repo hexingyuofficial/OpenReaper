@@ -142,7 +142,14 @@ describe("P1 template fill descriptors", () => {
     assert.equal(copy.bridge.operation_name, "template.execute");
     assert.equal(copy.bridge.capability, "item.copy_to_track");
     assert.equal(copy.bridge.idempotency, "supported");
-    assert.deepEqual(copy.inputSchema.required, ["position_seconds"]);
+    assert.deepEqual(copy.inputSchema.required, []);
+    assert.equal(copy.inputSchema.properties.batch.maxItems, 64);
+    assert.deepEqual(copy.inputSchema.properties.batch.items.required, [
+      "id",
+      "source_item_ref",
+      "target_track_ref",
+      "position_seconds",
+    ]);
     assert.deepEqual(copy.refs.input.map((entry) => [entry.name, entry.kind]), [
       ["source_item_ref", "item"],
       ["target_track_ref", "track"],

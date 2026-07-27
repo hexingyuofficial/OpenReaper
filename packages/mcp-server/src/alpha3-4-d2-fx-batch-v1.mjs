@@ -14,6 +14,8 @@ export const ALPHA3_4_D2_FX_BATCH_MODE = "exact_assignments";
 export const ALPHA3_4_D2_FX_BATCH_ROW_ID_PATTERN = /^[A-Za-z0-9_-]{1,12}$/u;
 export const ALPHA3_4_D2_FX_BATCH_MAX_ROWS = 64;
 export const ALPHA3_4_D2_MIN_RESPONSE_BUDGET = 2_048;
+export const ALPHA3_4_D2_FX_NATIVE_BATCH_TEMPLATE_ID = "template.fx.set_parameter_assignments_batch";
+export const ALPHA3_4_D2_FX_NATIVE_BATCH_CAPABILITY = "fx.set_parameter_assignments_batch";
 
 const SET_FX_PARAMETER_ID = "template.fx.set_fx_parameter_normalized";
 const READ_FX_PARAMETER_ID = "template.fx.read_fx_parameter";
@@ -159,7 +161,9 @@ export function normalizeExactAssignmentsInput(input = {}) {
       param_ident: hasIdent ? raw.param_ident.trim() : null,
       param_name: hasName ? raw.param_name.trim() : null,
       normalized_value: raw.normalized_value,
-      requested_formatted_value: typeof raw.requested_formatted_value === "string" ? raw.requested_formatted_value : null,
+      ...(typeof raw.requested_formatted_value === "string"
+        ? { requested_formatted_value: raw.requested_formatted_value }
+        : {}),
     });
   }
   return {
@@ -182,6 +186,7 @@ export async function executeExactAssignmentsBatch({
   state,
   listBudget,
   readBudget,
+  nativeBatchExecutor,
 } = {}) {
   const activeBudget = responseBudget(request);
   const t0 = monoTick(monoNow);
@@ -209,6 +214,28 @@ export async function executeExactAssignmentsBatch({
   }
 
   const dryRun = normalized.dry_run;
+  const nativeExecutor = typeof nativeBatchExecutor === "function"
+    ? nativeBatchExecutor
+    : typeof executeAtomic.nativeBatchExecutor === "function"
+      ? executeAtomic.nativeBatchExecutor
+      : null;
+  if (nativeExecutor) {
+    return executeNativeExactAssignmentsBatch({
+      request,
+      normalized,
+      nativeExecutor,
+      projectIndexRuntime,
+      now,
+      monoNow,
+      entry,
+      startedAt,
+      stages,
+      state,
+      activeBudget,
+      t0,
+    });
+  }
+
   const resolveStarted = monoTick(monoNow);
   const resolvedRows = [];
   const fxCache = new Map();
@@ -622,6 +649,195 @@ export async function executeExactAssignmentsBatch({
   });
 }
 
+async function executeNativeExactAssignmentsBatch({
+  request,
+  normalized,
+  nativeExecutor,
+  projectIndexRuntime,
+  now,
+  monoNow,
+  entry,
+  startedAt,
+  stages,
+  state,
+  activeBudget,
+  t0,
+}) {
+  const dryRun = normalized.dry_run;
+  const fxRefs = [...new Map(normalized.assignments.map((row) => [row.fx_ref, exactFxObjectRef(row.fx_ref)])).values()];
+  for (const ref of fxRefs) {
+    state.objectRefs.set(ref.ref, clone(ref));
+    state.canonicalRefs.push(ref.ref);
+  }
+  state.changes = normalized.assignments.map((row) => batchRowChange(row, {
+    status: dryRun ? "planned" : "pending",
+    mutation: dryRun ? "not_run" : "pending",
+    readback: "pending",
+    index: dryRun ? "skipped" : "pending",
+  }));
+
+  const dispatchStarted = monoTick(monoNow);
+  let execution;
+  try {
+    state.calls.native_batch += 1;
+    execution = await nativeExecutor({
+      id: ALPHA3_4_D2_FX_NATIVE_BATCH_TEMPLATE_ID,
+      input: {
+        dry_run: dryRun,
+        batch: normalized.assignments.map((row) => ({ ...row })),
+      },
+      refs: { fx_refs: fxRefs },
+      context: request.context,
+      budget: request.budget,
+      observeProjectIndex: false,
+    });
+    collectExecution(state, execution);
+  } catch (error) {
+    execution = {
+      ok: false,
+      error: {
+        code: error?.code ?? "FX_ASSIGNMENTS_NATIVE_BATCH_FAILED",
+        message: error?.message ?? "Native FX batch dispatch threw.",
+        details: { mutation_outcome: dryRun ? "not_attempted" : "unknown" },
+      },
+    };
+  }
+  const dispatchMs = monoElapsed(dispatchStarted, monoNow);
+  const readback = executionReadback(execution);
+  const nativeTimings = isPlainObject(readback?.batch_timings) ? readback.batch_timings : {};
+  state.timings.target_resolution_ms = Number(nativeTimings.target_resolution_ms) || 0;
+  state.timings.inventory_hydration_ms = Number(nativeTimings.inventory_hydration_ms) || 0;
+  state.timings.preflight_ms = Number(nativeTimings.preflight_ms) || dispatchMs;
+  state.timings.mutation_ms = dryRun ? 0 : Number(nativeTimings.mutation_ms) || 0;
+  state.timings.final_readback_ms = dryRun ? 0 : Number(nativeTimings.readback_ms) || 0;
+
+  const mutationAttempted = !dryRun && (
+    readback?.mutation_attempted === true
+    || readback?.batch_timings?.native_mutation_count > 0
+    || execution?.ok !== true && execution?.error?.details?.zero_write !== true
+  );
+  const validated = execution?.ok === true
+    ? validateNativeBatchReadback(normalized.assignments, readback)
+    : failed(
+      execution?.error?.code ?? "FX_ASSIGNMENTS_NATIVE_BATCH_FAILED",
+      execution?.error?.message ?? "Native FX batch dispatch failed.",
+    );
+
+  if (!validated.ok) {
+    for (const change of state.changes) {
+      change.status = mutationAttempted ? "unknown_or_partial" : "failed";
+      change.mutation = { status: mutationAttempted ? "unknown_or_partial" : "failed" };
+      change.live_readback = { status: "failed" };
+      change.code = validated.code;
+    }
+    const indexStarted = monoTick(monoNow);
+    const indexResult = maintainBatchProjectIndex(projectIndexRuntime, state, now);
+    state.timings.index_maintenance_ms = monoElapsed(indexStarted, monoNow);
+    state.timings.total_ms = monoElapsed(t0, monoNow);
+    applyBatchIndexMaintenance(state.changes, indexResult);
+    pushStage(stages, "stock-plugin-execute", "runtime_execute", mutationAttempted ? "failed" : "skipped", "Native FX assignment batch did not produce a complete trusted result.", state.evidenceRefs);
+    pushStage(stages, "stock-plugin-verify", "verify", "failed", "Aggregate native FX readback was incomplete or mismatched.", state.evidenceRefs);
+    pushStage(stages, "stock-plugin-index-update", "index_update", indexResult.status === "skipped" ? "skipped" : indexResult.ok ? "completed" : "failed", indexResult.message, []);
+    return failureEnvelope({
+      entry, request, startedAt, now, stages, state, activeBudget,
+      status: mutationAttempted ? "partial_failure" : "failed",
+      code: validated.code,
+      message: validated.message,
+      blockers: [blocker(validated.code, validated.message)],
+      data: compactBatchData(state, { dry_run: dryRun, unique_fx_count: fxRefs.length }),
+      compact: activeBudget <= ALPHA3_4_D2_MIN_RESPONSE_BUDGET,
+    });
+  }
+
+  for (const [index, row] of validated.rows.entries()) {
+    const change = state.changes[index];
+    change.status = dryRun ? "planned" : "applied";
+    change.mutation = { status: dryRun ? "not_run" : "completed", source: "native_batch" };
+    change.live_readback = { status: "passed", source: dryRun ? "native_preflight" : "native_aggregate_readback" };
+    change.native = {
+      param_ident: row.param_ident,
+      formatted_value: row.formatted_value,
+      tolerance: row.tolerance,
+      verification_mode: row.verification_mode,
+    };
+    change.index_maintenance = { status: dryRun ? "skipped" : "pending", scopes: [] };
+  }
+  const indexStarted = monoTick(monoNow);
+  const indexResult = maintainBatchProjectIndex(projectIndexRuntime, state, now);
+  state.timings.index_maintenance_ms = monoElapsed(indexStarted, monoNow);
+  state.timings.total_ms = monoElapsed(t0, monoNow);
+  applyBatchIndexMaintenance(state.changes, indexResult);
+  pushStage(stages, "stock-plugin-execute", "runtime_execute", dryRun ? "skipped" : "completed", dryRun ? "Native FX batch dry_run performed zero writes." : "Native FX batch completed its serial native mutation phase.", state.evidenceRefs);
+  pushStage(stages, "stock-plugin-verify", "verify", "completed", `Aggregate native readback passed for ${validated.rows.length} exact assignment row(s).`, state.evidenceRefs);
+  pushStage(stages, "stock-plugin-index-update", "index_update", indexResult.status === "skipped" ? "skipped" : indexResult.ok ? "completed" : "failed", indexResult.message, []);
+  if (!indexResult.ok) {
+    return failureEnvelope({
+      entry, request, startedAt, now, stages, state, activeBudget,
+      status: "partial_failure",
+      code: indexResult.code,
+      message: indexResult.message,
+      blockers: indexResult.blockers,
+      data: compactBatchData(state, { dry_run: dryRun, unique_fx_count: fxRefs.length }),
+      compact: activeBudget <= ALPHA3_4_D2_MIN_RESPONSE_BUDGET,
+    });
+  }
+  pushStage(stages, "stock-plugin-result", "result_project", "completed", "Projected native FX assignment batch truth.", state.evidenceRefs);
+  return successEnvelope({
+    entry, request, startedAt, now, stages, state, activeBudget,
+    status: dryRun ? "dry_run_completed" : "completed",
+    summary: dryRun ? `Previewed ${validated.rows.length} exact FX assignment row(s) with no mutation.` : `Applied and verified ${validated.rows.length} exact FX assignment row(s) through one native batch dispatch.`,
+    data: compactBatchData(state, { dry_run: dryRun, unique_fx_count: fxRefs.length }),
+    compact: activeBudget <= ALPHA3_4_D2_MIN_RESPONSE_BUDGET,
+  });
+}
+
+function validateNativeBatchReadback(assignments, readback) {
+  const rows = readback?.rows;
+  if (!Array.isArray(rows) || rows.length !== assignments.length) {
+    return failed("FX_ASSIGNMENTS_NATIVE_BATCH_PARTIAL", "Native FX batch returned an unknown or partial row set.");
+  }
+  const expected = new Map(assignments.map((row) => [row.id, row]));
+  const seen = new Set();
+  const validated = [];
+  for (const row of rows) {
+    if (!isPlainObject(row) || typeof row.id !== "string" || seen.has(row.id) || !expected.has(row.id)) {
+      return failed("FX_ASSIGNMENTS_NATIVE_BATCH_PARTIAL", "Native FX batch returned duplicate, unknown, or malformed row identity.");
+    }
+    seen.add(row.id);
+    const input = expected.get(row.id);
+    const normalized = Number(row.normalized_value);
+    const tolerance = Number(row.tolerance);
+    const identityOk = row.fx_ref === input.fx_ref
+      && (input.param_index === null || row.param_index === input.param_index)
+      && (!input.param_ident || row.param_ident === input.param_ident)
+      && (!input.param_name || typeof row.name === "string" && row.name.toLocaleLowerCase() === input.param_name.toLocaleLowerCase());
+    const formattedOk = typeof row.formatted_value === "string" && row.formatted_value.length > 0
+      && (!input.requested_formatted_value || row.requested_formatted_value === input.requested_formatted_value);
+    const valueOk = row.verification_mode === "native_discrete_format"
+      ? formattedOk && row.formatted_value === row.requested_formatted_value
+      : Number.isFinite(normalized) && Number.isFinite(tolerance) && tolerance >= 0 && Math.abs(normalized - input.normalized_value) <= tolerance;
+    if (!identityOk || !formattedOk || row.updated !== true || !valueOk) {
+      return failed("FX_ASSIGNMENTS_NATIVE_BATCH_READBACK_MISMATCH", `Native aggregate readback for ${row.id} did not preserve exact identity and native value truth.`);
+    }
+    validated.push(row);
+  }
+  return { ok: true, rows: validated };
+}
+
+function exactFxObjectRef(ref) {
+  const parsed = parseFxRef(ref);
+  if (!parsed) return { kind: "fx", ref, identity: { scheme: "fx_ref", value: ref } };
+  return {
+    kind: "fx",
+    ref,
+    identity: {
+      scheme: `${parsed.ownerKind}_fx`,
+      value: `${parsed.ownerRef}:${parsed.slotIndex}`,
+    },
+    display: { owner_ref: parsed.ownerRef, slot_index: parsed.slotIndex },
+  };
+}
+
 async function resolveExactFxRef({ fxRef, executeAtomic, request, state }) {
   const parsed = parseFxRef(fxRef);
   if (!parsed) {
@@ -784,7 +1000,7 @@ function compactBatchData(state, { dry_run, unique_fx_count = 0 } = {}) {
 }
 
 function emptyCalls() {
-  return { resolve: 0, inventory: 0, preflight: 0, mutation: 0, readback: 0, index: 0, total: 0 };
+  return { resolve: 0, inventory: 0, preflight: 0, mutation: 0, readback: 0, native_batch: 0, index: 0, total: 0 };
 }
 
 function emptyTimings() {
@@ -801,15 +1017,28 @@ function emptyTimings() {
 
 function finalizeCalls(calls) {
   const value = calls ?? emptyCalls();
-  return {
-    resolve: value.resolve,
-    inventory: value.inventory,
-    preflight: value.preflight,
-    mutation: value.mutation,
-    readback: value.readback,
-    index: value.index,
-    total: value.resolve + value.inventory + value.preflight + value.mutation + value.readback + value.index,
-  };
+  const nativeBatch = value.native_batch ?? 0;
+  const total = value.resolve + value.inventory + value.preflight + value.mutation + value.readback + nativeBatch + value.index;
+  return nativeBatch > 0
+    ? {
+      resolve: value.resolve,
+      inventory: value.inventory,
+      preflight: value.preflight,
+      mutation: value.mutation,
+      readback: value.readback,
+      native_batch: nativeBatch,
+      index: value.index,
+      total,
+    }
+    : {
+      resolve: value.resolve,
+      inventory: value.inventory,
+      preflight: value.preflight,
+      mutation: value.mutation,
+      readback: value.readback,
+      index: value.index,
+      total,
+    };
 }
 
 function successEnvelope({ entry, request, startedAt, now, stages, state, activeBudget, status, summary, data, compact = false }) {

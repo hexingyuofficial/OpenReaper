@@ -133,7 +133,7 @@ describe("Alpha3.3-B1d executable macro.automation.apply", () => {
     assert.equal(overPointCalls.length, 0);
   });
 
-  it("inserts a bounded point batch and derives applied only from complete pre/post live points", async () => {
+  it("inserts a bounded point batch and derives applied from complete preflight plus batch aggregate readback", async () => {
     const bridge = new FakeAutomationBridge({ initialPoints: [point(0, 0.25)] });
     const result = await executeAlpha3_3B1dAutomationApplyMacro({
       request: request({ mode: "insert_points", envelope_refs: [ENV_A], points: [point(1, 0.5), point(2, 0.75)], dry_run: false }),
@@ -145,15 +145,35 @@ describe("Alpha3.3-B1d executable macro.automation.apply", () => {
     assert.deepEqual(bridge.calls.map((call) => call.id), [
       "template.automation.read_envelope_points",
       "template.automation.insert_envelope_points_batch",
-      "template.automation.read_envelope_points",
     ]);
     assert.equal(result.result.changes[0].status, "applied");
     assert.equal(result.result.changes[0].applied, true);
     assert.deepEqual(result.result.changes[0].mutation, { status: "completed", template_id: "template.automation.insert_envelope_points_batch" });
-    assert.deepEqual(result.result.changes[0].live_readback, { status: "passed", source: "live_envelope_points", requested: 2, replaced: 0, net_new: 2, before: 1, after: 3 });
+    assert.deepEqual(result.result.changes[0].live_readback, { status: "passed", source: "insert_envelope_points_batch_aggregate_readback", requested: 2, replaced: 0, net_new: 2, before: 1, after: 3 });
     assert.equal(result.result.changes[0].index_maintenance.status, "skipped");
     assert.equal(result.result.verification.status, "passed");
     assert.deepEqual(validateMacroExecutionEnvelope(result), { valid: true, errors: [] });
+  });
+
+  it("serial multi-target insert_points keeps full preflight then one insert-batch hop per target", async () => {
+    const bridge = new FakeAutomationBridge();
+    bridge.envelopes.set(ENV_A, envelope(ENV_A, "volume", [point(0, 0.1)]));
+    bridge.envelopes.set(ENV_B, envelope(ENV_B, "volume", [point(0, 0.2)]));
+    const result = await executeAlpha3_3B1dAutomationApplyMacro({
+      request: request({ mode: "insert_points", envelope_refs: [ENV_A, ENV_B], points: [point(1, 0.5)], dry_run: false }),
+      executeAtomic: bridge.executeAtomic,
+      now: () => new Date(NOW),
+    });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.deepEqual(bridge.calls.map((call) => call.id), [
+      "template.automation.read_envelope_points",
+      "template.automation.read_envelope_points",
+      "template.automation.insert_envelope_points_batch",
+      "template.automation.insert_envelope_points_batch",
+    ]);
+    assert.equal(result.result.changes.length, 2);
+    assert.equal(result.result.changes.every((change) => change.status === "applied"), true);
+    assert.equal(result.result.changes.every((change) => change.live_readback?.source === "insert_envelope_points_batch_aggregate_readback"), true);
   });
 
   it("treats identical and colliding point tuples as bounded overlays", async () => {
@@ -176,7 +196,7 @@ describe("Alpha3.3-B1d executable macro.automation.apply", () => {
         now: () => new Date(NOW),
       });
       assert.equal(result.ok, true, JSON.stringify(result));
-      assert.deepEqual(result.result.changes[0].live_readback, { status: "passed", source: "live_envelope_points", ...scenario.facts });
+      assert.deepEqual(result.result.changes[0].live_readback, { status: "passed", source: "insert_envelope_points_batch_aggregate_readback", ...scenario.facts });
     }
   });
 
@@ -203,7 +223,7 @@ describe("Alpha3.3-B1d executable macro.automation.apply", () => {
       now: () => new Date(NOW),
     });
     assert.equal(accepted.ok, true, JSON.stringify(accepted));
-    assert.deepEqual(accepted.result.changes[0].live_readback, { status: "passed", source: "live_envelope_points", requested: 64, replaced: 64, net_new: 0, before: 64, after: 64 });
+    assert.deepEqual(accepted.result.changes[0].live_readback, { status: "passed", source: "insert_envelope_points_batch_aggregate_readback", requested: 64, replaced: 64, net_new: 0, before: 64, after: 64 });
 
     const rejectedBridge = new FakeAutomationBridge({ initialPoints: [point(0, 0.1), point(100, 0.2)] });
     const rejected = await executeAlpha3_3B1dAutomationApplyMacro({
@@ -507,7 +527,7 @@ describe("Alpha3.3-B1d executable macro.automation.apply", () => {
     assertCallsValidateThroughHarness(bridge.calls, ["template.automation.delete_envelope_points"]);
   });
 
-  it("rejects mutation success when complete point readback omits one requested row", async () => {
+  it("rejects insert when native batch overlay verification omits one requested row", async () => {
     const bridge = new FakeAutomationBridge({ dropLastInsertedPoint: true });
     const invalidations = [];
     const result = await executeAlpha3_3B1dAutomationApplyMacro({
@@ -519,15 +539,20 @@ describe("Alpha3.3-B1d executable macro.automation.apply", () => {
 
     assert.equal(result.ok, false);
     assert.equal(result.execution.status, "partial_failure");
-    assert.equal(result.error.code, "AUTOMATION_READBACK_MISMATCH");
-    assert.equal(result.result.changes[0].status, "readback_failed");
-    assert.equal(result.result.changes[0].mutation.status, "completed");
+    assert.equal(result.error.code, "VERIFY_FAILED");
+    assert.equal(result.result.changes[0].mutation.status, "unknown_or_partial");
+    assert.equal(result.result.changes[0].applied, false);
     assert.equal(result.result.changes[0].live_readback.status, "failed");
     assert.equal(result.result.changes[0].index_maintenance.status, "completed");
     assert.deepEqual(invalidations, [["automation"]]);
+    assert.deepEqual(bridge.calls.map((call) => call.id), [
+      "template.automation.read_envelope_points",
+      "template.automation.insert_envelope_points_batch",
+      "template.automation.read_envelope_points",
+    ]);
   });
 
-  it("rejects overlays whose after-readback loses an old tuple or gains an extra tuple", async () => {
+  it("rejects insert when native batch overlay loses an old tuple or gains an extra tuple", async () => {
     for (const options of [
       { removeOldPointAfterMutation: 3 },
       { addExtraPointAfterMutation: point(9, 0.9) },
@@ -539,8 +564,8 @@ describe("Alpha3.3-B1d executable macro.automation.apply", () => {
         now: () => new Date(NOW),
       });
       assert.equal(result.ok, false);
-      assert.equal(result.error.code, "AUTOMATION_READBACK_MISMATCH");
-      assert.equal(result.result.changes[0].status, "readback_failed");
+      assert.equal(result.error.code, "VERIFY_FAILED");
+      assert.equal(result.result.changes[0].mutation.status, "unknown_or_partial");
       assert.equal(result.result.changes[0].applied, false);
       assert.equal(result.result.changes[0].live_readback.status, "failed");
     }
@@ -697,12 +722,14 @@ class FakeAutomationBridge {
     if (id === "template.automation.read_envelope_summary") return execution(id, envelopeSummary(env), [envelopeRef(ref)]);
     if (id === "template.automation.read_envelope_points") return execution(id, pointsSummary(env, input.autoitem_index ?? -1), [envelopeRef(ref)]);
     if (id === "template.automation.insert_envelope_points_batch") {
-      const inserted = this.options.dropLastInsertedPoint ? input.points.slice(0, -1) : input.points;
       if (this.options.partialBatchFailure) {
         upsertPoint(env.points, input.points[0]);
         sortPoints(env.points);
         return failure(id, "COMMAND_FAILED", { mutation_applied: true, inserted_before_failure: 1 }, false);
       }
+      const beforeCount = env.points.length;
+      const replaced = input.points.filter((row) => env.points.some((existing) => Math.abs(existing.time_seconds - row.time_seconds) <= 0.000001)).length;
+      const inserted = this.options.dropLastInsertedPoint ? input.points.slice(0, -1) : input.points;
       for (const row of inserted) upsertPoint(env.points, row);
       if (this.options.removeOldPointAfterMutation) {
         const removeIndex = env.points.findIndex((row) => row.time_seconds === this.options.removeOldPointAfterMutation);
@@ -710,7 +737,36 @@ class FakeAutomationBridge {
       }
       if (this.options.addExtraPointAfterMutation) env.points.push(structuredClone(this.options.addExtraPointAfterMutation));
       sortPoints(env.points);
-      return execution(id, { ...envelopeSummary(env), requested: input.points.length, first_time_seconds: input.points[0].time_seconds, last_time_seconds: input.points.at(-1).time_seconds }, [envelopeRef(ref)]);
+      const afterCount = env.points.length;
+      const expectedAfter = beforeCount - replaced + input.points.length;
+      if (
+        this.options.dropLastInsertedPoint
+        || this.options.removeOldPointAfterMutation
+        || this.options.addExtraPointAfterMutation
+        || afterCount !== expectedAfter
+      ) {
+        return failure(id, "VERIFY_FAILED", {
+          reason_code: "POINT_BATCH_OVERLAY_READBACK_MISMATCH",
+          requested: input.points.length,
+          replaced,
+          net_new: input.points.length - replaced,
+          before: beforeCount,
+          after: afterCount,
+          mutation_applied: true,
+          index_maintenance_applied: true,
+        }, false);
+      }
+      return execution(id, {
+        ...envelopeSummary(env),
+        requested: input.points.length,
+        replaced,
+        net_new: input.points.length - replaced,
+        before: beforeCount,
+        after: afterCount,
+        inserted_count: input.points.length,
+        first_time_seconds: input.points[0].time_seconds,
+        last_time_seconds: input.points.at(-1).time_seconds,
+      }, [envelopeRef(ref)]);
     }
     if (id === "template.automation.set_envelope_point") {
       const current = env.points[input.point_index];

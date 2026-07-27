@@ -27,6 +27,7 @@ import {
 } from "../packages/core/src/artifact-state-store-live-helper-v1.mjs";
 import {
   LIVE_BRIDGE_HEARTBEAT_FILENAME,
+  LIVE_BRIDGE_LIVENESS_DEFAULT_MAX_AGE_MS,
   LIVE_BRIDGE_LIVENESS_CONTRACT,
 } from "../packages/mcp-server/src/live-bridge-executor-v1.mjs";
 
@@ -66,7 +67,7 @@ const PACKAGE_PROVENANCE_CONTRACT = "openreaper.package.provenance.v1";
 const ALPHA3_3_PACKAGE_CATALOG_COUNTS = Object.freeze({
   exact_tool_count: 6,
   accepted_macro_count: 15,
-  accepted_template_count: 235,
+  accepted_template_count: 237,
   bridge_handler_count: 91,
 });
 const skipZip = options.skip_zip === true;
@@ -516,7 +517,7 @@ always fail closed.
 Manual mode never clicks startup windows; it inspects read-only and waits for
 the user to clear every blocker before readiness can pass.
 Each System Events inspection is bounded by
-OPENREAPER_STARTUP_DIALOG_TIMEOUT_SECONDS (default 5 seconds); timeout or
+OPENREAPER_STARTUP_DIALOG_TIMEOUT_SECONDS (default 15 seconds); timeout or
 inspection failure is a typed blocker and never a ready result.
 
 Uninstall:
@@ -1516,7 +1517,7 @@ async function smokePackagedRuntimeDoctorReadiness() {
         await writePackageHeartbeat(transportDir, {
           owner,
           generation,
-          mtime: new Date(Date.now() - 5_000),
+          mtime: new Date(Date.now() - LIVE_BRIDGE_LIVENESS_DEFAULT_MAX_AGE_MS - 1_000),
         });
       }
       const selectedRenderRoot = fixture.render === "valid"
@@ -1615,7 +1616,7 @@ async function smokePackagedRuntimeDoctorReadiness() {
     await writePackageHeartbeat(stale.transportDir, {
       owner,
       generation,
-      mtime: new Date(Date.now() - 5_000),
+      mtime: new Date(Date.now() - LIVE_BRIDGE_LIVENESS_DEFAULT_MAX_AGE_MS - 1_000),
     });
     const staleResult = await runPackagedDoctorFixture({
       doctorPath,

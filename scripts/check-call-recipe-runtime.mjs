@@ -55,8 +55,8 @@ if (ALPHA3_3_B1_VISIBLE_EXECUTABLE_IDS.length !== 15) {
   console.error("Visible macro count must remain 15.");
   process.exit(1);
 }
-if (CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length !== 235) {
-  console.error("Accepted template count must remain 235.");
+if (CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length !== 237) {
+  console.error("Accepted template count must remain 237.");
   process.exit(1);
 }
 

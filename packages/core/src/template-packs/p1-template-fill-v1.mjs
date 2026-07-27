@@ -111,7 +111,7 @@ export const P1_TEMPLATE_FILL_TEMPLATES = deepFreeze([
   commandDescriptor({
     id: "template.items.copy_item_to_track",
     title: "Copy item to track",
-    summary: "Copy one source item footprint to one target track at an explicit project position.",
+    summary: "Copy one source item footprint, or a bounded batch of exact source/target rows, through one managed native route.",
     pack: "items",
     entity_kind: "item",
     tags: ["p1", "items", "item", "copy", "write"],
@@ -123,7 +123,24 @@ export const P1_TEMPLATE_FILL_TEMPLATES = deepFreeze([
     }),
     inputSchema: objectSchema({
       position_seconds: { type: "number" },
-    }, ["position_seconds"]),
+      batch: {
+        type: "array",
+        minItems: 1,
+        maxItems: 64,
+        items: {
+          type: "object",
+          properties: {
+            id: { type: "string" },
+            source_item_ref: { type: "string" },
+            target_track_ref: { type: "string" },
+            position_seconds: { type: "number" },
+            source_offset_seconds: { type: "number" },
+          },
+          required: ["id", "source_item_ref", "target_track_ref", "position_seconds"],
+          additionalProperties: false,
+        },
+      },
+    }, []),
     outputSchema: objectSchema({
       new_item_ref: { type: "string" },
       source_item_ref: { type: "string" },
@@ -131,6 +148,8 @@ export const P1_TEMPLATE_FILL_TEMPLATES = deepFreeze([
       position_seconds: { type: "number" },
       copy_depth: { const: "active_take_footprint" },
       source_footprint: { type: "object" },
+      rows: { type: "array" },
+      batch_timings: { type: "object" },
     }, ["new_item_ref", "target_track_ref", "position_seconds", "copy_depth", "source_footprint"]),
     refs: refs({
       input: [

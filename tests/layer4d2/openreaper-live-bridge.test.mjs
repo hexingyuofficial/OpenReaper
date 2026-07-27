@@ -91,7 +91,7 @@ describe("Layer 4D.2 REAPER-side live bridge script", () => {
     assert.doesNotMatch(sourceModules["40-route-pack-handlers.lua"], /local TRANSPORT_DIR = non_empty\(os\.getenv\(TRANSPORT_ENV\)\)/);
     assert.match(
       readFileSync(new URL("../../reaper/bridge/src/handlers/core/read_template_catalog_summary.lua", import.meta.url), "utf8"),
-      /template_count = 235/,
+      /template_count = 237/,
     );
     assert.match(sourceModules["90-file-transport-loop.lua"], /reaper\.EnumerateFiles\(REQUESTS_DIR, index\)/);
     assert.match(sourceModules["90-file-transport-loop.lua"], /local completed_request_files = \{\}/);
@@ -145,7 +145,9 @@ for index = 1, 1143 do
   files[index] = filename
   results["/results/" .. string.gsub(filename, "%.json$", ".json")] = true
 end
-run_poll(0.11)
+for index = 1, 1143 do
+  run_poll(index * 0.11)
+end
 local historical_result_checks = 0
 for path, count in pairs(file_exists_calls) do
   if string.find(path, "/results/history-", 1, true) == 1 then historical_result_checks = historical_result_checks + count end
@@ -154,12 +156,12 @@ assert(historical_result_checks == 1143)
 
 files[1144] = "next.json"
 requests["/requests/next.json"] = { id = "next", params = {} }
-run_poll(0.22)
+run_poll(1144 * 0.11)
 local checks_after_next = 0
 for path, count in pairs(file_exists_calls) do
   if string.find(path, "/results/history-", 1, true) == 1 then checks_after_next = checks_after_next + count end
 end
-assert(checks_after_next == 1143, "historical result files must not be reopened")
+assert(checks_after_next == 1143)
 assert(dispatch_calls.next == 1)
 assert(results["/results/next.json"] == true)
 `);
@@ -233,12 +235,13 @@ assert(dispatch_calls.first == 2)
 assert((resume_calls.first or 0) == 1)
 assert(results["/results/first.json"] == true)
 assert(requests["/claims/first.json"] == nil)
-assert(dispatch_calls.second == 1)
-assert(results["/results/second.json"] == true)
+assert(dispatch_calls.second == nil)
+assert(results["/results/second.json"] == nil)
 
 run_poll(0.33)
 assert(dispatch_calls.first == 2)
 assert(dispatch_calls.second == 1)
+assert(results["/results/second.json"] == true)
 `);
   });
 
@@ -282,6 +285,10 @@ assert(requests["/claims/z-second.json"] == nil)
 run_poll(0.22)
 assert(dispatch_calls["a-first"] == 2)
 assert(results["/results/a-first.json"] == true)
+assert(dispatch_calls["z-second"] == nil)
+assert(results["/results/z-second.json"] == nil)
+
+run_poll(0.33)
 assert(dispatch_calls["z-second"] == 1)
 assert(results["/results/z-second.json"] == true)
 `);

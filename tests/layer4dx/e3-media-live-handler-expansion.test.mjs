@@ -35,15 +35,17 @@ const E3_OPERATION_KEYS = Object.freeze([
 const E3_CAPABILITIES = Object.freeze([
   "media.import_file_to_track",
   "media.import_file_section_to_track",
+  "media.import_files_batch",
   "media.relink_take_source",
 ]);
 
 describe("E3 media live handler expansion", () => {
-  it("adds a separate runtime allowlist for exactly the four E3 media route template ids", async () => {
+  it("adds a separate runtime allowlist for exactly the five E3 media route template ids", async () => {
     assert.deepEqual(CALL_TEMPLATE_RUNTIME_E3_MEDIA_ROUTE_TEMPLATE_IDS, [
       "template.media.list_folder_media_files",
       "template.media.import_file_to_track",
       "template.media.import_file_section_to_track",
+      "template.media.import_files_batch",
       "template.media.relink_take_source",
     ]);
 
@@ -77,6 +79,7 @@ describe("E3 media live handler expansion", () => {
         "run_command:template.execute",
         "run_command:template.execute",
         "run_command:template.execute",
+        "run_command:template.execute",
       ],
     );
     assert.deepEqual(bridge.seen.slice(1).map((request) => request.pack.capability), E3_CAPABILITIES);
@@ -92,7 +95,7 @@ describe("E3 media live handler expansion", () => {
       assert.equal("shell" in request, false);
       assert.equal("process" in request, false);
     }
-    assert.equal(bridge.seen[3].idempotency_key, "e3-media-route:relink-take-source");
+    assert.equal(bridge.seen[4].idempotency_key, "e3-media-route:relink-take-source");
 
     const mixed = createCallTemplateRuntime({
       live: {
@@ -161,11 +164,12 @@ describe("E3 media live handler expansion", () => {
     assert.deepEqual(report.attempted_template_ids, CALL_TEMPLATE_RUNTIME_E3_MEDIA_ROUTE_TEMPLATE_IDS);
 
     const requests = await readTransportRequests(transportDir);
-    assert.equal(requests.length, 4);
+    assert.equal(requests.length, 5);
     assert.deepEqual(
       requests.map((request) => `${request.operation.family}:${request.operation.name}`),
       [
         "query_state:media.folder_media.list",
+        "run_command:template.execute",
         "run_command:template.execute",
         "run_command:template.execute",
         "run_command:template.execute",
@@ -194,14 +198,17 @@ describe("E3 media live handler expansion", () => {
     assert.equal(requests[1].refs.find((ref) => ref.kind === "file").ref, `file:path:${fixture.sourcePath}`);
     assert.equal(requests[2].params.start_percent, 0.25);
     assert.equal(requests[2].params.end_percent, 0.75);
-    assert.equal(requests[3].refs.find((ref) => ref.kind === "file").ref, `file:path:${fixture.relinkPath}`);
-    assert.equal(requests[3].idempotency_key, "e3-media-route:relink-take-source");
+    assert.deepEqual(requests[3].params.batch.map((row) => row.id), ["e3-batch-a", "e3-batch-b"]);
+    assert.equal(requests[3].refs.filter((ref) => ref.kind === "file").length, 2);
+    assert.equal(requests[4].refs.find((ref) => ref.kind === "file").ref, `file:path:${fixture.relinkPath}`);
+    assert.equal(requests[4].idempotency_key, "e3-media-route:relink-take-source");
   });
 
   it("keeps the Lua bridge E3 media surface exact and free of raw/import-action routes", () => {
     assert.match(BRIDGE_SOURCE, /\["query_state:media\.folder_media\.list"\]/);
     assert.match(BRIDGE_SOURCE, /\["media\.import_file_to_track"\]\s*=\s*OPENREAPER_HANDLER_EXPORTS\.import_file_to_track/);
     assert.match(BRIDGE_SOURCE, /\["media\.import_file_section_to_track"\]\s*=\s*OPENREAPER_HANDLER_EXPORTS\.import_file_section_to_track/);
+    assert.match(BRIDGE_SOURCE, /\["media\.import_files_batch"\]\s*=\s*OPENREAPER_HANDLER_EXPORTS\.import_files_batch/);
     assert.match(BRIDGE_SOURCE, /\["media\.relink_take_source"\]\s*=\s*OPENREAPER_HANDLER_EXPORTS\.relink_take_source/);
     assert.match(BRIDGE_SOURCE, /AddMediaItemToTrack/);
     assert.match(BRIDGE_SOURCE, /AddTakeToMediaItem/);
@@ -247,6 +254,15 @@ function e3Input(id) {
   if (id === "template.media.import_file_section_to_track") {
     return { position_seconds: 2, start_percent: 0.25, end_percent: 0.75, preserve_selection: true };
   }
+  if (id === "template.media.import_files_batch") {
+    return {
+      batch: [
+        { id: "e3-batch-a", position_seconds: 4 },
+        { id: "e3-batch-b", position_seconds: 6, start_percent: 0.25, end_percent: 0.75 },
+      ],
+      preserve_selection: true,
+    };
+  }
   if (id === "template.media.relink_take_source") {
     return { verify_source_type: true };
   }
@@ -264,6 +280,9 @@ function e3Refs(id) {
   const takeRef = createObjectRef("take", { scheme: "index", value: "0" }, { ref: "take:index:0" });
   if (id === "template.media.import_file_to_track" || id === "template.media.import_file_section_to_track") {
     return { source_file_ref: sourceFileRef, track_ref: trackRef };
+  }
+  if (id === "template.media.import_files_batch") {
+    return { source_file_refs: [sourceFileRef, sourceFileRef], track_refs: [trackRef, trackRef] };
   }
   if (id === "template.media.relink_take_source") {
     return { source_file_ref: relinkFileRef, take_ref: takeRef };

@@ -3,9 +3,9 @@
   "generated_from": "reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json",
   "registry_summary": {
     "contract": "openreaper.bridge_handler_registry.v1",
-    "entryCount": 235,
+    "entryCount": 237,
     "legacyMonolithCount": 0,
-    "extractedHandlerCount": 235,
+    "extractedHandlerCount": 237,
     "handlerModuleCount": 91,
     "routeCount": 34,
     "operationCount": 103
@@ -592,9 +592,9 @@
     },
     {
       "route": "e3-media-live-handlers",
-      "template_count": 4,
+      "template_count": 5,
       "handler_module_count": 1,
-      "operation_count": 4,
+      "operation_count": 5,
       "packs": [
         "media"
       ],
@@ -612,6 +612,7 @@
         "template.media.list_folder_media_files",
         "template.media.import_file_to_track",
         "template.media.import_file_section_to_track",
+        "template.media.import_files_batch",
         "template.media.relink_take_source"
       ]
     },
@@ -770,9 +771,9 @@
     },
     {
       "route": "e2-fx-b1-write-handlers",
-      "template_count": 7,
+      "template_count": 8,
       "handler_module_count": 1,
-      "operation_count": 7,
+      "operation_count": 8,
       "packs": [
         "fx"
       ],
@@ -783,13 +784,15 @@
         "none"
       ],
       "tests": [
-        "tests/layer4dx/e2-fx-l1-read-handler-expansion.test.mjs"
+        "tests/layer4dx/e2-fx-l1-read-handler-expansion.test.mjs",
+        "tests/layer4dx/e2-fx-native-batch-handler.test.mjs"
       ],
       "template_ids": [
         "template.fx.add_track_fx",
         "template.fx.add_take_fx",
         "template.fx.set_fx_bypass",
         "template.fx.set_fx_parameter_normalized",
+        "template.fx.set_parameter_assignments_batch",
         "template.fx.set_fx_preset_by_name",
         "template.fx.set_fx_preset_by_index",
         "template.fx.reorder_fx"

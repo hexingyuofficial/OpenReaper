@@ -22,8 +22,15 @@ const OFFICIAL_OUTPUTS = Object.freeze({
   "recipe.media.create_layered_sound_effect_variants": Object.freeze(["placement_changes", "variation_changes", "control_evidence"]),
   "recipe.items.create_sound_variations": Object.freeze(["variation_changes", "control_changes", "tone_changes", "automation_changes"]),
 });
-const OFFICIAL_RECIPE_SPEED_BUDGET_MS = 60_000;
-const CAPACITY_SPEED_BUDGET_MS = Object.freeze({ 1: 60_000, 8: 180_000, 64: 900_000, 65: 30_000 });
+const INTERNAL_EXECUTION_SPEED_GATE_MS = 30_000;
+const OFFICIAL_RECIPE_SPEED_BUDGET_MS = INTERNAL_EXECUTION_SPEED_GATE_MS;
+const OFFICIAL_RECIPE_GET_BUDGET = Object.freeze({ max_response_bytes: 65_536 });
+const CAPACITY_SPEED_BUDGET_MS = Object.freeze({
+  1: INTERNAL_EXECUTION_SPEED_GATE_MS,
+  8: INTERNAL_EXECUTION_SPEED_GATE_MS,
+  64: INTERNAL_EXECUTION_SPEED_GATE_MS,
+  65: INTERNAL_EXECUTION_SPEED_GATE_MS,
+});
 const PUBLIC_CALL_TIMEOUT_MS = 960_000;
 
 export async function connectInstalledWrapperAlpha345({ installedWrapper, liveEnvironment = {}, clientName = "official-recipes" } = {}) {
@@ -106,7 +113,11 @@ export async function runAlpha345OfficialRecipesHarness({
 
     for (const id of OFFICIAL_IDS) {
       const identity = exactIdentity(byId.get(id));
-      const got = await timedCall(invoke, { operation: "get", ...identity });
+      const got = await timedCall(invoke, {
+        operation: "get",
+        ...identity,
+        budget: OFFICIAL_RECIPE_GET_BUDGET,
+      });
       if (got.value?.ok !== true || got.value?.source !== "official") throw coded("OFFICIAL_RECIPE_GET_FAILED", `${id} exact expansion failed.`);
       officialDetails.set(id, got.value);
       const run = await timedCall(invoke, { operation: "run", ...identity, inputs: fixture.inputs[id], budget: { max_response_bytes: 65_536 } });
@@ -380,7 +391,7 @@ function summarizeRun(recipeId, call, identity, semanticRecipeId = recipeId) {
     public_call_count: 1,
     duration_ms: call.duration_ms,
     speed_budget_ms: OFFICIAL_RECIPE_SPEED_BUDGET_MS,
-    speed_ok: call.duration_ms <= OFFICIAL_RECIPE_SPEED_BUDGET_MS,
+    speed_ok: call.duration_ms < OFFICIAL_RECIPE_SPEED_BUDGET_MS,
     outputs: verifiedOutputs.map((output) => output.id).sort(),
     output_counts: Object.fromEntries(verifiedOutputs.map((output) => [output.id, Array.isArray(output.value) ? output.value.length : output.value == null ? 0 : 1])),
     output_omitted: Object.fromEntries(verifiedOutputs.map((output) => [output.id, output.value?.omitted === true])),
@@ -579,7 +590,7 @@ function summarizeCapacity(count, call, requiredMutationRows, evidence, inputs) 
     ok,
     duration_ms: call.duration_ms,
     speed_budget_ms: CAPACITY_SPEED_BUDGET_MS[count],
-    speed_ok: call.duration_ms <= CAPACITY_SPEED_BUDGET_MS[count],
+    speed_ok: call.duration_ms < CAPACITY_SPEED_BUDGET_MS[count],
     required_mutation_rows: requiredMutationRows,
     native_mutation_count: value.execution_truth?.native_mutation_count ?? 0,
     readback_count: value.execution_truth?.readback_count ?? 0,
@@ -801,4 +812,8 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
   await main();
 }
 
-export { CONTRACT as ALPHA3_45_OFFICIAL_RECIPES_HARNESS_CONTRACT, OFFICIAL_IDS as ALPHA3_45_OFFICIAL_RECIPE_IDS };
+export {
+  CONTRACT as ALPHA3_45_OFFICIAL_RECIPES_HARNESS_CONTRACT,
+  INTERNAL_EXECUTION_SPEED_GATE_MS as ALPHA4_INTERNAL_EXECUTION_SPEED_GATE_MS,
+  OFFICIAL_IDS as ALPHA3_45_OFFICIAL_RECIPE_IDS,
+};

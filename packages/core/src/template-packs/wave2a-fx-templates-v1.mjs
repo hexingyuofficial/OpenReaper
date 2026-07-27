@@ -11,6 +11,7 @@ export const WAVE2A_FX_TEMPLATE_IDS = Object.freeze([
   "template.fx.add_take_fx",
   "template.fx.set_fx_bypass",
   "template.fx.set_fx_parameter_normalized",
+  "template.fx.set_parameter_assignments_batch",
   "template.fx.set_fx_preset_by_name",
   "template.fx.set_fx_preset_by_index",
   "template.fx.reorder_fx",
@@ -340,6 +341,48 @@ export const WAVE2A_FX_TEMPLATES = deepFreeze([
         name: "set_fx_param_normalized",
         summary: "Set parameter zero to the midpoint normalized value.",
         input: { param_index: 0, normalized_value: 0.5, tolerance: 0.0001 },
+      },
+    ],
+  }),
+  writeDescriptor({
+    id: "template.fx.set_parameter_assignments_batch",
+    title: "Set FX parameter assignments batch",
+    summary: "Validate a complete exact FX parameter assignment batch, then apply serial native chunks and one aggregate readback.",
+    entity_kind: "fx_param",
+    tags: ["fx", "parameter", "batch", "native", "wave2a"],
+    capability: "fx.set_parameter_assignments_batch",
+    inputProperties: {
+      dry_run: { type: "boolean" },
+      batch: { type: "array" },
+    },
+    requiredInput: ["batch", "dry_run"],
+    outputProperties: {
+      rows: { type: "array" },
+      mutation_attempted: { type: "boolean" },
+      batch_timings: { type: "object" },
+    },
+    refs: refs({
+      input: [ref("fx_refs", "fx", true, "All exact FX refs addressed by the batch.")],
+      output: [ref("fx_refs", "fx", true, "Exact FX refs preserved after aggregate readback.")],
+    }),
+    expectedAction: "update",
+    expectedSummary: "Updates exact FX parameter assignments through one native batch dispatch with all-row preflight and aggregate readback.",
+    expectedEntitySummary: "Exact FX parameter assignments are validated and read back as one batch.",
+    checks: [
+      check("batch_identity_preserved", "state_delta", "Every returned row preserves id, FX ref, parameter identity, formatted value, and native tolerance truth."),
+      check("batch_zero_write_dry_run", "state_delta", "dry_run returns a complete preflight without calling a native setter."),
+    ],
+    examples: [
+      {
+        name: "set_exact_assignment_batch",
+        summary: "Apply two exact parameter assignments through one native batch.",
+        input: {
+          dry_run: false,
+          batch: [
+            { id: "gain", fx_ref: "fx:track:guid:{TRACK}:0", param_index: 0, normalized_value: 0.5 },
+            { id: "mix", fx_ref: "fx:track:guid:{TRACK}:0", param_ident: "mix", normalized_value: 0.25 },
+          ],
+        },
       },
     ],
   }),

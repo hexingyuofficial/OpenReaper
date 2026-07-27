@@ -122,6 +122,7 @@ export const E2_FX_B1_WRITE_TEMPLATE_IDS = Object.freeze([
   "template.fx.add_take_fx",
   "template.fx.set_fx_bypass",
   "template.fx.set_fx_parameter_normalized",
+  "template.fx.set_parameter_assignments_batch",
   "template.fx.set_fx_preset_by_name",
   "template.fx.set_fx_preset_by_index",
   "template.fx.reorder_fx",
@@ -244,7 +245,10 @@ export const registryRoutes = Object.freeze({
   }),
   "e2-fx-b1-write-handlers": Object.freeze({
     ids: E2_FX_B1_WRITE_TEMPLATE_IDS,
-    tests: Object.freeze(["tests/layer4dx/e2-fx-l1-read-handler-expansion.test.mjs"]),
+    tests: Object.freeze([
+      "tests/layer4dx/e2-fx-l1-read-handler-expansion.test.mjs",
+      "tests/layer4dx/e2-fx-native-batch-handler.test.mjs",
+    ]),
   }),
   "d23-fx-discovery-read-handlers": Object.freeze({
     ids: CALL_TEMPLATE_RUNTIME_D23_FX_DISCOVERY_READ_TEMPLATE_IDS,

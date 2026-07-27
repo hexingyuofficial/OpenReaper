@@ -18,7 +18,7 @@ PROJECT_INDEX_STATE_ROOT=""
 BRIDGE_OWNER=""
 BRIDGE_GENERATION=""
 START_WAIT_SECONDS="${OPENREAPER_START_WAIT_SECONDS:-20}"
-STARTUP_DIALOG_TIMEOUT_SECONDS="${OPENREAPER_STARTUP_DIALOG_TIMEOUT_SECONDS:-5}"
+STARTUP_DIALOG_TIMEOUT_SECONDS="${OPENREAPER_STARTUP_DIALOG_TIMEOUT_SECONDS:-15}"
 STARTUP_DIALOG_ASSIST=true
 IGNORE_MISSING_MEDIA=false
 STARTUP_DIALOG_CONSENT=""
@@ -1381,6 +1381,9 @@ bridge_heartbeat_ready() {
   node --input-type=module - "${TRANSPORT_DIR}/openreaper-bridge-liveness-v1.json" "${BRIDGE_OWNER}" "${BRIDGE_GENERATION}" <<'NODE'
 import { readFile, stat } from "node:fs/promises";
 const [heartbeatPath, owner, generationText] = process.argv.slice(2);
+// Match the runtime liveness grace: synchronous native work may defer the
+// heartbeat, but a stale or mismatched identity must still fail closed.
+const maxAgeMs = 35_000;
 try {
   const [raw, metadata] = await Promise.all([readFile(heartbeatPath, "utf8"), stat(heartbeatPath)]);
   const heartbeat = JSON.parse(raw);
@@ -1394,9 +1397,9 @@ try {
     && heartbeat.sequence >= 1
     && Number.isSafeInteger(heartbeat.refreshed_at_unix_s)
     && now - metadata.mtimeMs >= -1_000
-    && now - metadata.mtimeMs <= 3_000
+    && now - metadata.mtimeMs <= maxAgeMs
     && now - heartbeat.refreshed_at_unix_s * 1_000 >= -1_000
-    && now - heartbeat.refreshed_at_unix_s * 1_000 <= 3_000;
+    && now - heartbeat.refreshed_at_unix_s * 1_000 <= maxAgeMs;
   process.exit(ready ? 0 : 1);
 } catch {
   process.exit(1);

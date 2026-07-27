@@ -323,6 +323,151 @@ assert(#refs == 4)
 `);
   });
 
+  it("runs 1/8/64 rows through one native batch shape and zero-writes invalid batches", () => {
+    runLua(`
+local source = { filename = "/tmp/source.wav", source_type = "WAVE", length = 8 }
+local source_take = { guid = "{SOURCE-TAKE}", source = source, start = 0.25, rate = 1.25, pitch = -2, preserve = 1 }
+local source_track = { guid = "{SOURCE-TRACK}" }
+local source_item = { guid = "{SOURCE}", active = source_take, length = 3, position = 1, track = source_track }
+local target_track = { guid = "{TARGET}" }
+local created_count, write_count, imports, destroys, source_binds = 0, 0, 0, 0, 0
+local bound_sources = {}
+local fail_on_bind = nil
+local function source_ref(item) return item.guid end
+call_reaper = function(name, ...)
+  local args = { ... }
+  if name == "CountMediaItems" then return true, 1 end
+  if name == "GetMediaItem" then return true, source_item end
+  if name == "BR_GetMediaItemGUID" then return false end
+  if name == "GetSetMediaItemInfo_String" then return true, true, args[1].guid end
+  if name == "GetSetMediaItemTakeInfo_String" then return true, true, args[1].guid end
+  if name == "CountTracks" then return true, 1 end
+  if name == "GetTrack" then return true, target_track end
+  if name == "GetTrackGUID" then return true, args[1].guid end
+  if name == "GetMediaItemTrack" then return true, args[1].track end
+  if name == "GetActiveTake" then return true, args[1].active end
+  if name == "GetMediaItemTake_Source" then return true, args[1].source end
+  if name == "TakeFX_GetCount" then return true, 0 end
+  if name == "GetMediaSourceFileName" then return true, args[1].filename end
+  if name == "GetMediaSourceType" then return true, args[1].source_type or "WAVE" end
+  if name == "GetMediaSourceLength" then return true, args[1].length, false end
+  if name == "GetMediaItemInfo_Value" then
+    return true, args[2] == "D_POSITION" and args[1].position or args[1].length
+  end
+  if name == "GetMediaItemTakeInfo_Value" then
+    local take, key = args[1], args[2]
+    return true, key == "D_STARTOFFS" and take.start or key == "D_PLAYRATE" and take.rate or key == "D_PITCH" and take.pitch or take.preserve
+  end
+  if name == "PCM_Source_CreateFromFile" then
+    imports = imports + 1
+    return true, { filename = args[1], source_type = "WAVE", length = 8 }
+  end
+  if name == "PCM_Source_Destroy" then destroys = destroys + 1; return true end
+  if name == "AddMediaItemToTrack" then
+    created_count = created_count + 1
+    local item = { guid = "{NEW-" .. tostring(created_count) .. "}", length = 0, position = 0, track = target_track }
+    write_count = write_count + 1
+    return true, item
+  end
+  if name == "SetMediaItemInfo_Value" then
+    if args[2] == "D_POSITION" then args[1].position = args[3] else args[1].length = args[3] end
+    write_count = write_count + 1
+    return true, true
+  end
+  if name == "AddTakeToMediaItem" then
+    local take = { guid = "{NEW-TAKE-" .. tostring(created_count) .. "}", source = nil, start = 0, rate = 1, pitch = 0, preserve = 0 }
+    args[1].active = take
+    write_count = write_count + 1
+    return true, take
+  end
+  if name == "SetMediaItemTake_Source" then
+    source_binds = source_binds + 1
+    assert(bound_sources[args[2]] == nil, "a source handle was reused across target Takes")
+    bound_sources[args[2]] = true
+    args[1].source = args[2]
+    write_count = write_count + 1
+    if fail_on_bind == source_binds then return true, false end
+    return true, true
+  end
+  if name == "SetMediaItemTakeInfo_Value" then
+    local take, key, value = args[1], args[2], args[3]
+    if key == "D_STARTOFFS" then take.start = value elseif key == "D_PLAYRATE" then take.rate = value elseif key == "D_PITCH" then take.pitch = value else take.preserve = value end
+    write_count = write_count + 1
+    return true, true
+  end
+  if name == "SetActiveTake" or name == "UpdateItemInProject" then return true end
+  if name == "DeleteTrackMediaItem" then return true, true end
+  return false
+end
+
+local function rows(count)
+  local batch = json_array({})
+  for index = 1, count do
+    batch[#batch + 1] = {
+      id = "r" .. tostring(index),
+      source_item_ref = "item:guid:{SOURCE}",
+      target_track_ref = "track:guid:{TARGET}",
+      position_seconds = index,
+      source_offset_seconds = index == 1 and 0.125 or nil,
+    }
+  end
+  return batch
+end
+
+for _, count in ipairs({ 1, 8, 64 }) do
+  local summary, failure, _, _, refs = copy_item_to_track({
+    pack = { id = "items", capability = "item.copy_to_track", risk = "write" },
+    params = { batch = rows(count) },
+    refs = json_array({}),
+    budget = { max_response_bytes = 65536, max_inline_value_bytes = 24576 },
+  })
+  assert(failure == nil and summary ~= nil, failure and failure.code or "missing_summary")
+  assert(#summary.rows == count and summary.batch_timings.rows == count)
+  assert(summary.batch_timings.native_mutation_count == count and summary.batch_timings.native_readback_count == count)
+  assert(summary.batch_timings.chunks == 1 and summary.batch_timings.runner == "e4_generic_copy_batch")
+  assert(summary.rows[1].source_offset_seconds == 0.125)
+  assert(#refs == count)
+  assert(summary.batch_timings.native_source_create_count == count)
+  assert(summary.batch_timings.native_source_reuse_count == 0)
+end
+
+assert(imports == 73 and destroys == 0, "imports=" .. tostring(imports) .. " destroys=" .. tostring(destroys))
+
+fail_on_bind = source_binds + 2
+local summary, failure = copy_item_to_track({
+  pack = { id = "items", capability = "item.copy_to_track", risk = "write" },
+  params = { batch = rows(2) }, refs = json_array({}), budget = { max_response_bytes = 65536 },
+})
+assert(summary == nil and failure.code == "COMMAND_FAILED" and failure.details.completed_rows == 1)
+assert(imports == 75, "imports_after_failed_batch=" .. tostring(imports))
+assert(destroys == 0, "project-owned reused source was destroyed")
+
+write_count = 0
+local bad = rows(1)
+bad[1].unsupported = true
+local summary, failure = copy_item_to_track({
+  pack = { id = "items", capability = "item.copy_to_track", risk = "write" },
+  params = { batch = bad }, refs = json_array({}), budget = { max_response_bytes = 65536 },
+})
+assert(summary == nil and failure.code == "PARAMS_INVALID" and failure.details.zero_write == true and write_count == 0)
+
+local duplicate = rows(2)
+duplicate[2].id = duplicate[1].id
+summary, failure = copy_item_to_track({
+  pack = { id = "items", capability = "item.copy_to_track", risk = "write" },
+  params = { batch = duplicate }, refs = json_array({}), budget = { max_response_bytes = 65536 },
+})
+assert(summary == nil and failure.code == "PARAMS_INVALID" and failure.details.zero_write == true and write_count == 0)
+
+local too_many = rows(65)
+summary, failure = copy_item_to_track({
+  pack = { id = "items", capability = "item.copy_to_track", risk = "write" },
+  params = { batch = too_many }, refs = json_array({}), budget = { max_response_bytes = 65536 },
+})
+assert(summary == nil and failure.code == "BATCH_LIMIT_EXCEEDED" and failure.details.zero_write == true and write_count == 0)
+`);
+  });
+
   it("keeps the generated bridge sourced from the same source-first fail-closed route", () => {
     assert.match(SOURCE, /source_footprint_unreadable/);
     assert.match(SOURCE, /unreadable_fields = unreadable_fields/);

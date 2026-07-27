@@ -126,7 +126,7 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
     assert.match(source, /if windowSubrole is "AXDialog" or windowSubrole is "AXSheet" then/u);
     assert.match(source, /if windowSubrole is "AXDialog" or windowSubrole is "AXSheet" then\s+if windowTitle contains "Evaluation"/u);
     assert.match(source, /if windowSubrole is not "AXWindow" and windowSubrole is not "AXStandardWindow" and windowSubrole is not "" then\s+return "blocked_unknown_dialog:title="/u);
-    assert.match(source, /STARTUP_DIALOG_TIMEOUT_SECONDS="\$\{OPENREAPER_STARTUP_DIALOG_TIMEOUT_SECONDS:-5\}"/u);
+    assert.match(source, /STARTUP_DIALOG_TIMEOUT_SECONDS="\$\{OPENREAPER_STARTUP_DIALOG_TIMEOUT_SECONDS:-15\}"/u);
     assert.match(source, /perl -e 'my \$seconds = shift @ARGV; alarm \$seconds; exec @ARGV or die/u);
     assert.match(source, /"\$\{STARTUP_DIALOG_TIMEOUT_SECONDS\}"[\s\\]+\/usr\/bin\/osascript - "\$\{STARTUP_DIALOG_ASSIST\}" "\$\{IGNORE_MISSING_MEDIA\}" "\$\{reaper_pid\}"/u);
     assert.match(source, /blocked_dialog_inspection_timeout:seconds=/u);

@@ -65,6 +65,15 @@ export async function inspectAlpha3_2B3ReaperProcess({ sessionRoot }) {
       "--no-startup-dialog-assist",
       "--recover-existing",
     ];
+    // Keep the healthy-Bridge fixture fresh across slow CI/macOS process setup.
+    await writeFile(path.join(transportRoot, "openreaper-bridge-liveness-v1.json"), JSON.stringify({
+      contract: "openreaper.bridge_liveness.v1",
+      active_owner: "openreaper-alpha",
+      active_generation: 1,
+      interval_ms: 500,
+      refreshed_at_unix_s: Math.floor(Date.now() / 1000),
+      sequence: 1,
+    }), "utf8");
     const result = await execFileAsync(startPath, startArgs, {
       env: { ...process.env, OPENREAPER_START_WAIT_SECONDS: "1", OPENREAPER_TEST_PARENT_PID: parentPid },
       timeout: 10_000,

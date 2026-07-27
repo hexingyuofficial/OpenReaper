@@ -113,6 +113,7 @@ const ENVELOPE_FIELDS = new Set([
   "error",
   "recovery",
   "budget",
+  "performance",
 ]);
 const ENVELOPE_MACRO_FIELDS = new Set(["id", "program_id", "program_version", "risk"]);
 const ENVELOPE_REQUEST_FIELDS = new Set(["request_id", "dry_run"]);
@@ -263,6 +264,7 @@ export function validateMacroExecutionEnvelope(envelope) {
   requireCondition(envelope.error === null || isPlainObject(envelope.error), "error must be null or an object", errors);
   requireCondition(envelope.recovery === null || isPlainObject(envelope.recovery), "recovery must be null or an object", errors);
   validateBudget(envelope.budget, errors);
+  validateExecutionPerformance(envelope.performance, errors);
 
   const status = envelope.execution?.status;
   const dryRun = envelope.request?.dry_run;
@@ -286,6 +288,31 @@ export function validateMacroExecutionEnvelope(envelope) {
 
   validateSerializedBudget(envelope, errors);
   return validationResult(errors);
+}
+
+function validateExecutionPerformance(value, errors) {
+  if (value === undefined) return;
+  if (!isPlainObject(value)) {
+    errors.push("performance must be an object");
+    return;
+  }
+  requireEqual(value.contract, "openreaper.execution_performance.v1", "performance contract is invalid", errors);
+  requireEqual(value.gate_ms, 30_000, "performance gate_ms is invalid", errors);
+  requireEqual(value.gate_mode, "internal_acceptance_only", "performance gate_mode is invalid", errors);
+  requireEqual(value.runtime_cancellation, false, "performance runtime_cancellation must be false", errors);
+  requireCondition(isPlainObject(value.phase_timings_ms), "performance phase_timings_ms is required", errors);
+  requireCondition(isPlainObject(value.counters), "performance counters are required", errors);
+  requireCondition(isPlainObject(value.measurement_sources), "performance measurement_sources are required", errors);
+  for (const [name, duration] of Object.entries(value.phase_timings_ms ?? {})) {
+    requireCondition(typeof name === "string" && Number.isFinite(duration) && duration >= 0, "performance phase timing is invalid", errors);
+  }
+  for (const [name, count] of Object.entries(value.counters ?? {})) {
+    requireCondition(typeof name === "string" && Number.isFinite(count) && count >= 0, "performance counter is invalid", errors);
+  }
+  requireCondition(value.measurement_sources.runtime === true || value.measurement_sources.runtime === false, "performance runtime measurement source is invalid", errors);
+  requireCondition(value.measurement_sources.bridge === true || value.measurement_sources.bridge === false, "performance bridge measurement source is invalid", errors);
+  requireCondition(Number.isFinite(value.total_ms) && value.total_ms >= 0, "performance total_ms is invalid", errors);
+  requireCondition(value.gate_ok === null || value.gate_ok === true || value.gate_ok === false, "performance gate_ok is invalid", errors);
 }
 
 function validateSelectorPolicy(value, errors) {

@@ -261,57 +261,88 @@ function makeVariationExecutor({ failAt = null, fxCount = 1, corruptFxProof = fa
       }
       if (child.id === "template.items.copy_item_to_track") {
         mutationCount += 1;
-        if (failAt !== null && mutationCount === failAt) return { ok: false, request: { id: child.id }, error: { code: "COPY_FAILED", message: "copy failed" }, result: { summary: {}, readback: {}, refs: [] } };
-        copyCount += 1;
-        const newItemRef = realisticRefs
-          ? `item:guid:${realisticGuid("A", copyCount)}`
-          : `item:guid:{NEW-${String(copyCount).padStart(2, "0")}}`;
-        const newTakeRef = realisticRefs
-          ? `take:guid:${realisticGuid("B", copyCount)}`
-          : `take:guid:{NEW-TAKE-${String(copyCount).padStart(2, "0")}}`;
-        const sourceTakeRef = realisticRefs
-          ? `take:guid:${realisticGuid("C", copyCount)}`
-          : `take:guid:{SOURCE-TAKE-${String(copyCount).padStart(2, "0")}}`;
-        const takeFxCopy = takeFxCopyProof(sourceTakeRef, newTakeRef, fxCount);
-        if (corruptFxProof && takeFxCopy.slots[0]) takeFxCopy.slots[0].target_fx_ref = "fx:take:guid:{WRONG}:0";
-        const row = {
-          item_ref: newItemRef,
-          active_take_ref: newTakeRef,
-          track_ref: child.refs.target_track_ref.ref,
-          position_seconds: child.input.position_seconds,
-          start_offset_seconds: 0,
-        };
-        items.set(newItemRef, row);
+        const batch = child.input?.batch;
+        if (!Array.isArray(batch) || batch.length < 1) {
+          throw new Error("batch executor requires a non-empty input.batch");
+        }
+        if (failAt !== null) {
+          return {
+            ok: false,
+            request: { id: child.id },
+            error: {
+              code: "COPY_FAILED",
+              message: "copy batch failed",
+              details: { row_index: failAt, completed_rows: Math.max(0, failAt - 1), zero_write: false },
+            },
+            result: { summary: {}, readback: {}, refs: [] },
+          };
+        }
+        const rows = batch.map((entry, index) => {
+          copyCount += 1;
+          const newItemRef = realisticRefs
+            ? `item:guid:${realisticGuid("A", copyCount)}`
+            : `item:guid:{NEW-${String(copyCount).padStart(2, "0")}}`;
+          const newTakeRef = realisticRefs
+            ? `take:guid:${realisticGuid("B", copyCount)}`
+            : `take:guid:{NEW-TAKE-${String(copyCount).padStart(2, "0")}}`;
+          const sourceTakeRef = realisticRefs
+            ? `take:guid:${realisticGuid("C", copyCount)}`
+            : `take:guid:{SOURCE-TAKE-${String(copyCount).padStart(2, "0")}}`;
+          const takeFxCopy = takeFxCopyProof(sourceTakeRef, newTakeRef, fxCount);
+          if (corruptFxProof && takeFxCopy.slots[0]) takeFxCopy.slots[0].target_fx_ref = "fx:take:guid:{WRONG}:0";
+          const row = {
+            id: entry.id,
+            item_ref: newItemRef,
+            active_take_ref: newTakeRef,
+            track_ref: entry.target_track_ref,
+            position_seconds: entry.position_seconds,
+            start_offset_seconds: entry.source_offset_seconds ?? 0,
+          };
+          items.set(newItemRef, row);
+          return {
+            id: entry.id,
+            new_item_ref: newItemRef,
+            active_take_ref: newTakeRef,
+            source_item_ref: entry.source_item_ref,
+            target_track_ref: entry.target_track_ref,
+            position_seconds: entry.position_seconds,
+            ...(entry.source_offset_seconds === undefined ? {} : { source_offset_seconds: entry.source_offset_seconds }),
+            source_item: { active_take_ref: sourceTakeRef },
+            take_fx_copy: takeFxCopy,
+            batch_index: index + 1,
+          };
+        });
+        const refs = rows.flatMap((row, index) => [
+          objectRef("item", row.new_item_ref),
+          objectRef("take", row.active_take_ref),
+          objectRef("track", batch[index].target_track_ref),
+          ...Array.from({ length: fxCount }, (_, slotIndex) => takeFxObjectRef(row.active_take_ref, slotIndex)),
+        ]);
         return {
           ok: true,
           request: { id: child.id },
           verification: { status: "passed" },
           result: {
             summary: {
-              new_item_ref: newItemRef,
-              active_take_ref: newTakeRef,
-              source_item_ref: child.refs.source_item_ref.ref,
-              target_track_ref: row.track_ref,
-              position_seconds: row.position_seconds,
-              source_item: { active_take_ref: sourceTakeRef },
-              take_fx_copy: takeFxCopy,
+              rows,
+              batch_timings: {
+                preflight_ms: 2,
+                mutation_ms: 4,
+                readback_ms: 1,
+                evidence_ms: 1,
+                transport_ms: 1,
+                native_mutation_count: rows.length,
+                native_readback_count: rows.length,
+                rows: rows.length,
+                chunk_size: 128,
+                chunks: 1,
+                runner: "fake_e4_generic_copy_batch",
+              },
             },
             readback: {},
-            refs: [
-              objectRef("item", newItemRef),
-              objectRef("take", newTakeRef),
-              objectRef("track", row.track_ref),
-              ...Array.from({ length: fxCount }, (_, slotIndex) => takeFxObjectRef(newTakeRef, slotIndex)),
-            ],
+            refs,
           },
         };
-      }
-      if (child.id === "template.items.set_take_start_in_source") {
-        mutationCount += 1;
-        if (failAt !== null && mutationCount === failAt) return { ok: false, request: { id: child.id }, error: { code: "OFFSET_FAILED", message: "offset failed" }, result: { summary: {}, readback: {}, refs: [] } };
-        const row = items.get(child.refs.item_ref.ref);
-        row.start_offset_seconds = child.input.start_offset_seconds;
-        return { ok: true, request: { id: child.id }, verification: { status: "passed" }, result: { summary: { item_ref: row.item_ref, start_offset_seconds: row.start_offset_seconds }, readback: {}, refs: [objectRef("item", row.item_ref)] } };
       }
       if (child.id === "template.items.read_item_summary") {
         const row = items.get(child.refs.item_ref.ref);
@@ -363,8 +394,16 @@ describe("Alpha3.4-D1 upper items batch set_item_take_controls", () => {
       assert.equal(response.result.changes.every((row) => /^take:guid:\{NEW-TAKE-\d+\}$/u.test(row.new_take_ref)), true);
       assert.equal(response.result.changes.every((row) => row.take_fx_copy?.status === "passed" && row.take_fx_copy.slots.length === 1), true);
       assert.equal(response.result.changes.every((row) => row.take_fx_copy.slots[0].target_fx_ref === `fx:${row.new_take_ref}:0`), true);
-      assert.equal(response.result.data.calls.resolve, count + Math.min(count, 4));
+      assert.equal(response.result.data.calls.resolve, 0);
+      assert.equal(response.result.data.calls.mutation, 1);
       assert.equal(response.result.data.calls.readback, 0);
+      assert.equal(executor.calls.filter((call) => call.id === "template.items.copy_item_to_track").length, 1);
+      const copyCall = executor.calls.find((call) => call.id === "template.items.copy_item_to_track");
+      assert.equal(copyCall.input.batch.length, count);
+      assert.equal(copyCall.refs.source_item_ref.length, count);
+      assert.equal(copyCall.refs.target_track_ref.length, count);
+      assert.equal(copyCall.refs.source_item_ref.every((ref, index) => ref.ref === variationRows(count)[index].source_item_ref), true);
+      assert.equal(copyCall.refs.target_track_ref.every((ref, index) => ref.ref === variationRows(count)[index].target_track_ref), true);
     }
     const calls = [];
     const blocked = await executeAlpha3_3B1cItemsApplyMacro({
@@ -380,7 +419,7 @@ describe("Alpha3.4-D1 upper items batch set_item_take_controls", () => {
     assert.equal(calls.length, 0);
   });
 
-  it("reuses repeated exact variation resolvers while every copy remains serial and verified", async () => {
+  it("dispatches repeated exact variation rows through one aggregate copy call", async () => {
     const rows = variationRows(64).map((row, index) => ({
       ...row,
       source_item_ref: itemRef(1),
@@ -395,10 +434,11 @@ describe("Alpha3.4-D1 upper items batch set_item_take_controls", () => {
     });
     assert.equal(response.ok, true, JSON.stringify(response));
     assert.equal(response.result.changes.length, 64);
-    assert.equal(response.result.data.calls.resolve, 2);
-    assert.equal(response.result.data.calls.mutation, 64);
+    assert.equal(response.result.data.calls.resolve, 0);
+    assert.equal(response.result.data.calls.mutation, 1);
     assert.equal(response.result.data.calls.readback, 0);
-    assert.equal(executor.calls.filter((call) => call.id === "template.items.copy_item_to_track").length, 64);
+    assert.equal(executor.calls.filter((call) => call.id === "template.items.copy_item_to_track").length, 1);
+    assert.equal(executor.calls.find((call) => call.id === "template.items.copy_item_to_track").input.batch.length, 64);
     assert.equal(executor.calls.some((call) => call.id === "template.items.read_item_summary"), false);
     assert.deepEqual(validateMacroExecutionEnvelope(response), { valid: true, errors: [] });
     assert.equal(response.budget.actual_bytes <= 65_536, true);
@@ -450,7 +490,7 @@ describe("Alpha3.4-D1 upper items batch set_item_take_controls", () => {
     assert.equal(corrupt.result.changes[0].status, "rbf");
   });
 
-  it("uses the source-offset atom and final Item summary, then stops subsequent rows after a mid-row failure", async () => {
+  it("keeps source-offset in the copy batch and fails closed when the aggregate call fails", async () => {
     const offsetExecutor = makeVariationExecutor();
     const offsetResponse = await executeAlpha3_3B1cItemsApplyMacro({
       request: request({ mode: "create_variations", dry_run: false, variations: variationRows(1, { offset: true }) }, { max_response_bytes: 65_536, max_items: 128, max_inline_value_bytes: 24_576 }),
@@ -461,9 +501,14 @@ describe("Alpha3.4-D1 upper items batch set_item_take_controls", () => {
     const offsetChange = offsetResponse.result.changes[0];
     assert.equal(Object.hasOwn(offsetChange, "source_offset_seconds"), false);
     assert.equal(offsetChange.readback, "pass");
-    const offsetCall = offsetExecutor.calls.find((child) => child.id === "template.items.set_take_start_in_source");
-    assert.equal(offsetCall.input.start_offset_seconds, 0.125);
-    assert.equal(offsetCall.refs.item_ref.ref, offsetChange.new_item_ref);
+    assert.equal(offsetExecutor.calls.filter((child) => child.id === "template.items.copy_item_to_track").length, 1);
+    assert.deepEqual(offsetExecutor.calls[0].input.batch[0], {
+      id: "v01abcdefghi",
+      source_item_ref: itemRef(1),
+      target_track_ref: trackRef(1),
+      position_seconds: 10,
+      source_offset_seconds: 0.125,
+    });
 
     const failingExecutor = makeVariationExecutor({ failAt: 2 });
     const failed = await executeAlpha3_3B1cItemsApplyMacro({
@@ -473,10 +518,9 @@ describe("Alpha3.4-D1 upper items batch set_item_take_controls", () => {
     });
     assert.equal(failed.ok, false);
     assert.equal(failed.execution.status, "partial_failure");
-    assert.equal(failed.result.changes[0].status, "fail");
-    assert.equal(failed.result.changes[0].new_item_ref, "item:guid:{NEW-01}");
-    assert.equal(failed.result.changes[1].status, "skip");
-    assert.equal(failed.result.changes[2].status, "skip");
+    assert.equal(failed.result.changes.every((change) => change.status === "unk"), true);
+    assert.equal(failed.result.changes.every((change) => change.mutation === "unk"), true);
+    assert.equal(failed.result.changes.every((change) => !Object.hasOwn(change, "new_item_ref")), true);
     assert.equal(failingExecutor.calls.filter((child) => child.id === "template.items.copy_item_to_track").length, 1);
   });
 
@@ -583,14 +627,14 @@ describe("Alpha3.4-D1 upper items batch set_item_take_controls", () => {
     assert.equal(inlineDetailBytes(success) <= 24_576, true, `success inline bytes=${inlineDetailBytes(success)}`);
     assert.deepEqual(validateMacroExecutionEnvelope(success), { valid: true, errors: [] });
   });
-  it("keeps mode list and exact public counts 6/15/235/91", () => {
+  it("keeps mode list and exact public counts 6/15/237/91", () => {
     assert.equal(ALPHA3_3_B1C_ITEMS_APPLY_MODES.includes("set_item_take_controls"), true);
     assert.equal(OPENREAPER_PUBLIC_TOOL_IDS.length, 6);
     assert.equal(ALPHA3_3_B1_VISIBLE_EXECUTABLE_IDS.length, 15);
-    assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 235);
+    assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 237);
     const registry = loadBridgeHandlerRegistry({ cwd: ROOT });
     validateBridgeHandlerRegistry({ cwd: ROOT, registry });
-    assert.equal(registry.entries.length, 235);
+    assert.equal(registry.entries.length, 237);
     assert.equal(new Set(registry.entries.map((entry) => entry.handler_file)).size, 91);
     assert.equal(countLua(path.join(ROOT, "reaper/bridge/src/handlers")), 91);
     assert.equal(ALPHA3_3_B1C_ITEMS_APPLY_REGISTRY.ids.includes(ALPHA3_3_B1C_ITEMS_APPLY_MACRO_ID), true);

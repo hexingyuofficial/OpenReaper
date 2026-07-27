@@ -289,8 +289,13 @@ local function poll_once()
   end
   table.sort(request_filenames)
   for _, filename in ipairs(request_filenames) do
-    if not completed_request_files[filename] and process_request_file(filename) then
-      completed_request_files[filename] = true
+    if not completed_request_files[filename] then
+      if process_request_file(filename) then
+        completed_request_files[filename] = true
+      end
+      -- Process one request per defer tick so the bridge heartbeat can refresh
+      -- between queued native calls instead of going stale for the whole batch.
+      return
     end
   end
 end

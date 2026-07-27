@@ -4,7 +4,7 @@ import { describe, it } from "node:test";
 import { FakeFoundationBridge } from "../../../packages/core/src/foundation-bridge-v1.mjs";
 import {
   CALL_TEMPLATE_INTERNAL_DISPATCH_TIMEOUT,
-  CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS,
+  CALL_TEMPLATE_RUNTIME_D30_PROJECT_CONTAINER_TEMPLATE_IDS,
   createCallTemplateRuntime,
 } from "../../../packages/mcp-server/src/call-template-runtime-v1.mjs";
 
@@ -24,22 +24,22 @@ describe("Alpha4 Shard B Recipe/batch child timeout propagation", () => {
       live: {
         opted_in: true,
         executor: bridge,
-        allowed_template_ids: CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS,
+        allowed_template_ids: CALL_TEMPLATE_RUNTIME_D30_PROJECT_CONTAINER_TEMPLATE_IDS,
       },
     });
 
     const ordinary = await runtime.call_template({
-      id: "template.project.read_summary",
-      input: {},
+      id: "template.project.list_open_projects",
+      input: { cursor: "0", limit: 25 },
       refs: [],
       context: CONTEXT,
     });
     assert.equal(ordinary.ok, true, JSON.stringify(ordinary));
-    assert.equal(ordinary.request.timeout_ms, 5_000);
+    assert.equal(ordinary.request.timeout_ms, 30_000);
 
     const internalRequest = {
-      id: "template.project.read_summary",
-      input: {},
+      id: "template.project.list_open_projects",
+      input: { cursor: "0", limit: 25 },
       refs: [],
       context: CONTEXT,
       [CALL_TEMPLATE_INTERNAL_DISPATCH_TIMEOUT]: 300_000,

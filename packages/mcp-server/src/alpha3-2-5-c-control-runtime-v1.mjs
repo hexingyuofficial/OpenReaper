@@ -582,6 +582,7 @@ async function executeControlsBatch({
 async function executeStockPluginControls({
   request = {},
   executeAtomic,
+  nativeBatchExecutor,
   projectIndexRuntime,
   catalog,
   semanticProofChecker = assertAlpha34CSemanticUnitsProven,
@@ -608,6 +609,7 @@ async function executeStockPluginControls({
       state,
       listBudget: ALPHA3_E1_STOCK_PLUGIN_PARAMETER_LIST_BUDGET,
       readBudget: ALPHA3_E1_STOCK_PLUGIN_PARAMETER_READBACK_BUDGET,
+      nativeBatchExecutor,
     });
   }
   const inputBlockers = validateInputFields(input, STOCK_INPUT_FIELDS, "STOCK_PLUGIN_INPUT_FIELD_UNSUPPORTED");

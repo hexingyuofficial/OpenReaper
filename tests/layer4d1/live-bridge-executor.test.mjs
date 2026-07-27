@@ -20,6 +20,7 @@ import {
 import {
   LIVE_BRIDGE_HEARTBEAT_FILENAME,
   LIVE_BRIDGE_EXECUTOR_ENV,
+  LIVE_BRIDGE_LIVENESS_DEFAULT_MAX_AGE_MS,
   LIVE_BRIDGE_LIVENESS_CONTRACT,
   LIVE_BRIDGE_LIVENESS_FUTURE_SKEW_MS,
   LIVE_BRIDGE_LIVENESS_PROBE_CONTRACT,
@@ -35,6 +36,8 @@ describe("Layer 4D.1 live bridge executor binding", () => {
     assert.equal(config.configured, false);
     assert.equal(config.reason, "live_bridge_executor_not_configured");
     assert.equal(config.spawned_reaper, false);
+    const configured = createLiveBridgeExecutor({ transportDir: "/tmp/openreaper-test-transport" });
+    assert.equal(configured.config.heartbeat_max_age_ms, LIVE_BRIDGE_LIVENESS_DEFAULT_MAX_AGE_MS);
     assert.deepEqual(CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS, [
       "template.project.read_summary",
       "template.transport.read_state",
@@ -42,6 +45,30 @@ describe("Layer 4D.1 live bridge executor binding", () => {
       "template.system.read_runtime_environment",
       "template.system.read_resource_paths",
     ]);
+  });
+
+  it("keeps the default liveness grace above the complete atomic-operation gate", async () => {
+    const now = new Date("2026-07-10T12:00:10.000Z");
+    const transport = await makeTransport();
+
+    await writeHeartbeat(transport.root, {
+      mtime: new Date(now.getTime() - 30_000),
+    });
+    const withinAtomicGrace = await probeLiveBridgeLiveness({
+      transportDir: transport.root,
+      now: () => now,
+    });
+    assert.equal(withinAtomicGrace.status, LIVE_BRIDGE_LIVENESS_STATUS.READY);
+    assert.equal(withinAtomicGrace.heartbeat.max_age_ms, LIVE_BRIDGE_LIVENESS_DEFAULT_MAX_AGE_MS);
+
+    await writeHeartbeat(transport.root, {
+      mtime: new Date(now.getTime() - LIVE_BRIDGE_LIVENESS_DEFAULT_MAX_AGE_MS - 1),
+    });
+    const beyondBoundedGrace = await probeLiveBridgeLiveness({
+      transportDir: transport.root,
+      now: () => now,
+    });
+    assert.equal(beyondBoundedGrace.status, LIVE_BRIDGE_LIVENESS_STATUS.LOOP_UNRESPONSIVE);
   });
 
   it("allows live executor dispatch only for Wave 0 canary ids", async () => {

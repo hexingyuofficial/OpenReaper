@@ -40,6 +40,7 @@ export const ALPHA3_3_MEDIA_PLACE_ASSETS_TEMPLATE_IDS = deepFreeze([
   "template.media.read_take_source",
   "template.media.import_file_to_track",
   "template.media.import_file_section_to_track",
+  "template.media.import_files_batch",
   "template.media.relink_take_source",
   "template.tracks.resolve_track_ref",
   "template.tracks.create_track",
@@ -54,6 +55,7 @@ const PROBE_FILE_ID = "template.media.probe_file";
 const READ_TAKE_SOURCE_ID = "template.media.read_take_source";
 const IMPORT_FILE_ID = "template.media.import_file_to_track";
 const IMPORT_SECTION_ID = "template.media.import_file_section_to_track";
+const IMPORT_BATCH_ID = "template.media.import_files_batch";
 const RELINK_TAKE_ID = "template.media.relink_take_source";
 const RESOLVE_TRACK_ID = "template.tracks.resolve_track_ref";
 const CREATE_TRACK_ID = "template.tracks.create_track";
@@ -129,7 +131,7 @@ const REGISTRY_ENTRY = deepFreeze({
     { id: "media-place-assets-probe", kind: "selector_resolve", risk: "read", stop_on_error: true },
     { id: "media-place-assets-preflight", kind: "live_ref_resolve", risk: "read", stop_on_error: true },
     { id: "media-place-assets-layout", kind: "selector_resolve", risk: "read", stop_on_error: true },
-    { id: "media-place-assets-mutate", kind: "template_execute", risk: "write", stop_on_error: true, dependency_ref: IMPORT_FILE_ID },
+    { id: "media-place-assets-mutate", kind: "template_execute", risk: "write", stop_on_error: true, dependency_ref: IMPORT_BATCH_ID },
     { id: "media-place-assets-readback", kind: "verify", risk: "read", stop_on_error: true },
     { id: "media-place-assets-index", kind: "index_update", risk: "read", stop_on_error: true },
     { id: "media-place-assets-result", kind: "result_project", risk: "read", stop_on_error: true },
@@ -377,20 +379,106 @@ export async function executeAlpha3_3MediaPlaceAssetsMacro({ request = {}, execu
     }
 
     await createPlannedTracks({ request, input, executeAtomic, state });
-    for (const operation of state.operations) {
-      const change = pendingChange(operation);
-      state.changes.push(change);
-      const target = targetForOperation(operation, state);
-      const mutation = input.mode === "relink_sources"
-        ? await child({ request, executeAtomic, state, id: RELINK_TAKE_ID, input: { verify_source_type: operation.verify_source_type }, refs: { take_ref: operation.take_object, source_file_ref: operation.file_object }, mutation: true })
-        : await child({ request, executeAtomic, state, id: operation.import_template_id, input: operation.import_input, refs: { track_ref: target.track_object, source_file_ref: operation.file_object }, mutation: true });
-      change.mutation = mutationOutcome(mutation);
+    const preserveSelectionValues = new Set(state.operations.map((operation) => operation.preserve_selection));
+    const useImportBatch = input.mode === "place_assets"
+      && state.operations.length > 1
+      && preserveSelectionValues.size === 1;
+    if (useImportBatch) {
+      const changes = state.operations.map((operation) => pendingChange(operation));
+      state.changes.push(...changes);
+      const targets = state.operations.map((operation) => targetForOperation(operation, state));
+      if (targets.some((target) => !target?.track_object || !isExactTrackRef(target.track_ref))) {
+        throw coded("MEDIA_TARGET_TRACK_OBJECT_REQUIRED", "Every media batch row requires one exact reusable target Track ref.");
+      }
+      const mutation = await child({
+        request,
+        executeAtomic,
+        state,
+        id: IMPORT_BATCH_ID,
+        input: {
+          batch: state.operations.map((operation) => ({
+            id: operation.id,
+            position_seconds: operation.position_seconds,
+            ...(operation.start_percent !== null ? { start_percent: operation.start_percent, end_percent: operation.end_percent } : {}),
+          })),
+          preserve_selection: state.operations[0]?.preserve_selection === true,
+        },
+        refs: {
+          source_file_refs: state.operations.map((operation) => operation.file_object),
+          track_refs: targets.map((target) => target.track_object),
+        },
+        mutation: true,
+      });
       if (!mutation.ok || !mutation.verificationPassed) {
-        change.live_readback = { status: "not_run", blocker_code: mutation.code };
+        markBatchFailure(changes, mutation);
         throw coded(mutation.code, mutation.message, mutation.blockers);
       }
-      const mutationFacts = readback(mutation.execution);
-      if (input.mode === "place_assets") {
+      for (const change of changes) change.mutation = mutationOutcome(mutation);
+      const facts = readback(mutation.execution);
+      state.batchTimings = isObject(facts.batch_timings) ? clone(facts.batch_timings) : null;
+      const rows = Array.isArray(facts.rows) ? facts.rows : [];
+      if (rows.length !== state.operations.length) {
+        throw coded("MEDIA_BATCH_READBACK_ROWS_REQUIRED", "The typed media batch did not return exactly one aggregate readback row per requested asset.");
+      }
+      const rowsById = new Map(rows.map((row) => [row?.id, row]));
+      const batchRefs = executionObjectRefs(mutation.execution);
+      for (const [index, operation] of state.operations.entries()) {
+        const change = changes[index];
+        const target = targets[index];
+        const row = rowsById.get(operation.id);
+        const itemRef = row?.item_ref;
+        const takeRef = row?.take_ref;
+        const itemObject = batchRefs.find((ref) => ref.kind === "item" && ref.ref === itemRef);
+        const takeObject = batchRefs.find((ref) => ref.kind === "take" && ref.ref === takeRef);
+        const passed = row?.id === operation.id
+          && isItemRef(itemRef)
+          && isTakeRef(takeRef)
+          && row.source_file_ref === operation.file_ref
+          && row.track_ref === target.track_ref
+          && close(row.position_seconds, operation.position_seconds)
+          && close(row.length_seconds, operation.import_length_seconds)
+          && itemObject
+          && takeObject;
+        change.live_readback = passed
+          ? { status: "passed", source: "typed_native_batch_readback", item_ref: itemRef, take_ref: takeRef, track_ref: row.track_ref, position_seconds: row.position_seconds, length_seconds: row.length_seconds, source_file_ref: row.source_file_ref, source_type: row.source_type }
+          : { status: "failed", source: "typed_native_batch_readback", blocker_code: "MEDIA_LIVE_READBACK_MISMATCH" };
+        if (!passed) {
+          for (const laterChange of changes.slice(index + 1)) {
+            laterChange.status = "not_run";
+            laterChange.live_readback = { status: "not_run", blocker_code: "MEDIA_LIVE_READBACK_MISMATCH" };
+          }
+          throw coded("MEDIA_LIVE_READBACK_MISMATCH", `${operation.id} aggregate native batch readback did not match the planned import.`);
+        }
+        operation.item_ref = itemRef;
+        operation.item_object = itemObject;
+        state.canonicalRefs.push(itemRef, takeRef, row.source_file_ref);
+        change.status = "applied";
+      }
+      for (const operation of state.operations) if (operation.region) await createAndVerifyRegion({ request, operation, executeAtomic, state });
+    } else if (input.mode === "place_assets") {
+      // Keep the existing atomic route for a single row or a row set whose
+      // selection policy cannot be represented by one batch-level boolean.
+      for (const operation of state.operations) {
+        const importId = operation.start_percent === null ? IMPORT_FILE_ID : IMPORT_SECTION_ID;
+        operation.import_template_id = importId;
+        const change = pendingChange(operation);
+        state.changes.push(change);
+        const target = targetForOperation(operation, state);
+        const mutation = await child({
+          request,
+          executeAtomic,
+          state,
+          id: importId,
+          input: operation.import_input,
+          refs: { track_ref: target.track_object, source_file_ref: operation.file_object },
+          mutation: true,
+        });
+        change.mutation = mutationOutcome(mutation);
+        if (!mutation.ok || !mutation.verificationPassed) {
+          change.live_readback = { status: "not_run", blocker_code: mutation.code };
+          throw coded(mutation.code, mutation.message, mutation.blockers);
+        }
+        const mutationFacts = readback(mutation.execution);
         const itemRefs = stringArray(mutationFacts.imported_item_refs).filter(isItemRef);
         if (itemRefs.length !== 1) throw coded("MEDIA_IMPORTED_ITEM_IDENTITY_REQUIRED", `${operation.id} import did not return exactly one canonical Item ref.`);
         operation.item_ref = itemRefs[0];
@@ -414,7 +502,17 @@ export async function executeAlpha3_3MediaPlaceAssetsMacro({ request = {}, execu
         state.canonicalRefs.push(operation.item_ref, takeRef);
         change.status = "applied";
         if (operation.region) await createAndVerifyRegion({ request, operation, executeAtomic, state });
-      } else {
+      }
+    } else {
+      for (const operation of state.operations) {
+        const change = pendingChange(operation);
+        state.changes.push(change);
+        const mutation = await child({ request, executeAtomic, state, id: RELINK_TAKE_ID, input: { verify_source_type: operation.verify_source_type }, refs: { take_ref: operation.take_object, source_file_ref: operation.file_object }, mutation: true });
+        change.mutation = mutationOutcome(mutation);
+        if (!mutation.ok || !mutation.verificationPassed) {
+          change.live_readback = { status: "not_run", blocker_code: mutation.code };
+          throw coded(mutation.code, mutation.message, mutation.blockers);
+        }
         const sourceRead = await child({ request, executeAtomic, state, id: READ_TAKE_SOURCE_ID, input: { include_metadata_keys: false, include_parent_source: false }, refs: { take_ref: operation.take_object } });
         ensureChangeReadOk(sourceRead, READ_TAKE_SOURCE_ID, change);
         const source = readback(sourceRead.execution);
@@ -685,7 +783,7 @@ async function prepareOperations({ request, input, executeAtomic, state }) {
   assignTrackPlans(input, operations);
   assignPositions(input, operations, appendEnds);
   for (const operation of operations) {
-    operation.import_template_id = operation.start_percent === null ? IMPORT_FILE_ID : IMPORT_SECTION_ID;
+    operation.import_template_id = IMPORT_BATCH_ID;
     operation.import_input = operation.start_percent === null
       ? { position_seconds: operation.position_seconds, preserve_selection: operation.preserve_selection }
       : { position_seconds: operation.position_seconds, start_percent: operation.start_percent, end_percent: operation.end_percent, preserve_selection: operation.preserve_selection };
@@ -1001,6 +1099,34 @@ function maintainIndex(runtime, state, now) {
 }
 
 function applyIndex(changes, result) { for (const change of changes) if (["completed", "unknown_or_partial"].includes(change.mutation?.status)) change.index_maintenance = { status: result.status, scopes: result.scopes, ...(result.code ? { blocker_code: result.code } : {}) }; }
+function markBatchFailure(changes, result) {
+  const details = result.execution?.error?.details ?? {};
+  const hasNativeMutationCount = Number.isSafeInteger(details.native_mutation_count) && details.native_mutation_count >= 0;
+  const nativeMutations = hasNativeMutationCount
+    ? Math.min(changes.length, details.native_mutation_count)
+    : details.zero_write === true ? 0 : Math.min(changes.length, 1);
+  const completedRows = Number.isSafeInteger(details.completed_rows) && details.completed_rows >= 0
+    ? Math.min(changes.length, details.completed_rows)
+    : nativeMutations;
+  for (const [index, change] of changes.entries()) {
+    if (index < nativeMutations) {
+      change.mutation = {
+        status: "unknown_or_partial",
+        dispatch_status: "failed",
+        verification_status: "not_passed",
+        blocker_code: result.code,
+        completed_rows: completedRows,
+        native_mutation_count: nativeMutations,
+        native_readback_count: details.native_readback_count ?? 0,
+      };
+      change.live_readback = { status: "not_run", blocker_code: result.code };
+    } else {
+      change.mutation = { status: "not_run" };
+      change.live_readback = { status: "not_run", blocker_code: result.code };
+      change.status = "not_run";
+    }
+  }
+}
 function mutationOutcome(result) { return result.ok && result.verificationPassed ? { status: "completed", dispatch_status: "completed", verification_status: "passed" } : { status: "unknown_or_partial", dispatch_status: result.ok ? "completed" : "failed", verification_status: result.verificationPassed ? "passed" : "not_passed", blocker_code: result.code }; }
 function setupChange({ id, kind, templateId, targetRef, assetId, requested }) { return { change_id: `setup:${id}`, ...(assetId ? { related_asset_id: assetId } : {}), mode: "setup", setup_kind: kind, template_id: templateId, target_ref: targetRef, requested, status: "pending", mutation: { status: "pending" }, live_readback: { status: "pending" }, index_maintenance: { status: "pending", scopes: [] } }; }
 function pendingChange(operation) { return { asset_id: operation.id, mode: operation.take_ref ? "relink_sources" : "place_assets", template_id: operation.take_ref ? RELINK_TAKE_ID : operation.import_template_id, source_file_ref: operation.file_ref, target_ref: operation.take_ref ?? operation.target_track_ref ?? operation.target_track_key, planned_position_seconds: operation.position_seconds, status: "pending", mutation: { status: "pending" }, live_readback: { status: "pending" }, index_maintenance: { status: "pending", scopes: [] } }; }
@@ -1192,7 +1318,7 @@ function resultData(input, state) {
   const mutated = state.changes.filter((change) => ["completed", "unknown_or_partial"].includes(change.mutation?.status));
   const applied = state.changes.filter((change) => change.status === "applied" && change.live_readback?.status === "passed");
   const indexStatuses = uniqueStrings(mutated.map((change) => change.index_maintenance?.status));
-  return { mode: input.mode, placement_mode: input.placement.mode, track_policy: input.track_policy, asset_count: input.assets.length, setup_mutation_count: setupChanges(state).length, selected_sources: state.operations.map((operation) => ({ id: operation.id, source_file_ref: operation.file_ref, path: operation.path })), layout: state.operations.map((operation) => ({ id: operation.id, position_seconds: operation.position_seconds, target_ref: operation.take_ref ?? operation.target_track_ref ?? operation.target_track_key, duration_seconds: operation.import_length_seconds ?? null })), source_media_deleted: false, arbitrary_folder_scan: false, sqlite_write_authority: false, outcome: { mutation: { status: mutated.some((change) => change.mutation.status === "unknown_or_partial") ? "unknown_or_partial" : mutated.length ? "completed" : "not_run", completed_count: mutated.filter((change) => change.mutation.status === "completed").length, unknown_or_partial_count: mutated.filter((change) => change.mutation.status === "unknown_or_partial").length, total_count: state.changes.length }, live_readback: { status: applied.length === mutated.length && mutated.length ? "passed" : applied.length ? "partial" : "not_run", passed_count: applied.length, total_count: mutated.length }, index_maintenance: { status: indexStatuses.length === 1 ? indexStatuses[0] : indexStatuses.length > 1 ? "mixed" : "not_run", scopes: uniqueStrings(mutated.flatMap((change) => change.index_maintenance?.scopes ?? [])) } } };
+  return { mode: input.mode, placement_mode: input.placement.mode, track_policy: input.track_policy, asset_count: input.assets.length, setup_mutation_count: setupChanges(state).length, ...(state.batchTimings ? { batch_timings: clone(state.batchTimings) } : {}), selected_sources: state.operations.map((operation) => ({ id: operation.id, source_file_ref: operation.file_ref, path: operation.path })), layout: state.operations.map((operation) => ({ id: operation.id, position_seconds: operation.position_seconds, target_ref: operation.take_ref ?? operation.target_track_ref ?? operation.target_track_key, duration_seconds: operation.import_length_seconds ?? null })), source_media_deleted: false, arbitrary_folder_scan: false, sqlite_write_authority: false, outcome: { mutation: { status: mutated.some((change) => change.mutation.status === "unknown_or_partial") ? "unknown_or_partial" : mutated.length ? "completed" : "not_run", completed_count: mutated.filter((change) => change.mutation.status === "completed").length, unknown_or_partial_count: mutated.filter((change) => change.mutation.status === "unknown_or_partial").length, total_count: state.changes.length }, live_readback: { status: applied.length === mutated.length && mutated.length ? "passed" : applied.length ? "partial" : "not_run", passed_count: applied.length, total_count: mutated.length }, index_maintenance: { status: indexStatuses.length === 1 ? indexStatuses[0] : indexStatuses.length > 1 ? "mixed" : "not_run", scopes: uniqueStrings(mutated.flatMap((change) => change.index_maintenance?.scopes ?? [])) } } };
 }
 
 function searchResultData(page) {
@@ -1228,7 +1354,7 @@ function emptySearchData(input) {
   };
 }
 
-function createState() { return { operations: [], changes: [], canonicalRefs: [], evidenceRefs: [], trackObjects: new Map(), createdTracks: new Map(), beforeRegions: [], sqlite: sqliteEvidence() }; }
+function createState() { return { operations: [], changes: [], canonicalRefs: [], evidenceRefs: [], trackObjects: new Map(), createdTracks: new Map(), beforeRegions: [], batchTimings: null, sqlite: sqliteEvidence() }; }
 
 function successEnvelope({ entry, request, startedAt, now, stages, state, activeBudget, status = "completed", summary, data }) { return finalizeEnvelope(buildSuccessEnvelope({ entry, request, startedAt, completedAt: safeNowIso(now), stages, state, activeBudget, status, summary, data })); }
 function buildSuccessEnvelope({ entry, request, startedAt, completedAt, stages, state, activeBudget, status, summary, data }) { return { contract: MACRO_EXECUTION_CONTRACT, ok: true, macro: macroIdentity(entry), request: requestSummary(request), execution: { status, started_at: startedAt, completed_at: completedAt, stage_count: stages.length, stages }, sqlite: state.sqlite, result: { summary, canonical_refs: uniqueStrings(state.canonicalRefs), changes: clone(state.changes), verification: { status: "passed", evidence_refs: uniqueStrings(state.evidenceRefs) }, data }, blockers: [], error: null, recovery: null, budget: { max_bytes: activeBudget, actual_bytes: 0, truncated: false, artifact_fallback: false } }; }

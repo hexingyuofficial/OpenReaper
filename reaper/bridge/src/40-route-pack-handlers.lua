@@ -806,6 +806,7 @@ local SAFE_WRITE_A_HANDLERS = {
 local E3_MEDIA_ROUTE_HANDLERS = {
   ["media.import_file_to_track"] = import_file_to_track,
   ["media.import_file_section_to_track"] = import_file_section_to_track,
+  ["media.import_files_batch"] = import_files_batch,
   ["media.relink_take_source"] = relink_take_source,
 }
 
@@ -852,6 +853,7 @@ local E2_FX_B1_WRITE_HANDLERS = {
   ["fx.add_take"] = add_take_fx,
   ["fx.set_bypass"] = set_fx_bypass,
   ["fx.set_parameter_normalized"] = set_fx_parameter_normalized,
+  ["fx.set_parameter_assignments_batch"] = e2_fx_parameter_assignments_batch,
   ["fx.set_preset_by_name"] = set_fx_preset_by_name,
   ["fx.set_preset_by_index"] = set_fx_preset_by_index,
   ["fx.reorder"] = reorder_fx,
@@ -979,7 +981,7 @@ local function dispatch_template_execute(request, resume_continuation)
   end
   handler = E4_ITEM_ROUTE_HANDLERS[request.pack.capability]
   if handler then
-    return handler(request)
+    return handler(request, resume_continuation)
   end
   handler = E5_ROUTING_WRITE_HANDLERS[request.pack.capability]
   if handler then
@@ -1860,9 +1862,16 @@ local function dispatch_request(request, fallback_id, resume_continuation, runti
   -- or REAPER mutation. Pure validation only (no EnumProjects / Undo_*).
   local e3_media_write_capability = capability == "media.import_file_to_track"
     or capability == "media.import_file_section_to_track"
+    or capability == "media.import_files_batch"
     or capability == "media.relink_take_source"
+  local e3_media_batch_capability = capability == "media.import_files_batch"
   if e3_media_write_capability and phase_may_mutate then
-    local preflight_ok, preflight_result = READ_B_MEDIA.preflight_mutation_write(request)
+    local preflight_ok, preflight_result
+    if e3_media_batch_capability then
+      preflight_ok, preflight_result = OPENREAPER_HANDLER_EXPORTS.import_files_batch(request, true)
+    else
+      preflight_ok, preflight_result = READ_B_MEDIA.preflight_mutation_write(request)
+    end
     if preflight_ok ~= true then
       local failure = preflight_result or {
         code = "PARAMS_INVALID",

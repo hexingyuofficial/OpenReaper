@@ -32,6 +32,7 @@ const ALLOWLIST = Object.freeze([
   "template.media.read_take_source",
   "template.media.import_file_to_track",
   "template.media.import_file_section_to_track",
+  "template.media.import_files_batch",
   "template.media.read_project_media_files",
   "template.media.relink_take_source",
 ]);
@@ -112,6 +113,7 @@ describe("Wave 2A media template descriptors", () => {
     const readTakeSource = catalog.require("template.media.read_take_source");
     const importFile = catalog.require("template.media.import_file_to_track");
     const importSection = catalog.require("template.media.import_file_section_to_track");
+    const importBatch = catalog.require("template.media.import_files_batch");
     const relink = catalog.require("template.media.relink_take_source");
 
     assert.deepEqual(Object.keys(probe.inputSchema.properties), ["path", "include_metadata_keys"]);
@@ -125,6 +127,11 @@ describe("Wave 2A media template descriptors", () => {
       "end_percent",
       "preserve_selection",
     ]);
+    assert.deepEqual(Object.keys(importBatch.inputSchema.properties), ["batch", "preserve_selection"]);
+    assert.deepEqual(importBatch.refs.input.map((entry) => entry.kind), ["file", "track"]);
+    assert.deepEqual(importBatch.refs.output.map((entry) => entry.kind), ["item", "take", "file"]);
+    assert.equal(importBatch.bridge.capability, "media.import_files_batch");
+    assert.equal(importBatch.verification.checks[0].name, "batch_items_and_sources_match");
     assert.deepEqual(relink.refs.input.map((entry) => entry.kind), ["take", "file"]);
     assert.equal(relink.summary.includes("without item-container edits"), true);
     assert.equal(catalog.get("template.media.relink_project_source_path"), null);
@@ -231,8 +238,14 @@ describe("Wave 2A media template descriptors", () => {
       const input = sampleInput(id);
       const refs = id === "template.media.relink_take_source"
         ? { take_ref: take, source_file_ref: file }
+        : id === "template.media.import_files_batch"
+          ? { source_file_refs: [file, file], track_refs: [track, track] }
         : { source_file_ref: file, track_ref: track };
-      const outputRefs = id === "template.media.relink_take_source" ? [take, file] : [item, file];
+      const outputRefs = id === "template.media.relink_take_source"
+        ? [take, file]
+        : id === "template.media.import_files_batch"
+          ? [item, take, file]
+          : [item, file];
       const executor = fakeRefsExecutor(outputRefs);
       const request = buildTemplateBridgeRequest({
         descriptor,
@@ -249,7 +262,8 @@ describe("Wave 2A media template descriptors", () => {
       assert.equal(request.undo.label, `OpenReaper: ${descriptor.bridge.capability}`, id);
       assert.deepEqual(request.undo.flags, expectedUndoFlags(descriptor), id);
       assert.equal(request.verification.mode, "required", id);
-      assert.deepEqual(request.refs, Object.values(refs), id);
+      const expectedRefs = Object.values(refs).flatMap((value) => Array.isArray(value) ? value : [value]);
+      assert.deepEqual(request.refs, expectedRefs, id);
       assert.equal("idempotency_key" in request, false, id);
 
       const result = await executeTemplate({
@@ -348,6 +362,14 @@ function sampleInput(id) {
         end_percent: 0.75,
         preserve_selection: true,
       };
+    case "template.media.import_files_batch":
+      return {
+        batch: [
+          { id: "asset-1", position_seconds: 0 },
+          { id: "asset-2", position_seconds: 2, start_percent: 0.25, end_percent: 0.75 },
+        ],
+        preserve_selection: true,
+      };
     case "template.media.read_project_media_files":
       return { include_offline: true, include_metadata_keys: false, max_sources: 25 };
     case "template.media.relink_take_source":
@@ -358,6 +380,12 @@ function sampleInput(id) {
 }
 
 function sampleInputRefs(descriptor) {
+  if (descriptor.id === "template.media.import_files_batch") {
+    return {
+      source_file_refs: [fileRef("sample-a.wav"), fileRef("sample-b.wav")],
+      track_refs: [trackRef("{TRACK-A}"), trackRef("{TRACK-B}")],
+    };
+  }
   return Object.fromEntries(
     descriptor.refs.input.map((refDeclaration) => [refDeclaration.name, sampleObjectRef(refDeclaration.kind)]),
   );

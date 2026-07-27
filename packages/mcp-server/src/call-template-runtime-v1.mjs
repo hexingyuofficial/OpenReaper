@@ -31,6 +31,17 @@ import {
 } from "../../core/src/template-catalog-fixtures-v1.mjs";
 import { executeTemplate } from "../../core/src/template-execution-harness-v1.mjs";
 import {
+  createExecutionDeadline,
+  effectiveDispatchTimeoutMs,
+  mergeDeadlineDetails,
+  normalizeExecutionDeadlineMs,
+} from "../../core/src/execution-deadline-v1.mjs";
+import {
+  addExecutionPerformancePhase,
+  attachExecutionPerformance,
+  createExecutionPerformance,
+} from "../../core/src/execution-performance-v1.mjs";
+import {
   MACRO_EXECUTION_CONTRACT,
   validateMacroExecutionEnvelope,
 } from "./macro-runtime-contract-v1.mjs";
@@ -507,6 +518,7 @@ export const CALL_TEMPLATE_RUNTIME_E3_MEDIA_ROUTE_TEMPLATE_IDS = deepFreeze([
   "template.media.list_folder_media_files",
   "template.media.import_file_to_track",
   "template.media.import_file_section_to_track",
+  "template.media.import_files_batch",
   "template.media.relink_take_source",
 ]);
 
@@ -546,6 +558,7 @@ export const CALL_TEMPLATE_RUNTIME_E2_FX_B1_ROUTE_TEMPLATE_IDS = deepFreeze([
   "template.fx.add_take_fx",
   "template.fx.set_fx_bypass",
   "template.fx.set_fx_parameter_normalized",
+  "template.fx.set_parameter_assignments_batch",
   "template.fx.set_fx_preset_by_name",
   "template.fx.set_fx_preset_by_index",
   "template.fx.reorder_fx",
@@ -904,6 +917,7 @@ export const CALL_TEMPLATE_RUNTIME_ALLOWED_REQUEST_FIELDS = Object.freeze([
   "context",
   "budget",
   "idempotency_key",
+  "deadline_ms",
 ]);
 export const CALL_TEMPLATE_INTERNAL_RECIPE_UNDO = Symbol.for("openreaper.call_template.recipe_undo");
 export const CALL_TEMPLATE_INTERNAL_DISPATCH_TIMEOUT = Symbol.for("openreaper.call_template.dispatch_timeout_ms");
@@ -931,6 +945,7 @@ export const CALL_TEMPLATE_RUNTIME_ERROR_CODES = Object.freeze([
   "CALL_TEMPLATE_LIVE_EXECUTOR_NOT_CONFIGURED",
   "CALL_TEMPLATE_LIVE_ID_NOT_ALLOWED",
   "CALL_TEMPLATE_PREFLIGHT_FAILED",
+  "CALL_TEMPLATE_EXECUTION_FAILED",
   "RESPONSE_TOO_LARGE",
 ]);
 
@@ -1158,12 +1173,16 @@ export function createCallTemplateRuntime(options = {}) {
     recipe_undo = null,
     dispatchTimeoutMs = null,
     signal = null,
+    deadline = null,
+    performance = null,
   }) {
-    assertTemplateRequestActive(signal, "Template request was cancelled before preflight.");
+    const livePreflightStartedAt = Date.now();
+    assertTemplateRequestActive(signal, "Template request was cancelled before preflight.", deadline);
     assertLiveRuntimeDispatchAllowed(live, id);
     const descriptor = resolveAcceptedCatalogDescriptor(catalog, id);
     const normalizedInput = await preflightTemplateInput(id, input, budget);
-    assertTemplateRequestActive(signal, "Template request was cancelled before REAPER dispatch.");
+    addExecutionPerformancePhase(performance, "live_preflight", Date.now() - livePreflightStartedAt);
+    assertTemplateRequestActive(signal, "Template request was cancelled before REAPER dispatch.", deadline);
     const execution = await executeTemplate({
       descriptor,
       input: normalizedInput,
@@ -1172,9 +1191,23 @@ export function createCallTemplateRuntime(options = {}) {
       budget,
       idempotency_key,
       recipeUndo: recipe_undo,
-      dispatchTimeoutMs: normalizeInternalDispatchTimeoutMs(dispatchTimeoutMs),
+      dispatchTimeoutMs: effectiveDispatchTimeoutMs(
+        normalizeInternalDispatchTimeoutMs(dispatchTimeoutMs),
+        deadline,
+      ),
+      // Keep the bridge request schema-valid if the timer reaches zero
+      // between the guard and request construction. The composed signal still
+      // preserves cancellation truth for the late result.
+      deadlineMs: deadline?.remainingMs?.() === null
+        ? null
+        : Math.max(1, deadline.remainingMs()),
+      signal,
+      performance,
       executor: live.enabled ? live.executor : options.executor,
     });
+    if (signal?.aborted === true || deadline?.isExpired?.() === true) {
+      return lateTemplateExecutionEnvelope(execution, deadline);
+    }
     if (!observeProjectIndex) return execution;
     return observeProjectIndexExecution({
       execution,
@@ -1189,17 +1222,34 @@ export function createCallTemplateRuntime(options = {}) {
 
   async function call_template(request = {}, execution = {}) {
     let id = null;
+    let deadline = null;
+    let ownsDeadline = false;
     try {
       const normalized = normalizeCallTemplateRequest(request);
       id = normalized.id;
+      if (execution?.deadline?.contract === "openreaper.execution_deadline.v1") {
+        deadline = execution.deadline;
+      } else {
+        deadline = createExecutionDeadline({
+          deadlineMs: normalized.deadline_ms,
+          signal: execution?.signal,
+        });
+        ownsDeadline = true;
+      }
+      const performance = execution?.performance ?? createExecutionPerformance();
       const macroAtomic = live.enabled || options.executor
         ? createMacroAtomicExecutor(
             executeAcceptedAtomic,
             normalized.context,
             normalized.recipe_undo,
-            execution?.signal,
-            normalizeInternalDispatchTimeoutMs(execution?.dispatchTimeoutMs)
+            deadline.signal,
+            effectiveDispatchTimeoutMs(
+              normalizeInternalDispatchTimeoutMs(execution?.dispatchTimeoutMs)
               ?? CALL_TEMPLATE_INTERNAL_CHILD_DISPATCH_TIMEOUT_MS,
+              deadline,
+            ),
+            deadline,
+            performance,
           )
         : null;
       if (isAlpha3_3B1DeprecatedAlias(id)) {
@@ -1310,6 +1360,7 @@ export function createCallTemplateRuntime(options = {}) {
           envelope = await executeAlpha3_2_5CControlMacro({
             request: adapted.request,
             executeAtomic: macroAtomic,
+            nativeBatchExecutor: macroAtomic,
             projectIndexRuntime,
             catalog,
             now,
@@ -1434,6 +1485,7 @@ export function createCallTemplateRuntime(options = {}) {
         const envelope = await executeAlpha3_2_5CControlMacro({
           request: normalized,
           executeAtomic: macroAtomic,
+          nativeBatchExecutor: macroAtomic,
           projectIndexRuntime,
           catalog,
           now,
@@ -1529,7 +1581,9 @@ export function createCallTemplateRuntime(options = {}) {
         idempotency_key: normalized.idempotency_key,
         recipe_undo: normalized.recipe_undo,
         dispatchTimeoutMs: normalized.dispatch_timeout_ms,
-        signal: execution?.signal,
+        signal: deadline.signal,
+        deadline,
+        performance,
       });
       retainEvidence(retainedEvidence, evidenceFromExecution(observedExecution, live.evidence), evidenceLimit);
       return observedExecution;
@@ -1543,6 +1597,8 @@ export function createCallTemplateRuntime(options = {}) {
       });
       retainEvidence(retainedEvidence, evidenceFromRuntimeError(envelope, live.evidence), evidenceLimit);
       return envelope;
+    } finally {
+      if (ownsDeadline) deadline?.cleanup();
     }
   }
 
@@ -1557,8 +1613,14 @@ export function createCallTemplateRuntime(options = {}) {
       productSurface: { live_gate: live.summary },
     }).list_templates,
     async call_template(request = {}, execution = {}) {
-      const response = await call_template(request, execution);
-      return enforceRuntimeResponseContract(response, request, now);
+      const ownsPerformance = execution?.performance == null;
+      const performance = execution?.performance ?? createExecutionPerformance();
+      const startedAt = Date.now();
+      const response = await call_template(request, { ...execution, performance });
+      const timed = ownsPerformance
+        ? attachExecutionPerformance(response, performance, Date.now() - startedAt)
+        : response;
+      return enforceRuntimeResponseContract(timed, request, now);
     },
     evidence() {
       return cloneJson(retainedEvidence);
@@ -1798,6 +1860,16 @@ function normalizeCallTemplateRequest(request) {
     );
   }
 
+  let deadlineMs;
+  try {
+    deadlineMs = normalizeExecutionDeadlineMs(request.deadline_ms);
+  } catch (error) {
+    throw new CallTemplateRuntimeError(
+      "CALL_TEMPLATE_REQUEST_INVALID",
+      error.message,
+      { field: "deadline_ms" },
+    );
+  }
   return {
     id,
     input: request.input ?? {},
@@ -1805,6 +1877,7 @@ function normalizeCallTemplateRequest(request) {
     context: request.context,
     budget: request.budget,
     idempotency_key: request.idempotency_key,
+    deadline_ms: deadlineMs,
     recipe_undo: normalizeInternalRecipeUndo(request[CALL_TEMPLATE_INTERNAL_RECIPE_UNDO]),
     dispatch_timeout_ms: normalizeInternalDispatchTimeoutMs(request[CALL_TEMPLATE_INTERNAL_DISPATCH_TIMEOUT]),
   };
@@ -2097,6 +2170,23 @@ function enforceMacroExecutionResponse(response, request, budget, now) {
   const validation = validateMacroExecutionEnvelope(candidate);
   if (validation.valid && candidate.budget.actual_bytes <= candidate.budget.max_bytes) {
     return deepFreeze(candidate);
+  }
+  // A Macro may have already produced a truthful, budget-fitting typed blocker
+  // before the shared performance envelope was attached. Preserve that public
+  // contract under a very small caller budget; performance remains available
+  // on normal responses and in retained execution evidence.
+  const compactCandidate = cloneJson(response);
+  delete compactCandidate.performance;
+  compactCandidate.budget.max_bytes = Math.min(
+    compactCandidate.budget.max_bytes,
+    budget.max_response_bytes,
+  );
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    compactCandidate.budget.actual_bytes = encodedBytes(compactCandidate);
+  }
+  const compactValidation = validateMacroExecutionEnvelope(compactCandidate);
+  if (compactValidation.valid && compactCandidate.budget.actual_bytes <= compactCandidate.budget.max_bytes) {
+    return deepFreeze(compactCandidate);
   }
   return compactRuntimeErrorEnvelope({
     id: response.macro?.id ?? normalizePossibleId(request?.id),
@@ -2437,6 +2527,8 @@ function createMacroAtomicExecutor(
   recipeUndo = null,
   signal = null,
   dispatchTimeoutMs = null,
+  deadline = null,
+  performance = null,
 ) {
   let childIndex = 0;
   return (childRequest = {}) => {
@@ -2444,7 +2536,10 @@ function createMacroAtomicExecutor(
       throw new CallTemplateRuntimeError(
         "CALL_TEMPLATE_EXECUTION_FAILED",
         "Macro request was cancelled before the next atomic operation.",
-        { recoverable: false, details: { request_cancelled: true } },
+        {
+          recoverable: false,
+          details: mergeDeadlineDetails(deadline, { request_cancelled: true, zero_write: true }),
+        },
       );
     }
     childIndex += 1;
@@ -2460,8 +2555,10 @@ function createMacroAtomicExecutor(
     return executeAtomic({
       ...childRequest,
       recipe_undo: recipeUndo,
-      dispatchTimeoutMs,
+      dispatchTimeoutMs: effectiveDispatchTimeoutMs(dispatchTimeoutMs, deadline),
       signal,
+      deadline,
+      performance,
       context: {
         ...sourceContext,
         created_at: childCreatedAt,
@@ -2474,13 +2571,52 @@ function normalizeInternalDispatchTimeoutMs(value) {
   return Number.isSafeInteger(value) && value >= 1 && value <= 600_000 ? value : null;
 }
 
-function assertTemplateRequestActive(signal, message) {
-  if (signal?.aborted !== true) return;
+function assertTemplateRequestActive(signal, message, deadline = null) {
+  if (signal?.aborted !== true && deadline?.isExpired?.() !== true) return;
   throw new CallTemplateRuntimeError(
     "CALL_TEMPLATE_EXECUTION_FAILED",
     message,
-    { recoverable: false, details: { request_cancelled: true, zero_write: true } },
+    {
+      recoverable: false,
+      details: mergeDeadlineDetails(deadline, { request_cancelled: true, zero_write: true }),
+    },
   );
+}
+
+function lateTemplateExecutionEnvelope(execution, deadline = null) {
+  const executionDetails = isPlainObject(execution?.error?.details)
+    ? execution.error.details
+    : {};
+  const mutation = lateTemplateMutationTruth(execution);
+  const details = mergeDeadlineDetails(deadline, {
+    request_cancelled: true,
+    result_available_after_cancellation: execution?.ok === true || execution?.result !== undefined,
+    mutation_truth: mutation,
+    zero_write: mutation === "not_applied",
+    ...(isPlainObject(executionDetails.mutation) ? { mutation: executionDetails.mutation } : {}),
+  });
+  return {
+    ...execution,
+    ok: false,
+    error: {
+      source: "runtime",
+      code: "CALL_TEMPLATE_EXECUTION_FAILED",
+      message: "Template returned after cancellation or deadline expiry; inspect the preserved result before retrying.",
+      recoverable: false,
+      details,
+    },
+  };
+}
+
+function lateTemplateMutationTruth(execution) {
+  const risk = execution?.template?.risk;
+  if (risk === "read") return "not_applied";
+  if (execution?.ok === true) return "applied_unverified";
+  const details = isPlainObject(execution?.error?.details) ? execution.error.details : {};
+  const completedCount = details.mutation?.completed_count;
+  if (Number.isSafeInteger(completedCount) && completedCount > 0) return "applied_unverified";
+  if (details.mutation_before_readback === true || details.zero_write !== true) return "unknown";
+  return "not_applied";
 }
 
 function runtimeMacroLiveReadiness({ id, live, projectIndexRuntime }) {

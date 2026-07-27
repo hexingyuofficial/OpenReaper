@@ -45,15 +45,15 @@ const REGISTRY = JSON.parse(
 );
 
 describe("Alpha3.4-C2 upper MIDI musical timing", () => {
-  it("keeps public counts at 6 tools / 15 macros / 235 templates / 91 handlers", () => {
+  it("keeps public counts at 6 tools / 15 macros / 237 templates / 91 handlers", () => {
     assert.equal(OPENREAPER_PUBLIC_TOOL_IDS.length, 6);
     assert.equal(ALPHA3_3_B1_VISIBLE_EXECUTABLE_IDS.length, 15);
     assert.equal(new Set(ALPHA3_3_B1_VISIBLE_EXECUTABLE_IDS).size, 15);
-    assert.equal(REGISTRY.entries.length, 235);
+    assert.equal(REGISTRY.entries.length, 237);
     assert.equal(new Set(REGISTRY.entries.map((entry) => entry.handler_file)).size, 91);
     const registry = loadBridgeHandlerRegistry({ cwd: ROOT.pathname });
     validateBridgeHandlerRegistry({ cwd: ROOT.pathname, registry });
-    assert.equal(registry.entries.length, 235);
+    assert.equal(registry.entries.length, 237);
     assert.equal(new Set(registry.entries.map((entry) => entry.handler_file)).size, 91);
     const discovery = createAlpha3_2_5DMidiMacroDiscoveryItem();
     assert.match(JSON.stringify(discovery.examples), /duration_quarter_notes/);

@@ -274,14 +274,14 @@ describe("Alpha3.4-D2 exact_assignments multi-target FX batch", () => {
     assert.equal(downstream.every((child) => child.refs.fx_ref.identity.scheme === "take_fx"), true);
     assert.equal(downstream.every((child) => child.refs.fx_ref.identity.value === `${takeRef}:0`), true);
   });
-  it("keeps public counts 6/15/235/91 and mode token", () => {
+  it("keeps public counts 6/15/237/91 and mode token", () => {
     assert.equal(ALPHA3_4_D2_FX_BATCH_MODE, "exact_assignments");
     assert.equal(OPENREAPER_PUBLIC_TOOL_IDS.length, 6);
     assert.equal(ALPHA3_3_B1_VISIBLE_EXECUTABLE_IDS.length, 15);
-    assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 235);
+    assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 237);
     const registry = loadBridgeHandlerRegistry({ cwd: ROOT });
     validateBridgeHandlerRegistry({ cwd: ROOT, registry });
-    assert.equal(registry.entries.length, 235);
+    assert.equal(registry.entries.length, 237);
     assert.equal(new Set(registry.entries.map((entry) => entry.handler_file)).size, 91);
     assert.equal(countLua(path.join(ROOT, "reaper/bridge/src/handlers")), 91);
   });

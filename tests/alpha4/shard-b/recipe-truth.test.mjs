@@ -221,7 +221,7 @@ describe("Alpha4 Shard B Recipe truth", () => {
       assert.equal(failed.error.code, "BRIDGE_NOT_RUNNING");
       assert.deepEqual(failed.error.details, thrown.details);
       assert.equal(failed.execution_truth.mutation, "not_applied");
-      assert.equal(failed.execution_truth.transport_call_count, 1);
+      assert.equal(failed.execution_truth.transport_call_count, 0);
       const evidence = fixture.evidenceStore.get(failed.evidence_ref);
       assert.equal(evidence.items.find((item) => item.stage_id === "run_macro").status, "failed");
       assert.equal(Object.hasOwn(evidence.items.find((item) => item.stage_id === "run_macro"), "error"), false);
@@ -276,14 +276,168 @@ describe("Alpha4 Shard B Recipe truth", () => {
       fixture.cleanup();
     }
   });
+
+  it("keeps late mutating stage truth and closes the Whole-Recipe Undo after deadline expiry", async () => {
+    const undoCalls = [];
+    const fixture = makeRuntime({
+      undoController: {
+        async begin(request) {
+          undoCalls.push(request);
+          return { ok: true, opened: true, handle: "undo:alpha4-shard-b:deadline", project_ref: request.project_ref };
+        },
+        async end(request) {
+          undoCalls.push(request);
+          return { ok: true, closed: true, verified: true, handle: request.handle, project_ref: request.project_ref };
+        },
+      },
+    });
+    try {
+      const draft = makeDraft();
+      const saved = await saveDraft(fixture.runtime, draft);
+      const response = await runFixture(fixture, saved, draft, {
+        // Leave enough budget for fixture validation; the delayed mutating
+        // stage itself must still expire before it can return readback proof.
+        deadline_ms: 70,
+        template: async () => {
+          await new Promise((resolve) => setTimeout(resolve, 80));
+          return templateSuccess();
+        },
+      });
+
+      assert.equal(response.ok, false, JSON.stringify(response));
+      assert.equal(response.error.details.deadline_exceeded, true, JSON.stringify(response));
+      assert.equal(response.execution_truth.mutation, "applied_unverified", JSON.stringify(response));
+      assert.equal(response.execution_truth.native_mutation_count, 0, JSON.stringify(response));
+      assert.equal(response.undo.status, "closed", JSON.stringify(response));
+      assert.equal(response.resume_safe, false);
+      assert.deepEqual(undoCalls.map((request) => request.operation), ["begin", "end"]);
+      const evidence = fixture.evidenceStore.get(response.evidence_ref);
+      const lateStage = evidence.items.find((item) => item.stage_id === "readback");
+      assert.equal(lateStage.status, "failed");
+      assert.equal(lateStage.verified, false);
+      assert.equal(lateStage.mutation_truth, "applied_unverified");
+      assert.equal(lateStage.counters.transport_call_count, 0);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("reports one complete Recipe performance envelope while preserving optional deadline behavior", async () => {
+    const fixture = makeRuntime();
+    try {
+      const draft = makeDraft();
+      const saved = await saveDraft(fixture.runtime, draft);
+      const result = await runFixture(fixture, saved, draft, {
+        template: () => templateSuccess(),
+      });
+
+      assert.equal(result.ok, true, JSON.stringify(result));
+      assert.equal(result.performance.contract, "openreaper.execution_performance.v1");
+      assert.equal(result.performance.gate_mode, "internal_acceptance_only");
+      assert.equal(result.performance.runtime_cancellation, false);
+      assert.equal(result.performance.counters.undo_call_count, 2);
+      assert.equal(result.performance.counters.evidence_count, 1);
+      assert.equal(result.performance.counters.transport_call_count, 0);
+      assert.equal(result.execution_truth.stage_dispatch_count, 3);
+      assert.equal(result.execution_truth.transport_call_count, 0);
+      assert.equal(result.execution_truth.performance.contract, "openreaper.execution_performance.v1");
+      assert.equal(result.execution_truth.performance.gate_ok, true);
+
+      const evidence = fixture.evidenceStore.get(result.evidence_ref);
+      assert.equal(evidence.run_summary.performance.contract, "openreaper.execution_performance.v1");
+      assert.equal(evidence.run_summary.performance.gate_mode, "internal_acceptance_only");
+      assert.equal(evidence.run_summary.counters.stage_dispatch_count, 3);
+      assert.equal(evidence.run_summary.counters.transport_call_count, 0);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("passes one shared performance envelope through every Recipe stage", async () => {
+    const fixture = makeRuntime();
+    const seen = [];
+    try {
+      const draft = makeDraft();
+      const saved = await saveDraft(fixture.runtime, draft);
+      const result = await runFixture(fixture, saved, draft, {
+        macro: (_stage, options) => {
+          seen.push(options.performance);
+          return macroSuccess();
+        },
+        template: (_stage, options) => {
+          seen.push(options.performance);
+          options.performance.counters.transport_call_count += 1;
+          return templateSuccess();
+        },
+      });
+
+      assert.equal(result.ok, true, JSON.stringify(result));
+      assert.equal(seen.length, 3);
+      assert.ok(seen.every((performance) => performance === seen[0]));
+      assert.equal(seen[0].contract, result.execution_truth.performance.contract);
+      assert.equal(seen[0].gate_mode, result.execution_truth.performance.gate_mode);
+      assert.equal(result.execution_truth.stage_dispatch_count, 3);
+      assert.equal(result.execution_truth.transport_call_count, 2);
+      assert.equal(result.performance.counters.transport_call_count, 2);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("preserves mutation truth when evidence or run-state persistence fails", async () => {
+    const evidenceFailure = makeRuntime({
+      evidenceStore: new ThrowingPutStore("evidence write failed"),
+    });
+    try {
+      const draft = makeDraft();
+      const saved = await saveDraft(evidenceFailure.runtime, draft);
+      const response = await runFixture(evidenceFailure, saved, draft, {
+        template: () => templateSuccess(),
+      });
+
+      assert.equal(response.ok, false, JSON.stringify(response));
+      assert.equal(response.error.code, "STORE_ERROR");
+      assert.equal(response.error.details.persistence_failure, "evidence_store");
+      assert.equal(response.error.details.mutation_truth, "applied_verified");
+      assert.equal(response.execution_truth.mutation, "applied_verified");
+      assert.equal(response.error.details.zero_write, false);
+      assert.equal(response.evidence_ref, null);
+      assert.equal(response.undo.status, "closed");
+    } finally {
+      evidenceFailure.cleanup();
+    }
+
+    const runStateFailure = makeRuntime({
+      runStore: new ThrowingPutStore("run state write failed", { fail_after: 3 }),
+    });
+    try {
+      const draft = makeDraft();
+      const saved = await saveDraft(runStateFailure.runtime, draft);
+      const response = await runFixture(runStateFailure, saved, draft, {
+        template: () => templateSuccess(),
+      });
+
+      assert.equal(response.ok, false, JSON.stringify(response));
+      assert.equal(response.error.code, "STORE_ERROR");
+      assert.equal(response.error.details.persistence_failure, "run_store");
+      assert.equal(response.error.details.mutation_truth, "applied_verified");
+      assert.equal(response.execution_truth.mutation, "applied_verified");
+      assert.equal(response.error.details.zero_write, false);
+      assert.equal(typeof response.evidence_ref, "string");
+      assert.ok(runStateFailure.evidenceStore.get(response.evidence_ref));
+      assert.equal(response.undo.status, "closed");
+    } finally {
+      runStateFailure.cleanup();
+    }
+  });
 });
 
 function makeRuntime(overrides = {}) {
   const catalog = createCatalog();
   const root = mkdtempSync(path.join(os.tmpdir(), "openreaper-alpha4-b-recipe-"));
   const store = createExecutableRecipeRevisionStore({ root, catalog, source: "user" });
-  const evidenceStore = new MapStore();
-  const runStore = new MapStore();
+  const evidenceStore = overrides.evidenceStore ?? new MapStore();
+  const runStore = overrides.runStore ?? new MapStore();
   const undoController = overrides.undoController ?? {
     async begin(request) {
       return { ok: true, opened: true, handle: `undo:alpha4-shard-b:${request.run_id}`, project_ref: request.project_ref };
@@ -317,7 +471,7 @@ async function saveDraft(runtime, draft) {
   });
 }
 
-async function runFixture(fixture, saved, draft, { template, dispatches = [], budget } = {}) {
+async function runFixture(fixture, saved, draft, { macro, template, dispatches = [], budget, deadline_ms } = {}) {
   const runtime = createCallRecipeRuntime({
     store: fixture.runtime.store,
     catalog: fixture.catalog,
@@ -325,11 +479,11 @@ async function runFixture(fixture, saved, draft, { template, dispatches = [], bu
     runStore: fixture.runStore,
     undoController: fixture.undoController,
     dispatchers: {
-      macro: async ({ stage }) => {
+      macro: async ({ stage, ...options }) => {
         dispatches.push(stage.id);
-        return macroSuccess();
+        return macro ? macro(stage, options) : macroSuccess();
       },
-      template: async ({ stage }) => template(stage),
+      template: async ({ stage, ...options }) => template(stage, options),
     },
     runtimeFactsProvider: async ({ revision }) => runtimeFacts(revision, fixture.catalog),
   });
@@ -338,6 +492,7 @@ async function runFixture(fixture, saved, draft, { template, dispatches = [], bu
     ...identity(saved),
     inputs: { track_name: "Dialog" },
     ...(budget ? { budget } : {}),
+    ...(deadline_ms !== undefined ? { deadline_ms } : {}),
   });
 }
 
@@ -346,6 +501,24 @@ class MapStore {
 
   put(key, value) { this.#values.set(key, value); }
   get(key) { return this.#values.get(key) ?? null; }
+}
+
+class ThrowingPutStore extends MapStore {
+  #message;
+  #failAfter;
+  #putCount = 0;
+
+  constructor(message, { fail_after = 0 } = {}) {
+    super();
+    this.#message = message;
+    this.#failAfter = fail_after;
+  }
+
+  put(key, value) {
+    this.#putCount += 1;
+    if (this.#putCount > this.#failAfter) throw new Error(this.#message);
+    super.put(key, value);
+  }
 }
 
 function createCatalog() {

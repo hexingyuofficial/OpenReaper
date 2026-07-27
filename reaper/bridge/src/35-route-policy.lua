@@ -36,6 +36,7 @@ local SAFE_WRITE_A_CAPABILITIES = {
 local E3_MEDIA_ROUTE_CAPABILITIES = {
   ["media.import_file_to_track"] = { pack = "media", risk = "write" },
   ["media.import_file_section_to_track"] = { pack = "media", risk = "write" },
+  ["media.import_files_batch"] = { pack = "media", risk = "write" },
   ["media.relink_take_source"] = { pack = "media", risk = "write" },
 }
 
@@ -208,6 +209,7 @@ local E2_FX_B1_WRITE_CAPABILITIES = {
   ["fx.add_take"] = { pack = "fx", risk = "write" },
   ["fx.set_bypass"] = { pack = "fx", risk = "write" },
   ["fx.set_parameter_normalized"] = { pack = "fx", risk = "write" },
+  ["fx.set_parameter_assignments_batch"] = { pack = "fx", risk = "write" },
   ["fx.set_preset_by_name"] = { pack = "fx", risk = "write" },
   ["fx.set_preset_by_index"] = { pack = "fx", risk = "write" },
   ["fx.reorder"] = { pack = "fx", risk = "write" },

@@ -25,7 +25,9 @@ export const LIVE_BRIDGE_LIVENESS_STATUS = Object.freeze({
   PROBE_INPUT_INVALID: "bridge_probe_input_invalid",
 });
 
-export const LIVE_BRIDGE_LIVENESS_DEFAULT_MAX_AGE_MS = 2_000;
+// A synchronous REAPER atomic operation may pause defer-driven heartbeats.
+// Keep the liveness grace bounded while covering the product's <30s operation gate.
+export const LIVE_BRIDGE_LIVENESS_DEFAULT_MAX_AGE_MS = 35_000;
 export const LIVE_BRIDGE_LIVENESS_FUTURE_SKEW_MS = 1_000;
 export const LIVE_BRIDGE_LIVENESS_MAX_AGE_BOUNDS = Object.freeze({
   min: 500,

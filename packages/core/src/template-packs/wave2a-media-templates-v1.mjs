@@ -5,6 +5,7 @@ export const WAVE2A_MEDIA_TEMPLATE_IDS = Object.freeze([
   "template.media.read_take_source",
   "template.media.import_file_to_track",
   "template.media.import_file_section_to_track",
+  "template.media.import_files_batch",
   "template.media.read_project_media_files",
   "template.media.relink_take_source",
 ]);
@@ -245,6 +246,69 @@ export const WAVE2A_MEDIA_TEMPLATES = deepFreeze([
           position_seconds: 2,
           start_percent: 0.25,
           end_percent: 0.75,
+          preserve_selection: true,
+        },
+      },
+    ],
+  }),
+  commandDescriptor({
+    id: "template.media.import_files_batch",
+    title: "Import media files batch",
+    summary: "Import a bounded batch of media files through one typed native queue and one Undo scope.",
+    entity_kind: "media_file",
+    tags: ["media", "import", "batch", "track"],
+    bridge: bridge({ capability: "media.import_files_batch" }),
+    inputSchema: objectSchema({
+      batch: { type: "array" },
+      preserve_selection: { type: "boolean" },
+    }, ["batch", "preserve_selection"]),
+    outputSchema: objectSchema({
+      rows: { type: "array" },
+      source_footprints: { type: "array" },
+      batch_timings: { type: "object" },
+      selection_restored: { type: "boolean" },
+    }, ["rows", "batch_timings"]),
+    refs: refs({
+      input: [
+        ref("source_file_refs", "file", true, "One exact source File ref per batch row."),
+        ref("track_refs", "track", true, "One exact target Track ref per batch row."),
+      ],
+      output: [
+        ref("item_refs", "item", true, "Created Item refs in batch row order."),
+        ref("take_refs", "take", true, "Created Take refs in batch row order."),
+        ref("source_file_refs", "file", true, "Canonical source File refs in batch row order."),
+      ],
+    }),
+    expectedDelta: mutationDelta({
+      summary: "Imports a bounded media-file batch onto existing target Tracks through one serial native queue.",
+      entities: [
+        {
+          entity_kind: "media_file",
+          action: "read",
+          summary: "Every source media file is decoded and measured during batch preflight.",
+        },
+        {
+          entity_kind: "item",
+          action: "create",
+          summary: "One placed media Item is created per completed batch row.",
+        },
+      ],
+      idempotent: false,
+    }),
+    verification: requiredVerification({
+      name: "batch_items_and_sources_match",
+      kind: "state_delta",
+      summary: "Every completed row returns native Item/Take/source identity and position readback.",
+    }),
+    examples: [
+      {
+        name: "import_files_batch",
+        summary: "Import multiple resolved source Files onto resolved Tracks in one native batch.",
+        input: {
+          batch: [
+            { id: "asset-1", position_seconds: 0 },
+            { id: "asset-2", position_seconds: 2, start_percent: 0.25, end_percent: 0.75 },
+          ],
           preserve_selection: true,
         },
       },

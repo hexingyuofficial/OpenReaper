@@ -93,6 +93,10 @@ test("official live harness discovers and one-calls all four Recipes with Recipe
   });
   assert.equal(report.recipe04_truth.evidence_refs.some((ref) => ref.startsWith("recipe-evidence:recipe.items.create_sound_variations:")), true);
   assert.equal(calls.filter((call) => call.operation === "run").every((call) => typeof call.validation_result_id === "string"), true);
+  const exactGets = calls.filter((call) => call.operation === "get" && !call.evidence_ref);
+  assert.equal(exactGets.length, ALPHA3_45_OFFICIAL_RECIPE_IDS.length);
+  assert.equal(exactGets.every((call) => call.budget?.max_response_bytes === 65_536), true);
+  assert.equal(exactGets.every((call) => typeof call.recipe_id === "string" && typeof call.content_hash === "string"), true);
   assert.deepEqual(calls.filter((call) => call.operation === "run").map((call) => call.recipe_id), [
     ...ALPHA3_45_OFFICIAL_RECIPE_IDS,
     "recipe.items.create_sound_variations",

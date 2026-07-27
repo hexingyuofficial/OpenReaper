@@ -772,11 +772,11 @@ describe("Layer 4D call_template runtime binding", () => {
       },
     });
     const graduatedMenu = graduatedRuntime.list_templates({ limit: 100 });
-    assert.equal(CALL_TEMPLATE_RUNTIME_ALPHA2_HISTORICAL_EVIDENCE_TEMPLATE_IDS.length, 213);
+    assert.equal(CALL_TEMPLATE_RUNTIME_ALPHA2_HISTORICAL_EVIDENCE_TEMPLATE_IDS.length, 214);
     assert.equal(CALL_TEMPLATE_RUNTIME_ALPHA2_HISTORICAL_EVIDENCE_TEMPLATE_IDS.includes("template.items.set_item_pan"), true);
-    assert.equal(CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS.length, 212);
+    assert.equal(CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS.length, 213);
     assert.equal(CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS.includes("template.items.set_item_pan"), false);
-    assert.equal(graduatedRuntime.live_gate.allowed_template_ids.length, 212);
+    assert.equal(graduatedRuntime.live_gate.allowed_template_ids.length, 213);
     assert.equal(CALL_TEMPLATE_RUNTIME_ALPHA3_2C3A_PROJECT_FILE_READ_TEMPLATE_IDS.length, 2);
     assert.equal(CALL_TEMPLATE_RUNTIME_ALPHA3_2C3BC_PROJECT_FILE_SAVE_TEMPLATE_IDS.length, 2);
     assert.equal(
@@ -784,7 +784,7 @@ describe("Layer 4D call_template runtime binding", () => {
         CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS.includes(id)),
       false,
     );
-    assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 235);
+    assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 236);
     const currentProductRuntime = createCallTemplateRuntime({
       live: {
         opted_in: true,
@@ -792,7 +792,7 @@ describe("Layer 4D call_template runtime binding", () => {
         allowed_template_ids: CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS,
       },
     });
-    assert.equal(currentProductRuntime.live_gate.allowed_template_ids.length, 235);
+    assert.equal(currentProductRuntime.live_gate.allowed_template_ids.length, 236);
     assert.equal(
       currentProductRuntime.list_templates({
         ids: CALL_TEMPLATE_RUNTIME_ALPHA3_2C3A_PROJECT_FILE_READ_TEMPLATE_IDS,
@@ -920,6 +920,7 @@ describe("Layer 4D call_template runtime binding", () => {
       "template.fx.add_take_fx",
       "template.fx.set_fx_bypass",
       "template.fx.set_fx_parameter_normalized",
+      "template.fx.set_parameter_assignments_batch",
       "template.fx.set_fx_preset_by_name",
       "template.fx.set_fx_preset_by_index",
       "template.fx.reorder_fx",
@@ -966,6 +967,7 @@ describe("Layer 4D call_template runtime binding", () => {
         "run_command:template.execute",
         "run_command:template.execute",
         "run_command:template.execute",
+        "run_command:template.execute",
         "query_state:fx.read_video_processor_code",
       ],
     );
@@ -983,6 +985,7 @@ describe("Layer 4D call_template runtime binding", () => {
         "fx.add_take",
         "fx.set_bypass",
         "fx.set_parameter_normalized",
+        "fx.set_parameter_assignments_batch",
         "fx.set_preset_by_name",
         "fx.set_preset_by_index",
         "fx.reorder",
@@ -995,15 +998,15 @@ describe("Layer 4D call_template runtime binding", () => {
       assert.equal(request.undo.mode, "none");
       assert.equal(request.artifacts.allow, false);
     }
-    for (const request of bridge.seen.slice(7, 14)) {
+    for (const request of bridge.seen.slice(7, 15)) {
       assert.equal(request.pack.id, "fx");
       assert.equal(request.pack.risk, "write");
       assert.equal(request.undo.mode, "required");
       assert.equal(request.verification.mode, "required");
       assert.equal(request.artifacts.allow, false);
     }
-    assert.equal(bridge.seen[14].pack.risk, "read");
-    assert.equal(bridge.seen[14].artifacts.allow, true);
+    assert.equal(bridge.seen[15].pack.risk, "read");
+    assert.equal(bridge.seen[15].artifacts.allow, true);
 
     const mixed = createCallTemplateRuntime({
       live: {
@@ -1279,6 +1282,7 @@ describe("Layer 4D call_template runtime binding", () => {
       "template.media.list_folder_media_files",
       "template.media.import_file_to_track",
       "template.media.import_file_section_to_track",
+      "template.media.import_files_batch",
       "template.media.relink_take_source",
     ]);
 
@@ -1312,6 +1316,7 @@ describe("Layer 4D call_template runtime binding", () => {
         "run_command:template.execute",
         "run_command:template.execute",
         "run_command:template.execute",
+        "run_command:template.execute",
       ],
     );
     assert.deepEqual(
@@ -1320,6 +1325,7 @@ describe("Layer 4D call_template runtime binding", () => {
         "media.folder_media.list",
         "media.import_file_to_track",
         "media.import_file_section_to_track",
+        "media.import_files_batch",
         "media.relink_take_source",
       ],
     );
@@ -1331,7 +1337,7 @@ describe("Layer 4D call_template runtime binding", () => {
       assert.equal(request.verification.mode, "required");
       assert.equal(request.artifacts.allow, false);
     }
-    assert.equal(bridge.seen[3].idempotency_key, "e3-media-route:relink-take-source");
+    assert.equal(bridge.seen[4].idempotency_key, "e3-media-route:relink-take-source");
 
     const mixed = createCallTemplateRuntime({
       live: {
@@ -1361,6 +1367,7 @@ describe("Layer 4D call_template runtime binding", () => {
       "media.folder_media.list",
       "media.import_file_to_track",
       "media.import_file_section_to_track",
+      "media.import_files_batch",
       "media.relink_take_source",
     ]);
     assert.deepEqual(fake.preflight_blockers_covered, [
@@ -1369,7 +1376,7 @@ describe("Layer 4D call_template runtime binding", () => {
       "media_source_absent",
       "relink_target_type_mismatch",
     ]);
-    assert.equal(fake.executions.length, 4);
+    assert.equal(fake.executions.length, 5);
     assert.equal(fake.executions.every((execution) => execution.ok), true);
     assert.equal(fake.executions[0].operation, "query_state:media.folder_media.list");
     for (const execution of fake.executions.slice(1)) {
@@ -1609,7 +1616,7 @@ describe("Layer 4D call_template runtime binding", () => {
     }).trim();
     const preview = JSON.parse(previewOutput);
     assert.equal(preview.contract, CALL_TEMPLATE_RUNTIME_PRODUCT_SURFACE_CONTRACT);
-    assert.equal(preview.allowed_template_count, 212);
+    assert.equal(preview.allowed_template_count, 213);
     assert.deepEqual(preview.workflow_rhythm.steps, ["discover", "observe", "target", "confirm", "execute_one", "readback"]);
     assert.equal(preview.startup_preflight[0].id, "manual_session_visible");
     assert.equal(preview.startup_health.contract, ALPHA3_D1_STARTUP_HEALTH_CONTRACT);
@@ -1668,6 +1675,12 @@ function fxB1RouteInput(id) {
   if (id === "template.fx.set_fx_parameter_normalized") {
     return { param_index: 0, normalized_value: 0.5, tolerance: 0.001 };
   }
+  if (id === "template.fx.set_parameter_assignments_batch") {
+    return {
+      dry_run: true,
+      batch: [{ id: "gain", fx_ref: "fx:track:guid:{E2-FX-TRACK}:0", param_index: 0, normalized_value: 0.5 }],
+    };
+  }
   if (id === "template.fx.set_fx_preset_by_name") {
     return { preset_name: "Default" };
   }
@@ -1702,6 +1715,9 @@ function fxB1RouteRefs(id) {
   }
   if (id === "template.fx.read_video_processor_code") {
     return { fx_ref: videoFxRef };
+  }
+  if (id === "template.fx.set_parameter_assignments_batch") {
+    return { fx_refs: [fxRef] };
   }
   return { fx_ref: fxRef };
 }
@@ -1766,6 +1782,15 @@ function mediaRouteInput(id) {
       preserve_selection: true,
     };
   }
+  if (id === "template.media.import_files_batch") {
+    return {
+      batch: [
+        { id: "e3-batch-a", position_seconds: 4 },
+        { id: "e3-batch-b", position_seconds: 6, start_percent: 0.25, end_percent: 0.75 },
+      ],
+      preserve_selection: true,
+    };
+  }
   if (id === "template.media.relink_take_source") {
     return {
       verify_source_type: true,
@@ -1792,6 +1817,12 @@ function mediaRouteRefs(id) {
     return {
       source_file_ref: sourceFileRef,
       track_ref: trackRef,
+    };
+  }
+  if (id === "template.media.import_files_batch") {
+    return {
+      source_file_refs: [sourceFileRef, sourceFileRef],
+      track_refs: [trackRef, trackRef],
     };
   }
   if (id === "template.media.relink_take_source") {

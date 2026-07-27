@@ -1357,47 +1357,15 @@ async function executeCreateVariationsBatch({
   }
 
   const resolveStarted = monoTick(monoNow);
-  const resolvedRows = [];
-  const resolvedItems = new Map();
-  const resolvedTracks = new Map();
-  for (const row of normalized.input.variations) {
-    let sourceExecution;
-    let trackExecution;
-    try {
-      sourceExecution = resolvedItems.get(row.source_item_ref)
-        ?? await runAtomicCounted(executeAtomic, request, state, "resolve", { id: RESOLVE_ITEM_ID, input: { ref: row.source_item_ref }, refs: {} });
-      if (!resolvedItems.has(row.source_item_ref)) resolvedItems.set(row.source_item_ref, sourceExecution);
-      trackExecution = sourceExecution?.ok === true
-        ? resolvedTracks.get(row.target_track_ref)
-          ?? await runAtomicCounted(executeAtomic, request, state, "resolve", { id: RESOLVE_TRACK_ID, input: { track_ref: row.target_track_ref }, refs: {} })
-        : null;
-      if (trackExecution && !resolvedTracks.has(row.target_track_ref)) resolvedTracks.set(row.target_track_ref, trackExecution);
-    } catch (error) {
-      return variationFailure({ entry, request, startedAt, now, stages, state, activeBudget, data: data(), code: "ITEM_APPLY_ATOMIC_FAILED", message: error?.message ?? "Variation target resolution failed." });
-    }
-    collectExecutionEvidence(state, sourceExecution);
-    collectExecutionEvidence(state, trackExecution);
-    if (sourceExecution?.ok !== true) {
-      const failure = atomicFailure(sourceExecution, RESOLVE_ITEM_ID);
-      return variationFailure({ entry, request, startedAt, now, stages, state, activeBudget, data: data(), ...failure });
-    }
-    if (trackExecution?.ok !== true) {
-      const failure = atomicFailure(trackExecution, RESOLVE_TRACK_ID);
-      return variationFailure({ entry, request, startedAt, now, stages, state, activeBudget, data: data(), ...failure });
-    }
-    const sourceObject = executionObjectRefs(sourceExecution).find((ref) => ref.kind === "item");
-    const targetTrackObject = executionObjectRefs(trackExecution).find((ref) => ref.kind === "track");
-    if (!isAuthoritativeItemObjectRef(sourceObject) || sourceObject.ref !== row.source_item_ref
-      || !isAuthoritativeTrackObjectRef(targetTrackObject) || targetTrackObject.ref !== row.target_track_ref) {
-      return variationFailure({
-        entry, request, startedAt, now, stages, state, activeBudget, data: data(),
-        code: "ITEM_APPLY_TARGET_IDENTITY_MISMATCH",
-        message: `Variation ${row.id} source Item or target Track did not round-trip its exact canonical ref.`,
-      });
-    }
-    resolvedRows.push({ ...row, source_item: sourceObject, target_track: targetTrackObject });
+  // Exact refs are already compiler-validated. The live E4 batch handler is
+  // the authority for resolving and preflighting every row before its first
+  // native write, so this stage does not perform one child transport per row.
+  const resolvedRows = normalized.input.variations.map((row) => {
+    const sourceObject = exactGuidObjectRef("item", row.source_item_ref);
+    const targetTrackObject = exactGuidObjectRef("track", row.target_track_ref);
     state.canonicalRefs.push(sourceObject.ref, targetTrackObject.ref);
-  }
+    return { ...row, source_item: sourceObject, target_track: targetTrackObject };
+  });
   state.timings.target_resolution_ms = monoElapsed(resolveStarted, monoNow);
   pushStage(stages, "items-apply-targets", "live_ref_resolve", "completed", `Resolved ${resolvedRows.length} exact variation source/target pair(s).`, state.evidenceRefs);
   state.changes = resolvedRows.map((row) => variationChange(row, { status: normalized.input.dry_run ? "planned" : "pending", mutation: normalized.input.dry_run ? "not_run" : "pending", readback: normalized.input.dry_run ? "not_run" : "pending", index: normalized.input.dry_run ? "skipped" : "pending" }));
@@ -1413,105 +1381,89 @@ async function executeCreateVariationsBatch({
   }
 
   let executionFailure = null;
-  let failedIndex = -1;
   const mutationStarted = monoTick(monoNow);
-  const readbackStarted = monoTick(monoNow);
-  for (const [index, row] of resolvedRows.entries()) {
-    const change = state.changes[index];
-    let copyExecution;
-    try {
-      copyExecution = await runAtomicCounted(executeAtomic, request, state, "mutation", {
-        id: COPY_ITEM_TO_TRACK_ID,
-        input: { position_seconds: row.position_seconds },
-        refs: { source_item_ref: row.source_item, target_track_ref: row.target_track },
-      });
-    } catch (error) {
+  let copyExecution;
+  try {
+    copyExecution = await runAtomicCounted(executeAtomic, request, state, "mutation", {
+      id: COPY_ITEM_TO_TRACK_ID,
+      input: {
+        batch: resolvedRows.map((row) => compactObject({
+          id: row.id,
+          source_item_ref: row.source_item_ref,
+          target_track_ref: row.target_track_ref,
+          position_seconds: row.position_seconds,
+          source_offset_seconds: row.source_offset_seconds,
+        })),
+      },
+      // The batch descriptor still requires both ref kinds. Pass the complete
+      // bounded arrays once; the live batch atom uses input.batch as the row
+      // authority and does not dispatch one transport call per variation.
+      refs: {
+        source_item_ref: resolvedRows.map((row) => row.source_item),
+        target_track_ref: resolvedRows.map((row) => row.target_track),
+      },
+    });
+  } catch (error) {
+    executionFailure = executionError(error, COPY_ITEM_TO_TRACK_ID, "mutation");
+  }
+  collectExecutionEvidence(state, copyExecution);
+  if (copyExecution?.ok !== true) {
+    executionFailure ??= { ...atomicFailure(copyExecution, COPY_ITEM_TO_TRACK_ID), phase: "mutation" };
+    for (const change of state.changes) {
       change.mutation = { status: "unknown_or_partial" };
       change.status = "unknown_or_partial";
-      executionFailure = executionError(error, COPY_ITEM_TO_TRACK_ID, "mutation");
-      failedIndex = index;
-      break;
     }
-    collectExecutionEvidence(state, copyExecution);
-    if (copyExecution?.ok !== true) {
-      change.mutation = { status: "failed" };
-      change.status = "failed";
-      executionFailure = { ...atomicFailure(copyExecution, COPY_ITEM_TO_TRACK_ID), phase: "mutation" };
-      failedIndex = index;
-      break;
-    }
+  } else {
     const copySummary = executionSummary(copyExecution);
-    const newItemRef = copySummary.new_item_ref;
-    const newTakeRef = copySummary.active_take_ref;
-    const copiedItem = executionObjectRefs(copyExecution).find((ref) => ref.kind === "item" && ref.ref === newItemRef);
-    if (!isExactGuidRef(newItemRef, "item") || !isExactGuidRef(newTakeRef, "take") || !isAuthoritativeItemObjectRef(copiedItem)
-      || copiedItem.ref !== newItemRef || newItemRef === row.source_item_ref || copySummary.source_item_ref !== row.source_item_ref
-      || copySummary.target_track_ref !== row.target_track_ref || !valuesMatch(copySummary.position_seconds, row.position_seconds)) {
-      change.mutation = { status: "completed" };
-      change.status = "readback_failed";
-      executionFailure = { ...failed("ITEM_APPLY_VARIATION_COPY_IDENTITY_INVALID", `Copy result for ${row.id} omitted an exact new Item/Take identity or mismatched the requested source, Track, or position.`), phase: "readback" };
-      failedIndex = index;
-      break;
-    }
-    const takeFxCopy = projectVerifiedTakeFxCopy(copySummary.take_fx_copy, {
-      sourceTakeRef: copySummary.source_item?.active_take_ref,
-      targetTakeRef: newTakeRef,
-      objectRefs: executionObjectRefs(copyExecution),
-    });
-    if (!takeFxCopy) {
-      change.mutation = { status: "completed" };
-      change.status = "readback_failed";
-      executionFailure = { ...failed("ITEM_APPLY_VARIATION_TAKE_FX_COPY_INVALID", `Copy result for ${row.id} omitted or contradicted the verified active-Take FX copy proof.`), phase: "readback" };
-      failedIndex = index;
-      break;
-    }
-    change.new_item_ref = newItemRef;
-    change.new_take_ref = newTakeRef;
-    change.take_fx_copy = takeFxCopy;
-    state.canonicalRefs.push(newItemRef, newTakeRef);
-    if (row.source_offset_seconds !== undefined) {
-      let offsetExecution;
-      try {
-        offsetExecution = await runAtomicCounted(executeAtomic, request, state, "mutation", {
-          id: SET_TAKE_START_IN_SOURCE_ID,
-          input: { start_offset_seconds: row.source_offset_seconds },
-          refs: { item_ref: copiedItem },
-        });
-      } catch (error) {
-        change.mutation = { status: "unknown_or_partial" };
-        change.status = "unknown_or_partial";
-        executionFailure = executionError(error, SET_TAKE_START_IN_SOURCE_ID, "mutation");
-        failedIndex = index;
-        break;
-      }
-      collectExecutionEvidence(state, offsetExecution);
-      if (offsetExecution?.ok !== true) {
-        change.mutation = { status: "failed" };
-        change.status = "failed";
-        executionFailure = { ...atomicFailure(offsetExecution, SET_TAKE_START_IN_SOURCE_ID), phase: "mutation" };
-        failedIndex = index;
-        break;
-      }
-      const offsetSummary = executionSummary(offsetExecution);
-      if (offsetSummary.item_ref !== newItemRef || !valuesMatch(offsetSummary.start_offset_seconds, row.source_offset_seconds)) {
+    const batchRows = Array.isArray(copySummary.rows) ? copySummary.rows : [];
+    const objectRefs = executionObjectRefs(copyExecution);
+    for (const [index, row] of resolvedRows.entries()) {
+      const change = state.changes[index];
+      const rowSummary = batchRows.find((candidate) => candidate?.id === row.id);
+      const newItemRef = rowSummary?.new_item_ref;
+      const newTakeRef = rowSummary?.active_take_ref;
+      const copiedItem = objectRefs.find((ref) => ref.kind === "item" && ref.ref === newItemRef);
+      if (!rowSummary || !isExactGuidRef(newItemRef, "item") || !isExactGuidRef(newTakeRef, "take")
+        || !isAuthoritativeItemObjectRef(copiedItem) || copiedItem.ref !== newItemRef
+        || newItemRef === row.source_item_ref || rowSummary.source_item_ref !== row.source_item_ref
+        || rowSummary.target_track_ref !== row.target_track_ref || !valuesMatch(rowSummary.position_seconds, row.position_seconds)) {
         change.mutation = { status: "completed" };
         change.status = "readback_failed";
-        executionFailure = { ...failed("ITEM_APPLY_VARIATION_OFFSET_READBACK_MISMATCH", `Source-offset readback for ${row.id} did not match the new Item or requested offset.`), phase: "readback" };
-        failedIndex = index;
-        break;
+        executionFailure ??= { ...failed("ITEM_APPLY_VARIATION_COPY_IDENTITY_INVALID", `Batch result for ${row.id} omitted an exact new Item/Take identity or mismatched the requested source, Track, or position.`), phase: "readback" };
+        continue;
       }
+      const takeFxCopy = projectVerifiedTakeFxCopy(rowSummary.take_fx_copy, {
+        sourceTakeRef: rowSummary.source_item?.active_take_ref,
+        targetTakeRef: newTakeRef,
+        objectRefs,
+      });
+      if (!takeFxCopy) {
+        change.mutation = { status: "completed" };
+        change.status = "readback_failed";
+        executionFailure ??= { ...failed("ITEM_APPLY_VARIATION_TAKE_FX_COPY_INVALID", `Batch result for ${row.id} omitted or contradicted the verified active-Take FX copy proof.`), phase: "readback" };
+        continue;
+      }
+      if (row.source_offset_seconds !== undefined && !valuesMatch(rowSummary.source_offset_seconds, row.source_offset_seconds)) {
+        change.mutation = { status: "completed" };
+        change.status = "readback_failed";
+        executionFailure ??= { ...failed("ITEM_APPLY_VARIATION_OFFSET_READBACK_MISMATCH", `Source-offset readback for ${row.id} did not match the requested offset.`), phase: "readback" };
+        continue;
+      }
+      change.new_item_ref = newItemRef;
+      change.new_take_ref = newTakeRef;
+      change.take_fx_copy = takeFxCopy;
+      state.canonicalRefs.push(newItemRef, newTakeRef);
+      change.mutation = { status: "completed" };
+      change.live_readback = { status: "passed", source: "copy_batch_aggregate_readback" };
+      change.status = "applied";
     }
-    change.mutation = { status: "completed" };
-    change.live_readback = { status: "passed", source: "copy_atom_verified_summary" };
-    change.status = "applied";
   }
   state.timings.mutation_ms = monoElapsed(mutationStarted, monoNow);
-  state.timings.final_readback_ms = monoElapsed(readbackStarted, monoNow);
-  if (failedIndex >= 0) {
-    for (let later = failedIndex + 1; later < state.changes.length; later += 1) {
-      state.changes[later] = variationChange(resolvedRows[later], { status: "not_run", mutation: "not_run", readback: "not_run", index: "not_run" });
-    }
-  }
+  const liveTimings = executionSummary(copyExecution)?.batch_timings;
+  state.timings.preflight_ms = finiteOrZero(liveTimings?.preflight_ms);
+  state.timings.final_readback_ms = finiteOrZero(liveTimings?.readback_ms);
+  state.timings.transport_ms = finiteOrZero(liveTimings?.transport_ms);
+  state.timings.evidence_ms = finiteOrZero(liveTimings?.evidence_ms);
   const indexStarted = monoTick(monoNow);
   const indexResult = maintainBatchProjectIndex(projectIndexRuntime, state, now);
   state.timings.index_maintenance_ms = monoElapsed(indexStarted, monoNow);
@@ -2385,6 +2337,10 @@ function monoTick(monoNow) {
 
 function monoElapsed(started, monoNow) {
   return Math.max(0, monoTick(monoNow) - started);
+}
+
+function finiteOrZero(value) {
+  return Number.isFinite(value) ? value : 0;
 }
 
 function normalizeInput(input) {
