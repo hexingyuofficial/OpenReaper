@@ -284,8 +284,9 @@ async function runOfficialForkProof({
       proof.reconnect_count = 1;
     }
 
-    const listed = await timedCall(activeInvoke, { operation: "list" });
-    const listedItems = Array.isArray(listed.value?.items) ? listed.value.items : [];
+    const listed = await listAllRecipePages(activeInvoke);
+    const listedItems = listed.items;
+    proof.list_page_count = listed.pages.length;
     const listedById = new Map(listedItems.map((item) => [item.recipe_id, item]));
     proof.listed_user_count = prepared.filter((fork) => {
       const item = listedById.get(fork.recipe_id);
@@ -332,6 +333,38 @@ async function runOfficialForkProof({
     proof.error = { code: error?.code ?? "OFFICIAL_FORK_PROOF_FAILED", message: error?.message ?? "Official Recipe fork proof failed." };
   }
   return proof;
+}
+
+async function listAllRecipePages(invoke) {
+  const items = [];
+  const pages = [];
+  let cursor = null;
+  for (let pageIndex = 0; pageIndex < 64; pageIndex += 1) {
+    const args = { operation: "list", limit: 32 };
+    if (cursor !== null) args.cursor = cursor;
+    const listed = await timedCall(invoke, args);
+    if (listed.value?.ok !== true || !Array.isArray(listed.value.items)) {
+      throw coded("OFFICIAL_FORK_LIST_FAILED", "Recipe list returned an invalid page.");
+    }
+    const page = listed.value.page;
+    items.push(...listed.value.items);
+    if (!page) {
+      pages.push({ cursor: cursor ?? "0", next_cursor: null, count: listed.value.items.length, duration_ms: listed.duration_ms });
+      return { items, pages };
+    }
+    const pageCursor = typeof page.cursor === "string" ? page.cursor : cursor ?? "0";
+    const nextCursor = page.next_cursor ?? null;
+    if (pageCursor !== (cursor ?? "0")
+      || (nextCursor !== null && (typeof nextCursor !== "string" || !/^\d+$/u.test(nextCursor)))
+      || nextCursor === pageCursor
+      || (page.has_more === true) !== (nextCursor !== null)) {
+      throw coded("OFFICIAL_FORK_LIST_PAGING_INVALID", "Recipe list returned an invalid or non-advancing page cursor.");
+    }
+    pages.push({ cursor: pageCursor, next_cursor: nextCursor, count: listed.value.items.length, duration_ms: listed.duration_ms });
+    if (nextCursor === null) return { items, pages };
+    cursor = nextCursor;
+  }
+  throw coded("OFFICIAL_FORK_LIST_PAGING_LIMIT", "Recipe list exceeded the bounded 64-page fork proof limit.");
 }
 
 function summarizeRun(recipeId, call, identity, semanticRecipeId = recipeId) {

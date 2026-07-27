@@ -906,6 +906,8 @@ export const CALL_TEMPLATE_RUNTIME_ALLOWED_REQUEST_FIELDS = Object.freeze([
   "idempotency_key",
 ]);
 export const CALL_TEMPLATE_INTERNAL_RECIPE_UNDO = Symbol.for("openreaper.call_template.recipe_undo");
+export const CALL_TEMPLATE_INTERNAL_DISPATCH_TIMEOUT = Symbol.for("openreaper.call_template.dispatch_timeout_ms");
+export const CALL_TEMPLATE_INTERNAL_CHILD_DISPATCH_TIMEOUT_MS = 300_000;
 
 export const CALL_TEMPLATE_RUNTIME_FAILURE_LAYERS = Object.freeze([
   "server_validation",
@@ -1154,6 +1156,7 @@ export function createCallTemplateRuntime(options = {}) {
     observeProjectIndex = true,
     projectIndexObservationContext = null,
     recipe_undo = null,
+    dispatchTimeoutMs = null,
     signal = null,
   }) {
     assertTemplateRequestActive(signal, "Template request was cancelled before preflight.");
@@ -1169,6 +1172,7 @@ export function createCallTemplateRuntime(options = {}) {
       budget,
       idempotency_key,
       recipeUndo: recipe_undo,
+      dispatchTimeoutMs: normalizeInternalDispatchTimeoutMs(dispatchTimeoutMs),
       executor: live.enabled ? live.executor : options.executor,
     });
     if (!observeProjectIndex) return execution;
@@ -1194,6 +1198,8 @@ export function createCallTemplateRuntime(options = {}) {
             normalized.context,
             normalized.recipe_undo,
             execution?.signal,
+            normalizeInternalDispatchTimeoutMs(execution?.dispatchTimeoutMs)
+              ?? CALL_TEMPLATE_INTERNAL_CHILD_DISPATCH_TIMEOUT_MS,
           )
         : null;
       if (isAlpha3_3B1DeprecatedAlias(id)) {
@@ -1522,6 +1528,7 @@ export function createCallTemplateRuntime(options = {}) {
         budget: normalized.budget,
         idempotency_key: normalized.idempotency_key,
         recipe_undo: normalized.recipe_undo,
+        dispatchTimeoutMs: normalized.dispatch_timeout_ms,
         signal: execution?.signal,
       });
       retainEvidence(retainedEvidence, evidenceFromExecution(observedExecution, live.evidence), evidenceLimit);
@@ -1799,6 +1806,7 @@ function normalizeCallTemplateRequest(request) {
     budget: request.budget,
     idempotency_key: request.idempotency_key,
     recipe_undo: normalizeInternalRecipeUndo(request[CALL_TEMPLATE_INTERNAL_RECIPE_UNDO]),
+    dispatch_timeout_ms: normalizeInternalDispatchTimeoutMs(request[CALL_TEMPLATE_INTERNAL_DISPATCH_TIMEOUT]),
   };
 }
 
@@ -2423,7 +2431,13 @@ function acceptedCatalogSummary(catalog) {
   });
 }
 
-function createMacroAtomicExecutor(executeAtomic, parentContext, recipeUndo = null, signal = null) {
+function createMacroAtomicExecutor(
+  executeAtomic,
+  parentContext,
+  recipeUndo = null,
+  signal = null,
+  dispatchTimeoutMs = null,
+) {
   let childIndex = 0;
   return (childRequest = {}) => {
     if (signal?.aborted === true) {
@@ -2446,6 +2460,7 @@ function createMacroAtomicExecutor(executeAtomic, parentContext, recipeUndo = nu
     return executeAtomic({
       ...childRequest,
       recipe_undo: recipeUndo,
+      dispatchTimeoutMs,
       signal,
       context: {
         ...sourceContext,
@@ -2453,6 +2468,10 @@ function createMacroAtomicExecutor(executeAtomic, parentContext, recipeUndo = nu
       },
     });
   };
+}
+
+function normalizeInternalDispatchTimeoutMs(value) {
+  return Number.isSafeInteger(value) && value >= 1 && value <= 600_000 ? value : null;
 }
 
 function assertTemplateRequestActive(signal, message) {

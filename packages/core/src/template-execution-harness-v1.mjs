@@ -37,6 +37,7 @@ const READ_OPERATION_FAMILIES = new Set(["query_state", "artifact_metadata"]);
 const IDEMPOTENCY_OPERATION_FAMILIES = new Set(["run_command", "run_action", "run_job"]);
 const UNDO_OPERATION_FAMILIES = new Set(["run_command", "run_action", "run_job"]);
 const PRINTABLE_IDEMPOTENCY_KEY_PATTERN = /^[\x20-\x7e]{1,128}$/;
+const TEMPLATE_DISPATCH_TIMEOUT_MAX_MS = 600_000;
 
 export class TemplateExecutionHarnessError extends Error {
   constructor(code, message, options = {}) {
@@ -104,6 +105,7 @@ function prepareTemplateExecution(options) {
   const context = normalizeExecutionContext(options.context);
   const refs = normalizeExecutionRefs(options.refs ?? [], descriptor.refs);
   const budget = normalizeBudget(options.budget);
+  const dispatchTimeoutMs = resolveDispatchTimeoutMs(options.dispatchTimeoutMs, descriptor.bridge.timeout_ms);
   const idempotencyKey = resolveIdempotencyKey({
     descriptor,
     input,
@@ -152,7 +154,7 @@ function prepareTemplateExecution(options) {
     },
     budget,
     ...(idempotencyKey !== undefined ? { idempotency_key: idempotencyKey } : {}),
-    timeout_ms: descriptor.bridge.timeout_ms,
+    timeout_ms: dispatchTimeoutMs,
   });
 
   return deepFreeze({
@@ -163,6 +165,17 @@ function prepareTemplateExecution(options) {
     budget,
     request,
   });
+}
+
+function resolveDispatchTimeoutMs(value, descriptorTimeoutMs) {
+  if (
+    !Number.isSafeInteger(value)
+    || value < descriptorTimeoutMs
+    || value > TEMPLATE_DISPATCH_TIMEOUT_MAX_MS
+  ) {
+    return descriptorTimeoutMs;
+  }
+  return value;
 }
 
 function normalizeDescriptor(input) {

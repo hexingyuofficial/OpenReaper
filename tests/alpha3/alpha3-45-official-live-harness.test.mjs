@@ -118,6 +118,7 @@ test("official live harness proves public validate/save/reconnect/list/get/run f
   await writeFile(wrapper, "#!/bin/sh\n", { mode: 0o700 });
   const fixtureValue = fixture();
   const calls = [];
+  let listCalls = 0;
   const officialIdentities = new Map(ALPHA3_45_OFFICIAL_RECIPE_IDS.map((recipe_id, index) => [recipe_id, {
     recipe_id,
     version: "1.0.0",
@@ -130,12 +131,30 @@ test("official live harness proves public validate/save/reconnect/list/get/run f
   const callRecipe = async (args) => {
     calls.push(structuredClone(args));
     if (args.operation === "list") {
+      listCalls += 1;
+      const listedUserForks = [...userForks.entries()].map(([recipe_id, identity]) => ({ ...identity, recipe_id, source: "user", immutable: true }));
+      if (listCalls === 1) {
+        return {
+          ok: true,
+          items: [...[...officialIdentities.entries()].map(([recipe_id, identity]) => ({ ...identity, recipe_id, source: "official" }))],
+        };
+      }
+      if (listCalls === 2) {
+        return {
+          ok: true,
+          items: [
+            ...[...officialIdentities.entries()].map(([recipe_id, identity]) => ({ ...identity, recipe_id, source: "official" })),
+            ...listedUserForks.slice(0, 2),
+          ],
+          page: { cursor: "0", next_cursor: "6", has_more: true },
+        };
+      }
       return {
         ok: true,
         items: [
-          ...[...officialIdentities.entries()].map(([recipe_id, identity]) => ({ ...identity, recipe_id, source: "official" })),
-          ...[...userForks.entries()].map(([recipe_id, identity]) => ({ ...identity, recipe_id, source: "user", immutable: true })),
+          ...listedUserForks.slice(2),
         ],
+        page: { cursor: "6", next_cursor: null, has_more: false },
       };
     }
     if (args.operation === "validate") return { ok: true, status: "validated", operation: "validate" };
@@ -204,7 +223,8 @@ test("official live harness proves public validate/save/reconnect/list/get/run f
   assert.deepEqual(report.fork_proof.forks.map((row) => row.semantic_recipe_id), ALPHA3_45_OFFICIAL_RECIPE_IDS);
   assert.equal(calls.filter((call) => call.operation === "validate").length, 4);
   assert.equal(calls.filter((call) => call.operation === "save").length, 4);
-  assert.equal(calls.filter((call) => call.operation === "list").length, 2);
+  assert.equal(calls.filter((call) => call.operation === "list").length, 3);
+  assert.deepEqual(calls.filter((call) => call.operation === "list").map((call) => call.cursor ?? null), [null, null, "6"]);
   assert.equal(calls.filter((call) => call.operation === "run").some((call) => /^recipe\.user\.forked_4_[a-f0-9]{8}$/u.test(call.recipe_id)), true);
   const persisted = JSON.parse(await readFile(path.join(root, "evidence", "alpha3-45-official-recipes.json"), "utf8"));
   assert.equal(persisted.fork_proof.forks.every((row) => Object.hasOwn(row, "output_values") === false), true);

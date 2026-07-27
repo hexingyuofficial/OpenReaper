@@ -1580,6 +1580,31 @@ on exactUiElementCount(theWindow, targetName, targetRole)
   return matchCount
 end exactUiElementCount
 
+on isExactProjectNotesWindow(theWindow)
+  tell application "System Events"
+    set hasProjectNotesMarker to false
+    set notesCheckboxCount to 0
+    set okButtonCount to 0
+    try
+      set uiElements to entire contents of theWindow
+      repeat with uiElement in uiElements
+        try
+          set uiName to name of uiElement
+          set uiRole to role of uiElement
+          if uiName is not missing value and (uiName as text) is "Notes" then set hasProjectNotesMarker to true
+          if uiName is not missing value and (uiName as text) is "Show notes on project load" then
+            set hasProjectNotesMarker to true
+            if uiRole is not missing value and (uiRole as text) is "AXCheckBox" then set notesCheckboxCount to notesCheckboxCount + 1
+          end if
+          if uiName is not missing value and (uiName as text) is "OK" and uiRole is not missing value and (uiRole as text) is "AXButton" then set okButtonCount to okButtonCount + 1
+        end try
+      end repeat
+      return hasProjectNotesMarker and notesCheckboxCount is 1 and okButtonCount is 1
+    end try
+  end tell
+  return false
+end isExactProjectNotesWindow
+
 on clickUniqueExactButton(theWindow, targetName)
   tell application "System Events"
     try
@@ -1632,7 +1657,9 @@ tell application "System Events"
         set windowTitle to name of reaperWindow as text
       end try
       if windowTitle is "Project Settings" or windowTitle is "Project Settings / Notes" then
-        set isProjectNotesWindow to my uiElementNamed(reaperWindow, "Notes") and my uiElementNamed(reaperWindow, "Show notes on project load") and my exactUiElementCount(reaperWindow, "OK", "AXButton") is 1
+        -- REAPER's macOS AX tree does not consistently expose the selected
+        -- Notes tab name. Inspect the exact safe markers in one tree pass.
+        set isProjectNotesWindow to my isExactProjectNotesWindow(reaperWindow)
         if isProjectNotesWindow then
           if not allowSafeActions then return "blocked_manual_dialog:title=Project Settings"
           try
@@ -1644,47 +1671,54 @@ tell application "System Events"
         end if
         return "project_settings_seen_but_not_notes"
       end if
-      set hasIgnoreMissingFiles to false
-      try
-        if my exactUiElementCount(reaperWindow, "Ignore all missing files", "AXButton") is 1 then set hasIgnoreMissingFiles to true
-      end try
-      if hasIgnoreMissingFiles then
-        if allowMissingMedia then
-          try
-            my clickUniqueExactButton(reaperWindow, "Ignore all missing files")
-            return "dismissed_missing_media:choice=Ignore all missing files"
-          on error errorMessage
-            return "blocked_missing_media:choice=Ignore all missing files:error=" & errorMessage
-          end try
-        end if
-        return "blocked_missing_media:choice=Ignore all missing files"
-      end if
-      if windowTitle is "Project Load Warning" then
-        set isOfflineMediaWarning to my uiTextAreaContains(reaperWindow, "in an off-line state", "filenames should be preserved")
-        if allowMissingMedia and isOfflineMediaWarning and my exactUiElementCount(reaperWindow, "OK", "AXButton") is 1 then
-          try
-            my clickUniqueExactButton(reaperWindow, "OK")
-            return "dismissed_missing_media_offline_warning:choice=OK"
-          on error errorMessage
-            return "blocked_missing_media_offline_warning:choice=OK:error=" & errorMessage
-          end try
-        end if
-        return "blocked_user_decision:title=Project Load Warning"
-      end if
       set windowSubrole to ""
       try
         set windowSubrole to subrole of reaperWindow as text
       on error errorMessage
         return "blocked_dialog_classification:title=" & windowTitle & ":error=" & errorMessage
       end try
-      if windowSubrole is "AXDialog" or windowSubrole is "AXSheet" then
-        if windowTitle contains "Evaluation" or windowTitle contains "License" or windowTitle contains "Recovery" or windowTitle contains "missing effect" or windowTitle contains "New version" then
-          return "blocked_user_decision:title=" & windowTitle
+      set isPotentialDialog to windowSubrole is "AXDialog" or windowSubrole is "AXSheet" or windowTitle is "Project Load Warning"
+      if not isPotentialDialog then
+        if windowSubrole is not "AXWindow" and windowSubrole is not "AXStandardWindow" and windowSubrole is not "" then
+          return "blocked_unknown_dialog:title=" & windowTitle
         end if
-        return "blocked_unknown_dialog:title=" & windowTitle
       end if
-      if windowSubrole is not "AXWindow" and windowSubrole is not "AXStandardWindow" and windowSubrole is not "" then
-        return "blocked_unknown_dialog:title=" & windowTitle
+      if isPotentialDialog then
+        -- Normal REAPER windows are not startup dialogs. Avoid traversing the
+        -- full accessibility tree on every readiness tick.
+        set hasIgnoreMissingFiles to false
+        try
+          if my exactUiElementCount(reaperWindow, "Ignore all missing files", "AXButton") is 1 then set hasIgnoreMissingFiles to true
+        end try
+        if hasIgnoreMissingFiles then
+          if allowMissingMedia then
+            try
+              my clickUniqueExactButton(reaperWindow, "Ignore all missing files")
+              return "dismissed_missing_media:choice=Ignore all missing files"
+            on error errorMessage
+              return "blocked_missing_media:choice=Ignore all missing files:error=" & errorMessage
+            end try
+          end if
+          return "blocked_missing_media:choice=Ignore all missing files"
+        end if
+        if windowTitle is "Project Load Warning" then
+          set isOfflineMediaWarning to my uiTextAreaContains(reaperWindow, "in an off-line state", "filenames should be preserved")
+          if allowMissingMedia and isOfflineMediaWarning and my exactUiElementCount(reaperWindow, "OK", "AXButton") is 1 then
+            try
+              my clickUniqueExactButton(reaperWindow, "OK")
+              return "dismissed_missing_media_offline_warning:choice=OK"
+            on error errorMessage
+              return "blocked_missing_media_offline_warning:choice=OK:error=" & errorMessage
+            end try
+          end if
+          return "blocked_user_decision:title=Project Load Warning"
+        end if
+        if windowSubrole is "AXDialog" or windowSubrole is "AXSheet" then
+          if windowTitle contains "Evaluation" or windowTitle contains "License" or windowTitle contains "Recovery" or windowTitle contains "missing effect" or windowTitle contains "New version" then
+            return "blocked_user_decision:title=" & windowTitle
+          end if
+          return "blocked_unknown_dialog:title=" & windowTitle
+        end if
       end if
     end repeat
   end tell

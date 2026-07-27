@@ -17,6 +17,7 @@ import {
 } from "./alpha3-2d-project-index-runtime-v1.mjs";
 import {
   CALL_TEMPLATE_INTERNAL_RECIPE_UNDO,
+  CALL_TEMPLATE_INTERNAL_DISPATCH_TIMEOUT,
   CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS,
   createCallTemplateRuntime,
 } from "./call-template-runtime-v1.mjs";
@@ -73,6 +74,7 @@ export const CALL_RECIPE_STAGE_BUDGET = Object.freeze({
   max_inline_value_bytes: 8_192,
   max_items: 100,
 });
+export const CALL_RECIPE_STAGE_DISPATCH_TIMEOUT_MS = 300_000;
 
 async function main() {
   const callContext = createAlpha3_2C1CallContextManager({ env: process.env });
@@ -670,10 +672,14 @@ function createStdioRecipeDispatchers({ callTemplateRuntime, artifactRuntime, ca
       context: callContext.allocate(),
       budget: CALL_RECIPE_STAGE_BUDGET,
     };
+    request[CALL_TEMPLATE_INTERNAL_DISPATCH_TIMEOUT] = CALL_RECIPE_STAGE_DISPATCH_TIMEOUT_MS;
     if (recipe_undo?.suppress_child_undo === true) {
       request[CALL_TEMPLATE_INTERNAL_RECIPE_UNDO] = recipe_undo;
     }
-    return callTemplateRuntime.call_template(request, { signal });
+    return callTemplateRuntime.call_template(request, {
+      signal,
+      dispatchTimeoutMs: CALL_RECIPE_STAGE_DISPATCH_TIMEOUT_MS,
+    });
   };
   return {
     macro: callTemplateStage,

@@ -118,6 +118,11 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
     assert.match(source, /my clickUniqueExactButton\(reaperWindow, "Ignore all missing files"\)/u);
     assert.match(source, /set matchingElement to missing value[\s\S]+set matchCount to 0[\s\S]+if matchCount is not 1 then error "exact button is not unique"[\s\S]+click matchingElement/u);
     assert.match(source, /set windowSubrole to subrole of reaperWindow as text/u);
+    const windowClassificationIndex = source.lastIndexOf('set windowSubrole to ""');
+    const deepTreeScanIndex = source.indexOf("set hasIgnoreMissingFiles to false");
+    assert.ok(windowClassificationIndex >= 0 && deepTreeScanIndex > windowClassificationIndex, "window subrole must be classified before deep accessibility scans");
+    assert.match(source, /set isPotentialDialog to windowSubrole is "AXDialog" or windowSubrole is "AXSheet" or windowTitle is "Project Load Warning"/u);
+    assert.match(source, /if isPotentialDialog then/u);
     assert.match(source, /if windowSubrole is "AXDialog" or windowSubrole is "AXSheet" then/u);
     assert.match(source, /if windowSubrole is "AXDialog" or windowSubrole is "AXSheet" then\s+if windowTitle contains "Evaluation"/u);
     assert.match(source, /if windowSubrole is not "AXWindow" and windowSubrole is not "AXStandardWindow" and windowSubrole is not "" then\s+return "blocked_unknown_dialog:title="/u);
@@ -139,7 +144,8 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
     assert.match(source, /every process whose unix id is launchedPid/u);
     assert.match(source, /if \(count of matchingProcesses\) is not 1 then return "blocked_reaper_identity:pid="/u);
     assert.doesNotMatch(source, /tell process "REAPER"/u);
-    assert.match(source, /set isProjectNotesWindow to my uiElementNamed\(reaperWindow, "Notes"\) and my uiElementNamed\(reaperWindow, "Show notes on project load"\) and my exactUiElementCount\(reaperWindow, "OK", "AXButton"\) is 1/u);
+    assert.match(source, /on isExactProjectNotesWindow\(theWindow\)[\s\S]+notesCheckboxCount is 1 and okButtonCount is 1[\s\S]+end isExactProjectNotesWindow/u);
+    assert.match(source, /set isProjectNotesWindow to my isExactProjectNotesWindow\(reaperWindow\)/u);
     assert.doesNotMatch(source, /if my uiElementNamed\(reaperWindow, "Notes"\) then set isProjectNotesWindow to true/u);
     assert.doesNotMatch(source, /if my uiElementNamed\(reaperWindow, "Show notes on project load"\) then set isProjectNotesWindow to true/u);
     assert.match(source, /if not allowSafeActions then return "blocked_manual_dialog:title=Project Settings"/u);
