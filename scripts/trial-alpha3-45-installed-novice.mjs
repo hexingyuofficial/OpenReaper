@@ -706,7 +706,7 @@ function inputBinding(port, stageId) {
 
 function assertExactOfficialCatalogItems(items, label) {
   assert(Array.isArray(items), `${label} omitted Recipe items`);
-  const officialItems = items.filter((item) => item?.source === "official");
+  const officialItems = items;
   const officialIds = officialItems.map((item) => item?.id).filter(Boolean);
   assert(officialItems.length === ALPHA345_NOVICE_OFFICIAL_RECIPE_IDS.length, `${label} must contain exactly four official rows`);
   assertSameSet(officialIds, ALPHA345_NOVICE_OFFICIAL_RECIPE_IDS, `${label} ids`);

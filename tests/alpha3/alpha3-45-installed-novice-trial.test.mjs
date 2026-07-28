@@ -329,7 +329,7 @@ function createMockClient({
         const requestedOfficialIds = ids.length === 0 ? ALPHA345_NOVICE_OFFICIAL_RECIPE_IDS : ids;
         const officialItems = requestedOfficialIds
           .filter((id) => ALPHA345_NOVICE_OFFICIAL_RECIPE_IDS.includes(id))
-          .map((id) => ({ id, source: "official" }));
+          .map((id) => ({ id, lifecycle: "validated" }));
         return json({
           ok: true,
           contract: "discovery.menu.v1",

@@ -1913,7 +1913,7 @@ function blockedEnvelope({
       changes: [],
       verification: { status: "not_required", evidence_refs: [] },
       artifact_refs: [],
-      data: boundedData(data),
+      data: boundedData({ ...data, zero_write: true }),
     },
     blockers: boundedBlockers(blockers),
     error: { code, message, recoverable: true },
@@ -1961,7 +1961,7 @@ function executionFailure({
       changes: [],
       verification: { status: "not_required", evidence_refs: [] },
       artifact_refs: [],
-      data: boundedData(data),
+      data: boundedData({ ...data, zero_write: true }),
     },
     blockers: boundedBlockers(blockers),
     error: {

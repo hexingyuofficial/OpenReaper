@@ -1208,7 +1208,30 @@ describe("Alpha3.2.5-B executable project understanding", () => {
       assert.equal(rejected.ok, false);
       assert.equal(rejected.contract, "macro.execution.v1");
       assert.equal(rejected.execution.status, "blocked");
+      assert.equal(rejected.result.data.zero_write, true);
       assert.equal(rejected.blockers.some((entry) => entry.code === "RAW_SQL_NOT_ALLOWED"), true);
+      assert.deepEqual(state.calls, []);
+    } finally {
+      indexRuntime?.close();
+      await fixture.cleanup();
+    }
+  });
+
+  it("proves zero writes when a cold Project Index query forbids refresh", async () => {
+    const fixture = await makeFixture();
+    const state = { revision: 1, trackName: "Kick", calls: [] };
+    let indexRuntime;
+    try {
+      indexRuntime = await openIndex(fixture);
+      const runtime = createRuntime({ fixture, indexRuntime, state });
+      const blocked = await runtime.call_template({
+        id: "macro.project.query",
+        input: { entity: "tracks", refresh_policy: "never", limit: 25 },
+        context: callContext(1),
+      });
+      assert.equal(blocked.ok, false, JSON.stringify(blocked));
+      assert.ok(["INDEX_NOT_READY", "INDEX_REFRESH_REQUIRED"].includes(blocked.error.code));
+      assert.equal(blocked.result.data.zero_write, true);
       assert.deepEqual(state.calls, []);
     } finally {
       indexRuntime?.close();

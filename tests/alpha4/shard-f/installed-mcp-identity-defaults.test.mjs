@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -18,6 +18,7 @@ test("installed MCP wrapper shares the start helper bridge identity by default",
     owner: "openreaper-alpha",
     generation: "1",
     logical_session_key: `reaper-pid:${process.pid}`,
+    bridge_script_path: path.join(run.installRoot, "vendor/openreaper-kernel/reaper/bridge/openreaper-live-bridge.lua"),
   });
 });
 
@@ -26,12 +27,14 @@ test("installed MCP wrapper preserves an explicit bounded bridge identity", asyn
     OPENREAPER_LIVE_BRIDGE_OWNER: "alpha4-live-evidence",
     OPENREAPER_LIVE_BRIDGE_GENERATION: "7",
     OPENREAPER_PROJECT_INDEX_LOGICAL_SESSION_KEY: "alpha4-session",
+    OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH: "/tmp/openreaper-explicit-bridge.lua",
   });
   assert.equal(run.result.code, 0, run.result.stderr);
   assert.deepEqual(run.capture, {
     owner: "alpha4-live-evidence",
     generation: "7",
     logical_session_key: "alpha4-session",
+    bridge_script_path: "/tmp/openreaper-explicit-bridge.lua",
   });
 });
 
@@ -55,19 +58,20 @@ async function runWrapper(label, extraEnv) {
 if [[ "$1" == "--input-type=module" ]]; then
   exec ${shellQuote(process.execPath)} "$@"
 fi
-${shellQuote(process.execPath)} -e 'const fs = require("node:fs"); fs.writeFileSync(process.argv[1], JSON.stringify({ owner: process.env.OPENREAPER_LIVE_BRIDGE_OWNER, generation: process.env.OPENREAPER_LIVE_BRIDGE_GENERATION, logical_session_key: process.env.OPENREAPER_PROJECT_INDEX_LOGICAL_SESSION_KEY }))' ${shellQuote(capturePath)}
+${shellQuote(process.execPath)} -e 'const fs = require("node:fs"); fs.writeFileSync(process.argv[1], JSON.stringify({ owner: process.env.OPENREAPER_LIVE_BRIDGE_OWNER, generation: process.env.OPENREAPER_LIVE_BRIDGE_GENERATION, logical_session_key: process.env.OPENREAPER_PROJECT_INDEX_LOGICAL_SESSION_KEY, bridge_script_path: process.env.OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH }))' ${shellQuote(capturePath)}
 `, "utf8");
   await chmod(fakeNode, 0o755);
   const env = { ...process.env, PATH: `${fakeBin}:${process.env.PATH ?? ""}`, ...extraEnv };
   for (const key of [
     "OPENREAPER_LIVE_BRIDGE_OWNER",
     "OPENREAPER_LIVE_BRIDGE_GENERATION",
+    "OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH",
     "OPENREAPER_PROJECT_INDEX_LOGICAL_SESSION_KEY",
   ]) {
     if (!Object.hasOwn(extraEnv, key)) delete env[key];
   }
   const result = await run(wrapper, env);
-  return { result, capture: JSON.parse(await readFile(capturePath, "utf8")) };
+  return { result, capture: JSON.parse(await readFile(capturePath, "utf8")), installRoot: await realpath(installRoot) };
 }
 
 function run(command, env) {
