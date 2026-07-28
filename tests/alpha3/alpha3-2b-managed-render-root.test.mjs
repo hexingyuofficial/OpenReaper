@@ -30,6 +30,8 @@ const RENDER_ENV = "OPENREAPER_LIVE_SMOKE_RENDER_ROOT";
 const RECORD_NAME = "managed-render-root.path";
 const RECORD_MAX = 4096;
 const PROVENANCE_NAME = "provenance.json";
+const STARTUP_BEGIN = "-- >>> OpenReaper alpha MCP startup hook >>>";
+const STARTUP_END = "-- <<< OpenReaper alpha MCP startup hook <<<";
 
 async function freshTmp(prefix) {
   const root = await mkdtemp(path.join("/tmp", prefix));
@@ -53,6 +55,39 @@ describe("Alpha3.2-B2 managed render root", () => {
     assert.match(result.stdout, /OpenReaper alpha installer/u);
     assert.match(result.stdout, /Show this help without installing/u);
     await assert.rejects(lstat(fixture.installRoot), (error) => error?.code === "ENOENT");
+  });
+
+  it("prints uninstaller help without mutating installed or user-owned state", async () => {
+    const fixture = await makeInstallerFixture();
+    const state = new Map([
+      [path.join(fixture.installRoot, "install-marker.txt"), "installed\n"],
+      [path.join(fixture.installRoot, "session", "renders", "render.wav"), "render\n"],
+      [path.join(fixture.home, ".openreaper", "data", "executable-recipes", "revision.json"), "recipe\n"],
+      [path.join(fixture.home, ".openreaper", "data", "startup-dialog-consent"), "always\n"],
+      [path.join(fixture.home, "Library", "Application Support", "REAPER", "Scripts", "__startup.lua"), `${STARTUP_BEGIN}\nmanaged startup\n${STARTUP_END}\nuser startup\n`],
+      [path.join(fixture.home, ".codex", "config.toml"), "[mcp_servers.openreaper]\ncommand = 'openreaper'\n\n[user]\nkeep = true\n"],
+      [path.join(fixture.home, ".cursor", "mcp.json"), '{"mcpServers":{"openreaper":{"command":"openreaper"},"keep":{"command":"keep"}}}\n'],
+      [path.join(fixture.home, "Library", "Application Support", "Claude", "claude_desktop_config.json"), '{"mcpServers":{"openreaper":{"command":"openreaper"},"keep":{"command":"keep"}}}\n'],
+    ]);
+    for (const [filePath, content] of state) {
+      await mkdir(path.dirname(filePath), { recursive: true });
+      await writeFile(filePath, content, "utf8");
+    }
+
+    const result = await runCaptured(process.execPath, [fixture.uninstallerPath, "--help"], {
+      cwd: fixture.packageRoot,
+      env: { ...process.env, HOME: fixture.home },
+    });
+
+    assert.equal(result.code, 0, result.stderr || result.stdout);
+    assert.equal(result.stderr, "");
+    assert.match(result.stdout, /OpenReaper alpha uninstaller/u);
+    assert.match(result.stdout, /Show this help without uninstalling/u);
+    assert.match(result.stdout, /--skip-client-config/u);
+    assert.match(result.stdout, /--skip-startup-hook/u);
+    for (const [filePath, content] of state) {
+      assert.equal(await readFile(filePath, "utf8"), content, `--help mutated ${filePath}`);
+    }
   });
 
   it("creates and persists the fresh default root with a bounded writable report", async () => {

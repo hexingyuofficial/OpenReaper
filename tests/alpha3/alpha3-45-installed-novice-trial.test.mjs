@@ -32,6 +32,15 @@ test("fake transport proves manuals, exact-four official recipes, resume, author
   const clients = [];
   const requests = [];
   const store = new Map();
+  const existingUserRecipe = {
+    recipe_id: "recipe.user.preexisting",
+    version: "1.0.0",
+    revision: 1,
+    content_hash: "preexisting_content_hash",
+    validation_result_id: "preexisting_validation_result",
+    immutable: true,
+  };
+  store.set(identityKey(existingUserRecipe), existingUserRecipe);
   const report = await runInstalledNoviceTrial({
     installedWrapper: wrapper,
     evidenceRoot,

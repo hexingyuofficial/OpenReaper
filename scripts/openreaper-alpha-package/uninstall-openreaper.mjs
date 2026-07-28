@@ -17,6 +17,10 @@ try {
   process.stderr.write(`[OpenReaper] ${String(error?.message ?? "invalid option").replace(/[\u0000-\u001f\u007f]/gu, " ").slice(0, 320)}\n`);
   process.exit(2);
 }
+if (options.help === true) {
+  printUninstallHelp();
+  process.exit(0);
+}
 const home = os.homedir();
 const installRoot = path.resolve(options.install_root ?? path.join(home, ".openreaper", "current"));
 const defaultRenderRoot = path.join(installRoot, "session", "renders");
@@ -300,6 +304,21 @@ function parseArgs(args) {
     }
   }
   return parsed;
+}
+
+function printUninstallHelp() {
+  process.stdout.write(`OpenReaper alpha uninstaller
+
+Usage:
+  ./uninstall.command [options]
+  node ./installer/uninstall-openreaper.mjs [options]
+
+Options:
+  --install-root <path>       Install destination (default: ~/.openreaper/current)
+  --skip-client-config        Do not update supported MCP client configs
+  --skip-startup-hook         Do not remove the conditional REAPER startup hook
+  --help                      Show this help without uninstalling
+`);
 }
 
 async function removeStartupHook() {
