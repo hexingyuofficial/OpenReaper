@@ -195,19 +195,22 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
     const readiness = source.slice(readinessStart, readinessEnd);
     const dialogIndex = readiness.indexOf('dialog_result="$(run_startup_dialog_assist)"');
     const decisionIndex = readiness.indexOf("if ! startup_dialog_result_is_safe \"${dialog_result}\"; then");
-    const heartbeatIndex = readiness.indexOf("if bridge_heartbeat_ready; then", decisionIndex);
+    const heartbeatIndex = readiness.indexOf("if bridge_heartbeat_ready; then");
     const probeIndex = readiness.indexOf("verify_public_bridge_read || return 1", heartbeatIndex);
     const cleanScanIndex = readiness.indexOf('if [[ "${dialog_result}" != "no_safe_dialog" ]]', decisionIndex);
     assert.equal(readinessStart >= 0 && readinessEnd > readinessStart, true);
-    assert.equal(dialogIndex >= 0 && dialogIndex < decisionIndex, true);
-    assert.equal(decisionIndex < cleanScanIndex && cleanScanIndex < heartbeatIndex && heartbeatIndex < probeIndex, true);
-    assert.doesNotMatch(readiness, /if bridge_heartbeat_ready; then[\s\S]+dialog_result="\$\(run_startup_dialog_assist\)"/u);
+    assert.equal(heartbeatIndex >= 0 && heartbeatIndex < probeIndex && probeIndex < dialogIndex, true);
+    assert.equal(dialogIndex < decisionIndex && decisionIndex < cleanScanIndex, true);
+    assert.match(readiness, /if bridge_heartbeat_ready; then[\s\S]+verify_public_bridge_read \|\| return 1[\s\S]+dialog_result="\$\(run_startup_dialog_assist\)"/u);
+    assert.match(readiness, /if startup_dialog_result_requires_manual_clearance "\$\{dialog_result\}"; then\s+sleep 0\.25\s+continue/u);
     assert.doesNotMatch(source, /startup_dialog_probe_is_unavailable/u);
 
     const hookStart = source.indexOf("wait_for_startup_hook() {");
     const hookEnd = source.indexOf("\n}\n\nverify_public_bridge_read()", hookStart);
     const hook = source.slice(hookStart, hookEnd);
-    assert.equal(hook.indexOf('dialog_result="$(run_startup_dialog_assist)"') < hook.indexOf("if startup_status_stage_ready; then"), true);
+    assert.equal(hook.indexOf("if startup_status_stage_ready; then") < hook.indexOf('dialog_result="$(run_startup_dialog_assist)"'), true);
+    assert.match(hook, /if startup_dialog_result_requires_manual_clearance "\$\{dialog_result\}"; then\s+sleep 0\.25\s+continue/u);
+    assert.match(source, /startup_dialog_result_requires_manual_clearance\(\) \{[\s\S]+if \[\[ "\$\{STARTUP_DIALOG_ASSIST\}" != "false" \]\]; then[\s\S]+blocked_user_decision:\*[\s\S]+blocked_unknown_dialog:\*/u);
   });
 
   it("summarizes startup readiness without opening REAPER or spawning processes", () => {

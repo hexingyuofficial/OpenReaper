@@ -1465,21 +1465,28 @@ wait_for_startup_hook() {
       echo "[OpenReaper] REAPER exited before its startup hook published a stage. pid=${reaper_pid}" >&2
       return 1
     fi
+    # The startup hook is authoritative once it has published a valid stage.
+    # Do not let a slow or stale Accessibility query turn that success into a
+    # startup failure.
+    if startup_status_stage_ready; then
+      return 0
+    fi
     # A project-load dialog can prevent REAPER from reaching __startup.lua.
     # Reuse the exact safe classifier while LaunchServices still carries the
     # session environment; unknown and decision-bearing dialogs stay blocked.
     dialog_result="$(run_startup_dialog_assist)"
     record_dialog_result "${dialog_result}"
     if ! startup_dialog_result_is_safe "${dialog_result}"; then
+      if startup_dialog_result_requires_manual_clearance "${dialog_result}"; then
+        sleep 0.25
+        continue
+      fi
       echo "[OpenReaper] startup-dialog-blocker=${dialog_result}" >&2
       return 2
     fi
     if [[ "${dialog_result}" != "no_safe_dialog" ]]; then
       sleep 0.25
       continue
-    fi
-    if startup_status_stage_ready; then
-      return 0
     fi
     sleep 0.25
   done
@@ -1749,6 +1756,18 @@ record_dialog_result() {
   echo "[OpenReaper] dialog-event timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ") project=${PROJECT_PATH:-none} result=${result}" >> "${START_LOG}"
 }
 
+startup_dialog_result_requires_manual_clearance() {
+  if [[ "${STARTUP_DIALOG_ASSIST}" != "false" ]]; then
+    return 1
+  fi
+  case "$1" in
+    blocked_manual_dialog:*|project_notes_seen_not_dismissed:*|project_settings_seen_but_not_notes|blocked_missing_media:*|blocked_missing_media_offline_warning:*|blocked_user_decision:*|blocked_unknown_dialog:*)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
 wait_for_startup_readiness() {
   local max_ticks=$(( START_WAIT_SECONDS * 4 ))
   local tick dialog_result
@@ -1758,20 +1777,26 @@ wait_for_startup_readiness() {
   fi
   for (( tick = 1; tick <= max_ticks; tick++ )); do
     assert_reaper_process_alive || return 1
+    # A matching heartbeat plus the public read probe is sufficient startup
+    # truth. Accessibility is only consulted while the Bridge is not ready.
+    if bridge_heartbeat_ready; then
+      verify_public_bridge_read || return 1
+      echo "[OpenReaper] bridge-heartbeat=ready owner=${BRIDGE_OWNER} generation=${BRIDGE_GENERATION}"
+      return 0
+    fi
     dialog_result="$(run_startup_dialog_assist)"
     record_dialog_result "${dialog_result}"
     if ! startup_dialog_result_is_safe "${dialog_result}"; then
+      if startup_dialog_result_requires_manual_clearance "${dialog_result}"; then
+        sleep 0.25
+        continue
+      fi
       echo "[OpenReaper] startup-dialog-blocker=${dialog_result}" >&2
       return 2
     fi
     if [[ "${dialog_result}" != "no_safe_dialog" ]]; then
       sleep 0.25
       continue
-    fi
-    if bridge_heartbeat_ready; then
-      verify_public_bridge_read || return 1
-      echo "[OpenReaper] bridge-heartbeat=ready owner=${BRIDGE_OWNER} generation=${BRIDGE_GENERATION}"
-      return 0
     fi
     sleep 0.25
   done

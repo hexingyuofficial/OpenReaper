@@ -1024,17 +1024,19 @@ describe("Alpha3.2-B2 managed render root", () => {
     await harness.assertLockRemoved();
   });
 
-  it("checks dialogs before accepting matching Bridge readiness", async () => {
+  it("accepts matching Bridge readiness before a bounded dialog scan", async () => {
     const source = await readFile(START_SOURCE, "utf8");
     const functionStart = source.indexOf("wait_for_startup_readiness() {");
     const functionEnd = source.indexOf("\n}\n\ntrap 'launchservices_cleanup_on_exit'", functionStart);
     assert.ok(functionStart >= 0 && functionEnd > functionStart, "startup readiness function must remain inspectable");
     const readinessSource = source.slice(functionStart, functionEnd);
     const heartbeatCheck = readinessSource.indexOf("if bridge_heartbeat_ready; then");
+    const publicProbe = readinessSource.indexOf("verify_public_bridge_read || return 1", heartbeatCheck);
     const dialogCheck = readinessSource.indexOf('dialog_result="$(run_startup_dialog_assist)"');
     assert.ok(heartbeatCheck >= 0, "readiness must check the matching Bridge heartbeat");
-    assert.ok(dialogCheck >= 0 && dialogCheck < heartbeatCheck, "unknown or decision-bearing dialogs must block even when the Bridge is ready");
-    assert.ok(readinessSource.indexOf("verify_public_bridge_read || return 1", heartbeatCheck) > heartbeatCheck);
+    assert.ok(publicProbe > heartbeatCheck, "matching Bridge readiness must include a real public read probe");
+    assert.ok(dialogCheck > publicProbe, "Accessibility must not override successful Bridge readiness");
+    assert.match(readinessSource, /if ! startup_dialog_result_is_safe "\$\{dialog_result\}"; then[\s\S]+startup-dialog-blocker=/u);
   });
 
   it("serializes staggered LaunchServices starts with one stable installed-scope lock", async () => {
