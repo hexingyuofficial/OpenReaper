@@ -5,6 +5,7 @@ import { mkdir, mkdtemp, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
+import { fileURLToPath } from "node:url";
 import {
   FakeFoundationBridge,
   createObjectRef,
@@ -20,7 +21,8 @@ import {
 
 const ROOT = new URL("../..", import.meta.url);
 const SMOKE_SCRIPT = "scripts/smoke-template-runtime-live.mjs";
-const BRIDGE_SOURCE = readFileSync(new URL("../../reaper/bridge/openreaper-live-bridge.lua", import.meta.url), "utf8");
+const BRIDGE_SCRIPT_PATH = fileURLToPath(new URL("../../reaper/bridge/openreaper-live-bridge.lua", import.meta.url));
+const BRIDGE_SOURCE = readFileSync(BRIDGE_SCRIPT_PATH, "utf8");
 const HANDLER_SOURCE = readFileSync(new URL("../../reaper/bridge/src/handlers/fx/e2_fx_l1_read_route.lua", import.meta.url), "utf8");
 const E2_FX_L1_FLAG = "--fx-read";
 const E2_FX_L1_OPT_IN_ENV = "OPENREAPER_E2_FX_L1_READ_LIVE_SMOKE";
@@ -365,6 +367,7 @@ function runSmoke(args, env) {
         OPENREAPER_TEMPLATE_RUNTIME_LIVE_SMOKE: "",
         [E2_FX_L1_OPT_IN_ENV]: "",
         [LIVE_BRIDGE_EXECUTOR_ENV.transport_dir]: "",
+        [LIVE_BRIDGE_EXECUTOR_ENV.bridge_script_path]: BRIDGE_SCRIPT_PATH,
         ...env,
       },
     }).trim(),

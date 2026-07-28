@@ -8,6 +8,7 @@ import {
 } from "../../scripts/build-live-bridge.mjs";
 
 const ROOT = new URL("../..", import.meta.url);
+const ROUTE_POLICY_SOURCE = readFileSync(new URL("../../reaper/bridge/src/35-route-policy.lua", import.meta.url), "utf8");
 const ROUTE_SOURCE = readFileSync(new URL("../../reaper/bridge/src/40-route-pack-handlers.lua", import.meta.url), "utf8");
 const HANDLER_SOURCE = readFileSync(
   new URL("../../reaper/bridge/src/handlers/routing/e5_r1_routing_read_route.lua", import.meta.url),
@@ -38,9 +39,12 @@ describe("E5 routing/automation extra live handler expansion", () => {
       "automation.set_automation_item_bounds",
       "automation.delete_automation_item",
       "automation.ensure_fx_parameter_envelope",
+      "automation.insert_fx_parameter_envelope_points_batch",
     ]) {
       assert.match(ROUTE_SOURCE, new RegExp(`\\["${capability.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}"\\]`));
     }
+
+    assert.match(ROUTE_POLICY_SOURCE, /\["automation\.insert_fx_parameter_envelope_points_batch"\]/);
 
     for (const operation of [
       "routing.fx_pin_mapping.read",

@@ -72,6 +72,17 @@ describe("Alpha3.2-F transport, budget, and error recovery", () => {
       await mkdir(join(root, "results"));
       const scriptPath = join(root, "bridge.lua");
       await writeFile(scriptPath, "-- test-only bridge marker\n");
+      await writeFile(
+        join(root, "openreaper-bridge-liveness-v1.json"),
+        `${JSON.stringify({
+          contract: "openreaper.bridge_liveness.v1",
+          active_owner: "owner-test",
+          active_generation: 1,
+          sequence: 1,
+          refreshed_at_unix_s: Math.floor(Date.now() / 1000),
+          interval_ms: 500,
+        })}\n`,
+      );
       const timeoutExecutor = createLiveBridgeExecutor({
         transportDir: root,
         bridgeScriptPath: scriptPath,
@@ -137,11 +148,13 @@ describe("Alpha3.2-F transport, budget, and error recovery", () => {
     assert.equal(JSON.stringify(result).includes("x".repeat(100)), false);
   });
 
-  it("gives an executable larger-inline retry without shrinking collection knowledge", async () => {
+  it("gives an executable larger-inline retry for one oversized leaf without shrinking collection knowledge", async () => {
     const bridge = new FakeFoundationBridge();
     const tracks = Array.from({ length: 90 }, (_, index) => ({
       track_ref: `track:guid:{TRACK-${String(index + 1).padStart(3, "0")}}`,
-      name: `Large Project Folder Track ${String(index + 1).padStart(3, "0")} ${"nested ".repeat(10)}`,
+      name: index === 0
+        ? `Large Project Folder Track 001 ${"nested ".repeat(1_200)}`
+        : `Large Project Folder Track ${String(index + 1).padStart(3, "0")} ${"nested ".repeat(10)}`,
       depth: index % 9 === 0 ? 1 : index % 9 === 8 ? -1 : 0,
     }));
     const runtime = createCallTemplateRuntime({
@@ -166,7 +179,7 @@ describe("Alpha3.2-F transport, budget, and error recovery", () => {
 
     assert.equal(first.ok, false);
     assert.equal(first.error.code, "RESPONSE_TOO_LARGE");
-    assert.equal(first.error.details.path, "result.summary");
+    assert.equal(first.error.details.path, "result.summary.tracks.0.name");
     assert.equal(first.error.details.bytes > budget.max_inline_value_bytes, true);
     assert.equal(first.error.recommended_next_action.code, "retry_with_larger_inline_budget");
     assert.deepEqual(Object.keys(first.error.recommended_next_action.request_patch.budget), ["max_inline_value_bytes"]);

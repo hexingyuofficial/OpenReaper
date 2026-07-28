@@ -91,7 +91,7 @@ describe("Layer 4D.2 REAPER-side live bridge script", () => {
     assert.doesNotMatch(sourceModules["40-route-pack-handlers.lua"], /local TRANSPORT_DIR = non_empty\(os\.getenv\(TRANSPORT_ENV\)\)/);
     assert.match(
       readFileSync(new URL("../../reaper/bridge/src/handlers/core/read_template_catalog_summary.lua", import.meta.url), "utf8"),
-      /template_count = 237/,
+      /template_count = 239/,
     );
     assert.match(sourceModules["90-file-transport-loop.lua"], /reaper\.EnumerateFiles\(REQUESTS_DIR, index\)/);
     assert.match(sourceModules["90-file-transport-loop.lua"], /local completed_request_files = \{\}/);
@@ -187,6 +187,22 @@ assert(requests["/claims/retry.json"] == nil)
 run_poll(0.33)
 assert(dispatch_calls.retry == 1)
 assert(read_calls["/requests/retry.json"] == 1)
+`);
+  });
+
+  it("refreshes heartbeat immediately before publishing a terminal result", () => {
+    runFileTransportLoopLua(String.raw`
+files = { "ordered.json" }
+requests["/requests/ordered.json"] = { id = "ordered", params = {} }
+
+run_poll(0.11)
+assert(results["/results/ordered.json"] == true)
+local result_write_index = nil
+for index, operation in ipairs(write_order) do
+  if operation == "/results/ordered.json" then result_write_index = index end
+end
+assert(result_write_index ~= nil, "terminal result write must be recorded")
+assert(write_order[result_write_index - 1] == "heartbeat", "heartbeat must refresh immediately before terminal result publication")
 `);
   });
 
@@ -654,6 +670,7 @@ files = {}
 requests = {}
 results = {}
 writes = {}
+write_order = {}
 write_failures = {}
 file_exists_calls = {}
 read_calls = {}
@@ -669,7 +686,10 @@ function is_request_id(value) return type(value) == "string" and #value > 0 end
 function bounded_string(value) return tostring(value) end
 function is_object(value) return type(value) == "table" end
 function ensure_directory() return true end
-function write_bridge_heartbeat() return true end
+function write_bridge_heartbeat()
+  write_order[#write_order + 1] = "heartbeat"
+  return true
+end
 function now_iso() return "2026-07-19T00:00:00.000Z" end
 function log(message) logs[#logs + 1] = message end
 function file_exists(path)
@@ -682,6 +702,7 @@ function read_file(path)
   return requests[path]
 end
 function write_file_atomic(path, content)
+  write_order[#write_order + 1] = path
   if (write_failures[path] or 0) > 0 then
     write_failures[path] = write_failures[path] - 1
     return false, "fixture_write_failed"

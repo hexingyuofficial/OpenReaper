@@ -47,6 +47,7 @@ const ALLOWLIST = Object.freeze([
   "template.automation.resolve_send_envelope",
   "template.automation.ensure_fx_parameter_envelope",
   "template.automation.insert_fx_parameter_envelope_points",
+  "template.automation.insert_fx_parameter_envelope_points_batch",
   "template.automation.insert_sine_wave_points",
 ]);
 
@@ -340,6 +341,21 @@ function sampleInput(id) {
         points: [
           { time_seconds: 0, value: 0.2, shape: 0, tension: 0 },
           { time_seconds: 2, value: 0.8, shape: 0, tension: 0 },
+        ],
+      };
+    case "template.automation.insert_fx_parameter_envelope_points_batch":
+      return {
+        param_index: 0,
+        create_if_missing: true,
+        targets: [
+          {
+            fx_ref: "fx:track:guid:{TRACK-A}:0",
+            points: [{ time_seconds: 0, value: 0.2, shape: 0, tension: 0 }],
+          },
+          {
+            fx_ref: "fx:track:guid:{TRACK-B}:0",
+            points: [{ time_seconds: 0, value: 0.8, shape: 0, tension: 0 }],
+          },
         ],
       };
     case "template.automation.insert_sine_wave_points":

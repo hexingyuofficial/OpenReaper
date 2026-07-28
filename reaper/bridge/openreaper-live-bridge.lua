@@ -1,5 +1,5 @@
 -- OpenReaper generated live bridge.
--- Handler registry: reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json (237 registered template handler row(s); 0 legacy_monolith row(s); 237 extracted handler row(s); 91 handler module file(s)).
+-- Handler registry: reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json (239 registered template handler row(s); 0 legacy_monolith row(s); 239 extracted handler row(s); 91 handler module file(s)).
 
 -- OpenReaper 4D.x minimal live bridge loop.
 -- Manual REAPER-side script: polls file transport requests and writes
@@ -1544,6 +1544,7 @@ local E5_AUTOMATION_WRITE_CAPABILITIES = {
   ["automation.delete_automation_item"] = { pack = "automation", risk = "destructive" },
   ["automation.ensure_fx_parameter_envelope"] = { pack = "automation", risk = "write" },
   ["automation.insert_fx_parameter_envelope_points"] = { pack = "automation", risk = "write" },
+  ["automation.insert_fx_parameter_envelope_points_batch"] = { pack = "automation", risk = "write" },
   ["automation.insert_sine_wave_points"] = { pack = "automation", risk = "write" },
 }
 
@@ -1584,6 +1585,7 @@ local D12_TRANSPORT_SAFE_CAPABILITIES = {
 
 local D13_ITEMS_CORE_WRITE_CAPABILITIES = {
   ["items.set_item_volume"] = { pack = "items", risk = "write" },
+  ["items.set_item_take_controls_batch"] = { pack = "items", risk = "write" },
   ["items.set_take_volume"] = { pack = "items", risk = "write" },
   ["items.set_take_pan"] = { pack = "items", risk = "write" },
   ["items.set_active_take"] = { pack = "items", risk = "write" },
@@ -2834,14 +2836,14 @@ __openreaper_register_handler_module("core/read_template_catalog_summary.lua", f
 -- Extracted Wave 1A handler: template.core.read_template_catalog_summary.
 
 local READ_TEMPLATE_CATALOG_SUMMARY_COUNTS = {
-  template_count = 237,
+  template_count = 239,
   by_pack = {
     actions = 8,
     analysis = 7,
-    automation = 22,
+    automation = 23,
     core = 3,
     fx = 18,
-    items = 35,
+    items = 36,
     media = 8,
     midi = 14,
     project = 33,
@@ -2855,17 +2857,17 @@ local READ_TEMPLATE_CATALOG_SUMMARY_COUNTS = {
     destructive = 15,
     read = 82,
     safe = 13,
-    write = 127,
+    write = 129,
   },
   by_lifecycle = {
-    experimental = 237,
+    experimental = 239,
   },
   by_entity_kind = {
     action = 4,
     api_symbol = 1,
     automation_item = 4,
     automation_mode = 3,
-    automation_point = 7,
+    automation_point = 8,
     channel = 5,
     cleanup_report = 1,
     command_id = 1,
@@ -2877,11 +2879,11 @@ local READ_TEMPLATE_CATALOG_SUMMARY_COUNTS = {
     envelope = 8,
     fx = 6,
     fx_chain = 3,
-    fx_param = 3,
+    fx_param = 4,
     ["fx_param.envelope_mapping"] = 1,
     grid = 2,
     hardware_output = 4,
-    item = 21,
+    item = 22,
     item_layer_report = 1,
     last_result = 1,
     loop_candidates = 1,
@@ -2890,7 +2892,7 @@ local READ_TEMPLATE_CATALOG_SUMMARY_COUNTS = {
     loop_state = 3,
     marker = 5,
     marker_action = 1,
-    media_file = 5,
+    media_file = 6,
     media_source = 2,
     midi_cc = 3,
     midi_event = 4,
@@ -2944,14 +2946,14 @@ local READ_TEMPLATE_CATALOG_SUMMARY_COUNTS = {
 }
 
 local READ_TEMPLATE_CATALOG_SUMMARY_LIVE_HANDLER_COUNTS = {
-  template_count = 237,
+  template_count = 239,
   by_pack = {
     actions = 8,
     analysis = 7,
-    automation = 22,
+    automation = 23,
     core = 3,
     fx = 18,
-    items = 35,
+    items = 36,
     media = 8,
     midi = 14,
     project = 33,
@@ -7545,6 +7547,506 @@ local function d13_items_set_take_value(request, key, value)
   return d13_items_write_summary(request, item)
 end
 
+local D13_ITEMS_SET_ITEM_TAKE_CONTROLS_BATCH_MAX_ROWS = 64
+local D13_ITEMS_SET_ITEM_TAKE_CONTROLS_BATCH_CHUNK_SIZE = 8
+
+local function d13_items_batch_error(code, message, row_index, details, recoverable)
+  local failure_details = details or {}
+  if row_index then failure_details.row_index = row_index end
+  return d13_items_error(code, message, failure_details, recoverable)
+end
+
+local function d13_items_batch_exact_ref(value, kind)
+  if not is_string(value) then return nil end
+  local prefix = kind .. ":guid:"
+  if value:sub(1, #prefix) ~= prefix then return nil end
+  local identity = value:sub(#prefix + 1)
+  if identity == "" or identity:find("%s") then return nil end
+  return identity
+end
+
+local function d13_items_batch_ref_map(request)
+  local refs = {}
+  if not is_json_array(request.refs) then return refs end
+  for index = 1, #request.refs do
+    local ref = request.refs[index]
+    if is_object(ref) and (ref.kind == "item" or ref.kind == "take") then
+      local identity = d13_items_batch_exact_ref(ref.ref, ref.kind)
+      if not identity or not is_object(ref.identity)
+          or ref.identity.scheme ~= "guid"
+          or tostring(ref.identity.value) ~= identity then
+        return d13_items_batch_error("REF_INVALID", "D13 Item/Take batch contains a contradictory exact ref.", nil, {
+          ref_index = index,
+          zero_write = true,
+        })
+      end
+      if refs[ref.ref] then
+        return d13_items_batch_error("REF_INVALID", "D13 Item/Take batch contains a duplicate exact ref.", nil, {
+          ref = ref.ref,
+          zero_write = true,
+        })
+      end
+      refs[ref.ref] = ref
+    end
+  end
+  return refs
+end
+
+local function d13_items_batch_take_object_ref(take)
+  local ref = d13_items_take_ref_string(take)
+  local scheme, value = ref and ref:match("^take:([^:]+):(.+)$")
+  if not ref or not scheme or not value then return nil end
+  return {
+    kind = "take",
+    ref = ref,
+    identity = { scheme = scheme, value = value },
+  }
+end
+
+local function d13_items_batch_number(value, minimum, maximum)
+  if not d13_items_finite_number(value) then return nil end
+  if minimum and value < minimum then return nil end
+  if maximum and value > maximum then return nil end
+  return value
+end
+
+local function d13_items_batch_validate_fields(row, row_index)
+  local allowed_row_fields = { id = true, item_ref = true, take_ref = true, item = true, take = true }
+  for key in pairs(row) do
+    if not allowed_row_fields[key] then
+      return d13_items_batch_error("PARAMS_INVALID", "D13 Item/Take batch row contains an unsupported field.", row_index, {
+        field = key,
+        zero_write = true,
+      })
+    end
+  end
+  if not is_string(row.id) or #row.id < 1 or #row.id > 12 or row.id:find("[^A-Za-z0-9_-]") then
+    return d13_items_batch_error("PARAMS_INVALID", "D13 Item/Take batch row id must match ^[A-Za-z0-9_-]{1,12}$.", row_index, { zero_write = true })
+  end
+  local item_identity = d13_items_batch_exact_ref(row.item_ref, "item")
+  if not item_identity then
+    return d13_items_batch_error("REF_INVALID", "D13 Item/Take batch requires an exact item:guid ref.", row_index, { zero_write = true })
+  end
+  local item = row.item
+  if item == JSON_NULL then item = nil end
+  if item ~= nil and not is_object(item) then
+    return d13_items_batch_error("PARAMS_INVALID", "D13 Item/Take batch item fields must be an object.", row_index, { zero_write = true })
+  end
+  local take = row.take
+  if take == JSON_NULL then take = nil end
+  if take ~= nil and not is_object(take) then
+    return d13_items_batch_error("PARAMS_INVALID", "D13 Item/Take batch take fields must be an object.", row_index, { zero_write = true })
+  end
+  local item_fields = item or {}
+  local take_fields = take or {}
+  local allowed_item_fields = {
+    volume_db = true,
+    length_seconds = true,
+    fade_in_seconds = true,
+    fade_out_seconds = true,
+    snap_offset_seconds = true,
+  }
+  local allowed_take_fields = {
+    volume_db = true,
+    pan = true,
+    pitch_semitones = true,
+    playrate = true,
+    preserve_pitch = true,
+  }
+  local item_values = {}
+  for key, value in pairs(item_fields) do
+    if not allowed_item_fields[key] then
+      return d13_items_batch_error("PARAMS_INVALID", "D13 Item/Take batch item fields contain an unsupported field.", row_index, {
+        field = key,
+        zero_write = true,
+      })
+    end
+    if key == "volume_db" then
+      item_values[key] = d13_items_bounded_db(value)
+    elseif key == "length_seconds" then
+      item_values[key] = d13_items_batch_number(value, 0.000001)
+    else
+      item_values[key] = d13_items_batch_number(value, 0)
+    end
+    if item_values[key] == nil then
+      return d13_items_batch_error("PARAMS_INVALID", "D13 Item/Take batch item value is outside its accepted numeric range.", row_index, {
+        field = key,
+        zero_write = true,
+      })
+    end
+  end
+  local take_values = {}
+  for key, value in pairs(take_fields) do
+    if not allowed_take_fields[key] then
+      return d13_items_batch_error("PARAMS_INVALID", "D13 Item/Take batch take fields contain an unsupported field.", row_index, {
+        field = key,
+        zero_write = true,
+      })
+    end
+    if key == "volume_db" then
+      take_values[key] = d13_items_bounded_db(value)
+    elseif key == "pan" then
+      take_values[key] = d13_items_batch_number(value, -1, 1)
+    elseif key == "playrate" then
+      take_values[key] = d13_items_batch_number(value, 0.000001, 16)
+    elseif key == "preserve_pitch" then
+      take_values[key] = type(value) == "boolean" and value or nil
+    else
+      take_values[key] = d13_items_batch_number(value)
+    end
+    if take_values[key] == nil then
+      return d13_items_batch_error("PARAMS_INVALID", "D13 Item/Take batch take value is outside its accepted range.", row_index, {
+        field = key,
+        zero_write = true,
+      })
+    end
+  end
+  local has_item = next(item_values) ~= nil
+  local has_take = next(take_values) ~= nil
+  if not has_item and not has_take then
+    return d13_items_batch_error("PARAMS_INVALID", "D13 Item/Take batch row requires at least one Item or Take field.", row_index, { zero_write = true })
+  end
+  local take_identity = d13_items_batch_exact_ref(row.take_ref, "take")
+  if has_take and not take_identity then
+    return d13_items_batch_error("REF_INVALID", "D13 Item/Take batch requires an exact take:guid ref for Take fields.", row_index, { zero_write = true })
+  end
+  if not has_take and row.take_ref ~= nil then
+    return d13_items_batch_error("REF_INVALID", "D13 Item/Take batch take_ref is only valid when Take fields are requested.", row_index, { zero_write = true })
+  end
+  return {
+    id = row.id,
+    item_ref = row.item_ref,
+    item_identity = item_identity,
+    take_ref = has_take and row.take_ref or nil,
+    take_identity = has_take and take_identity or nil,
+    item = item_values,
+    take = take_values,
+  }
+end
+
+local function d13_items_batch_set_value(owner_kind, owner, key, value)
+  local function accepted(ok, result)
+    return ok and (result == nil or result == true)
+  end
+  if owner_kind == "item" then
+    local ok, result = call_reaper("SetMediaItemInfo_Value", owner, key, value)
+    return accepted(ok, result)
+  end
+  local ok, result = call_reaper("SetMediaItemTakeInfo_Value", owner, key, value)
+  return accepted(ok, result)
+end
+
+local function d13_items_batch_read_value(owner_kind, owner, key)
+  if owner_kind == "item" then
+    local ok, value = call_reaper("GetMediaItemInfo_Value", owner, key)
+    return ok and first_number(value) or nil
+  end
+  local ok, value = call_reaper("GetMediaItemTakeInfo_Value", owner, key)
+  return ok and first_number(value) or nil
+end
+
+local function d13_items_batch_values_match(actual, expected)
+  return d13_items_finite_number(actual) and math.abs(actual - expected) <= 0.000001
+end
+
+local function d13_items_batch_summary(request, prepared, result_rows, dry_run, mutation_attempted, batch_timings)
+  return {
+    capability = request.pack.capability,
+    pack = request.pack.id,
+    risk = request.pack.risk,
+    mode = "set_item_take_controls_batch",
+    rows = result_rows,
+    row_count = #prepared,
+    dry_run = dry_run == true,
+    mutation_attempted = mutation_attempted == true,
+    readback_status = dry_run and "preflight_passed" or "passed",
+    undo_evidence = "required",
+    artifacts_allowed = false,
+    truncated = false,
+    batch_timings = batch_timings,
+    native_counters = {
+      native_mutation_count = batch_timings.native_mutation_count,
+      native_property_mutation_count = batch_timings.native_property_mutation_count,
+      native_readback_count = batch_timings.native_readback_count,
+    },
+  }
+end
+
+local function d13_items_set_item_take_controls_batch(request)
+  local params = is_object(request.params) and request.params or {}
+  local batch = params.changes or params.batch
+  if params.changes ~= nil and params.batch ~= nil then
+    return d13_items_batch_error("PARAMS_INVALID", "D13 Item/Take batch accepts one changes or batch array, not both.", nil, {
+      zero_write = true,
+    })
+  end
+  if not is_json_array(batch) or #batch < 1 or #batch > D13_ITEMS_SET_ITEM_TAKE_CONTROLS_BATCH_MAX_ROWS then
+    return d13_items_batch_error("BATCH_LIMIT_EXCEEDED", "D13 Item/Take batch accepts 1-64 rows.", nil, {
+      row_count = is_json_array(batch) and #batch or 0,
+      max_rows = D13_ITEMS_SET_ITEM_TAKE_CONTROLS_BATCH_MAX_ROWS,
+      zero_write = true,
+    })
+  end
+  if params.dry_run ~= nil and params.dry_run ~= true and params.dry_run ~= false then
+    return d13_items_batch_error("PARAMS_INVALID", "D13 Item/Take batch dry_run must be boolean.", nil, { zero_write = true })
+  end
+  local ref_map, ref_failure = d13_items_batch_ref_map(request)
+  if not ref_map then return nil, ref_failure end
+  local seen_ids = {}
+  local seen_items = {}
+  local prepared = json_array({})
+  local preflight_started = os.clock()
+  for index = 1, #batch do
+    local row = batch[index]
+    if not is_object(row) then
+      return d13_items_batch_error("PARAMS_INVALID", "D13 Item/Take batch rows must be objects.", index, { zero_write = true })
+    end
+    local normalized, validation_failure = d13_items_batch_validate_fields(row, index)
+    if not normalized then return nil, validation_failure end
+    if seen_ids[normalized.id] then
+      return d13_items_batch_error("PARAMS_INVALID", "D13 Item/Take batch row ids must be unique.", index, { zero_write = true })
+    end
+    if seen_items[normalized.item_ref] then
+      return d13_items_batch_error("PARAMS_INVALID", "D13 Item/Take batch item refs must be unique.", index, { zero_write = true })
+    end
+    seen_ids[normalized.id] = true
+    seen_items[normalized.item_ref] = true
+    local supplied_item_ref = ref_map[normalized.item_ref]
+    local item_ref_object = supplied_item_ref or {
+      kind = "item",
+      ref = normalized.item_ref,
+      identity = { scheme = "guid", value = normalized.item_identity },
+    }
+    local item = d13_items_resolve_item_from_ref_object(item_ref_object)
+    if not item or d13_items_item_ref_string(item) ~= normalized.item_ref then
+      return d13_items_batch_error("ITEM_NOT_FOUND", "D13 Item/Take batch could not prove the exact Item identity.", index, {
+        item_ref = normalized.item_ref,
+        zero_write = true,
+      })
+    end
+    local take = nil
+    local take_ref_object = nil
+    if normalized.take_ref then
+      local supplied_take_ref = ref_map[normalized.take_ref]
+      take_ref_object = supplied_take_ref or {
+        kind = "take",
+        ref = normalized.take_ref,
+        identity = { scheme = "guid", value = normalized.take_identity },
+      }
+      take = d13_items_active_take(item)
+      if not take then
+        return d13_items_batch_error("TAKE_NOT_FOUND", "D13 Item/Take batch requires an active Take for Take fields.", index, {
+          item_ref = normalized.item_ref,
+          take_ref = normalized.take_ref,
+          zero_write = true,
+        })
+      end
+      if not d13_items_take_ref_string(take) or d13_items_take_ref_string(take) ~= normalized.take_ref then
+        return d13_items_batch_error("REF_INVALID", "D13 Item/Take batch Take ref does not match the exact active Take.", index, {
+          item_ref = normalized.item_ref,
+          take_ref = normalized.take_ref,
+          zero_write = true,
+        })
+      end
+    end
+    prepared[#prepared + 1] = {
+      id = normalized.id,
+      item_ref = normalized.item_ref,
+      item = item,
+      item_ref_object = {
+        kind = "item",
+        ref = normalized.item_ref,
+        identity = { scheme = "guid", value = normalized.item_identity },
+      },
+      take = take,
+      take_ref = normalized.take_ref,
+      take_ref_object = take_ref_object,
+      item_values = normalized.item,
+      take_values = normalized.take,
+    }
+  end
+  local preflight_ms = (os.clock() - preflight_started) * 1000
+  local dry_run = params.dry_run == true
+  local result_rows = json_array({})
+  local batch_timings = {
+    preflight_ms = preflight_ms,
+    mutation_ms = 0,
+    readback_ms = 0,
+    evidence_ms = 0,
+    transport_ms = 0,
+    total_ms = 0,
+    native_mutation_count = 0,
+    native_property_mutation_count = 0,
+    native_readback_count = 0,
+    rows = #prepared,
+    completed_rows = 0,
+    chunk_size = D13_ITEMS_SET_ITEM_TAKE_CONTROLS_BATCH_CHUNK_SIZE,
+    chunks = math.ceil(#prepared / D13_ITEMS_SET_ITEM_TAKE_CONTROLS_BATCH_CHUNK_SIZE),
+    runner = "d13_generic_item_take_controls_native_batch",
+  }
+  for index = 1, #prepared do
+    local row = prepared[index]
+    result_rows[#result_rows + 1] = {
+      id = row.id,
+      batch_index = index,
+      item_ref = row.item_ref,
+      take_ref = row.take_ref or JSON_NULL,
+      identity = { item_ref = row.item_ref, take_ref = row.take_ref or JSON_NULL },
+      status = dry_run and "preflight_passed" or "pending",
+      readback_status = dry_run and "preflight_passed" or "pending",
+      mutation = { status = dry_run and "not_run" or "pending" },
+      live_readback = { status = dry_run and "not_run" or "pending" },
+    }
+  end
+  if dry_run then
+    batch_timings.total_ms = (os.clock() - preflight_started) * 1000
+    return d13_items_batch_summary(request, prepared, result_rows, true, false, batch_timings), nil, json_array({}), json_array({}), json_array({})
+  end
+
+  local mutation_started = os.clock()
+  local mutation_failure = nil
+  for chunk_start = 1, #prepared, D13_ITEMS_SET_ITEM_TAKE_CONTROLS_BATCH_CHUNK_SIZE do
+    local chunk_end = math.min(#prepared, chunk_start + D13_ITEMS_SET_ITEM_TAKE_CONTROLS_BATCH_CHUNK_SIZE - 1)
+    for index = chunk_start, chunk_end do
+      local row = prepared[index]
+      local function set_item(field, key, value)
+        if value == nil then return true end
+        if not d13_items_batch_set_value("item", row.item, key, value) then return false end
+        batch_timings.native_property_mutation_count = batch_timings.native_property_mutation_count + 1
+        return true
+      end
+      local function set_take(field, key, value)
+        if value == nil then return true end
+        if not d13_items_batch_set_value("take", row.take, key, value) then return false end
+        batch_timings.native_property_mutation_count = batch_timings.native_property_mutation_count + 1
+        return true
+      end
+      local item_values = row.item_values
+      local take_values = row.take_values
+      local ok = set_item("volume_db", "D_VOL", item_values.volume_db and d13_items_db_to_linear(item_values.volume_db) or nil)
+        and set_item("length_seconds", "D_LENGTH", item_values.length_seconds)
+        and set_item("fade_in_seconds", "D_FADEINLEN", item_values.fade_in_seconds)
+        and set_item("fade_out_seconds", "D_FADEOUTLEN", item_values.fade_out_seconds)
+        and set_item("snap_offset_seconds", "D_SNAPOFFSET", item_values.snap_offset_seconds)
+      if ok and row.take then
+        ok = set_take("volume_db", "D_VOL", take_values.volume_db and d13_items_db_to_linear(take_values.volume_db) or nil)
+          and set_take("pan", "D_PAN", take_values.pan)
+          and set_take("pitch_semitones", "D_PITCH", take_values.pitch_semitones)
+          and set_take("playrate", "D_PLAYRATE", take_values.playrate)
+          and set_take("preserve_pitch", "B_PPITCH", take_values.preserve_pitch == nil and nil or (take_values.preserve_pitch and 1 or 0))
+      end
+      if not ok or not call_reaper("UpdateItemInProject", row.item) then
+        local _, failure = d13_items_batch_error("COMMAND_FAILED", "REAPER rejected an Item/Take batch native mutation.", index, {
+          item_ref = row.item_ref,
+          take_ref = row.take_ref or JSON_NULL,
+          mutation_attempted = batch_timings.native_property_mutation_count > 0,
+          zero_write = batch_timings.native_property_mutation_count == 0,
+        }, false)
+        mutation_failure = failure
+        break
+      end
+      batch_timings.native_mutation_count = batch_timings.native_mutation_count + 1
+    end
+    if mutation_failure then break end
+  end
+  batch_timings.mutation_ms = (os.clock() - mutation_started) * 1000
+  if mutation_failure then
+    local failure = mutation_failure[2] or mutation_failure
+    failure.details.batch_timings = batch_timings
+    failure.details.completed_rows = batch_timings.native_mutation_count
+    return nil, failure
+  end
+
+  local readback_started = os.clock()
+  local readback_failure = nil
+  for index = 1, #prepared do
+    local row = prepared[index]
+    local result = result_rows[index]
+    local item_identity = d13_items_item_ref_string(row.item)
+    local take_identity = row.take and d13_items_take_ref_string(row.take) or nil
+    local matches = item_identity == row.item_ref and (not row.take_ref or take_identity == row.take_ref)
+    local expected = row.item_values
+    local actual_item_native = {
+      volume = d13_items_batch_read_value("item", row.item, "D_VOL"),
+      length_seconds = d13_items_batch_read_value("item", row.item, "D_LENGTH"),
+      fade_in_seconds = d13_items_batch_read_value("item", row.item, "D_FADEINLEN"),
+      fade_out_seconds = d13_items_batch_read_value("item", row.item, "D_FADEOUTLEN"),
+      snap_offset_seconds = d13_items_batch_read_value("item", row.item, "D_SNAPOFFSET"),
+    }
+    local actual_take_native = row.take and {
+      volume = d13_items_batch_read_value("take", row.take, "D_VOL"),
+      pan = d13_items_batch_read_value("take", row.take, "D_PAN"),
+      pitch_semitones = d13_items_batch_read_value("take", row.take, "D_PITCH"),
+      playrate = d13_items_batch_read_value("take", row.take, "D_PLAYRATE"),
+      preserve_pitch = d13_items_batch_read_value("take", row.take, "B_PPITCH"),
+    } or nil
+    local actual_item = {
+      volume_db = d13_items_linear_to_db(actual_item_native.volume),
+      length_seconds = actual_item_native.length_seconds,
+      fade_in_seconds = actual_item_native.fade_in_seconds,
+      fade_out_seconds = actual_item_native.fade_out_seconds,
+      snap_offset_seconds = actual_item_native.snap_offset_seconds,
+    }
+    local actual_take = actual_take_native and {
+      volume_db = d13_items_linear_to_db(actual_take_native.volume),
+      pan = actual_take_native.pan,
+      pitch_semitones = actual_take_native.pitch_semitones,
+      playrate = actual_take_native.playrate,
+      preserve_pitch = actual_take_native.preserve_pitch == nil and nil or actual_take_native.preserve_pitch == 1,
+    } or nil
+    local checks = {
+      { expected = expected.volume_db and d13_items_db_to_linear(expected.volume_db), actual = actual_item_native.volume },
+      { expected = expected.length_seconds, actual = actual_item_native.length_seconds },
+      { expected = expected.fade_in_seconds, actual = actual_item_native.fade_in_seconds },
+      { expected = expected.fade_out_seconds, actual = actual_item_native.fade_out_seconds },
+      { expected = expected.snap_offset_seconds, actual = actual_item_native.snap_offset_seconds },
+    }
+    for check_index = 1, #checks do
+      if checks[check_index].expected ~= nil and not d13_items_batch_values_match(checks[check_index].actual, checks[check_index].expected) then matches = false end
+    end
+    if actual_take_native then
+      if row.take_values.volume_db ~= nil and not d13_items_batch_values_match(actual_take_native.volume, d13_items_db_to_linear(row.take_values.volume_db)) then matches = false end
+      if row.take_values.pan ~= nil and not d13_items_batch_values_match(actual_take_native.pan, row.take_values.pan) then matches = false end
+      if row.take_values.pitch_semitones ~= nil and not d13_items_batch_values_match(actual_take_native.pitch_semitones, row.take_values.pitch_semitones) then matches = false end
+      if row.take_values.playrate ~= nil and not d13_items_batch_values_match(actual_take_native.playrate, row.take_values.playrate) then matches = false end
+      if row.take_values.preserve_pitch ~= nil and actual_take_native.preserve_pitch ~= (row.take_values.preserve_pitch and 1 or 0) then matches = false end
+    end
+    batch_timings.native_readback_count = batch_timings.native_readback_count + 1
+    if matches then
+      result.status = "applied"
+      result.readback_status = "aggregate_passed"
+      result.mutation = { status = "completed" }
+      result.live_readback = { status = "passed", source = "d13_aggregate_native_readback" }
+      result.item_identity = item_identity
+      result.take_identity = take_identity or JSON_NULL
+      result.fields = { item = actual_item, take = actual_take or JSON_NULL }
+    elseif not readback_failure then
+      local _, failure = d13_items_batch_error("VERIFY_FAILED", "D13 Item/Take batch aggregate readback did not match native identity or requested values.", index, {
+        item_ref = row.item_ref,
+        take_ref = row.take_ref or JSON_NULL,
+        mutation_attempted = true,
+        zero_write = false,
+      }, false)
+      readback_failure = failure
+    end
+  end
+  batch_timings.readback_ms = (os.clock() - readback_started) * 1000
+  local evidence_started = os.clock()
+  batch_timings.completed_rows = batch_timings.native_readback_count
+  batch_timings.evidence_ms = (os.clock() - evidence_started) * 1000
+  batch_timings.total_ms = (os.clock() - preflight_started) * 1000
+  if readback_failure then
+    local failure = readback_failure[2] or readback_failure
+    failure.details.batch_timings = batch_timings
+    failure.details.completed_rows = batch_timings.native_readback_count
+    return nil, failure
+  end
+  -- rows[] already carries every exact Item/Take identity and requested-field
+  -- readback. Repeating those identities in refs[] exceeds the Bridge response
+  -- budget at the supported 64-row ceiling after successful mutation.
+  return d13_items_batch_summary(request, prepared, result_rows, false, true, batch_timings), nil, json_array({}), json_array({}), json_array({})
+end
+
 local function d13_items_set_item_volume(request)
   local db = d13_items_bounded_db(request.params.volume_db)
   if not db then
@@ -7823,7 +8325,7 @@ local function d13_items_set_stretch_marker_fade_size(request)
   return d13_items_set_take_value(request, "F_STRETCHFADESIZE", fade_size_ms / 1000)
 end
 return {
-  exports = { d13_items_list_selected_items = d13_items_list_selected_items, d13_items_list_items_on_track = d13_items_list_items_on_track, d13_items_set_item_volume = d13_items_set_item_volume, d13_items_set_take_volume = d13_items_set_take_volume, d13_items_set_take_pan = d13_items_set_take_pan, d13_items_rename_take = d13_items_rename_take, d13_items_set_loop_source = d13_items_set_loop_source, d13_items_set_mute = d13_items_set_mute, d13_items_set_lock = d13_items_set_lock, d13_items_set_play_all_takes = d13_items_set_play_all_takes, d13_items_set_take_start_in_source = d13_items_set_take_start_in_source, d13_items_set_channel_mode = d13_items_set_channel_mode, d13_items_set_pitch_shift_mode = d13_items_set_pitch_shift_mode, d13_items_set_stretch_marker_fade_size = d13_items_set_stretch_marker_fade_size, d13_items_set_reverse = d13_items_set_reverse },
+  exports = { d13_items_list_selected_items = d13_items_list_selected_items, d13_items_list_items_on_track = d13_items_list_items_on_track, d13_items_set_item_volume = d13_items_set_item_volume, d13_items_set_item_take_controls_batch = d13_items_set_item_take_controls_batch, d13_items_set_take_volume = d13_items_set_take_volume, d13_items_set_take_pan = d13_items_set_take_pan, d13_items_rename_take = d13_items_rename_take, d13_items_set_loop_source = d13_items_set_loop_source, d13_items_set_mute = d13_items_set_mute, d13_items_set_lock = d13_items_set_lock, d13_items_set_play_all_takes = d13_items_set_play_all_takes, d13_items_set_take_start_in_source = d13_items_set_take_start_in_source, d13_items_set_channel_mode = d13_items_set_channel_mode, d13_items_set_pitch_shift_mode = d13_items_set_pitch_shift_mode, d13_items_set_stretch_marker_fade_size = d13_items_set_stretch_marker_fade_size, d13_items_set_reverse = d13_items_set_reverse },
   shared = {  },
 }
 end)
@@ -15371,6 +15873,7 @@ local function e5_automation_read_native_lane(envelope, autoitem_index)
     local row = e5_automation_point_row_ex(envelope, autoitem_index, index)
     if not row then return nil end
     rows[#rows + 1] = {
+      point_index = index,
       time_seconds = row.time_seconds,
       value = row.value,
       shape = row.shape,
@@ -16521,6 +17024,363 @@ local function insert_fx_parameter_envelope_points(request)
   return summary, err, artifacts, jobs, refs
 end
 
+local function e5_automation_batch_fx_ref_object(fx_ref)
+  local owner_kind = fx_ref:match("^fx:(track):") and "track" or fx_ref:match("^fx:(take):") and "take" or nil
+  local owner_ref, slot_index = fx_ref:match("^fx:(track:[^:]+:.+):(%d+)$")
+  if not owner_ref then
+    owner_ref, slot_index = fx_ref:match("^fx:(take:[^:]+:.+):(%d+)$")
+  end
+  if not owner_kind or not owner_ref or not slot_index then
+    return nil
+  end
+  return {
+    kind = "fx",
+    ref = fx_ref,
+    identity = {
+      scheme = owner_kind .. "_fx",
+      value = owner_ref .. ":" .. tostring(slot_index),
+    },
+  }
+end
+
+local function e5_automation_batch_project_time_check(owner_kind, owner, project_time)
+  if owner_kind ~= "take" then
+    return true, nil
+  end
+  local ok_item, item = call_reaper("GetMediaItemTake_Item", owner)
+  local ok_position, item_position = false, nil
+  local ok_length, item_length = false, nil
+  if ok_item and item then
+    ok_position, item_position = call_reaper("GetMediaItemInfo_Value", item, "D_POSITION")
+    ok_length, item_length = call_reaper("GetMediaItemInfo_Value", item, "D_LENGTH")
+  end
+  item_position = ok_position and first_number(item_position) or nil
+  item_length = ok_length and first_number(item_length) or nil
+  local ok_playrate, playrate = call_reaper("GetMediaItemTakeInfo_Value", owner, "D_PLAYRATE")
+  playrate = ok_playrate and first_number(playrate) or nil
+  if not ok_item or not item or item_position == nil or item_length == nil or item_length < 0 or playrate == nil or playrate <= 0 then
+    return false, {
+      code = "TAKE_ENVELOPE_TIME_CONTEXT_UNAVAILABLE",
+      message = "Take FX Envelope batch time validation requires a valid parent Item and positive Take playrate.",
+      details = {},
+    }
+  end
+  if project_time < item_position - 0.000000001 or project_time > item_position + item_length + 0.000000001 then
+    return false, {
+      code = "TAKE_ENVELOPE_TIME_OUT_OF_BOUNDS",
+      message = "Take FX Envelope batch point time must fall inside the parent Item project-time bounds.",
+      details = {
+        requested_time_seconds = project_time,
+        item_start_seconds = item_position,
+        item_end_seconds = item_position + item_length,
+        take_playrate = playrate,
+      },
+    }
+  end
+  return true, nil
+end
+
+local function e5_automation_batch_normalize_points(points, target_index)
+  if not is_json_array(points) or #points < 1 or #points > 64 then
+    return nil, e5_routing_error("PARAMS_INVALID", "Each FX parameter batch target requires 1..64 points.", {
+      reason_code = "POINT_BATCH_LIMIT_EXCEEDED",
+      target_index = target_index,
+    })
+  end
+  local rows = json_array({})
+  local seen_times = {}
+  for index = 1, #points do
+    local point = is_object(points[index]) and points[index] or nil
+    local time_seconds = point and e5_automation_finite_number(point.time_seconds) or nil
+    local value = point and e5_automation_finite_number(point.value) or nil
+    local shape = point and tonumber(point.shape) or nil
+    local tension = point and e5_automation_finite_number(point.tension) or nil
+    if not point or time_seconds == nil or time_seconds < 0 or value == nil or value < 0 or value > 1 or type(shape) ~= "number" or shape ~= math.floor(shape) or shape < 0 or shape > 5 or tension == nil or tension < -1 or tension > 1 then
+      return nil, e5_routing_error("PARAMS_INVALID", "FX parameter batch points require project time>=0, normalized value 0..1, shape 0..5, and tension -1..1.", {
+        reason_code = "POINT_FIELDS_INVALID",
+        target_index = target_index,
+        point_index = index - 1,
+      })
+    end
+    local time_key = string.format("%.12f", time_seconds)
+    if seen_times[time_key] then
+      return nil, e5_routing_error("PARAMS_INVALID", "FX parameter batch target contains duplicate project point times and no points were inserted.", {
+        reason_code = "POINT_BATCH_DUPLICATE_PROJECT_TIME",
+        target_index = target_index,
+        point_index = index - 1,
+        first_index = seen_times[time_key] - 1,
+      })
+    end
+    seen_times[time_key] = index
+    rows[#rows + 1] = {
+      time_seconds = time_seconds,
+      value = value,
+      shape = shape,
+      tension = tension,
+      selected = point.selected == true,
+    }
+  end
+  return rows, nil
+end
+
+local function e5_automation_batch_project_rows(envelope, rows)
+  local result = json_array({})
+  for index = 1, #(rows or {}) do
+    local row = rows[index]
+    local project_time, time_error = e5_automation_native_to_project_time(envelope, row.time_seconds)
+    if project_time == nil then
+      return nil, time_error
+    end
+    result[#result + 1] = {
+      point_index = row.point_index,
+      time_seconds = project_time,
+      value = row.value,
+      shape = row.shape,
+      tension = row.tension,
+      selected = row.selected,
+    }
+  end
+  return result, nil
+end
+
+local function insert_fx_parameter_envelope_points_batch(request)
+  local params = request.params or {}
+  local targets = params.targets
+  if not is_json_array(targets) or #targets < 1 or #targets > 64 then
+    return e5_routing_error("PARAMS_INVALID", "FX parameter batch requires 1..64 target rows and never silently truncates.", {
+      reason_code = "FX_TARGET_BATCH_LIMIT_EXCEEDED",
+      target_count = is_json_array(targets) and #targets or JSON_NULL,
+      max_targets = 64,
+      mutation_applied = false,
+    })
+  end
+  local param_index = tonumber(params.param_index)
+  if type(param_index) ~= "number" or param_index ~= math.floor(param_index) or param_index < 0 then
+    return e5_routing_error("PARAMS_INVALID", "FX parameter batch requires a non-negative integer param_index.", { reason_code = "FX_PARAMETER_INDEX_INVALID", mutation_applied = false })
+  end
+  local create_if_missing = params.create_if_missing ~= false
+  local seen_fx = {}
+  local total_points = 0
+  local plans = {}
+
+  -- Resolve and validate every target before creating an Envelope or inserting a point.
+  for index = 1, #targets do
+    local target = is_object(targets[index]) and targets[index] or nil
+    local fx_ref = target and target.fx_ref or nil
+    if not target or not is_string(fx_ref) or seen_fx[fx_ref] then
+      return e5_routing_error("REF_INVALID", "FX parameter batch targets must contain unique exact fx refs.", {
+        reason_code = seen_fx[fx_ref] and "FX_TARGET_DUPLICATED" or "FX_TARGET_INVALID",
+        target_index = index - 1,
+        fx_ref = fx_ref or JSON_NULL,
+        mutation_applied = false,
+      })
+    end
+    local fx_object = e5_automation_batch_fx_ref_object(fx_ref)
+    local owner_kind, owner, slot_index, owner_ref
+    if fx_object then
+      owner_kind, owner, slot_index, owner_ref = e5_routing_fx_owner_from_ref_object(fx_object)
+    end
+    if not owner then
+      return e5_routing_error("FX_REF_NOT_FOUND", "FX parameter batch target did not resolve to one exact live Track-FX or Take-FX.", {
+        reason_code = "FX_REF_NOT_FOUND",
+        target_index = index - 1,
+        fx_ref = fx_ref,
+        mutation_applied = false,
+      })
+    end
+    local point_rows, point_error = e5_automation_batch_normalize_points(target.points, index - 1)
+    if not point_rows then return nil, point_error end
+    total_points = total_points + #point_rows
+    if total_points > 512 then
+      return e5_routing_error("PARAMS_INVALID", "FX parameter batch total point work exceeds 512.", {
+        reason_code = "POINT_BATCH_TOTAL_LIMIT_EXCEEDED",
+        target_index = index - 1,
+        total_requested_points = total_points,
+        max_total_points = 512,
+        mutation_applied = false,
+      })
+    end
+    local api = owner_kind == "take" and "TakeFX_GetNumParams" or "TrackFX_GetNumParams"
+    local ok_count, count = call_reaper(api, owner, slot_index)
+    count = ok_count and first_number(count) or nil
+    if count == nil or param_index >= count then
+      return e5_routing_error("FX_PARAMETER_NOT_FOUND", "FX parameter batch index is outside the live FX parameter count.", {
+        reason_code = "FX_PARAMETER_NOT_FOUND",
+        target_index = index - 1,
+        fx_ref = fx_ref,
+        param_index = param_index,
+        parameter_count = count or JSON_NULL,
+        mutation_applied = false,
+      })
+    end
+    local param_ident = e5_automation_fx_parameter_ident(owner_kind, owner, slot_index, param_index)
+    if is_string(params.param_ident) and params.param_ident ~= "" and params.param_ident ~= param_ident then
+      return e5_routing_error("FX_PARAMETER_IDENTITY_MISMATCH", "FX parameter batch param_ident does not match every exact live target.", {
+        reason_code = "FX_PARAMETER_IDENTITY_MISMATCH",
+        target_index = index - 1,
+        fx_ref = fx_ref,
+        param_index = param_index,
+        requested_param_ident = params.param_ident,
+        live_param_ident = param_ident or JSON_NULL,
+        mutation_applied = false,
+      })
+    end
+    local param_name = e5_automation_fx_parameter_name(owner_kind, owner, slot_index, param_index)
+    local ok_existing, envelope = e5_automation_get_fx_envelope(owner_kind, owner, slot_index, param_index, false)
+    if not ok_existing then
+      return e5_routing_error("COMMAND_FAILED", "REAPER failed the create=false FX parameter Envelope lookup during batch preflight.", { reason_code = "FX_ENVELOPE_LOOKUP_FAILED", target_index = index - 1, fx_ref = fx_ref, mutation_applied = false })
+    end
+    if not envelope and not create_if_missing then
+      return e5_routing_error("FX_ENVELOPE_MISSING", "An FX parameter batch target has no Envelope and create_if_missing=false.", { reason_code = "FX_ENVELOPE_MISSING", target_index = index - 1, fx_ref = fx_ref, param_index = param_index, mutation_applied = false })
+    end
+    local before_rows = json_array({})
+    local normalized_rows = json_array({})
+    local overlay = nil
+    if envelope then
+      before_rows = e5_automation_read_native_lane(envelope, -1)
+      if not before_rows then
+        return e5_routing_error("COMMAND_FAILED", "Complete FX parameter Envelope readback failed during batch preflight.", { reason_code = "POINT_READBACK_UNAVAILABLE", target_index = index - 1, fx_ref = fx_ref, mutation_applied = false })
+      end
+      for point_index = 1, #point_rows do
+        local native_time, time_error = e5_automation_project_to_native_time(envelope, point_rows[point_index].time_seconds)
+        if native_time == nil then
+          local details = time_error.details or {}
+          details.target_index = index - 1
+          details.point_index = point_index - 1
+          return e5_routing_error(time_error.code, time_error.message, details)
+        end
+        normalized_rows[#normalized_rows + 1] = { time_seconds = native_time, value = point_rows[point_index].value, shape = point_rows[point_index].shape, tension = point_rows[point_index].tension, selected = point_rows[point_index].selected }
+      end
+      overlay = e5_automation_overlay_plan(before_rows, normalized_rows)
+      if not overlay then
+        return e5_routing_error("PARAMS_INVALID", "FX parameter batch contains duplicate native Envelope times.", { reason_code = "POINT_BATCH_DUPLICATE_NATIVE_TIME", target_index = index - 1, fx_ref = fx_ref, mutation_applied = false })
+      end
+      if overlay.after > 64 then
+        return e5_routing_error("PARAMS_INVALID", "FX parameter batch overlay would exceed the complete 64-point lane boundary.", { reason_code = "POINT_FINAL_LANE_LIMIT_EXCEEDED", target_index = index - 1, fx_ref = fx_ref, after = overlay.after, max_points = 64, mutation_applied = false })
+      end
+    else
+      for point_index = 1, #point_rows do
+        local valid_time, time_error = e5_automation_batch_project_time_check(owner_kind, owner, point_rows[point_index].time_seconds)
+        if not valid_time then
+          local details = time_error.details or {}
+          details.target_index = index - 1
+          details.point_index = point_index - 1
+          return e5_routing_error(time_error.code, time_error.message, details)
+        end
+      end
+    end
+    seen_fx[fx_ref] = true
+    plans[#plans + 1] = {
+      target_index = index - 1,
+      fx_ref = fx_ref,
+      owner_kind = owner_kind,
+      owner = owner,
+      owner_ref = owner_ref,
+      slot_index = slot_index,
+      param_index = param_index,
+      param_ident = param_ident,
+      param_name = param_name,
+      envelope = envelope,
+      envelope_ref = envelope and ("envelope:guid:" .. tostring(e5_automation_envelope_guid(envelope) or "")) or nil,
+      created = false,
+      point_rows = point_rows,
+      before_rows = before_rows,
+      normalized_rows = normalized_rows,
+      overlay = overlay,
+    }
+  end
+
+  -- Envelope creation happens only after all exact targets/parameters/times pass preflight.
+  for index = 1, #plans do
+    local plan = plans[index]
+    if not plan.envelope then
+      local ok_created, created_envelope = e5_automation_get_fx_envelope(plan.owner_kind, plan.owner, plan.slot_index, plan.param_index, true)
+      if not ok_created or not created_envelope then
+        return e5_routing_error("COMMAND_FAILED", "REAPER rejected native FX parameter Envelope creation in the aggregate batch.", { reason_code = "FX_ENVELOPE_CREATE_FAILED", target_index = plan.target_index, fx_ref = plan.fx_ref, mutation_applied = index > 1 })
+      end
+      plan.envelope = created_envelope
+      plan.created = true
+      local guid = e5_automation_envelope_guid(created_envelope)
+      if not guid then
+        return e5_routing_error("VERIFY_FAILED", "Created FX parameter Envelope did not expose a canonical GUID.", { reason_code = "FX_ENVELOPE_GUID_MISSING", target_index = plan.target_index, fx_ref = plan.fx_ref, mutation_applied = true })
+      end
+      plan.envelope_ref = "envelope:guid:" .. guid
+      plan.before_rows = json_array({})
+      for point_index = 1, #plan.point_rows do
+        local native_time, time_error = e5_automation_project_to_native_time(plan.envelope, plan.point_rows[point_index].time_seconds)
+        if native_time == nil then
+          local details = time_error.details or {}
+          details.target_index = plan.target_index
+          details.point_index = point_index - 1
+          return e5_routing_error(time_error.code, time_error.message, details, false)
+        end
+        plan.normalized_rows[#plan.normalized_rows + 1] = { time_seconds = native_time, value = plan.point_rows[point_index].value, shape = plan.point_rows[point_index].shape, tension = plan.point_rows[point_index].tension, selected = plan.point_rows[point_index].selected }
+      end
+      plan.overlay = e5_automation_overlay_plan(plan.before_rows, plan.normalized_rows)
+    end
+  end
+
+  local result_targets = json_array({})
+  local total_processed = 0
+  for index = 1, #plans do
+    local plan = plans[index]
+    local writes_completed = 0
+    for write_index = 1, #plan.overlay.writes do
+      local write = plan.overlay.writes[write_index]
+      local point = write.point
+      local call_ok, inserted = call_reaper("InsertEnvelopePointEx", plan.envelope, -1, point.time_seconds, point.value, point.shape, point.tension, point.selected, true)
+      if not call_ok or inserted ~= true then
+        return e5_routing_error("COMMAND_FAILED", "REAPER rejected an FX parameter batch point insertion.", { reason_code = "POINT_BATCH_INSERT_FAILED", target_index = plan.target_index, fx_ref = plan.fx_ref, inserted_before_failure = writes_completed, mutation_applied = writes_completed > 0 or index > 1, index_maintenance_applied = false }, false)
+      end
+      writes_completed = writes_completed + 1
+    end
+    if writes_completed > 0 then
+      local sort_ok = call_reaper("Envelope_SortPointsEx", plan.envelope, -1)
+      if not sort_ok then
+        return e5_routing_error("COMMAND_FAILED", "Envelope_SortPointsEx failed after an FX parameter batch insertion.", { reason_code = "POINT_SORT_FAILED", target_index = plan.target_index, fx_ref = plan.fx_ref, processed_count = writes_completed, mutation_applied = true, index_maintenance_applied = false }, false)
+      end
+    end
+    local after_rows = e5_automation_read_native_lane(plan.envelope, -1)
+    if not e5_automation_point_multiset_equals(after_rows, plan.overlay.expected) then
+      return e5_routing_error("VERIFY_FAILED", "FX parameter batch aggregate readback did not match the complete expected Envelope lane.", { reason_code = "POINT_BATCH_OVERLAY_READBACK_MISMATCH", target_index = plan.target_index, fx_ref = plan.fx_ref, mutation_applied = writes_completed > 0 or plan.created, index_maintenance_applied = writes_completed > 0 }, false)
+    end
+    local before_project, before_error = e5_automation_batch_project_rows(plan.envelope, plan.before_rows)
+    local after_project, after_error = e5_automation_batch_project_rows(plan.envelope, after_rows)
+    if not before_project or not after_project then
+      local time_error = before_error or after_error
+      return e5_routing_error(time_error.code, time_error.message, { target_index = plan.target_index, fx_ref = plan.fx_ref, mutation_applied = true }, false)
+    end
+    total_processed = total_processed + writes_completed
+    result_targets[#result_targets + 1] = {
+      fx_ref = plan.fx_ref,
+      envelope_ref = plan.envelope_ref,
+      owner_kind = plan.owner_kind,
+      owner_ref = plan.owner_ref,
+      slot_index = plan.slot_index,
+      param_index = plan.param_index,
+      param_ident = plan.param_ident or JSON_NULL,
+      param_name = plan.param_name,
+      created = plan.created,
+      requested = plan.overlay.requested,
+      replaced = plan.overlay.replaced,
+      net_new = plan.overlay.net_new,
+      before = plan.overlay.before,
+      after = plan.overlay.after,
+      processed_count = writes_completed,
+      before_points = before_project,
+      after_points = after_project,
+    }
+  end
+  return e5_routing_summary(request, {
+    targets = result_targets,
+    target_count = #result_targets,
+    total_requested_points = total_points,
+    total_processed_points = total_processed,
+    execution_shape = "single_bridge_request_native_batch",
+    aggregate_readback = true,
+  }), nil, json_array({}), json_array({}), e5_routing_refs()
+end
+
 local function insert_sine_wave_points(request)
   local envelope, envelope_ref, parent_kind, key, display_name, err = e5_automation_resolve_or_error(request)
   if not envelope then
@@ -17060,7 +17920,7 @@ local function resolve_send_envelope(request)
   )
 end
 return {
-  exports = { track_mono_or_stereo_button = track_mono_or_stereo_button, read_track_routing = read_track_routing, resolve_send_ref = resolve_send_ref, list_track_hardware_outputs = list_track_hardware_outputs, read_project_routing_graph = read_project_routing_graph, list_available_audio_outputs = list_available_audio_outputs, create_track_send = create_track_send, set_send_volume = set_send_volume, set_send_pan = set_send_pan, set_send_mute = set_send_mute, set_send_mode = set_send_mode, set_master_parent_send = set_master_parent_send, set_track_channel_count = set_track_channel_count, set_track_hardware_output = set_track_hardware_output, remove_track_hardware_output = remove_track_hardware_output, set_send_audio_channels = set_send_audio_channels, set_send_phase = set_send_phase, set_send_mono = set_send_mono, set_send_midi_channels = set_send_midi_channels, read_fx_pin_mapping = read_fx_pin_mapping, resolve_envelope_ref = resolve_envelope_ref, list_project_envelopes = list_project_envelopes, read_envelope_summary = read_envelope_summary, read_envelope_points = read_envelope_points, evaluate_envelope_at_time = evaluate_envelope_at_time, set_envelope_lane_state = set_envelope_lane_state, insert_envelope_point = insert_envelope_point, set_track_automation_mode = set_track_automation_mode, read_track_automation_mode = read_track_automation_mode, read_automation_items = read_automation_items, set_envelope_point = set_envelope_point, insert_envelope_points_batch = insert_envelope_points_batch, delete_envelope_points = delete_envelope_points, set_send_automation_mode = set_send_automation_mode, create_automation_item = create_automation_item, set_automation_item_bounds = set_automation_item_bounds, delete_automation_item = delete_automation_item, resolve_send_envelope = resolve_send_envelope, ensure_fx_parameter_envelope = ensure_fx_parameter_envelope, insert_fx_parameter_envelope_points = insert_fx_parameter_envelope_points, insert_sine_wave_points = insert_sine_wave_points },
+  exports = { track_mono_or_stereo_button = track_mono_or_stereo_button, read_track_routing = read_track_routing, resolve_send_ref = resolve_send_ref, list_track_hardware_outputs = list_track_hardware_outputs, read_project_routing_graph = read_project_routing_graph, list_available_audio_outputs = list_available_audio_outputs, create_track_send = create_track_send, set_send_volume = set_send_volume, set_send_pan = set_send_pan, set_send_mute = set_send_mute, set_send_mode = set_send_mode, set_master_parent_send = set_master_parent_send, set_track_channel_count = set_track_channel_count, set_track_hardware_output = set_track_hardware_output, remove_track_hardware_output = remove_track_hardware_output, set_send_audio_channels = set_send_audio_channels, set_send_phase = set_send_phase, set_send_mono = set_send_mono, set_send_midi_channels = set_send_midi_channels, read_fx_pin_mapping = read_fx_pin_mapping, resolve_envelope_ref = resolve_envelope_ref, list_project_envelopes = list_project_envelopes, read_envelope_summary = read_envelope_summary, read_envelope_points = read_envelope_points, evaluate_envelope_at_time = evaluate_envelope_at_time, set_envelope_lane_state = set_envelope_lane_state, insert_envelope_point = insert_envelope_point, set_track_automation_mode = set_track_automation_mode, read_track_automation_mode = read_track_automation_mode, read_automation_items = read_automation_items, set_envelope_point = set_envelope_point, insert_envelope_points_batch = insert_envelope_points_batch, delete_envelope_points = delete_envelope_points, set_send_automation_mode = set_send_automation_mode, create_automation_item = create_automation_item, set_automation_item_bounds = set_automation_item_bounds, delete_automation_item = delete_automation_item, resolve_send_envelope = resolve_send_envelope, ensure_fx_parameter_envelope = ensure_fx_parameter_envelope, insert_fx_parameter_envelope_points = insert_fx_parameter_envelope_points, insert_fx_parameter_envelope_points_batch = insert_fx_parameter_envelope_points_batch, insert_sine_wave_points = insert_sine_wave_points },
   shared = {  },
 }
 end)
@@ -25611,6 +26471,36 @@ local function e4_item_batch_preflight_budget(request, prepared_rows)
   return nil
 end
 
+local function e4_item_compact_batch_take_fx_copy(value)
+  local slots = json_array({})
+  for index = 1, #(value and value.slots or {}) do
+    local slot = value.slots[index]
+    slots[#slots + 1] = {
+      slot_index = slot.slot_index,
+      target_fx_ref = slot.target_fx_ref,
+    }
+  end
+  return {
+    status = value and value.status or "failed",
+    source_count = value and value.source_count or 0,
+    copied_count = value and value.copied_count or 0,
+    slots = slots,
+  }
+end
+
+local function e4_item_compact_batch_row(summary, row, source_footprint_index, target_track_index)
+  return {
+    id = row.id,
+    new_item_ref = summary.new_item_ref,
+    active_take_ref = summary.active_take_ref,
+    source_footprint_index = source_footprint_index,
+    target_track_index = target_track_index,
+    position_seconds = summary.position_seconds,
+    source_offset_seconds = row.source_offset_seconds,
+    take_fx_copy = e4_item_compact_batch_take_fx_copy(summary.take_fx_copy),
+  }
+end
+
 local function e4_item_copy_batch_set_offset(item, take, offset)
   if offset == nil then return true, false end
   local ok_set, accepted = call_reaper("SetMediaItemTakeInfo_Value", take, "D_STARTOFFS", offset)
@@ -25676,6 +26566,15 @@ local function copy_item_to_track_batch(request)
   local result_rows = json_array({})
   local source_footprints = json_array({})
   local source_footprint_seen = {}
+  local target_tracks = json_array({})
+  local target_track_seen = {}
+  for index = 1, #prepared_rows do
+    local target_track_ref = prepared_rows[index].target_track_ref
+    if not target_track_seen[target_track_ref] then
+      target_tracks[#target_tracks + 1] = { target_track_ref = target_track_ref }
+      target_track_seen[target_track_ref] = #target_tracks
+    end
+  end
   local phase_timings = { mutation_ms = 0, readback_ms = 0 }
   local native_mutations = 0
   local native_readbacks = 0
@@ -25727,14 +26626,11 @@ local function copy_item_to_track_batch(request)
         }, false)
       end
       native_readbacks = native_readbacks + 1
-      summary.id = prepared.row.id
-      summary.source_offset_seconds = prepared.row.source_offset_seconds
-      summary.batch_index = index
-      result_rows[#result_rows + 1] = summary
-      if not source_footprint_seen[prepared.row.source_item_ref] then
-        source_footprint_seen[prepared.row.source_item_ref] = true
+      local source_footprint_index = source_footprint_seen[prepared.row.source_item_ref]
+      if not source_footprint_index then
         source_footprints[#source_footprints + 1] = {
           source_item_ref = prepared.row.source_item_ref,
+          source_take_ref = prepared.source_snapshot.active_take_ref,
           source_footprint = {
             canonical_source_identity = prepared.footprint.canonical_source_identity,
             source_type = prepared.footprint.source_type,
@@ -25747,28 +26643,29 @@ local function copy_item_to_track_batch(request)
             take_fx = e4_item_take_fx_evidence(prepared.footprint.take_fx),
           },
         }
+        source_footprint_index = #source_footprints
+        source_footprint_seen[prepared.row.source_item_ref] = source_footprint_index
       end
+      result_rows[#result_rows + 1] = e4_item_compact_batch_row(
+        summary, prepared.row, source_footprint_index, target_track_seen[prepared.target_track_ref])
     end
   end
   local evidence_started = e4_item_monotonic_now()
+  -- Batch rows already carry every exact target identity. Repeating the same
+  -- Item and Take-FX identities in refs[] can exceed the Bridge response budget
+  -- after successful mutation at the supported 64-row ceiling.
   local refs = json_array({})
-  for index = 1, #result_rows do
-    local row = result_rows[index]
-    refs[#refs + 1] = e4_item_ref_object("item", row.new_item_ref)
-    for fx_index, slot in ipairs(row.take_fx_copy and row.take_fx_copy.slots or {}) do
-      refs[#refs + 1] = e4_item_take_fx_object_ref(row.active_take_ref, fx_index - 1, slot.name)
-    end
-  end
   local evidence_ms = (e4_item_monotonic_now() - evidence_started) * 1000
   return e4_item_summary(request, {
     rows = result_rows,
     source_footprints = source_footprints,
+    target_tracks = target_tracks,
     copy_depth = "active_take_footprint",
     new_item_ref = #result_rows == 1 and result_rows[1].new_item_ref or nil,
-    source_item_ref = #result_rows == 1 and result_rows[1].source_item_ref or nil,
-    target_track_ref = #result_rows == 1 and result_rows[1].target_track_ref or nil,
+    source_item_ref = #result_rows == 1 and prepared_rows[1].row.source_item_ref or nil,
+    target_track_ref = #result_rows == 1 and prepared_rows[1].target_track_ref or nil,
     position_seconds = #result_rows == 1 and result_rows[1].position_seconds or nil,
-    source_footprint = #result_rows == 1 and result_rows[1].source_footprint or nil,
+    source_footprint = #result_rows == 1 and source_footprints[1].source_footprint or nil,
     batch_timings = {
       preflight_ms = preflight_ms,
       mutation_ms = phase_timings.mutation_ms,
@@ -35550,6 +36447,7 @@ local E5_AUTOMATION_WRITE_HANDLERS = {
   ["automation.delete_automation_item"] = OPENREAPER_HANDLER_EXPORTS.delete_automation_item,
   ["automation.ensure_fx_parameter_envelope"] = OPENREAPER_HANDLER_EXPORTS.ensure_fx_parameter_envelope,
   ["automation.insert_fx_parameter_envelope_points"] = OPENREAPER_HANDLER_EXPORTS.insert_fx_parameter_envelope_points,
+  ["automation.insert_fx_parameter_envelope_points_batch"] = OPENREAPER_HANDLER_EXPORTS.insert_fx_parameter_envelope_points_batch,
   ["automation.insert_sine_wave_points"] = OPENREAPER_HANDLER_EXPORTS.insert_sine_wave_points,
 }
 
@@ -35601,6 +36499,7 @@ local D12_TRANSPORT_SAFE_HANDLERS = {
 
 local D13_ITEMS_CORE_WRITE_HANDLERS = {
   ["items.set_item_volume"] = OPENREAPER_HANDLER_EXPORTS.d13_items_set_item_volume,
+  ["items.set_item_take_controls_batch"] = OPENREAPER_HANDLER_EXPORTS.d13_items_set_item_take_controls_batch,
   ["items.set_take_volume"] = OPENREAPER_HANDLER_EXPORTS.d13_items_set_take_volume,
   ["items.set_take_pan"] = OPENREAPER_HANDLER_EXPORTS.d13_items_set_take_pan,
   ["items.set_active_take"] = OPENREAPER_HANDLER_EXPORTS.set_active_take,
@@ -36839,15 +37738,15 @@ local function write_terminal_result(filename, result_path, result_json, result_
     completed_request_files[filename] = true
     return true
   end
+  -- A long synchronous handler can block reaper.defer long enough for the
+  -- next client dispatch to observe a stale heartbeat. Refresh before the
+  -- terminal result becomes visible so its consumer cannot race the refresh.
+  local heartbeat_ok, heartbeat_error = write_bridge_heartbeat()
+  if not heartbeat_ok then
+    log("heartbeat refresh before result failed: " .. tostring(heartbeat_error))
+  end
   local ok, write_error = write_file_atomic(result_path, result_json .. "\n")
   if ok then
-    -- A long synchronous handler can block reaper.defer long enough for the
-    -- next client dispatch to observe a stale heartbeat. Refresh after the
-    -- terminal result is durable so the completed request proves loop health.
-    local heartbeat_ok, heartbeat_error = write_bridge_heartbeat()
-    if not heartbeat_ok then
-      log("heartbeat refresh after result failed: " .. tostring(heartbeat_error))
-    end
     finish_claim(filename)
     completed_request_files[filename] = true
     return true

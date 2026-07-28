@@ -1063,6 +1063,36 @@ local function e4_item_batch_preflight_budget(request, prepared_rows)
   return nil
 end
 
+local function e4_item_compact_batch_take_fx_copy(value)
+  local slots = json_array({})
+  for index = 1, #(value and value.slots or {}) do
+    local slot = value.slots[index]
+    slots[#slots + 1] = {
+      slot_index = slot.slot_index,
+      target_fx_ref = slot.target_fx_ref,
+    }
+  end
+  return {
+    status = value and value.status or "failed",
+    source_count = value and value.source_count or 0,
+    copied_count = value and value.copied_count or 0,
+    slots = slots,
+  }
+end
+
+local function e4_item_compact_batch_row(summary, row, source_footprint_index, target_track_index)
+  return {
+    id = row.id,
+    new_item_ref = summary.new_item_ref,
+    active_take_ref = summary.active_take_ref,
+    source_footprint_index = source_footprint_index,
+    target_track_index = target_track_index,
+    position_seconds = summary.position_seconds,
+    source_offset_seconds = row.source_offset_seconds,
+    take_fx_copy = e4_item_compact_batch_take_fx_copy(summary.take_fx_copy),
+  }
+end
+
 local function e4_item_copy_batch_set_offset(item, take, offset)
   if offset == nil then return true, false end
   local ok_set, accepted = call_reaper("SetMediaItemTakeInfo_Value", take, "D_STARTOFFS", offset)
@@ -1128,6 +1158,15 @@ local function copy_item_to_track_batch(request)
   local result_rows = json_array({})
   local source_footprints = json_array({})
   local source_footprint_seen = {}
+  local target_tracks = json_array({})
+  local target_track_seen = {}
+  for index = 1, #prepared_rows do
+    local target_track_ref = prepared_rows[index].target_track_ref
+    if not target_track_seen[target_track_ref] then
+      target_tracks[#target_tracks + 1] = { target_track_ref = target_track_ref }
+      target_track_seen[target_track_ref] = #target_tracks
+    end
+  end
   local phase_timings = { mutation_ms = 0, readback_ms = 0 }
   local native_mutations = 0
   local native_readbacks = 0
@@ -1179,14 +1218,11 @@ local function copy_item_to_track_batch(request)
         }, false)
       end
       native_readbacks = native_readbacks + 1
-      summary.id = prepared.row.id
-      summary.source_offset_seconds = prepared.row.source_offset_seconds
-      summary.batch_index = index
-      result_rows[#result_rows + 1] = summary
-      if not source_footprint_seen[prepared.row.source_item_ref] then
-        source_footprint_seen[prepared.row.source_item_ref] = true
+      local source_footprint_index = source_footprint_seen[prepared.row.source_item_ref]
+      if not source_footprint_index then
         source_footprints[#source_footprints + 1] = {
           source_item_ref = prepared.row.source_item_ref,
+          source_take_ref = prepared.source_snapshot.active_take_ref,
           source_footprint = {
             canonical_source_identity = prepared.footprint.canonical_source_identity,
             source_type = prepared.footprint.source_type,
@@ -1199,28 +1235,29 @@ local function copy_item_to_track_batch(request)
             take_fx = e4_item_take_fx_evidence(prepared.footprint.take_fx),
           },
         }
+        source_footprint_index = #source_footprints
+        source_footprint_seen[prepared.row.source_item_ref] = source_footprint_index
       end
+      result_rows[#result_rows + 1] = e4_item_compact_batch_row(
+        summary, prepared.row, source_footprint_index, target_track_seen[prepared.target_track_ref])
     end
   end
   local evidence_started = e4_item_monotonic_now()
+  -- Batch rows already carry every exact target identity. Repeating the same
+  -- Item and Take-FX identities in refs[] can exceed the Bridge response budget
+  -- after successful mutation at the supported 64-row ceiling.
   local refs = json_array({})
-  for index = 1, #result_rows do
-    local row = result_rows[index]
-    refs[#refs + 1] = e4_item_ref_object("item", row.new_item_ref)
-    for fx_index, slot in ipairs(row.take_fx_copy and row.take_fx_copy.slots or {}) do
-      refs[#refs + 1] = e4_item_take_fx_object_ref(row.active_take_ref, fx_index - 1, slot.name)
-    end
-  end
   local evidence_ms = (e4_item_monotonic_now() - evidence_started) * 1000
   return e4_item_summary(request, {
     rows = result_rows,
     source_footprints = source_footprints,
+    target_tracks = target_tracks,
     copy_depth = "active_take_footprint",
     new_item_ref = #result_rows == 1 and result_rows[1].new_item_ref or nil,
-    source_item_ref = #result_rows == 1 and result_rows[1].source_item_ref or nil,
-    target_track_ref = #result_rows == 1 and result_rows[1].target_track_ref or nil,
+    source_item_ref = #result_rows == 1 and prepared_rows[1].row.source_item_ref or nil,
+    target_track_ref = #result_rows == 1 and prepared_rows[1].target_track_ref or nil,
     position_seconds = #result_rows == 1 and result_rows[1].position_seconds or nil,
-    source_footprint = #result_rows == 1 and result_rows[1].source_footprint or nil,
+    source_footprint = #result_rows == 1 and source_footprints[1].source_footprint or nil,
     batch_timings = {
       preflight_ms = preflight_ms,
       mutation_ms = phase_timings.mutation_ms,

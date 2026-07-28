@@ -114,6 +114,7 @@ export const E5_ROUTING_AUTOMATION_EXTRA_TEMPLATE_IDS = Object.freeze([
   "template.automation.resolve_send_envelope",
   "template.automation.ensure_fx_parameter_envelope",
   "template.automation.insert_fx_parameter_envelope_points",
+  "template.automation.insert_fx_parameter_envelope_points_batch",
   "template.automation.insert_sine_wave_points",
 ]);
 

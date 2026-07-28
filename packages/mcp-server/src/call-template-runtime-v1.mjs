@@ -40,6 +40,8 @@ import {
   addExecutionPerformancePhase,
   attachExecutionPerformance,
   createExecutionPerformance,
+  finishExecutionPerformance,
+  snapshotExecutionPerformance,
 } from "../../core/src/execution-performance-v1.mjs";
 import {
   MACRO_EXECUTION_CONTRACT,
@@ -605,6 +607,7 @@ export const CALL_TEMPLATE_RUNTIME_E5_ROUTING_AUTOMATION_ROUTE_TEMPLATE_IDS = de
   "template.automation.resolve_send_envelope",
   "template.automation.ensure_fx_parameter_envelope",
   "template.automation.insert_fx_parameter_envelope_points",
+  "template.automation.insert_fx_parameter_envelope_points_batch",
   "template.automation.insert_sine_wave_points",
 ]);
 
@@ -656,6 +659,7 @@ export const CALL_TEMPLATE_RUNTIME_D13_ITEMS_CORE_TEMPLATE_IDS = deepFreeze([
   "template.items.list_selected_items",
   "template.items.list_items_on_track",
   "template.items.set_item_volume",
+  "template.items.set_item_take_controls_batch",
   "template.items.set_take_volume",
   "template.items.set_take_pan",
   "template.items.set_active_take",
@@ -776,6 +780,7 @@ export const CALL_TEMPLATE_RUNTIME_ALPHA3_2C3BC_PROJECT_FILE_SAVE_TEMPLATE_IDS =
 export const CALL_TEMPLATE_RUNTIME_ALPHA3_3_B1D_AUTOMATION_TEMPLATE_IDS = deepFreeze([
   "template.automation.delete_automation_item",
   "template.automation.ensure_fx_parameter_envelope",
+  "template.automation.insert_fx_parameter_envelope_points_batch",
 ]);
 
 export const CALL_TEMPLATE_RUNTIME_ALPHA3_3_LIFECYCLE_ATOM_TEMPLATE_IDS = deepFreeze([
@@ -830,6 +835,10 @@ const CALL_TEMPLATE_RUNTIME_ALPHA3_4_D3_PROJECT_SWITCHING_TEMPLATE_IDS = deepFre
   "template.project.open_project_in_tab",
 ]);
 
+const CALL_TEMPLATE_RUNTIME_ALPHA4_BATCH_TEMPLATE_IDS = deepFreeze([
+  "template.items.set_item_take_controls_batch",
+]);
+
 const CALL_TEMPLATE_RUNTIME_ALPHA3_PRODUCT_TEMPLATE_IDS = new Set([
   "template.project.create_project_map_snapshot",
   "template.project.create_observation_bundle",
@@ -841,6 +850,7 @@ const CALL_TEMPLATE_RUNTIME_ALPHA3_PRODUCT_TEMPLATE_IDS = new Set([
   ...CALL_TEMPLATE_RUNTIME_ALPHA3_2C3BC_PROJECT_FILE_SAVE_TEMPLATE_IDS,
   ...CALL_TEMPLATE_RUNTIME_ALPHA3_3_B1D_AUTOMATION_TEMPLATE_IDS,
   ...CALL_TEMPLATE_RUNTIME_ALPHA3_3_LIFECYCLE_ATOM_TEMPLATE_IDS,
+  ...CALL_TEMPLATE_RUNTIME_ALPHA4_BATCH_TEMPLATE_IDS,
 ]);
 
 export const CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS = deepFreeze(
@@ -870,6 +880,7 @@ export const CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS = deepFreez
   "template.items.set_active_take",
   ...CALL_TEMPLATE_RUNTIME_ALPHA3_2C3A_PROJECT_FILE_READ_TEMPLATE_IDS,
   ...CALL_TEMPLATE_RUNTIME_ALPHA3_2C3BC_PROJECT_FILE_SAVE_TEMPLATE_IDS,
+  ...CALL_TEMPLATE_RUNTIME_ALPHA4_BATCH_TEMPLATE_IDS,
   ...CALL_TEMPLATE_RUNTIME_ALPHA3_2D_PROJECT_INDEX_REFRESH_TEMPLATE_IDS,
   "template.automation.delete_envelope_points",
   ...CALL_TEMPLATE_RUNTIME_ALPHA3_3_B1D_AUTOMATION_TEMPLATE_IDS,
@@ -1176,12 +1187,14 @@ export function createCallTemplateRuntime(options = {}) {
     deadline = null,
     performance = null,
   }) {
-    const livePreflightStartedAt = Date.now();
+    const validationStartedAt = Date.now();
     assertTemplateRequestActive(signal, "Template request was cancelled before preflight.", deadline);
     assertLiveRuntimeDispatchAllowed(live, id);
     const descriptor = resolveAcceptedCatalogDescriptor(catalog, id);
     const normalizedInput = await preflightTemplateInput(id, input, budget);
-    addExecutionPerformancePhase(performance, "live_preflight", Date.now() - livePreflightStartedAt);
+    // Local request/input checks are validation. The Bridge owns the
+    // live_preflight phase, so its native timing is not counted twice.
+    addExecutionPerformancePhase(performance, "validation", Date.now() - validationStartedAt);
     assertTemplateRequestActive(signal, "Template request was cancelled before REAPER dispatch.", deadline);
     const execution = await executeTemplate({
       descriptor,
@@ -1209,7 +1222,7 @@ export function createCallTemplateRuntime(options = {}) {
       return lateTemplateExecutionEnvelope(execution, deadline);
     }
     if (!observeProjectIndex) return execution;
-    return observeProjectIndexExecution({
+    const observedExecution = await observeProjectIndexExecution({
       execution,
       id,
       projectIndexRuntime,
@@ -1217,13 +1230,26 @@ export function createCallTemplateRuntime(options = {}) {
       observationInput: normalizedInput,
       observationRefs: refs,
       observationContext: projectIndexObservationContext,
+      deadline,
     });
+    return signal?.aborted === true || deadline?.isExpired?.() === true
+      ? lateTemplateExecutionEnvelope(observedExecution, deadline)
+      : observedExecution;
   }
+
+  // The generic Macro executor reads capability flags from its atomic
+  // function. Preserve the managed executor's declarations across the
+  // Template harness, which binds object dispatch methods into a new function.
+  executeAcceptedAtomic.supportsItemTakeControlsBatch =
+    (live.executor ?? options.executor)?.supportsItemTakeControlsBatch === true;
+  executeAcceptedAtomic.supportsAutomationFxParameterEnvelopePointsBatch =
+    (live.executor ?? options.executor)?.supportsAutomationFxParameterEnvelopePointsBatch === true;
 
   async function call_template(request = {}, execution = {}) {
     let id = null;
     let deadline = null;
     let ownsDeadline = false;
+    const startedAt = Date.now();
     try {
       const normalized = normalizeCallTemplateRequest(request);
       id = normalized.id;
@@ -1294,7 +1320,7 @@ export function createCallTemplateRuntime(options = {}) {
           now,
         });
         retainEvidence(retainedEvidence, evidenceFromExecution(envelope, live.evidence), evidenceLimit);
-        return envelope;
+        return finalizeMacroExecutionEnvelope(envelope, deadline, performance, startedAt);
       }
       if (isAlpha3_3B1cItemsApplyMacroId(id)) {
         const envelope = await executeAlpha3_3B1cItemsApplyMacro({
@@ -1304,7 +1330,7 @@ export function createCallTemplateRuntime(options = {}) {
           now,
         });
         retainEvidence(retainedEvidence, evidenceFromExecution(envelope, live.evidence), evidenceLimit);
-        return envelope;
+        return finalizeMacroExecutionEnvelope(envelope, deadline, performance, startedAt);
       }
       if (isAlpha3_3B1dAutomationApplyMacroId(id)) {
         const envelope = await executeAlpha3_3B1dAutomationApplyMacro({
@@ -1314,7 +1340,7 @@ export function createCallTemplateRuntime(options = {}) {
           now,
         });
         retainEvidence(retainedEvidence, evidenceFromExecution(envelope, live.evidence), evidenceLimit);
-        return envelope;
+        return finalizeMacroExecutionEnvelope(envelope, deadline, performance, startedAt);
       }
       if (["macro.midi.apply", "macro.fx.apply_chain", "macro.fx.set_controls"].includes(id)) {
         if (id === "macro.midi.apply" && ["edit_notes", "quantize", "write_cc"].includes(normalized.input?.mode)) {
@@ -1325,7 +1351,7 @@ export function createCallTemplateRuntime(options = {}) {
             now,
           });
           retainEvidence(retainedEvidence, evidenceFromExecution(envelope, live.evidence), evidenceLimit);
-          return envelope;
+          return finalizeMacroExecutionEnvelope(envelope, deadline, performance, startedAt);
         }
         const adapted = adaptAlpha3_3B1CanonicalExecutionRequest(normalized);
         if (!adapted.ok) {
@@ -1368,7 +1394,7 @@ export function createCallTemplateRuntime(options = {}) {
         }
         const canonicalEnvelope = canonicalizeAlpha3_3B1MacroExecutionEnvelope(envelope, id);
         retainEvidence(retainedEvidence, evidenceFromExecution(canonicalEnvelope, live.evidence), evidenceLimit);
-        return canonicalEnvelope;
+        return finalizeMacroExecutionEnvelope(canonicalEnvelope, deadline, performance, startedAt);
       }
       if (isAlpha3_2_5BProjectUnderstandingMacroId(id)) {
         const envelope = await executeAlpha3_2_5BProjectUnderstandingMacro({
@@ -1379,7 +1405,7 @@ export function createCallTemplateRuntime(options = {}) {
           now,
         });
         retainEvidence(retainedEvidence, evidenceFromExecution(envelope, live.evidence), evidenceLimit);
-        return envelope;
+        return finalizeMacroExecutionEnvelope(envelope, deadline, performance, startedAt);
       }
       if (isAlpha3_2EMediaPlaceAssetsMacroId(id)) {
         const envelope = await executeAlpha3_3MediaPlaceAssetsMacro({
@@ -1389,7 +1415,7 @@ export function createCallTemplateRuntime(options = {}) {
           now,
         });
         retainEvidence(retainedEvidence, evidenceFromExecution(envelope, live.evidence), evidenceLimit);
-        return envelope;
+        return finalizeMacroExecutionEnvelope(envelope, deadline, performance, startedAt);
       }
       if (isAlpha3_2_5CProjectWriteMacroId(id)) {
         const envelope = await executeAlpha3_2_5CProjectWriteMacro({
@@ -1399,7 +1425,7 @@ export function createCallTemplateRuntime(options = {}) {
           now,
         });
         retainEvidence(retainedEvidence, evidenceFromExecution(envelope, live.evidence), evidenceLimit);
-        return envelope;
+        return finalizeMacroExecutionEnvelope(envelope, deadline, performance, startedAt);
       }
       if (isAlpha3_2ERenderTargetsMacroId(id)) {
         const envelope = await executeAlpha3_2_5CRenderTargetsMacro({
@@ -1410,7 +1436,7 @@ export function createCallTemplateRuntime(options = {}) {
           now,
         });
         retainEvidence(retainedEvidence, evidenceFromExecution(envelope, live.evidence), evidenceLimit);
-        return envelope;
+        return finalizeMacroExecutionEnvelope(envelope, deadline, performance, startedAt);
       }
       if (isAlpha3_2C3DProjectFileMacroId(id)) {
         const envelope = await executeAlpha3_2_5CProjectFileMacro({
@@ -1420,7 +1446,7 @@ export function createCallTemplateRuntime(options = {}) {
           now,
         });
         retainEvidence(retainedEvidence, evidenceFromExecution(envelope, live.evidence), evidenceLimit);
-        return envelope;
+        return finalizeMacroExecutionEnvelope(envelope, deadline, performance, startedAt);
       }
       if (isAlpha3_2AContractOnlyMacroId(id)) {
         throw new CallTemplateRuntimeError(
@@ -1479,7 +1505,7 @@ export function createCallTemplateRuntime(options = {}) {
           now,
         });
         retainEvidence(retainedEvidence, evidenceFromExecution(envelope, live.evidence), evidenceLimit);
-        return envelope;
+        return finalizeMacroExecutionEnvelope(envelope, deadline, performance, startedAt);
       }
       if (isAlpha3_2_5CExecutableControlMacroId(id)) {
         const envelope = await executeAlpha3_2_5CControlMacro({
@@ -1491,7 +1517,7 @@ export function createCallTemplateRuntime(options = {}) {
           now,
         });
         retainEvidence(retainedEvidence, evidenceFromExecution(envelope, live.evidence), evidenceLimit);
-        return envelope;
+        return finalizeMacroExecutionEnvelope(envelope, deadline, performance, startedAt);
       }
       if (isAlpha3_2_5DMidiMacroId(id)) {
         const envelope = await executeAlpha3_2_5DMidiMacro({
@@ -1502,7 +1528,7 @@ export function createCallTemplateRuntime(options = {}) {
           now,
         });
         retainEvidence(retainedEvidence, evidenceFromExecution(envelope, live.evidence), evidenceLimit);
-        return envelope;
+        return finalizeMacroExecutionEnvelope(envelope, deadline, performance, startedAt);
       }
       if (isAlpha3_2_5DNativeFxMacroId(id)) {
         const envelope = await executeAlpha3_2_5DNativeFxMacro({
@@ -1513,7 +1539,7 @@ export function createCallTemplateRuntime(options = {}) {
           now,
         });
         retainEvidence(retainedEvidence, evidenceFromExecution(envelope, live.evidence), evidenceLimit);
-        return envelope;
+        return finalizeMacroExecutionEnvelope(envelope, deadline, performance, startedAt);
       }
       if (isAlpha3_2_5CLegacyControlMacroId(id)) {
         const targetKind = targetKindForAlpha3_2_5CLegacyControlMacro(id);
@@ -1631,6 +1657,64 @@ export function createCallTemplateRuntime(options = {}) {
   });
 }
 
+function finalizeMacroExecutionEnvelope(envelope, deadline, performance, startedAt) {
+  const terminal = deadline?.isExpired?.() === true || deadline?.signal?.aborted === true
+    ? lateMacroExecutionEnvelope(envelope, deadline)
+    : envelope;
+  return attachExecutionPerformance(terminal, performance, Date.now() - startedAt);
+}
+
+function lateMacroExecutionEnvelope(envelope, deadline = null) {
+  const existingDetails = isPlainObject(envelope?.error?.details)
+    ? envelope.error.details
+    : {};
+  const existingChanges = Array.isArray(envelope?.result?.changes)
+    ? envelope.result.changes.length
+    : 0;
+  const explicitMutationTruth = typeof existingDetails.mutation_truth === "string"
+    ? existingDetails.mutation_truth
+    : null;
+  const mutationTruth = existingChanges > 0
+    ? "applied_unverified"
+    : explicitMutationTruth
+      ?? (envelope?.macro?.risk === "read" || existingDetails.zero_write === true
+        ? "not_applied"
+        : "unknown");
+  const details = mergeDeadlineDetails(deadline, {
+    ...existingDetails,
+    request_cancelled: true,
+    result_available_after_cancellation: envelope?.ok === true || existingChanges > 0,
+    mutation_truth: mutationTruth,
+    zero_write: mutationTruth === "not_applied",
+  });
+  const blockers = Array.isArray(envelope?.blockers) ? envelope.blockers : [];
+  const blocker = {
+    code: "CALL_TEMPLATE_EXECUTION_FAILED",
+    message: "Macro returned after cancellation or deadline expiry; inspect preserved changes before retrying.",
+    recoverable: false,
+  };
+  return {
+    ...envelope,
+    ok: false,
+    execution: {
+      ...(isPlainObject(envelope?.execution) ? envelope.execution : {}),
+      status: "failed",
+      completed_at: new Date().toISOString(),
+    },
+    blockers: [...blockers, blocker].slice(0, 32),
+    error: {
+      code: "CALL_TEMPLATE_EXECUTION_FAILED",
+      message: blocker.message,
+      recoverable: false,
+      details,
+    },
+    recovery: envelope?.recovery ?? {
+      partial_changes_possible: existingChanges > 0,
+      action: "Inspect preserved Macro evidence and project state before retrying.",
+    },
+  };
+}
+
 async function observeProjectIndexExecution({
   execution,
   id,
@@ -1639,6 +1723,7 @@ async function observeProjectIndexExecution({
   observationInput,
   observationRefs,
   observationContext,
+  deadline = null,
 }) {
   if (!projectIndexRuntime || !ALPHA3_2D_PROJECT_INDEX_REFRESH_TEMPLATE_IDS.includes(id) || execution?.ok !== true) {
     return execution;
@@ -1666,6 +1751,9 @@ async function observeProjectIndexExecution({
         template_id: id,
         execution,
       });
+      if (deadline?.isExpired?.() === true || deadline?.signal?.aborted === true) {
+        return lateTemplateExecutionEnvelope(execution, deadline);
+      }
       const payload = artifactPayloadFromRead(artifactRead);
       if (payload) {
         observation = projectIndexRuntime.observeArtifactPayload({
@@ -2531,7 +2619,7 @@ function createMacroAtomicExecutor(
   performance = null,
 ) {
   let childIndex = 0;
-  return (childRequest = {}) => {
+  const macroAtomic = (childRequest = {}) => {
     if (signal?.aborted === true) {
       throw new CallTemplateRuntimeError(
         "CALL_TEMPLATE_EXECUTION_FAILED",
@@ -2565,6 +2653,11 @@ function createMacroAtomicExecutor(
       },
     });
   };
+  // The live executor exposes only capabilities that are implemented by the
+  // managed Bridge. Legacy test executors intentionally keep the old path.
+  macroAtomic.supportsItemTakeControlsBatch = executeAtomic?.supportsItemTakeControlsBatch === true;
+  macroAtomic.supportsAutomationFxParameterEnvelopePointsBatch = executeAtomic?.supportsAutomationFxParameterEnvelopePointsBatch === true;
+  return macroAtomic;
 }
 
 function normalizeInternalDispatchTimeoutMs(value) {

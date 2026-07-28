@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { mkdir, mkdtemp, readdir } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
+import { fileURLToPath } from "node:url";
 import {
   artifactPathFromRef,
   parseArtifactRef,
@@ -15,6 +16,8 @@ import {
 } from "../../packages/core/src/artifact-state-store-live-helper-v1.mjs";
 import {
   LIVE_BRIDGE_EXECUTOR_ENV,
+  LIVE_BRIDGE_HEARTBEAT_FILENAME,
+  LIVE_BRIDGE_LIVENESS_CONTRACT,
 } from "../../packages/mcp-server/src/live-bridge-executor-v1.mjs";
 import { TOOL_ABI_V1_TOOL_NAMES } from "../../packages/mcp-server/src/tool-abi-v1.mjs";
 import {
@@ -28,6 +31,7 @@ import {
 
 const ROOT = new URL("../..", import.meta.url);
 const SMOKE_SCRIPT = "scripts/smoke-artifact-state-live.mjs";
+const BRIDGE_SCRIPT_PATH = fileURLToPath(new URL("../../reaper/bridge/openreaper-live-bridge.lua", import.meta.url));
 const HELPER_SOURCE = readFileSync(ARTIFACT_STATE_LIVE_SMOKE_HELPER_SCRIPT_PATH, "utf8");
 const VALID_REF = "artifact:core:live_artifact_smoke:art_20260703010203999_451_a4b5c6";
 
@@ -160,12 +164,22 @@ describe("Layer 4.5C Lua artifact helper and live artifact smoke gate", () => {
     const transportDir = await mkdtemp(path.join(tmpdir(), "openreaper-layer4_5c-transport-"));
     await mkdir(path.join(transportDir, "requests"));
     await mkdir(path.join(transportDir, "results"));
+    await writeFile(path.join(transportDir, LIVE_BRIDGE_HEARTBEAT_FILENAME), `${JSON.stringify({
+      contract: LIVE_BRIDGE_LIVENESS_CONTRACT,
+      active_owner: "openreaper-artifact-state-smoke",
+      active_generation: 1,
+      sequence: 1,
+      refreshed_at_unix_s: Math.floor(Date.now() / 1_000),
+      interval_ms: 500,
+    })}\n`);
 
     const report = runSmokeExpectingFailure(["--live"], {
       [ARTIFACT_STATE_LIVE_SMOKE_OPT_IN_ENV]: "",
       [ARTIFACT_STATE_LIVE_SMOKE_ARTIFACT_ROOT_ENV]: artifactRoot,
       [LIVE_BRIDGE_EXECUTOR_ENV.transport_dir]: transportDir,
       [LIVE_BRIDGE_EXECUTOR_ENV.timeout_ms]: "1",
+      OPENREAPER_LIVE_BRIDGE_OWNER: "openreaper-artifact-state-smoke",
+      OPENREAPER_LIVE_BRIDGE_GENERATION: "1",
     });
 
     assert.equal(report.ok, false);
@@ -259,6 +273,7 @@ function runSmoke(args, env) {
       encoding: "utf8",
       env: {
         ...process.env,
+        [LIVE_BRIDGE_EXECUTOR_ENV.bridge_script_path]: BRIDGE_SCRIPT_PATH,
         ...env,
       },
     }).trim(),
@@ -272,6 +287,7 @@ function runSmokeExpectingFailure(args, env) {
       encoding: "utf8",
       env: {
         ...process.env,
+        [LIVE_BRIDGE_EXECUTOR_ENV.bridge_script_path]: BRIDGE_SCRIPT_PATH,
         ...env,
       },
     });

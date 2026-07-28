@@ -900,6 +900,23 @@
       "capability": "items.set_item_volume"
     },
     {
+      "template_id": "template.items.set_item_take_controls_batch",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "items",
+      "risk": "write",
+      "route": "d13-items-core-handlers",
+      "handler_file": "items/d13_items_core_route.lua",
+      "handler_export": "d13_items_set_item_take_controls_batch",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d13-items-core-handler-expansion.test.mjs"
+      ],
+      "capability": "items.set_item_take_controls_batch"
+    },
+    {
       "template_id": "template.items.set_take_volume",
       "operation": {
         "family": "run_command",
@@ -2963,6 +2980,23 @@
       "route": "e5-routing-automation-extra-handlers",
       "handler_file": "routing/e5_r1_routing_read_route.lua",
       "handler_export": "insert_fx_parameter_envelope_points",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e5-routing-automation-extra-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.automation.insert_fx_parameter_envelope_points_batch",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "automation.insert_fx_parameter_envelope_points_batch",
+      "pack": "automation",
+      "risk": "write",
+      "route": "e5-routing-automation-extra-handlers",
+      "handler_file": "routing/e5_r1_routing_read_route.lua",
+      "handler_export": "insert_fx_parameter_envelope_points_batch",
       "artifact_policy": "none",
       "tests": [
         "tests/layer4dx/e5-routing-automation-extra-handler-expansion.test.mjs"

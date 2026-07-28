@@ -6,3 +6,7 @@ coverage/
 .env.*
 *.log
 setup-out/
+packages/mcp-server/src/*.PROBE.mjs
+tests/alpha4/evidence/
+tests/alpha4/shard-e/evidence/
+tests/alpha4/shard-f/evidence/

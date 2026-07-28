@@ -77,6 +77,7 @@ export const ALPHA3_3_B1C_ITEMS_APPLY_TEMPLATE_IDS = deepFreeze([
   "template.items.list_selected_items",
   "template.items.move_item",
   "template.items.set_item_volume",
+  "template.items.set_item_take_controls_batch",
   "template.items.set_take_volume",
   "template.items.set_take_pan",
   "template.items.set_take_pitch",
@@ -104,6 +105,7 @@ const LIST_SELECTED_ID = "template.items.list_selected_items";
 const MOVE_ITEM_ID = "template.items.move_item";
 const SET_ACTIVE_TAKE_ID = "template.items.set_active_take";
 const SET_ITEM_VOLUME_ID = "template.items.set_item_volume";
+const SET_ITEM_TAKE_CONTROLS_BATCH_ID = "template.items.set_item_take_controls_batch";
 const SET_TAKE_VOLUME_ID = "template.items.set_take_volume";
 const SET_TAKE_PAN_ID = "template.items.set_take_pan";
 const SET_TAKE_PITCH_ID = "template.items.set_take_pitch";
@@ -679,6 +681,165 @@ export async function executeAlpha3_3B1cItemsApplyMacro({
     status: "completed",
     summary: `Applied and verified ${state.changes.length} Item change row(s).`,
     data: resultData(normalized.input, state),
+  });
+}
+
+async function executeSetItemTakeControlsBatchNative({
+  entry,
+  request,
+  executeAtomic,
+  projectIndexRuntime,
+  now,
+  monoNow = () => performance.now(),
+  startedAt,
+  stages,
+  state,
+  activeBudget,
+  normalized,
+}) {
+  const t0 = monoTick(monoNow);
+  const dryRun = normalized.input.dry_run;
+  const batchInput = {
+    batch: normalized.input.changes,
+    dry_run: dryRun,
+  };
+  state.batchMode = true;
+  state.calls = emptyCalls();
+  state.timings = emptyTimings();
+  state.nativeBatch = null;
+
+  let execution;
+  try {
+    execution = await runAtomicCounted(executeAtomic, request, state, "mutation", {
+      id: SET_ITEM_TAKE_CONTROLS_BATCH_ID,
+      input: batchInput,
+      refs: {},
+    });
+  } catch (error) {
+    state.timings.total_ms = monoElapsed(t0, monoNow);
+    return failureEnvelope({
+      entry, request, startedAt, now, stages, state, activeBudget,
+      code: "ITEM_APPLY_ATOMIC_FAILED",
+      message: error?.message ?? "Native Item/Take controls batch failed.",
+      blockers: [blocker("ITEM_APPLY_ATOMIC_FAILED", error?.message ?? "Native Item/Take controls batch failed.")],
+      data: compactBatchData(state, { dry_run: dryRun }),
+    });
+  }
+  collectExecutionEvidence(state, execution);
+
+  const summary = executionSummary(execution);
+  const batchTimings = plainObject(summary.batch_timings ?? summary.timings);
+  const nativeCounters = plainObject(summary.native_counters ?? summary.counters);
+  state.nativeBatch = {
+    batch_timings: batchTimings,
+    native_counters: nativeCounters,
+    transport_call_count: 1,
+  };
+  state.timings = {
+    target_resolution_ms: finiteOrZero(batchTimings.target_resolution_ms ?? batchTimings.preflight_ms),
+    preflight_ms: finiteOrZero(batchTimings.preflight_ms),
+    mutation_ms: finiteOrZero(batchTimings.mutation_ms),
+    final_readback_ms: finiteOrZero(batchTimings.readback_ms ?? batchTimings.final_readback_ms),
+    index_maintenance_ms: 0,
+    total_ms: finiteOrZero(batchTimings.total_ms) || monoElapsed(t0, monoNow),
+  };
+
+  if (execution?.ok !== true) {
+    return failureEnvelope({
+      entry, request, startedAt, now, stages, state, activeBudget,
+      code: execution?.error?.code ?? "ITEM_APPLY_ATOMIC_FAILED",
+      message: execution?.error?.message ?? "Native Item/Take controls batch failed.",
+      blockers: [blocker(
+        execution?.error?.code ?? "ITEM_APPLY_ATOMIC_FAILED",
+        execution?.error?.message ?? "Native Item/Take controls batch failed.",
+        execution?.error?.recoverable !== false,
+      )],
+      data: compactBatchData(state, { dry_run: dryRun }),
+    });
+  }
+
+  const returnedChanges = Array.isArray(summary.changes)
+    ? summary.changes
+    : Array.isArray(summary.rows) ? summary.rows : [];
+  if (returnedChanges.length !== normalized.input.changes.length) {
+    state.timings.total_ms = monoElapsed(t0, monoNow);
+    return failureEnvelope({
+      entry, request, startedAt, now, stages, state, activeBudget,
+      code: "ITEM_APPLY_BATCH_READBACK_INVALID",
+      message: `Native Item/Take controls batch returned ${returnedChanges.length} row(s) for ${normalized.input.changes.length} requested row(s).`,
+      blockers: [blocker("ITEM_APPLY_BATCH_READBACK_INVALID", "Native Item/Take controls batch did not return one truth row per request row.")],
+      data: compactBatchData(state, { dry_run: dryRun }),
+    });
+  }
+
+  state.changes = normalized.input.changes.map((row, index) => normalizeNativeBatchChange(
+    row,
+    returnedChanges[index],
+    dryRun,
+  ));
+  state.canonicalRefs = state.changes.flatMap((change) => [change.item_ref, change.take_ref]);
+  const indexStarted = monoTick(monoNow);
+  const indexResult = maintainBatchProjectIndex(projectIndexRuntime, state, now);
+  state.timings.index_maintenance_ms = monoElapsed(indexStarted, monoNow);
+  state.timings.total_ms = finiteOrZero(batchTimings.total_ms) || monoElapsed(t0, monoNow);
+  applyBatchIndexMaintenance(state.changes, indexResult);
+
+  const failedRow = state.changes.find((change) => !["applied", "planned"].includes(change.status));
+  if (failedRow || indexResult.ok === false) {
+    const code = failedRow?.code ?? indexResult.code ?? "ITEM_APPLY_BATCH_FAILED";
+    const message = failedRow
+      ? `Native Item/Take controls batch row ${failedRow.id} did not complete.`
+      : indexResult.message;
+    return failureEnvelope({
+      entry, request, startedAt, now, stages, state, activeBudget,
+      status: state.changes.some((change) => change.mutation?.status === "completed") ? "partial_failure" : "failed",
+      code,
+      message,
+      blockers: [blocker(code, message)],
+      data: compactBatchData(state, { dry_run: dryRun }),
+    });
+  }
+
+  pushStage(stages, "items-apply-mutate", "template_execute", "completed", `Native batch applied ${state.changes.length} Item/Take control row(s).`, state.evidenceRefs);
+  pushStage(stages, "items-apply-verify", "verify", "completed", "Native batch returned aggregate live readback for every requested row.", state.evidenceRefs);
+  pushStage(stages, "items-apply-index", "index_update", indexResult.status === "skipped" ? "skipped" : "completed", indexResult.message, []);
+  pushStage(stages, "items-apply-result", "result_project", "completed", "Projected native Item/Take batch truth.", state.evidenceRefs);
+  return successEnvelope({
+    entry, request, startedAt, now, stages, state, activeBudget,
+    status: dryRun ? "dry_run_completed" : "completed",
+    summary: dryRun
+      ? `Previewed ${state.changes.length} Item/Take control row(s) with no mutation.`
+      : `Applied and verified ${state.changes.length} Item/Take control row(s) in one native batch.`,
+    data: compactBatchData(state, { dry_run: dryRun }),
+    compact: activeBudget <= MIN_RESPONSE_BUDGET,
+  });
+}
+
+function normalizeNativeBatchChange(requested, returned, dryRun) {
+  const raw = isPlainObject(returned) ? returned : {};
+  const mutation = typeof raw.mutation === "string" ? raw.mutation : raw.mutation?.status;
+  const readback = typeof raw.live_readback === "string" ? raw.live_readback : raw.live_readback?.status ?? raw.readback?.status;
+  return compactObject({
+    ...batchRowChange(requested, {
+      status: dryRun ? "planned" : raw.status ?? "applied",
+      mutation: dryRun ? "not_run" : mutation ?? "completed",
+      readback: dryRun ? "not_run" : readback ?? "passed",
+      index: dryRun ? "skipped" : "pending",
+      code: raw.code,
+      fields: raw.fields,
+    }),
+    ...raw,
+    id: raw.id ?? requested.id,
+    item_ref: raw.item_ref ?? requested.item_ref,
+    take_ref: raw.take_ref ?? requested.take_ref,
+    item: raw.item ?? requested.item,
+    take: raw.take ?? requested.take,
+    status: dryRun ? "planned" : raw.status ?? "applied",
+    mutation: dryRun ? { status: "not_run" } : typeof raw.mutation === "object" ? raw.mutation : { status: mutation ?? "completed" },
+    live_readback: dryRun ? { status: "not_run" } : typeof raw.live_readback === "object" ? raw.live_readback : { status: readback ?? "passed" },
+    index_maintenance: dryRun
+      ? { status: "skipped", scopes: [] }
+      : (raw.index_maintenance ?? { status: "pending", scopes: [] }),
   });
 }
 
@@ -1416,26 +1577,50 @@ async function executeCreateVariationsBatch({
   } else {
     const copySummary = executionSummary(copyExecution);
     const batchRows = Array.isArray(copySummary.rows) ? copySummary.rows : [];
+    const sourceFootprints = Array.isArray(copySummary.source_footprints) ? copySummary.source_footprints : [];
+    const targetTracks = Array.isArray(copySummary.target_tracks) ? copySummary.target_tracks : [];
     const objectRefs = executionObjectRefs(copyExecution);
     for (const [index, row] of resolvedRows.entries()) {
       const change = state.changes[index];
       const rowSummary = batchRows.find((candidate) => candidate?.id === row.id);
       const newItemRef = rowSummary?.new_item_ref;
       const newTakeRef = rowSummary?.active_take_ref;
+      const sourceFootprint = Number.isSafeInteger(rowSummary?.source_footprint_index)
+        ? sourceFootprints[rowSummary.source_footprint_index - 1]
+        : sourceFootprints.find((candidate) => candidate?.source_item_ref === row.source_item_ref);
+      const targetTrack = Number.isSafeInteger(rowSummary?.target_track_index)
+        ? targetTracks[rowSummary.target_track_index - 1]
+        : targetTracks.find((candidate) => candidate?.target_track_ref === row.target_track_ref);
       const copiedItem = objectRefs.find((ref) => ref.kind === "item" && ref.ref === newItemRef);
+      const compactItemProof = isPlainObject(sourceFootprint?.source_footprint)
+        && isExactGuidRef(sourceFootprint?.source_take_ref, "take");
+      const copiedItemProofValid = copiedItem === undefined
+        ? compactItemProof
+        : isAuthoritativeItemObjectRef(copiedItem) && copiedItem.ref === newItemRef;
+      const sourceIdentityValid = rowSummary?.source_item_ref === undefined
+        ? sourceFootprint?.source_item_ref === row.source_item_ref
+        : rowSummary.source_item_ref === row.source_item_ref;
+      const targetIdentityValid = rowSummary?.target_track_ref === undefined
+        ? targetTrack?.target_track_ref === row.target_track_ref
+        : rowSummary.target_track_ref === row.target_track_ref;
       if (!rowSummary || !isExactGuidRef(newItemRef, "item") || !isExactGuidRef(newTakeRef, "take")
-        || !isAuthoritativeItemObjectRef(copiedItem) || copiedItem.ref !== newItemRef
-        || newItemRef === row.source_item_ref || rowSummary.source_item_ref !== row.source_item_ref
-        || rowSummary.target_track_ref !== row.target_track_ref || !valuesMatch(rowSummary.position_seconds, row.position_seconds)) {
+        || !copiedItemProofValid
+        || newItemRef === row.source_item_ref || !sourceIdentityValid
+        || !targetIdentityValid || !valuesMatch(rowSummary.position_seconds, row.position_seconds)) {
         change.mutation = { status: "completed" };
         change.status = "readback_failed";
         executionFailure ??= { ...failed("ITEM_APPLY_VARIATION_COPY_IDENTITY_INVALID", `Batch result for ${row.id} omitted an exact new Item/Take identity or mismatched the requested source, Track, or position.`), phase: "readback" };
         continue;
       }
+      const rowSourceTakeRef = rowSummary.source_item?.active_take_ref;
+      const sharedSourceTakeRef = sourceFootprint?.source_take_ref;
+      const sourceTakeRef = rowSourceTakeRef ?? sharedSourceTakeRef;
       const takeFxCopy = projectVerifiedTakeFxCopy(rowSummary.take_fx_copy, {
-        sourceTakeRef: rowSummary.source_item?.active_take_ref,
+        sourceTakeRef,
         targetTakeRef: newTakeRef,
         objectRefs,
+        sharedTakeFx: sourceFootprint?.source_footprint?.take_fx,
+        sharedSourceTakeRef,
       });
       if (!takeFxCopy) {
         change.mutation = { status: "completed" };
@@ -1603,6 +1788,22 @@ async function executeSetItemTakeControlsBatch({
       code: "ITEM_APPLY_LIVE_EXECUTOR_REQUIRED",
       message: "macro.items.apply requires the managed OpenReaper live executor.",
       data: compactBatchData(state, { dry_run: dryRun }),
+    });
+  }
+
+  if (executeAtomic.supportsItemTakeControlsBatch === true) {
+    return executeSetItemTakeControlsBatchNative({
+      entry,
+      request,
+      executeAtomic,
+      projectIndexRuntime,
+      now,
+      monoNow,
+      startedAt,
+      stages,
+      state,
+      activeBudget,
+      normalized,
     });
   }
 
@@ -2236,6 +2437,13 @@ function compactBatchData(state, { dry_run }) {
     },
     calls: finalizeCalls(state.calls),
     dry_run: dry_run === true,
+    ...(state.nativeBatch
+      ? {
+          batch_timings: clone(state.nativeBatch.batch_timings),
+          native_counters: clone(state.nativeBatch.native_counters),
+          transport_call_count: state.nativeBatch.transport_call_count,
+        }
+      : {}),
   };
 }
 
@@ -2767,6 +2975,7 @@ function compactVariationTakeFxCopy(value) {
   if (!isPlainObject(value) || !Array.isArray(value.slots)) return undefined;
   return {
     status: value.status,
+    copied_count: value.copied_count,
     slots: value.slots.map((slot) => ({ target_fx_ref: slot.target_fx_ref })),
   };
 }
@@ -2802,6 +3011,9 @@ function projectCompactBatchData(data) {
       total_ms: Math.round(Number(value.timings?.total_ms) || 0),
     },
     calls: finalizeCalls(value.calls),
+    ...(isPlainObject(value.batch_timings) ? { batch_timings: clone(value.batch_timings) } : {}),
+    ...(isPlainObject(value.native_counters) ? { native_counters: clone(value.native_counters) } : {}),
+    ...(Number.isInteger(value.transport_call_count) ? { transport_call_count: value.transport_call_count } : {}),
   };
 }
 
@@ -3040,12 +3252,25 @@ function isExactGuidRef(value, kind) {
   return typeof value === "string" && new RegExp(`^${kind}:guid:\\{[^{}]+\\}$`, "u").test(value);
 }
 
-function projectVerifiedTakeFxCopy(value, { sourceTakeRef, targetTakeRef, objectRefs }) {
+function projectVerifiedTakeFxCopy(value, {
+  sourceTakeRef,
+  targetTakeRef,
+  objectRefs,
+  sharedTakeFx,
+  sharedSourceTakeRef,
+}) {
+  const sharedSlots = Array.isArray(sharedTakeFx?.ordered_chain) ? sharedTakeFx.ordered_chain : null;
+  const hasSharedProof = sharedSlots !== null && isExactGuidRef(sharedSourceTakeRef, "take");
   if (!isPlainObject(value)
     || value.status !== "passed"
     || !isExactGuidRef(sourceTakeRef, "take")
-    || value.source_take_ref !== sourceTakeRef
-    || value.target_take_ref !== targetTakeRef
+    || (sharedSourceTakeRef !== undefined && sharedSourceTakeRef !== sourceTakeRef)
+    || (hasSharedProof
+      ? (value.source_take_ref !== undefined && value.source_take_ref !== sourceTakeRef)
+      : value.source_take_ref !== sourceTakeRef)
+    || (hasSharedProof
+      ? (value.target_take_ref !== undefined && value.target_take_ref !== targetTakeRef)
+      : value.target_take_ref !== targetTakeRef)
     || !Number.isSafeInteger(value.source_count)
     || !Number.isSafeInteger(value.copied_count)
     || value.source_count < 0
@@ -3053,29 +3278,45 @@ function projectVerifiedTakeFxCopy(value, { sourceTakeRef, targetTakeRef, object
     || !Array.isArray(value.slots)
     || value.slots.length !== value.copied_count) return null;
   const refs = Array.isArray(objectRefs) ? objectRefs : [];
+  if (sharedSlots && (!Number.isSafeInteger(sharedTakeFx.source_fx_count)
+    || !Number.isSafeInteger(sharedTakeFx.target_fx_count)
+    || sharedTakeFx.source_fx_count !== value.source_count
+    || sharedTakeFx.target_fx_count !== value.source_count
+    || sharedSlots.length !== value.source_count)) return null;
   const slots = [];
   for (const [slotIndex, slot] of value.slots.entries()) {
     const sourceFxRef = `fx:${sourceTakeRef}:${slotIndex}`;
     const targetFxRef = `fx:${targetTakeRef}:${slotIndex}`;
     const targetObject = refs.find((entry) => entry.kind === "fx" && entry.ref === targetFxRef);
+    const inferredTargetIdentity = `${targetTakeRef.slice("take:".length)}:${slotIndex}`;
+    const targetObjectValid = targetObject === undefined
+      ? hasSharedProof
+      : isPlainObject(targetObject.identity)
+        && ((targetObject.identity.scheme === "take_fx"
+          && targetObject.identity.value === `${targetTakeRef}:${slotIndex}`)
+          || (hasSharedProof
+            && targetObject.identity.scheme === "take"
+            && targetObject.identity.value === inferredTargetIdentity));
+    const metadata = typeof slot?.name === "string" ? slot : sharedSlots?.[slotIndex];
     if (!isPlainObject(slot)
       || slot.slot_index !== slotIndex
-      || slot.source_fx_ref !== sourceFxRef
+      || (hasSharedProof
+        ? (slot.source_fx_ref !== undefined && slot.source_fx_ref !== sourceFxRef)
+        : slot.source_fx_ref !== sourceFxRef)
       || slot.target_fx_ref !== targetFxRef
-      || typeof slot.name !== "string"
-      || slot.name.length < 1
-      || typeof slot.enabled !== "boolean"
-      || !Number.isSafeInteger(slot.parameter_count)
-      || slot.parameter_count < 0
-      || !Array.isArray(slot.parameter_names)
-      || !Array.isArray(slot.parameter_idents)
-      || slot.parameter_names.length !== slot.parameter_count
-      || slot.parameter_idents.length !== slot.parameter_count
-      || slot.parameter_names.some((entry) => typeof entry !== "string" || entry.length < 1)
-      || slot.parameter_idents.some((entry) => typeof entry !== "string" || entry.length < 1)
-      || !isPlainObject(targetObject?.identity)
-      || targetObject.identity.scheme !== "take_fx"
-      || targetObject.identity.value !== `${targetTakeRef}:${slotIndex}`) return null;
+      || !isPlainObject(metadata)
+      || typeof metadata.name !== "string"
+      || metadata.name.length < 1
+      || typeof metadata.enabled !== "boolean"
+      || !Number.isSafeInteger(metadata.parameter_count)
+      || metadata.parameter_count < 0
+      || !Array.isArray(metadata.parameter_names)
+      || !Array.isArray(metadata.parameter_idents)
+      || metadata.parameter_names.length !== metadata.parameter_count
+      || metadata.parameter_idents.length !== metadata.parameter_count
+      || metadata.parameter_names.some((entry) => typeof entry !== "string" || entry.length < 1)
+      || metadata.parameter_idents.some((entry) => typeof entry !== "string" || entry.length < 1)
+      || !targetObjectValid) return null;
     slots.push({ slot_index: slotIndex, target_fx_ref: targetFxRef });
   }
   return {

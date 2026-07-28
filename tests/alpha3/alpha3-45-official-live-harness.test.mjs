@@ -13,7 +13,7 @@ const roots = [];
 
 test.after(async () => Promise.all(roots.map((root) => rm(root, { recursive: true, force: true }))));
 
-test("official live harness discovers and one-calls all four Recipes with Recipe 04 Undo and 1/8/64/65 truth", async () => {
+test("official live harness discovers and one-calls all four Recipes with Recipe 04 native batch Automation and 1/8/64/65 truth", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "openreaper-alpha345-official-harness-"));
   roots.push(root);
   const wrapper = path.join(root, "openreaper-mcp.sh");
@@ -42,6 +42,10 @@ test("official live harness discovers and one-calls all four Recipes with Recipe
       };
     }
     const successful = fakeSuccessfulRun(args);
+    if (args.recipe_id === "recipe.items.create_sound_variations") {
+      replaceWithAggregateAutomationOutput(successful);
+      if (args.inputs.variation_count === 64) projectCapacityOutputs(successful);
+    }
     if (args.recipe_id === "recipe.mix.create_bus_processing") {
       successful.verified_outputs.find((output) => output.id === "layout_changes").value[0] = {
         operation_id: "bus",
@@ -82,6 +86,16 @@ test("official live harness discovers and one-calls all four Recipes with Recipe
   assert.deepEqual(report.capacity.map((row) => [row.count, row.ok, row.fail_closed]), [
     [1, true, false], [8, true, false], [64, true, false], [65, false, true],
   ]);
+  assert.deepEqual(report.capacity.find((row) => row.count === 8).stage_counters.automation, {
+    native_mutation_count: 1,
+    readback_count: 1,
+    transport_call_count: 1,
+  });
+  assert.equal(report.capacity.find((row) => row.count === 8).native_mutation_count, 25);
+  assert.equal(report.capacity.find((row) => row.count === 64).inline_rows_proven, false);
+  assert.equal(report.capacity.find((row) => row.count === 64).evidence_linked, true);
+  assert.equal(report.capacity.find((row) => row.count === 64).aggregate_automation_proven, true);
+  assert.equal(report.capacity.find((row) => row.count === 64).projected_outputs_proven, true);
   assert.equal(report.recipe04_truth.position_volume_pan_pitch_playrate, true);
   assert.equal(report.recipe04_truth.take_tone_fx, true);
   assert.equal(report.recipe04_truth.automation_envelope, true);
@@ -536,6 +550,44 @@ test("official live harness rejects count 64 success with underreported batch pr
   assert.equal(report.capacity.at(-1).batch_proven, false);
 });
 
+test("official live harness rejects retained evidence from a different run identity", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "openreaper-alpha345-official-evidence-identity-"));
+  roots.push(root);
+  const wrapper = path.join(root, "openreaper-mcp.sh");
+  await writeFile(wrapper, "#!/bin/sh\n", { mode: 0o700 });
+  const identities = ALPHA3_45_OFFICIAL_RECIPE_IDS.map((recipe_id, index) => ({
+    recipe_id,
+    source: "official",
+    version: "1.0.0",
+    revision: 1,
+    content_hash: `sha256:${String(index + 1).repeat(64)}`,
+    validation_result_id: `validation:${index + 1}`,
+  }));
+  const report = await runAlpha345OfficialRecipesHarness({
+    installedWrapper: wrapper,
+    evidenceRoot: path.join(root, "evidence"),
+    fixture: fixture(),
+    callRecipe: async (args) => {
+      if (args.operation === "list") return { ok: true, items: identities };
+      if (args.operation === "get" && args.evidence_ref) {
+        const evidence = fakeEvidencePage(args.evidence_ref);
+        evidence.run_id = `different:${evidence.run_id}`;
+        return evidence;
+      }
+      if (args.operation === "get") return { ok: true, source: "official", ...identities.find((row) => row.recipe_id === args.recipe_id) };
+      if (args.inputs.variation_count === 65) {
+        return { ok: false, error: { code: "ROW_LIMIT", details: { zero_write: true } }, undo: { claimed: false } };
+      }
+      return fakeSuccessfulRun(args);
+    },
+  });
+  assert.equal(report.ok, false);
+  assert.equal(report.error.code, "OFFICIAL_CAPACITY_SUCCESS_REQUIRED");
+  assert.equal(report.capacity.at(-1).count, 1);
+  assert.equal(report.capacity.at(-1).evidence_linked, false);
+  assert.equal(report.capacity.at(-1).batch_proven, false);
+});
+
 function fakeSuccessfulRun(args) {
   const count = Math.max(1, args.inputs?.variation_count ?? 1);
   return {
@@ -555,6 +607,8 @@ function fakeSuccessfulRun(args) {
       native_mutation_count: recipeIsItemVariations(args.recipe_id) ? count * 4 : count,
       readback_count: recipeIsItemVariations(args.recipe_id) ? count * 4 : count,
     },
+    run_id: `fake-run:${args.recipe_id}:${count}`,
+    recipe_id: args.recipe_id,
     evidence_ref: `recipe-evidence:${args.recipe_id}:${count}`,
   };
 }
@@ -608,15 +662,99 @@ function fakeVerifiedOutput(id, index = 0, source = { item_ref: "item:guid:{SEED
 }
 
 function fakeEvidencePage(evidenceRef) {
-  const count = Number(evidenceRef.split(":").at(-1)) || 1;
+  const parts = evidenceRef.split(":");
+  const count = Number([...parts].reverse().find((part) => /^\d+$/u.test(part))) || 1;
+  const aggregateAutomation = parts.at(-1) === "aggregate";
+  const recipeId = parts[1];
+  const nativeCount = aggregateAutomation ? (count * 3) + 1 : count * 4;
   return {
     ok: true,
     evidence_ref: evidenceRef,
+    run_id: `fake-run:${recipeId}:${count}`,
+    recipe_id: recipeId,
+    run_summary: {
+      mutation_truth: "applied_verified",
+      counters: {
+        native_mutation_count: nativeCount,
+        readback_count: nativeCount,
+      },
+    },
     items: ["copy", "controls", "tone", "automation"].map((stage_id) => ({
       stage_id,
-      counters: { native_mutation_count: count, readback_count: count, transport_call_count: 1 },
+      counters: {
+        native_mutation_count: aggregateAutomation && stage_id === "automation" ? 1 : count,
+        readback_count: aggregateAutomation && stage_id === "automation" ? 1 : count,
+        transport_call_count: 1,
+      },
     })),
   };
+}
+
+function replaceWithAggregateAutomationOutput(successful) {
+  const toneRows = successful.verified_outputs.find((output) => output.id === "tone_changes").value;
+  const targets = toneRows.map((tone, index) => ({
+    fx_ref: tone.fx_ref,
+    envelope_ref: `envelope:guid:{AUTO-${index + 1}}`,
+    requested: 2,
+    before: 0,
+    after: 2,
+    processed_count: 2,
+  }));
+  successful.verified_outputs = successful.verified_outputs.map((output) => output.id === "automation_changes"
+    ? {
+        ...output,
+        value: [{
+          operation_id: "automation-fx-parameter-points-batch",
+          template_id: "template.automation.insert_fx_parameter_envelope_points_batch",
+          target_ref: "fx:batch",
+          mode: "insert_fx_parameter_points",
+          requested: {
+            target_count: targets.length,
+            total_requested_points: targets.length * 2,
+            execution_shape: "single_bridge_request_native_batch",
+          },
+          status: "applied",
+          mutation: {
+            status: "completed",
+            target_count: targets.length,
+            total_processed_points: targets.length * 2,
+          },
+          live_readback: {
+            status: "passed",
+            source: "fx_parameter_batch_readback",
+            target_count: targets.length,
+            total_requested_points: targets.length * 2,
+            total_processed_points: targets.length * 2,
+            targets,
+          },
+        }],
+      }
+    : output);
+  const count = toneRows.length;
+  successful.execution_truth.native_mutation_count = count * 3 + 1;
+  successful.execution_truth.readback_count = count * 3 + 1;
+  successful.evidence_ref = `${successful.evidence_ref}:aggregate`;
+}
+
+function projectCapacityOutputs(successful) {
+  successful.verified_outputs = successful.verified_outputs.map((output) => {
+    if (["variation_changes", "control_changes", "automation_changes"].includes(output.id)) {
+      return { ...output, value: { omitted: true, reason: "inline_value_exceeds_call_recipe_budget" } };
+    }
+    if (output.id === "tone_changes") {
+      return {
+        ...output,
+        value: output.value.map((row, index) => ({
+          id: `tone_${index + 1}`,
+          status: row.status,
+          mutation: row.mutation,
+          readback: row.readback,
+          index: "done",
+        })),
+      };
+    }
+    return output;
+  });
 }
 
 function fixture() {

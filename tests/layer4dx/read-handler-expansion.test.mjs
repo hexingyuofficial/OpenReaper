@@ -5,6 +5,7 @@ import { mkdir, mkdtemp, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
+import { fileURLToPath } from "node:url";
 import {
   FakeFoundationBridge,
   createObjectRef,
@@ -22,7 +23,8 @@ import {
 } from "../../packages/mcp-server/src/live-bridge-executor-v1.mjs";
 
 const ROOT = new URL("../..", import.meta.url);
-const BRIDGE_SOURCE = readFileSync(new URL("../../reaper/bridge/openreaper-live-bridge.lua", import.meta.url), "utf8");
+const BRIDGE_SCRIPT_PATH = fileURLToPath(new URL("../../reaper/bridge/openreaper-live-bridge.lua", import.meta.url));
+const BRIDGE_SOURCE = readFileSync(BRIDGE_SCRIPT_PATH, "utf8");
 const TRACK_REF_ENV = "OPENREAPER_LIVE_SMOKE_TRACK_REF";
 const ITEM_REF_ENV = "OPENREAPER_LIVE_SMOKE_ITEM_REF";
 
@@ -234,13 +236,13 @@ describe("4D.x Wave 1A read-handler expansion", () => {
         operation,
       );
     }
-    assert.match(BRIDGE_SOURCE, /template_count = 235/);
+    assert.match(BRIDGE_SOURCE, /template_count = 239/);
     assert.doesNotMatch(BRIDGE_SOURCE, /template_count = 119/);
     assert.doesNotMatch(BRIDGE_SOURCE, /experimental = 119/);
     assert.match(BRIDGE_SOURCE, /accepted_runtime_template_count = template_count/);
     assert.match(BRIDGE_SOURCE, /live_supported_template_count = live_supported_template_count/);
     assert.match(BRIDGE_SOURCE, /catalog_count_semantics = "template_count is the accepted runtime catalog count; live_supported_template_count is the current bridge handler row count\."/);
-    assert.match(BRIDGE_SOURCE, /READ_TEMPLATE_CATALOG_SUMMARY_LIVE_HANDLER_COUNTS = \{[\s\S]*?template_count = 235/);
+    assert.match(BRIDGE_SOURCE, /READ_TEMPLATE_CATALOG_SUMMARY_LIVE_HANDLER_COUNTS = \{[\s\S]*?template_count = 239/);
     assert.match(BRIDGE_SOURCE, /live_supported_by_pack = pack and read_template_catalog_summary_count_for_key/);
 
     for (const code of [
@@ -422,6 +424,7 @@ describe("4D.x Wave 1A read-handler expansion", () => {
 
     const report = runLiveSmokeExpectingFailure({
       [LIVE_BRIDGE_EXECUTOR_ENV.transport_dir]: transportDir,
+      [LIVE_BRIDGE_EXECUTOR_ENV.bridge_script_path]: BRIDGE_SCRIPT_PATH,
       OPENREAPER_LIVE_BRIDGE_TIMEOUT_MS: "1",
       [TRACK_REF_ENV]: "track:Dialog",
       [ITEM_REF_ENV]: "item:index:0",

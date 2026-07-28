@@ -494,6 +494,215 @@ describe("Layer 4B template execution harness contract", () => {
     assert.equal(result.error.details.path, "result.last_result");
     assert.doesNotMatch(JSON.stringify(result), new RegExp(`x{${payload.length}}`));
   });
+
+  it("keeps aggregate batch rows intact without duplicating their canonical refs", async () => {
+    const descriptor = makeDescriptor();
+    const bridgeExecutor = new FakeFoundationBridge();
+    const track = createObjectRef("track", { scheme: "guid", value: "{TRACK-BATCH}" });
+    const sourceTrack = createObjectRef("track", { scheme: "guid", value: "{TRACK-BATCH-SOURCE}" });
+    const rows = Array.from({ length: 64 }, (_, index) => ({
+      row_index: index + 1,
+      item_ref: `item:guid:{ITEM-BATCH-${String(index + 1).padStart(2, "0")}}`,
+      active_take_ref: `take:guid:{TAKE-BATCH-${String(index + 1).padStart(2, "0")}}`,
+      position_seconds: index * 0.25,
+      volume_db: -1.5,
+      take_volume_db: -0.75,
+      take_pan: 0.125,
+      take_pitch_semitones: 1,
+      take_playrate: 1.01,
+      preserve_pitch: true,
+      readback_status: "passed",
+      readback_proof: "native item/take control identity and requested-field readback ".repeat(7),
+    }));
+
+    const result = await executeTemplate({
+      descriptor,
+      input: { name: "Batch" },
+      context: context(),
+      executor: (request) => {
+        const bridgeResult = structuredClone(bridgeExecutor.dispatch(request));
+        bridgeResult.result.summary = {
+          rows,
+          row_count: rows.length,
+          source_track_ref: sourceTrack.ref,
+          readback_status: "passed",
+          batch_timings: {
+            rows: rows.length,
+            native_mutation_count: rows.length,
+            native_readback_count: rows.length,
+            runner: "generic_native_batch",
+          },
+        };
+        bridgeResult.result.refs = [track];
+        bridgeResult.result.readback = { status: "passed", row_count: rows.length };
+        bridgeResult.budget.response_bytes = Buffer.byteLength(JSON.stringify(bridgeResult), "utf8");
+        return bridgeResult;
+      },
+    });
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.result.summary.rows, rows);
+    assert.deepEqual(result.result.readback, { status: "passed", row_count: 64 });
+    assert.deepEqual(result.result.refs, [track, sourceTrack]);
+    assert.equal(new Set(result.result.refs.map((ref) => ref.ref)).size, result.result.refs.length);
+    assert.equal(result.result.summary.batch_timings.native_mutation_count, 64);
+    assert.equal(result.result.summary.batch_timings.native_readback_count, 64);
+    assert.ok(result.budget.response_bytes <= FOUNDATION_BRIDGE_DEFAULT_BUDGET.max_response_bytes);
+  });
+
+  it("keeps aggregate target readback intact without duplicating its canonical refs", async () => {
+    const descriptor = makeDescriptor();
+    const bridgeExecutor = new FakeFoundationBridge();
+    const track = createObjectRef("track", { scheme: "guid", value: "{TRACK-TARGET-BATCH}" });
+    const sourceTrack = createObjectRef("track", { scheme: "guid", value: "{TRACK-TARGET-BATCH-SOURCE}" });
+    const project = createObjectRef("project", { scheme: "current", value: "current" });
+    const targets = Array.from({ length: 64 }, (_, index) => ({
+      owner_ref: `take:guid:{TAKE-TARGET-BATCH-${String(index + 1).padStart(2, "0")}}`,
+      fx_ref: `fx:take:guid:{TAKE-TARGET-BATCH-${String(index + 1).padStart(2, "0")}}:0`,
+      envelope_ref: `envelope:guid:{ENVELOPE-TARGET-BATCH-${String(index + 1).padStart(2, "0")}}`,
+      ...(index === 0 ? { track_ref: track.ref } : {}),
+      processed_count: 2,
+      readback_status: "passed",
+    }));
+    const changes = [
+      { item_ref: "item:guid:{ITEM-GENERIC-BATCH-1}" },
+      { item_ref: "item:guid:{ITEM-GENERIC-BATCH-2}" },
+    ];
+    const summary = {
+      aggregate_readback: true,
+      execution_shape: "single_bridge_request_native_batch",
+      target_count: targets.length,
+      targets,
+      change_count: changes.length,
+      changes,
+      source_track_ref: sourceTrack.ref,
+      readback_status: "passed",
+    };
+    const readback = {
+      aggregate_readback: true,
+      execution_shape: "single_bridge_request_native_batch",
+      target_count: targets.length,
+      targets,
+      project_ref: project.ref,
+      status: "passed",
+    };
+
+    const result = await executeTemplate({
+      descriptor,
+      input: { name: "Target Batch" },
+      context: context(),
+      executor: (request) => {
+        const bridgeResult = structuredClone(bridgeExecutor.dispatch(request));
+        bridgeResult.result.summary = summary;
+        bridgeResult.result.refs = [track];
+        bridgeResult.result.readback = readback;
+        bridgeResult.budget.response_bytes = Buffer.byteLength(JSON.stringify(bridgeResult), "utf8");
+        return bridgeResult;
+      },
+    });
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.result.summary, summary);
+    assert.deepEqual(result.result.readback, readback);
+    assert.deepEqual(result.result.refs, [track, sourceTrack, project]);
+    assert.equal(new Set(result.result.refs.map((ref) => ref.ref)).size, result.result.refs.length);
+    assert.ok(result.budget.response_bytes <= FOUNDATION_BRIDGE_DEFAULT_BUDGET.max_response_bytes);
+  });
+
+  it("still projects target refs without exact aggregate count evidence", async () => {
+    const descriptor = makeDescriptor();
+    const bridgeExecutor = new FakeFoundationBridge();
+
+    for (const [label, summary] of [
+      ["unproven", {
+        targets: [{ item_ref: "item:guid:{ITEM-TARGET-UNPROVEN-1}" }, { item_ref: "item:guid:{ITEM-TARGET-UNPROVEN-2}" }],
+        target_count: 2,
+      }],
+      ["mismatched", {
+        targets: [{ item_ref: "item:guid:{ITEM-TARGET-MISMATCH-1}" }, { item_ref: "item:guid:{ITEM-TARGET-MISMATCH-2}" }],
+        target_count: 1,
+        aggregate_readback: true,
+        execution_shape: "single_bridge_request_native_batch",
+      }],
+      ["non-integer", {
+        targets: [{ item_ref: "item:guid:{ITEM-TARGET-NONINTEGER-1}" }, { item_ref: "item:guid:{ITEM-TARGET-NONINTEGER-2}" }],
+        target_count: 2.5,
+        aggregate_readback: true,
+        execution_shape: "single_bridge_request_native_batch",
+      }],
+      ["non-batch", {
+        targets: [{ item_ref: "item:guid:{ITEM-TARGET-NONBATCH-1}" }, { item_ref: "item:guid:{ITEM-TARGET-NONBATCH-2}" }],
+        target_count: 2,
+        aggregate_readback: true,
+        execution_shape: "registered_macro_program",
+      }],
+      ["singular", {
+        targets: [{ item_ref: "item:guid:{ITEM-TARGET-SINGULAR}" }],
+        target_count: 1,
+        aggregate_readback: true,
+        execution_shape: "single_bridge_request_native_batch",
+      }],
+    ]) {
+      const result = await executeTemplate({
+        descriptor,
+        input: { name: label },
+        context: context(),
+        executor: (request) => {
+          const bridgeResult = structuredClone(bridgeExecutor.dispatch(request));
+          bridgeResult.result.summary = summary;
+          bridgeResult.result.refs = [];
+          bridgeResult.budget.response_bytes = Buffer.byteLength(JSON.stringify(bridgeResult), "utf8");
+          return bridgeResult;
+        },
+      });
+
+      assert.equal(result.ok, true, label);
+      assert.deepEqual(
+        result.result.refs.map((ref) => ref.ref),
+        summary.targets.map((target) => target.item_ref),
+        label,
+      );
+    }
+  });
+
+  it("still projects row refs when batch timing evidence is absent or singular", async () => {
+    const descriptor = makeDescriptor();
+    const bridgeExecutor = new FakeFoundationBridge();
+
+    for (const [label, summary] of [
+      ["unproven", {
+        rows: [{ item_ref: "item:guid:{ITEM-UNPROVEN-1}" }, { item_ref: "item:guid:{ITEM-UNPROVEN-2}" }],
+      }],
+      ["mismatched", {
+        rows: [{ item_ref: "item:guid:{ITEM-MISMATCH-1}" }, { item_ref: "item:guid:{ITEM-MISMATCH-2}" }],
+        batch_timings: { rows: 1, runner: "generic_native_batch" },
+      }],
+      ["singular", {
+        rows: [{ item_ref: "item:guid:{ITEM-SINGULAR}" }],
+        batch_timings: { rows: 1, runner: "generic_native_batch" },
+      }],
+    ]) {
+      const result = await executeTemplate({
+        descriptor,
+        input: { name: label },
+        context: context(),
+        executor: (request) => {
+          const bridgeResult = structuredClone(bridgeExecutor.dispatch(request));
+          bridgeResult.result.summary = summary;
+          bridgeResult.result.refs = [];
+          bridgeResult.budget.response_bytes = Buffer.byteLength(JSON.stringify(bridgeResult), "utf8");
+          return bridgeResult;
+        },
+      });
+
+      assert.equal(result.ok, true, label);
+      assert.deepEqual(
+        result.result.refs.map((ref) => ref.ref),
+        summary.rows.map((row) => row.item_ref),
+        label,
+      );
+    }
+  });
 });
 
 function makeDescriptor(overrides = {}) {

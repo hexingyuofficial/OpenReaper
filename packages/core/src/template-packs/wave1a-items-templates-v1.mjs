@@ -10,6 +10,7 @@ export const WAVE1A_ITEMS_TEMPLATE_IDS = Object.freeze([
   "template.items.delete_item",
   "template.items.delete_items",
   "template.items.set_item_volume",
+  "template.items.set_item_take_controls_batch",
   "template.items.set_take_volume",
   "template.items.set_take_pan",
   "template.items.set_active_take",
@@ -442,6 +443,63 @@ export const WAVE1A_ITEMS_TEMPLATES = deepFreeze([
         name: "set_item_volume_down",
         summary: "Set item volume to -3 dB.",
         input: { volume_db: -3 },
+      },
+    ],
+  }),
+  commandDescriptor({
+    id: "template.items.set_item_take_controls_batch",
+    title: "Set Item and Take controls batch",
+    summary: "Apply bounded Item and Active-Take control rows through one generic native batch with aggregate readback.",
+    entity_kind: "item",
+    tags: ["items", "item", "take", "controls", "batch"],
+    bridge: bridge({ capability: "items.set_item_take_controls_batch" }),
+    inputSchema: objectSchema({
+      batch: { type: "array" },
+      dry_run: { type: "boolean" },
+    }, ["batch"]),
+    outputSchema: objectSchema({
+      rows: { type: "array" },
+      row_count: { type: "integer" },
+      dry_run: { type: "boolean" },
+      mutation_attempted: { type: "boolean" },
+      readback_status: { type: "string" },
+      batch_timings: { type: "object" },
+    }, ["rows", "row_count", "readback_status", "batch_timings"]),
+    refs: refs(),
+    expectedDelta: mutationDelta({
+      summary: "Updates bounded Item and Active-Take controls in one native batch.",
+      entities: [
+        {
+          entity_kind: "item",
+          action: "update",
+          summary: "Each requested Item control row is updated and identity-checked.",
+        },
+        {
+          entity_kind: "take",
+          action: "update",
+          summary: "Each requested Active-Take control row is updated and identity-checked when present.",
+        },
+      ],
+    }),
+    verification: requiredVerification({
+      name: "item_take_controls_batch_matches",
+      kind: "state_delta",
+      summary: "Every batch row returns exact Item/Take identity and aggregate live readback.",
+    }),
+    examples: [
+      {
+        name: "batch_item_take_controls",
+        summary: "Apply one bounded Item volume and Active-Take pan row.",
+        input: {
+          batch: [{
+            id: "row1",
+            item_ref: "item:guid:{ITEM-GUID}",
+            take_ref: "take:guid:{TAKE-GUID}",
+            item: { volume_db: -3 },
+            take: { pan: 0.25 },
+          }],
+          dry_run: false,
+        },
       },
     ],
   }),

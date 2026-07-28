@@ -989,7 +989,7 @@ describe("Alpha3.2-B2 managed render root", () => {
     await harness.assertLockRemoved();
   });
 
-  it("checks matching Bridge readiness before repeating dialog inspection", async () => {
+  it("checks dialogs before accepting matching Bridge readiness", async () => {
     const source = await readFile(START_SOURCE, "utf8");
     const functionStart = source.indexOf("wait_for_startup_readiness() {");
     const functionEnd = source.indexOf("\n}\n\ntrap 'launchservices_cleanup_on_exit'", functionStart);
@@ -998,7 +998,7 @@ describe("Alpha3.2-B2 managed render root", () => {
     const heartbeatCheck = readinessSource.indexOf("if bridge_heartbeat_ready; then");
     const dialogCheck = readinessSource.indexOf('dialog_result="$(run_startup_dialog_assist)"');
     assert.ok(heartbeatCheck >= 0, "readiness must check the matching Bridge heartbeat");
-    assert.ok(dialogCheck < heartbeatCheck, "startup must classify dialogs before accepting a ready Bridge");
+    assert.ok(dialogCheck >= 0 && dialogCheck < heartbeatCheck, "unknown or decision-bearing dialogs must block even when the Bridge is ready");
     assert.ok(readinessSource.indexOf("verify_public_bridge_read || return 1", heartbeatCheck) > heartbeatCheck);
   });
 

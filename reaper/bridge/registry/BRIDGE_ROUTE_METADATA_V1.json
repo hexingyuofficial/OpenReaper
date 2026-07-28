@@ -3,9 +3,9 @@
   "generated_from": "reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json",
   "registry_summary": {
     "contract": "openreaper.bridge_handler_registry.v1",
-    "entryCount": 237,
+    "entryCount": 239,
     "legacyMonolithCount": 0,
-    "extractedHandlerCount": 237,
+    "extractedHandlerCount": 239,
     "handlerModuleCount": 91,
     "routeCount": 34,
     "operationCount": 103
@@ -277,9 +277,9 @@
     },
     {
       "route": "d13-items-core-handlers",
-      "template_count": 15,
+      "template_count": 16,
       "handler_module_count": 2,
-      "operation_count": 15,
+      "operation_count": 16,
       "packs": [
         "items"
       ],
@@ -297,6 +297,7 @@
         "template.items.list_selected_items",
         "template.items.list_items_on_track",
         "template.items.set_item_volume",
+        "template.items.set_item_take_controls_batch",
         "template.items.set_take_volume",
         "template.items.set_take_pan",
         "template.items.set_active_take",
@@ -699,9 +700,9 @@
     },
     {
       "route": "e5-routing-automation-extra-handlers",
-      "template_count": 22,
+      "template_count": 23,
       "handler_module_count": 1,
-      "operation_count": 22,
+      "operation_count": 23,
       "packs": [
         "automation",
         "routing"
@@ -739,6 +740,7 @@
         "template.automation.resolve_send_envelope",
         "template.automation.ensure_fx_parameter_envelope",
         "template.automation.insert_fx_parameter_envelope_points",
+        "template.automation.insert_fx_parameter_envelope_points_batch",
         "template.automation.insert_sine_wave_points"
       ]
     },

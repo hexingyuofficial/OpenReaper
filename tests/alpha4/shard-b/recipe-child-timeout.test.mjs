@@ -7,6 +7,9 @@ import {
   CALL_TEMPLATE_RUNTIME_D30_PROJECT_CONTAINER_TEMPLATE_IDS,
   createCallTemplateRuntime,
 } from "../../../packages/mcp-server/src/call-template-runtime-v1.mjs";
+import {
+  TEMPLATE_EXECUTION_DEFAULT_DISPATCH_TIMEOUT_MS,
+} from "../../../packages/core/src/template-execution-harness-v1.mjs";
 
 const CONTEXT = Object.freeze({
   request_id: "request:alpha4:child-timeout",
@@ -18,7 +21,7 @@ const CONTEXT = Object.freeze({
 });
 
 describe("Alpha4 Shard B Recipe/batch child timeout propagation", () => {
-  it("keeps public Template descriptor timeout while allowing only the internal child path to extend it", async () => {
+  it("keeps the public no-deadline safety cap while honoring an explicit internal child cap", async () => {
     const bridge = new FakeFoundationBridge();
     const runtime = createCallTemplateRuntime({
       live: {
@@ -35,7 +38,7 @@ describe("Alpha4 Shard B Recipe/batch child timeout propagation", () => {
       context: CONTEXT,
     });
     assert.equal(ordinary.ok, true, JSON.stringify(ordinary));
-    assert.equal(ordinary.request.timeout_ms, 30_000);
+    assert.equal(ordinary.request.timeout_ms, TEMPLATE_EXECUTION_DEFAULT_DISPATCH_TIMEOUT_MS);
 
     const internalRequest = {
       id: "template.project.list_open_projects",

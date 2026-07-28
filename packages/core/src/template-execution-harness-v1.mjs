@@ -43,6 +43,7 @@ const IDEMPOTENCY_OPERATION_FAMILIES = new Set(["run_command", "run_action", "ru
 const UNDO_OPERATION_FAMILIES = new Set(["run_command", "run_action", "run_job"]);
 const PRINTABLE_IDEMPOTENCY_KEY_PATTERN = /^[\x20-\x7e]{1,128}$/;
 const TEMPLATE_DISPATCH_TIMEOUT_MAX_MS = 600_000;
+export const TEMPLATE_EXECUTION_DEFAULT_DISPATCH_TIMEOUT_MS = TEMPLATE_DISPATCH_TIMEOUT_MAX_MS;
 
 export class TemplateExecutionHarnessError extends Error {
   constructor(code, message, options = {}) {
@@ -210,6 +211,9 @@ function prepareTemplateExecution(options) {
 }
 
 function resolveDispatchTimeoutMs(value, descriptorTimeoutMs) {
+  // Descriptor timeout_ms describes the operation; without an explicit caller
+  // or internal child cap it must not become an implicit runtime deadline.
+  if (value === undefined || value === null) return TEMPLATE_EXECUTION_DEFAULT_DISPATCH_TIMEOUT_MS;
   if (
     !Number.isSafeInteger(value)
     || value < descriptorTimeoutMs
@@ -751,19 +755,59 @@ function mapBridgeResult(prepared, bridgeResult) {
 function normalizeResultRefs({ refs, summary, readback }) {
   const normalized = cloneJson(refs);
   const seen = new Set(normalized.map((ref) => ref.ref));
-  for (const value of structuredRefStrings(summary)) {
+  const summaryRefSource = aggregateRefSource(summary);
+  const readbackRefSource = aggregateRefSource(readback);
+  for (const value of structuredRefStrings(summaryRefSource)) {
     const ref = objectRefFromCanonicalString(value);
     if (!ref || seen.has(ref.ref)) continue;
     normalized.push(ref);
     seen.add(ref.ref);
   }
-  for (const value of structuredRefStrings(readback)) {
+  for (const value of structuredRefStrings(readbackRefSource)) {
     const ref = objectRefFromCanonicalString(value);
     if (!ref || seen.has(ref.ref)) continue;
     normalized.push(ref);
     seen.add(ref.ref);
   }
   return normalized;
+}
+
+function aggregateRefSource(value) {
+  const aggregateCollections = aggregateBatchCollectionKeys(value);
+  return aggregateCollections.size > 0
+    ? Object.fromEntries(Object.entries(value).filter(([key]) => !aggregateCollections.has(key)))
+    : value;
+}
+
+function aggregateBatchCollectionKeys(summary) {
+  const keys = new Set();
+  if (!isPlainObject(summary)) return keys;
+
+  if (
+    Array.isArray(summary.rows)
+    && summary.rows.length > 1
+    && isPlainObject(summary.batch_timings)
+    && summary.batch_timings.rows === summary.rows.length
+  ) {
+    keys.add("rows");
+  }
+
+  if (
+    summary.aggregate_readback !== true
+    || summary.execution_shape !== "single_bridge_request_native_batch"
+  ) return keys;
+  for (const [key, value] of Object.entries(summary)) {
+    if (!Array.isArray(value) || value.length <= 1) continue;
+    const count = summary[collectionCountKey(key)];
+    if (Number.isSafeInteger(count) && count === value.length) keys.add(key);
+  }
+  return keys;
+}
+
+function collectionCountKey(key) {
+  if (key.endsWith("ies")) return `${key.slice(0, -3)}y_count`;
+  if (key.endsWith("s")) return `${key.slice(0, -1)}_count`;
+  return `${key}_count`;
 }
 
 function structuredRefStrings(value, key = null, output = []) {
@@ -1044,17 +1088,21 @@ function firstOversizedLastResult(lastResult, maxBytes) {
   }
 
   const { refs = [], ...inlineLastResult } = lastResult;
-  return (
+  const oversized =
     firstOversizedInlineValue(inlineLastResult, maxBytes, "result.last_result") ??
-    firstOversizedRefCollection(refs, maxBytes, "result.last_result.refs")
-  );
+    firstOversizedRefCollection(refs, maxBytes, "result.last_result.refs");
+  return oversized ? { ...oversized, path: "result.last_result" } : null;
 }
 
 function firstOversizedInlineValue(value, maxBytes, path) {
   if (value === undefined) return null;
-  const bytes = encodedBytes(value);
-  if (bytes > maxBytes) return { path, bytes, max_inline_value_bytes: maxBytes };
-  if (value === null || typeof value !== "object") return null;
+  if (value === null) return null;
+  if (typeof value !== "object") {
+    const bytes = encodedBytes(value);
+    return bytes > maxBytes ? { path, bytes, max_inline_value_bytes: maxBytes } : null;
+  }
+  // max_inline_value_bytes applies to individual inline leaves. Aggregate
+  // summaries and row collections are governed by max_response_bytes.
   for (const [key, entry] of Object.entries(value)) {
     const oversized = firstOversizedInlineValue(entry, maxBytes, `${path}.${key}`);
     if (oversized) return oversized;

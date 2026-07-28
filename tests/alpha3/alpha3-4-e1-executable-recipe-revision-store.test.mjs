@@ -1600,7 +1600,7 @@ describe("Alpha3.4-E1 executable recipe revision store", () => {
     assert.equal(typeof store.run, "undefined");
     assert.equal(typeof store.resume, "undefined");
     assert.equal(ALPHA3_3_B1_VISIBLE_EXECUTABLE_IDS.length, 15);
-    assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 237);
+    assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 239);
 
     const packageSource = readFileSync(
       new URL("../../scripts/package-openreaper-alpha.mjs", import.meta.url),

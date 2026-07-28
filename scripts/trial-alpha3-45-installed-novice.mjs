@@ -83,6 +83,7 @@ export async function runInstalledNoviceTrial({
   evidenceRoot,
   connectFactory = connectInstalledNoviceClient,
   draftFactory = createNoviceUserRecipeDraft,
+  resumeDraftFactory = createNoviceResumeRecipeDraft,
   recipeInputsFactory = () => ({}),
   naturalLanguageQuery = ALPHA345_NOVICE_NL_QUERY,
 } = {}) {
@@ -102,6 +103,8 @@ export async function runInstalledNoviceTrial({
       recipe_lifecycle_ops: [],
       official_recipe_ids: [],
       official_manual_ids: [],
+      official_catalog_count: 0,
+      official_legacy_or_draft_leak_count: 0,
       direct_template_fallback: false,
     },
     exact_expansions: {
@@ -114,6 +117,9 @@ export async function runInstalledNoviceTrial({
       identity: null,
       temp_run_ok: false,
       persistent_save_ok: false,
+      resume_partial_ok: false,
+      resume_recovery_ok: false,
+      resume_success_ok: false,
       rediscovered_after_reconnect: false,
       one_public_run_after_reconnect: false,
     },
@@ -204,7 +210,11 @@ export async function runInstalledNoviceTrial({
     }
     assertSameSet(exampleReadyIds, ALPHA345_NOVICE_MACRO_IDS, "15 Macro public examples");
     const inspectDependency = guideExpansions.find((entry) => entry.id === "macro.project.inspect")?.executable_recipe_dependency;
+    const projectFileDependency = guideExpansions.find((entry) => entry.id === "macro.project.file")?.executable_recipe_dependency;
+    const projectQueryDependency = guideExpansions.find((entry) => entry.id === "macro.project.query")?.executable_recipe_dependency;
     assertExecutableDependency(inspectDependency, "macro.project.inspect");
+    assertExecutableDependency(projectFileDependency, "macro.project.file");
+    assertExecutableDependency(projectQueryDependency, "macro.project.query");
     report.discovery.macro_manual_ids = [...ALPHA345_NOVICE_MACRO_IDS];
     report.discovery.macro_example_ids = [...ALPHA345_NOVICE_MACRO_IDS];
     report.exact_expansions.macros_expanded = ALPHA345_NOVICE_MACRO_IDS.length;
@@ -217,7 +227,9 @@ export async function runInstalledNoviceTrial({
 
     const officialIds = productization?.official_recipe_ids ?? [];
     assertSameSet(officialIds, ALPHA345_NOVICE_OFFICIAL_RECIPE_IDS, "four official Recipe ids");
+    const defaultOfficialItems = assertExactOfficialCatalogItems(recipes?.items, "default official Recipe catalog");
     report.discovery.official_recipe_ids = [...ALPHA345_NOVICE_OFFICIAL_RECIPE_IDS];
+    report.discovery.official_catalog_count = defaultOfficialItems.length;
 
     const exactOfficial = await callJson(primary, report, "primary", "list_recipes", {
       ids: [...ALPHA345_NOVICE_OFFICIAL_RECIPE_IDS],
@@ -226,6 +238,8 @@ export async function runInstalledNoviceTrial({
     const officialManuals = exactOfficial?.product_surface?.recipe_productization?.requested_manuals ?? [];
     const officialManualIds = officialManuals.map((entry) => entry.id).filter(Boolean);
     assertSameSet(officialManualIds, ALPHA345_NOVICE_OFFICIAL_RECIPE_IDS, "four official Recipe manuals");
+    assert(officialManuals.length === ALPHA345_NOVICE_OFFICIAL_RECIPE_IDS.length, "official Recipe manuals must contain exactly four unique rows");
+    assertExactOfficialCatalogItems(exactOfficial?.items, "exact official Recipe expansion");
     report.discovery.official_manual_ids = [...ALPHA345_NOVICE_OFFICIAL_RECIPE_IDS];
     report.exact_expansions.official_recipes_expanded = ALPHA345_NOVICE_OFFICIAL_RECIPE_IDS.length;
 
@@ -247,6 +261,71 @@ export async function runInstalledNoviceTrial({
       fallback_reason: "macro_target_ambiguous_or_unavailable",
     });
     const projectIdentity = exactActiveProjectIdentity(inventory);
+
+    const resumeDraft = resumeDraftFactory({
+      recipeId: `recipe.user.novice_resume_${process.pid}_${Date.now()}`,
+      projectFileDependency,
+      projectQueryDependency,
+      portability: {
+        project_identity: projectIdentity,
+        bridge_owner: bridgeIdentity.owner,
+        bridge_generation: bridgeIdentity.generation,
+        platform: "darwin",
+      },
+    });
+    assert(resumeDraft?.contract === "recipe.executable.draft.v1", "resumeDraftFactory must return recipe.executable.draft.v1");
+    const resumeValidated = await callJson(primary, report, "primary", "call_recipe", {
+      operation: "validate",
+      draft: resumeDraft,
+    });
+    assert(resumeValidated.ok === true && resumeValidated.status === "validated", "resume fixture validation failed");
+    const resumeSaved = await callJson(primary, report, "primary", "call_recipe", {
+      operation: "save",
+      draft: resumeDraft,
+      version: "1.0.0",
+      revision_number: 1,
+      saved_at: new Date().toISOString(),
+    });
+    assert(resumeSaved.ok === true && resumeSaved.immutable === true, "resume fixture immutable save failed");
+    const resumeIdentity = exactIdentity(resumeSaved);
+    const partial = await callJson(primary, report, "primary", "call_recipe", {
+      operation: "run",
+      ...resumeIdentity,
+      inputs: noviceResumeInputs(),
+    });
+    assert(partial.ok === false && partial.status === "partial", "resume fixture must produce one typed partial run");
+    assert(partial.resume_safe === true, "resume fixture partial run must be explicitly resume-safe");
+    assert(typeof partial.run_id === "string" && partial.run_id !== "", "resume fixture partial run omitted run_id");
+    assert(typeof partial.latest_checkpoint?.checkpoint_id === "string", "resume fixture partial run omitted latest checkpoint");
+    report.authoring.resume_partial_ok = true;
+    report.authoring.sequence.push("resume_partial");
+
+    const repaired = await callJson(primary, report, "primary", "call_template", {
+      id: "macro.project.query",
+      input: { entity: "tracks", limit: 25, refresh_policy: "if_stale" },
+    });
+    assert(repaired.ok === true, "public Project Index recovery failed before resume");
+    report.authoring.resume_recovery_ok = true;
+    report.authoring.sequence.push("resume_recovery");
+
+    const resumed = await callJson(primary, report, "primary", "call_recipe", {
+      operation: "resume",
+      ...resumeIdentity,
+      run_id: partial.run_id,
+      checkpoint_id: partial.latest_checkpoint.checkpoint_id,
+    });
+    assert(resumed.ok === true && resumed.operation === "resume", "public call_recipe resume did not complete");
+    assert(resumed.run_id === partial.run_id, "public call_recipe resume changed run identity");
+    report.authoring.resume_success_ok = true;
+    report.authoring.sequence.push("resume_success");
+
+    const resumeDeleted = await callJson(primary, report, "primary", "call_recipe", {
+      operation: "delete",
+      ...resumeIdentity,
+      confirm: true,
+    });
+    assert(resumeDeleted.ok === true && resumeDeleted.deleted === true, "resume fixture cleanup delete failed");
+    report.authoring.sequence.push("resume_delete");
 
     const draft = draftFactory({
       recipeId: `recipe.user.novice_${process.pid}_${Date.now()}`,
@@ -473,6 +552,108 @@ export function createNoviceUserRecipeDraft({
   };
 }
 
+export function createNoviceResumeRecipeDraft({
+  recipeId = "recipe.user.novice_resume",
+  projectFileDependency,
+  projectQueryDependency,
+  portability,
+} = {}) {
+  assertExecutableDependency(projectFileDependency, "macro.project.file");
+  assertExecutableDependency(projectQueryDependency, "macro.project.query");
+  assertPortability(portability);
+  const dependencies = [projectFileDependency, projectQueryDependency];
+  return {
+    contract: "recipe.executable.draft.v1",
+    id: recipeId,
+    title: "Novice resume recovery recipe",
+    summary: "List open projects, then read a deliberately cold index scope and resume after public hydration.",
+    pack: "project",
+    risk: projectFileDependency.risk,
+    inputs: [
+      { id: "operation", type: "string", required: true },
+      { id: "cursor", type: "string", required: true },
+      { id: "entity", type: "string", required: true },
+      { id: "refresh_policy", type: "string", required: true },
+      { id: "limit", type: "integer", required: true },
+    ],
+    outputs: [],
+    stages: [
+      {
+        id: "list_open_projects",
+        kind: "macro",
+        dependency: {
+          kind: "macro",
+          id: "macro.project.file",
+          version: projectFileDependency.version,
+          fallback_reason: null,
+        },
+        inputs: ["operation", "cursor", "limit"],
+        outputs: [],
+        risk: projectFileDependency.risk,
+        checkpoint: "checkpoint_projects_listed",
+      },
+      {
+        id: "read_cold_track_index",
+        kind: "macro",
+        dependency: {
+          kind: "macro",
+          id: "macro.project.query",
+          version: projectQueryDependency.version,
+          fallback_reason: null,
+        },
+        inputs: ["entity", "refresh_policy", "limit"],
+        outputs: [],
+        risk: projectQueryDependency.risk,
+        checkpoint: "checkpoint_track_index_read",
+      },
+    ],
+    bindings: [
+      inputBinding("operation", "list_open_projects"),
+      inputBinding("cursor", "list_open_projects"),
+      inputBinding("limit", "list_open_projects"),
+      inputBinding("entity", "read_cold_track_index"),
+      inputBinding("refresh_policy", "read_cold_track_index"),
+      inputBinding("limit", "read_cold_track_index"),
+    ],
+    dependencies: dependencies.map((dependency) => ({
+      kind: "macro",
+      id: dependency.id,
+      version: dependency.version,
+      risk: dependency.risk,
+      fallback_reason: null,
+      descriptor_hash: dependency.descriptor_hash,
+    })),
+    required_capabilities: unique(dependencies.flatMap((dependency) => dependency.capabilities)),
+    risk_grants: unique(dependencies.map((dependency) => dependency.risk)),
+    checkpoints: [
+      {
+        id: "checkpoint_projects_listed",
+        after_stage: "list_open_projects",
+        evidence_id: "evidence_projects_listed",
+        resume_identity: "resume.projects_listed",
+        summary: "Open project inventory completed without mutation.",
+      },
+      {
+        id: "checkpoint_track_index_read",
+        after_stage: "read_cold_track_index",
+        evidence_id: "evidence_track_index_read",
+        resume_identity: "resume.track_index_read",
+        summary: "Track index read completed after public hydration.",
+      },
+    ],
+    preflight: {
+      contract: "recipe.executable.preflight.v1",
+      complete_graph: true,
+      stage_count: 2,
+      dependency_count: 2,
+      requires_validation_before_save: true,
+      requires_save_before_run: true,
+      forbids_inline_execution: true,
+    },
+    portability: { ...portability },
+  };
+}
+
 function exactBridgeIdentity(ping) {
   const bridge = ping?.runtime_readiness?.bridge ?? ping?.live_bridge;
   const identity = bridge?.observed ?? bridge?.expected;
@@ -504,6 +685,39 @@ function assertPortability(value) {
   assert(typeof value?.project_identity === "string" && /^project:(?:path|tab):/u.test(value.project_identity), "exact Project identity required");
   assert(typeof value?.bridge_owner === "string" && value.bridge_owner !== "", "exact Bridge owner required");
   assert(typeof value?.bridge_generation === "string" && /^\d+$/u.test(value.bridge_generation), "exact Bridge generation required");
+}
+
+function noviceResumeInputs() {
+  return {
+    operation: "list_open_projects",
+    cursor: "0",
+    entity: "tracks",
+    refresh_policy: "never",
+    limit: 25,
+  };
+}
+
+function inputBinding(port, stageId) {
+  return {
+    from: { scope: "recipe_input", id: null, port },
+    to: { scope: "stage", id: stageId, port },
+  };
+}
+
+function assertExactOfficialCatalogItems(items, label) {
+  assert(Array.isArray(items), `${label} omitted Recipe items`);
+  const officialItems = items.filter((item) => item?.source === "official");
+  const officialIds = officialItems.map((item) => item?.id).filter(Boolean);
+  assert(officialItems.length === ALPHA345_NOVICE_OFFICIAL_RECIPE_IDS.length, `${label} must contain exactly four official rows`);
+  assertSameSet(officialIds, ALPHA345_NOVICE_OFFICIAL_RECIPE_IDS, `${label} ids`);
+  const leaked = officialItems.filter((item) => (
+    item?.lifecycle === "draft"
+    || item?.legacy === true
+    || item?.draft === true
+    || /(?:legacy|draft)/iu.test(item?.id ?? "")
+  ));
+  assert(leaked.length === 0, `${label} leaked legacy or draft official Recipes`);
+  return officialItems;
 }
 
 async function assertPublicSurface(client, report) {
@@ -658,8 +872,10 @@ function assertSameArray(actual, expected, label) {
 }
 
 function assertSameSet(actual, expected, label) {
+  assert(Array.isArray(actual), `${label} must be an array`);
   const left = [...new Set(actual)].sort();
   const right = [...new Set(expected)].sort();
+  assert(actual.length === left.length, `${label} contains duplicate rows: ${JSON.stringify(actual)}`);
   assert(sameArray(left, right), `${label} mismatch: ${JSON.stringify(left)}`);
 }
 

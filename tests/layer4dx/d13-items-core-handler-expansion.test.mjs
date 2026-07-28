@@ -28,6 +28,7 @@ const READ_IDS = Object.freeze([
 ]);
 const WRITE_CAPABILITIES = Object.freeze([
   "items.set_item_volume",
+  "items.set_item_take_controls_batch",
   "items.set_take_volume",
   "items.set_take_pan",
   "items.set_active_take",
@@ -54,11 +55,12 @@ describe("D13 items core live handler expansion", () => {
     );
   });
 
-  it("adds a separate runtime allowlist for the fifteen D13 template ids", async () => {
+  it("adds a separate runtime allowlist for the sixteen D13 template ids", async () => {
     assert.deepEqual(CALL_TEMPLATE_RUNTIME_D13_ITEMS_CORE_TEMPLATE_IDS, [
       "template.items.list_selected_items",
       "template.items.list_items_on_track",
       "template.items.set_item_volume",
+      "template.items.set_item_take_controls_batch",
       "template.items.set_take_volume",
       "template.items.set_take_pan",
       "template.items.set_active_take",
@@ -123,7 +125,13 @@ describe("D13 items core live handler expansion", () => {
       assert.equal(request.undo.mode, "required");
       assert.equal(request.verification.mode, "required");
       assert.equal(request.artifacts.allow, false);
-      assert.equal(request.refs.some((ref) => ref.kind === "item" && ref.ref === ITEM_REF.ref), true);
+      if (request.pack.capability === "items.set_item_take_controls_batch") {
+        assert.equal(request.refs.length, 0);
+        assert.equal(request.params.batch[0].item_ref, ITEM_REF.ref);
+        assert.equal(request.params.batch[0].take_ref, TAKE_REF.ref);
+      } else {
+        assert.equal(request.refs.some((ref) => ref.kind === "item" && ref.ref === ITEM_REF.ref), true);
+      }
       if (request.pack.capability === "items.set_active_take") {
         assert.equal(request.refs.some((ref) => ref.kind === "take" && ref.ref === TAKE_REF.ref), true);
       }
@@ -176,6 +184,23 @@ describe("D13 items core live handler expansion", () => {
       assert.match(HANDLER_SOURCE, new RegExp(escapeRegExp(symbol)), symbol);
     }
     assert.doesNotMatch(HANDLER_SOURCE, /VERIFICATION_FAILED/);
+    const batchHandlerSource = HANDLER_SOURCE.match(
+      /local function d13_items_set_item_take_controls_batch\(request\)[\s\S]*?\nend\n\nlocal function d13_items_set_item_volume/,
+    )?.[0];
+    assert.equal(typeof batchHandlerSource, "string");
+    assert.doesNotMatch(batchHandlerSource, /refs\[#refs \+ 1\]/);
+    assert.doesNotMatch(HANDLER_SOURCE, /return nil,\s*d13_items_batch_error\(/);
+    assert.doesNotMatch(batchHandlerSource, /(?:mutation_failure|readback_failure)\s*=\s*d13_items_batch_error\(/);
+    assert.match(HANDLER_SOURCE, /local item = row\.item\s+if item == JSON_NULL then item = nil end/);
+    assert.match(HANDLER_SOURCE, /local take = row\.take\s+if take == JSON_NULL then take = nil end/);
+    assert.doesNotMatch(BRIDGE_SOURCE, /return nil,\s*d13_items_batch_error\(/);
+    assert.doesNotMatch(BRIDGE_SOURCE, /(?:mutation_failure|readback_failure)\s*=\s*d13_items_batch_error\(/);
+    assert.match(BRIDGE_SOURCE, /local item = row\.item\s+if item == JSON_NULL then item = nil end/);
+    assert.match(BRIDGE_SOURCE, /local take = row\.take\s+if take == JSON_NULL then take = nil end/);
+    assert.match(
+      batchHandlerSource,
+      /return d13_items_batch_summary\(request, prepared, result_rows, false, true, batch_timings\), nil, json_array\(\{\}\), json_array\(\{\}\), json_array\(\{\}\)/,
+    );
     assert.match(HANDLER_SOURCE, /call_reaper\("Main_OnCommandEx", D13_ITEMS_TOGGLE_TAKE_REVERSE_ACTION_ID, 0, 0\)/);
     const withoutReviewedReverseAction = HANDLER_SOURCE.replace(
       /call_reaper\("Main_OnCommandEx", D13_ITEMS_TOGGLE_TAKE_REVERSE_ACTION_ID, 0, 0\)/g,
@@ -206,6 +231,18 @@ function d13Input(id) {
   }
   if (id === "template.items.set_item_volume" || id === "template.items.set_take_volume") {
     return { volume_db: -3 };
+  }
+  if (id === "template.items.set_item_take_controls_batch") {
+    return {
+      batch: [{
+        id: "row1",
+        item_ref: ITEM_REF.ref,
+        take_ref: TAKE_REF.ref,
+        item: { volume_db: -3 },
+        take: { pan: -0.25 },
+      }],
+      dry_run: true,
+    };
   }
   if (id === "template.items.set_take_pan") {
     return { pan: -0.25 };
@@ -241,7 +278,7 @@ function d13Input(id) {
 }
 
 function d13Refs(id) {
-  if (id === "template.items.list_selected_items") {
+  if (id === "template.items.list_selected_items" || id === "template.items.set_item_take_controls_batch") {
     return {};
   }
   if (id === "template.items.list_items_on_track") {
@@ -266,6 +303,7 @@ function context(extra = {}) {
 function handlerExport(capability) {
   return {
     "items.set_item_volume": "OPENREAPER_HANDLER_EXPORTS.d13_items_set_item_volume",
+    "items.set_item_take_controls_batch": "OPENREAPER_HANDLER_EXPORTS.d13_items_set_item_take_controls_batch",
     "items.set_take_volume": "OPENREAPER_HANDLER_EXPORTS.d13_items_set_take_volume",
     "items.set_take_pan": "OPENREAPER_HANDLER_EXPORTS.d13_items_set_take_pan",
     "items.set_active_take": "OPENREAPER_HANDLER_EXPORTS.set_active_take",

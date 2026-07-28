@@ -5,6 +5,7 @@ import {
 } from "../../../packages/core/src/foundation-bridge-v1.mjs";
 import {
   buildTemplateBridgeRequest,
+  TEMPLATE_EXECUTION_DEFAULT_DISPATCH_TIMEOUT_MS,
 } from "../../../packages/core/src/template-execution-harness-v1.mjs";
 import {
   createExecutionDeadline,
@@ -19,6 +20,7 @@ import {
 } from "../../../packages/core/src/execution-performance-v1.mjs";
 import {
   createAcceptedOfficialTemplateCatalog,
+  CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS,
   createCallTemplateRuntime,
 } from "../../../packages/mcp-server/src/call-template-runtime-v1.mjs";
 
@@ -56,6 +58,22 @@ describe("Alpha4 execution deadline contract", () => {
       deadlineMs: 25,
     });
     assert.equal(request.timeout_ms, 25);
+  });
+
+  it("uses the shared transport safety cap when no user deadline is supplied", () => {
+    const descriptor = createAcceptedOfficialTemplateCatalog().get("template.project.read_summary");
+    const request = buildTemplateBridgeRequest({
+      descriptor,
+      input: descriptor.examples[0]?.input ?? {},
+      context: {
+        session_id: "no-deadline-timeout-test",
+        expected_owner: "owner-test",
+        expected_generation: 1,
+        created_at: "2026-07-28T00:00:00.000Z",
+      },
+    });
+    assert.equal(request.timeout_ms, TEMPLATE_EXECUTION_DEFAULT_DISPATCH_TIMEOUT_MS);
+    assert.equal(request.timeout_ms > 30_000, true);
   });
 
   it("fails closed when a Template executor returns after the user deadline", async () => {
@@ -156,6 +174,132 @@ describe("Alpha4 execution deadline contract", () => {
 
     assert.equal(response.ok, false, JSON.stringify(response));
     assert.equal(response.error.details.result_available_after_cancellation, false);
+  });
+
+  it("reports a late read-only Macro as not_applied and zero-write", async () => {
+    const bridge = new FakeFoundationBridge();
+    const runtime = createCallTemplateRuntime({
+      executor: {
+        async dispatch(request) {
+          await new Promise((resolve) => setTimeout(resolve, 25));
+          return bridge.dispatch(request);
+        },
+      },
+    });
+    const response = await runtime.call_template({
+      id: "macro.project.inspect",
+      input: { include: ["project_path"] },
+      context: {
+        session_id: "macro-deadline-test",
+        expected_owner: "owner-test",
+        expected_generation: 1,
+        created_at: "2026-07-28T00:00:00.000Z",
+      },
+      deadline_ms: 5,
+    });
+
+    assert.equal(response.ok, false, JSON.stringify(response));
+    assert.equal(response.error.code, "CALL_TEMPLATE_EXECUTION_FAILED");
+    assert.equal(response.error.details.request_cancelled, true);
+    assert.equal(response.error.details.result_available_after_cancellation, false);
+    assert.equal(response.error.details.mutation_truth, "not_applied");
+    assert.equal(response.error.details.zero_write, true);
+  });
+
+  it("fails closed when Project Index artifact post-processing returns after the user deadline", async () => {
+    const fake = new FakeFoundationBridge({ owner: "artifact-deadline-owner", generation: 1 });
+    let artifactObserved = 0;
+    const runtime = createCallTemplateRuntime({
+      live: {
+        opted_in: true,
+        executor: {
+          dispatch(request) {
+            const response = structuredClone(fake.dispatch(request));
+            response.result = {
+              ...response.result,
+              summary: {
+                artifact_ref: "artifact:test:deadline",
+                project_ref: "project:test:deadline",
+                track_count: 0,
+                track_cursor: 0,
+                returned_track_count: 0,
+                map_truncated: false,
+              },
+              readback: {
+                artifact_ref: "artifact:test:deadline",
+                project_ref: "project:test:deadline",
+              },
+            };
+            return response;
+          },
+        },
+        allowed_template_ids: CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS,
+      },
+      projectIndexRuntime: {
+        identity: {
+          project_ref: "project:test:deadline",
+          bridge_owner: "artifact-deadline-owner",
+          bridge_generation: 1,
+          session_id: "artifact-deadline-session",
+        },
+        observeSuccessfulTemplateExecution() {
+          return {
+            ok: false,
+            blockers: [{
+              code: "ARTIFACT_PAYLOAD_REQUIRED",
+              details: { artifact_refs: ["artifact:test:deadline"] },
+            }],
+          };
+        },
+        observeArtifactPayload() {
+          artifactObserved += 1;
+          return { ok: true };
+        },
+      },
+      projectIndexArtifactReader: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        return { payload: { project_ref: "project:test:deadline" } };
+      },
+    });
+    const response = await runtime.call_template({
+      id: "template.project.create_observation_bundle",
+      input: {
+        max_tracks: 1,
+        max_items_per_track: 0,
+        max_selected_items: 0,
+        track_cursor: 0,
+        marker_region_limit: 1,
+        tempo_marker_limit: 1,
+        include_transport: true,
+        include_track_items: false,
+      },
+      context: {
+        session_id: "artifact-deadline-session",
+        expected_owner: "artifact-deadline-owner",
+        expected_generation: 1,
+        created_at: "2026-07-28T00:00:00.000Z",
+      },
+      deadline_ms: 20,
+    });
+
+    assert.equal(response.ok, false, JSON.stringify(response));
+    assert.equal(response.error.code, "CALL_TEMPLATE_EXECUTION_FAILED");
+    assert.equal(response.error.details.deadline_exceeded, true);
+    assert.equal(artifactObserved, 0);
+  });
+
+  it("keeps the public Macro performance envelope on a typed blocker", async () => {
+    const runtime = createCallTemplateRuntime();
+    const response = await runtime.call_template({
+      id: "macro.controls.set",
+      input: { target_kind: "track", fields: { volume_db: -6 } },
+    });
+
+    assert.equal(response.contract, "macro.execution.v1", JSON.stringify(response));
+    assert.equal(response.ok, false);
+    assert.equal(response.performance.contract, "openreaper.execution_performance.v1");
+    assert.equal(response.performance.gate_mode, "internal_acceptance_only");
+    assert.equal(response.performance.runtime_cancellation, false);
   });
 
   it("exposes the internal performance gate without turning it into runtime cancellation", async () => {

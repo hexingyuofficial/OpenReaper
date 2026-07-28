@@ -2155,6 +2155,7 @@ local function e5_automation_read_native_lane(envelope, autoitem_index)
     local row = e5_automation_point_row_ex(envelope, autoitem_index, index)
     if not row then return nil end
     rows[#rows + 1] = {
+      point_index = index,
       time_seconds = row.time_seconds,
       value = row.value,
       shape = row.shape,
@@ -3303,6 +3304,363 @@ local function insert_fx_parameter_envelope_points(request)
   summary.param_ident = request.params.param_ident or JSON_NULL
   summary.param_name = info.param_name
   return summary, err, artifacts, jobs, refs
+end
+
+local function e5_automation_batch_fx_ref_object(fx_ref)
+  local owner_kind = fx_ref:match("^fx:(track):") and "track" or fx_ref:match("^fx:(take):") and "take" or nil
+  local owner_ref, slot_index = fx_ref:match("^fx:(track:[^:]+:.+):(%d+)$")
+  if not owner_ref then
+    owner_ref, slot_index = fx_ref:match("^fx:(take:[^:]+:.+):(%d+)$")
+  end
+  if not owner_kind or not owner_ref or not slot_index then
+    return nil
+  end
+  return {
+    kind = "fx",
+    ref = fx_ref,
+    identity = {
+      scheme = owner_kind .. "_fx",
+      value = owner_ref .. ":" .. tostring(slot_index),
+    },
+  }
+end
+
+local function e5_automation_batch_project_time_check(owner_kind, owner, project_time)
+  if owner_kind ~= "take" then
+    return true, nil
+  end
+  local ok_item, item = call_reaper("GetMediaItemTake_Item", owner)
+  local ok_position, item_position = false, nil
+  local ok_length, item_length = false, nil
+  if ok_item and item then
+    ok_position, item_position = call_reaper("GetMediaItemInfo_Value", item, "D_POSITION")
+    ok_length, item_length = call_reaper("GetMediaItemInfo_Value", item, "D_LENGTH")
+  end
+  item_position = ok_position and first_number(item_position) or nil
+  item_length = ok_length and first_number(item_length) or nil
+  local ok_playrate, playrate = call_reaper("GetMediaItemTakeInfo_Value", owner, "D_PLAYRATE")
+  playrate = ok_playrate and first_number(playrate) or nil
+  if not ok_item or not item or item_position == nil or item_length == nil or item_length < 0 or playrate == nil or playrate <= 0 then
+    return false, {
+      code = "TAKE_ENVELOPE_TIME_CONTEXT_UNAVAILABLE",
+      message = "Take FX Envelope batch time validation requires a valid parent Item and positive Take playrate.",
+      details = {},
+    }
+  end
+  if project_time < item_position - 0.000000001 or project_time > item_position + item_length + 0.000000001 then
+    return false, {
+      code = "TAKE_ENVELOPE_TIME_OUT_OF_BOUNDS",
+      message = "Take FX Envelope batch point time must fall inside the parent Item project-time bounds.",
+      details = {
+        requested_time_seconds = project_time,
+        item_start_seconds = item_position,
+        item_end_seconds = item_position + item_length,
+        take_playrate = playrate,
+      },
+    }
+  end
+  return true, nil
+end
+
+local function e5_automation_batch_normalize_points(points, target_index)
+  if not is_json_array(points) or #points < 1 or #points > 64 then
+    return nil, e5_routing_error("PARAMS_INVALID", "Each FX parameter batch target requires 1..64 points.", {
+      reason_code = "POINT_BATCH_LIMIT_EXCEEDED",
+      target_index = target_index,
+    })
+  end
+  local rows = json_array({})
+  local seen_times = {}
+  for index = 1, #points do
+    local point = is_object(points[index]) and points[index] or nil
+    local time_seconds = point and e5_automation_finite_number(point.time_seconds) or nil
+    local value = point and e5_automation_finite_number(point.value) or nil
+    local shape = point and tonumber(point.shape) or nil
+    local tension = point and e5_automation_finite_number(point.tension) or nil
+    if not point or time_seconds == nil or time_seconds < 0 or value == nil or value < 0 or value > 1 or type(shape) ~= "number" or shape ~= math.floor(shape) or shape < 0 or shape > 5 or tension == nil or tension < -1 or tension > 1 then
+      return nil, e5_routing_error("PARAMS_INVALID", "FX parameter batch points require project time>=0, normalized value 0..1, shape 0..5, and tension -1..1.", {
+        reason_code = "POINT_FIELDS_INVALID",
+        target_index = target_index,
+        point_index = index - 1,
+      })
+    end
+    local time_key = string.format("%.12f", time_seconds)
+    if seen_times[time_key] then
+      return nil, e5_routing_error("PARAMS_INVALID", "FX parameter batch target contains duplicate project point times and no points were inserted.", {
+        reason_code = "POINT_BATCH_DUPLICATE_PROJECT_TIME",
+        target_index = target_index,
+        point_index = index - 1,
+        first_index = seen_times[time_key] - 1,
+      })
+    end
+    seen_times[time_key] = index
+    rows[#rows + 1] = {
+      time_seconds = time_seconds,
+      value = value,
+      shape = shape,
+      tension = tension,
+      selected = point.selected == true,
+    }
+  end
+  return rows, nil
+end
+
+local function e5_automation_batch_project_rows(envelope, rows)
+  local result = json_array({})
+  for index = 1, #(rows or {}) do
+    local row = rows[index]
+    local project_time, time_error = e5_automation_native_to_project_time(envelope, row.time_seconds)
+    if project_time == nil then
+      return nil, time_error
+    end
+    result[#result + 1] = {
+      point_index = row.point_index,
+      time_seconds = project_time,
+      value = row.value,
+      shape = row.shape,
+      tension = row.tension,
+      selected = row.selected,
+    }
+  end
+  return result, nil
+end
+
+local function insert_fx_parameter_envelope_points_batch(request)
+  local params = request.params or {}
+  local targets = params.targets
+  if not is_json_array(targets) or #targets < 1 or #targets > 64 then
+    return e5_routing_error("PARAMS_INVALID", "FX parameter batch requires 1..64 target rows and never silently truncates.", {
+      reason_code = "FX_TARGET_BATCH_LIMIT_EXCEEDED",
+      target_count = is_json_array(targets) and #targets or JSON_NULL,
+      max_targets = 64,
+      mutation_applied = false,
+    })
+  end
+  local param_index = tonumber(params.param_index)
+  if type(param_index) ~= "number" or param_index ~= math.floor(param_index) or param_index < 0 then
+    return e5_routing_error("PARAMS_INVALID", "FX parameter batch requires a non-negative integer param_index.", { reason_code = "FX_PARAMETER_INDEX_INVALID", mutation_applied = false })
+  end
+  local create_if_missing = params.create_if_missing ~= false
+  local seen_fx = {}
+  local total_points = 0
+  local plans = {}
+
+  -- Resolve and validate every target before creating an Envelope or inserting a point.
+  for index = 1, #targets do
+    local target = is_object(targets[index]) and targets[index] or nil
+    local fx_ref = target and target.fx_ref or nil
+    if not target or not is_string(fx_ref) or seen_fx[fx_ref] then
+      return e5_routing_error("REF_INVALID", "FX parameter batch targets must contain unique exact fx refs.", {
+        reason_code = seen_fx[fx_ref] and "FX_TARGET_DUPLICATED" or "FX_TARGET_INVALID",
+        target_index = index - 1,
+        fx_ref = fx_ref or JSON_NULL,
+        mutation_applied = false,
+      })
+    end
+    local fx_object = e5_automation_batch_fx_ref_object(fx_ref)
+    local owner_kind, owner, slot_index, owner_ref
+    if fx_object then
+      owner_kind, owner, slot_index, owner_ref = e5_routing_fx_owner_from_ref_object(fx_object)
+    end
+    if not owner then
+      return e5_routing_error("FX_REF_NOT_FOUND", "FX parameter batch target did not resolve to one exact live Track-FX or Take-FX.", {
+        reason_code = "FX_REF_NOT_FOUND",
+        target_index = index - 1,
+        fx_ref = fx_ref,
+        mutation_applied = false,
+      })
+    end
+    local point_rows, point_error = e5_automation_batch_normalize_points(target.points, index - 1)
+    if not point_rows then return nil, point_error end
+    total_points = total_points + #point_rows
+    if total_points > 512 then
+      return e5_routing_error("PARAMS_INVALID", "FX parameter batch total point work exceeds 512.", {
+        reason_code = "POINT_BATCH_TOTAL_LIMIT_EXCEEDED",
+        target_index = index - 1,
+        total_requested_points = total_points,
+        max_total_points = 512,
+        mutation_applied = false,
+      })
+    end
+    local api = owner_kind == "take" and "TakeFX_GetNumParams" or "TrackFX_GetNumParams"
+    local ok_count, count = call_reaper(api, owner, slot_index)
+    count = ok_count and first_number(count) or nil
+    if count == nil or param_index >= count then
+      return e5_routing_error("FX_PARAMETER_NOT_FOUND", "FX parameter batch index is outside the live FX parameter count.", {
+        reason_code = "FX_PARAMETER_NOT_FOUND",
+        target_index = index - 1,
+        fx_ref = fx_ref,
+        param_index = param_index,
+        parameter_count = count or JSON_NULL,
+        mutation_applied = false,
+      })
+    end
+    local param_ident = e5_automation_fx_parameter_ident(owner_kind, owner, slot_index, param_index)
+    if is_string(params.param_ident) and params.param_ident ~= "" and params.param_ident ~= param_ident then
+      return e5_routing_error("FX_PARAMETER_IDENTITY_MISMATCH", "FX parameter batch param_ident does not match every exact live target.", {
+        reason_code = "FX_PARAMETER_IDENTITY_MISMATCH",
+        target_index = index - 1,
+        fx_ref = fx_ref,
+        param_index = param_index,
+        requested_param_ident = params.param_ident,
+        live_param_ident = param_ident or JSON_NULL,
+        mutation_applied = false,
+      })
+    end
+    local param_name = e5_automation_fx_parameter_name(owner_kind, owner, slot_index, param_index)
+    local ok_existing, envelope = e5_automation_get_fx_envelope(owner_kind, owner, slot_index, param_index, false)
+    if not ok_existing then
+      return e5_routing_error("COMMAND_FAILED", "REAPER failed the create=false FX parameter Envelope lookup during batch preflight.", { reason_code = "FX_ENVELOPE_LOOKUP_FAILED", target_index = index - 1, fx_ref = fx_ref, mutation_applied = false })
+    end
+    if not envelope and not create_if_missing then
+      return e5_routing_error("FX_ENVELOPE_MISSING", "An FX parameter batch target has no Envelope and create_if_missing=false.", { reason_code = "FX_ENVELOPE_MISSING", target_index = index - 1, fx_ref = fx_ref, param_index = param_index, mutation_applied = false })
+    end
+    local before_rows = json_array({})
+    local normalized_rows = json_array({})
+    local overlay = nil
+    if envelope then
+      before_rows = e5_automation_read_native_lane(envelope, -1)
+      if not before_rows then
+        return e5_routing_error("COMMAND_FAILED", "Complete FX parameter Envelope readback failed during batch preflight.", { reason_code = "POINT_READBACK_UNAVAILABLE", target_index = index - 1, fx_ref = fx_ref, mutation_applied = false })
+      end
+      for point_index = 1, #point_rows do
+        local native_time, time_error = e5_automation_project_to_native_time(envelope, point_rows[point_index].time_seconds)
+        if native_time == nil then
+          local details = time_error.details or {}
+          details.target_index = index - 1
+          details.point_index = point_index - 1
+          return e5_routing_error(time_error.code, time_error.message, details)
+        end
+        normalized_rows[#normalized_rows + 1] = { time_seconds = native_time, value = point_rows[point_index].value, shape = point_rows[point_index].shape, tension = point_rows[point_index].tension, selected = point_rows[point_index].selected }
+      end
+      overlay = e5_automation_overlay_plan(before_rows, normalized_rows)
+      if not overlay then
+        return e5_routing_error("PARAMS_INVALID", "FX parameter batch contains duplicate native Envelope times.", { reason_code = "POINT_BATCH_DUPLICATE_NATIVE_TIME", target_index = index - 1, fx_ref = fx_ref, mutation_applied = false })
+      end
+      if overlay.after > 64 then
+        return e5_routing_error("PARAMS_INVALID", "FX parameter batch overlay would exceed the complete 64-point lane boundary.", { reason_code = "POINT_FINAL_LANE_LIMIT_EXCEEDED", target_index = index - 1, fx_ref = fx_ref, after = overlay.after, max_points = 64, mutation_applied = false })
+      end
+    else
+      for point_index = 1, #point_rows do
+        local valid_time, time_error = e5_automation_batch_project_time_check(owner_kind, owner, point_rows[point_index].time_seconds)
+        if not valid_time then
+          local details = time_error.details or {}
+          details.target_index = index - 1
+          details.point_index = point_index - 1
+          return e5_routing_error(time_error.code, time_error.message, details)
+        end
+      end
+    end
+    seen_fx[fx_ref] = true
+    plans[#plans + 1] = {
+      target_index = index - 1,
+      fx_ref = fx_ref,
+      owner_kind = owner_kind,
+      owner = owner,
+      owner_ref = owner_ref,
+      slot_index = slot_index,
+      param_index = param_index,
+      param_ident = param_ident,
+      param_name = param_name,
+      envelope = envelope,
+      envelope_ref = envelope and ("envelope:guid:" .. tostring(e5_automation_envelope_guid(envelope) or "")) or nil,
+      created = false,
+      point_rows = point_rows,
+      before_rows = before_rows,
+      normalized_rows = normalized_rows,
+      overlay = overlay,
+    }
+  end
+
+  -- Envelope creation happens only after all exact targets/parameters/times pass preflight.
+  for index = 1, #plans do
+    local plan = plans[index]
+    if not plan.envelope then
+      local ok_created, created_envelope = e5_automation_get_fx_envelope(plan.owner_kind, plan.owner, plan.slot_index, plan.param_index, true)
+      if not ok_created or not created_envelope then
+        return e5_routing_error("COMMAND_FAILED", "REAPER rejected native FX parameter Envelope creation in the aggregate batch.", { reason_code = "FX_ENVELOPE_CREATE_FAILED", target_index = plan.target_index, fx_ref = plan.fx_ref, mutation_applied = index > 1 })
+      end
+      plan.envelope = created_envelope
+      plan.created = true
+      local guid = e5_automation_envelope_guid(created_envelope)
+      if not guid then
+        return e5_routing_error("VERIFY_FAILED", "Created FX parameter Envelope did not expose a canonical GUID.", { reason_code = "FX_ENVELOPE_GUID_MISSING", target_index = plan.target_index, fx_ref = plan.fx_ref, mutation_applied = true })
+      end
+      plan.envelope_ref = "envelope:guid:" .. guid
+      plan.before_rows = json_array({})
+      for point_index = 1, #plan.point_rows do
+        local native_time, time_error = e5_automation_project_to_native_time(plan.envelope, plan.point_rows[point_index].time_seconds)
+        if native_time == nil then
+          local details = time_error.details or {}
+          details.target_index = plan.target_index
+          details.point_index = point_index - 1
+          return e5_routing_error(time_error.code, time_error.message, details, false)
+        end
+        plan.normalized_rows[#plan.normalized_rows + 1] = { time_seconds = native_time, value = plan.point_rows[point_index].value, shape = plan.point_rows[point_index].shape, tension = plan.point_rows[point_index].tension, selected = plan.point_rows[point_index].selected }
+      end
+      plan.overlay = e5_automation_overlay_plan(plan.before_rows, plan.normalized_rows)
+    end
+  end
+
+  local result_targets = json_array({})
+  local total_processed = 0
+  for index = 1, #plans do
+    local plan = plans[index]
+    local writes_completed = 0
+    for write_index = 1, #plan.overlay.writes do
+      local write = plan.overlay.writes[write_index]
+      local point = write.point
+      local call_ok, inserted = call_reaper("InsertEnvelopePointEx", plan.envelope, -1, point.time_seconds, point.value, point.shape, point.tension, point.selected, true)
+      if not call_ok or inserted ~= true then
+        return e5_routing_error("COMMAND_FAILED", "REAPER rejected an FX parameter batch point insertion.", { reason_code = "POINT_BATCH_INSERT_FAILED", target_index = plan.target_index, fx_ref = plan.fx_ref, inserted_before_failure = writes_completed, mutation_applied = writes_completed > 0 or index > 1, index_maintenance_applied = false }, false)
+      end
+      writes_completed = writes_completed + 1
+    end
+    if writes_completed > 0 then
+      local sort_ok = call_reaper("Envelope_SortPointsEx", plan.envelope, -1)
+      if not sort_ok then
+        return e5_routing_error("COMMAND_FAILED", "Envelope_SortPointsEx failed after an FX parameter batch insertion.", { reason_code = "POINT_SORT_FAILED", target_index = plan.target_index, fx_ref = plan.fx_ref, processed_count = writes_completed, mutation_applied = true, index_maintenance_applied = false }, false)
+      end
+    end
+    local after_rows = e5_automation_read_native_lane(plan.envelope, -1)
+    if not e5_automation_point_multiset_equals(after_rows, plan.overlay.expected) then
+      return e5_routing_error("VERIFY_FAILED", "FX parameter batch aggregate readback did not match the complete expected Envelope lane.", { reason_code = "POINT_BATCH_OVERLAY_READBACK_MISMATCH", target_index = plan.target_index, fx_ref = plan.fx_ref, mutation_applied = writes_completed > 0 or plan.created, index_maintenance_applied = writes_completed > 0 }, false)
+    end
+    local before_project, before_error = e5_automation_batch_project_rows(plan.envelope, plan.before_rows)
+    local after_project, after_error = e5_automation_batch_project_rows(plan.envelope, after_rows)
+    if not before_project or not after_project then
+      local time_error = before_error or after_error
+      return e5_routing_error(time_error.code, time_error.message, { target_index = plan.target_index, fx_ref = plan.fx_ref, mutation_applied = true }, false)
+    end
+    total_processed = total_processed + writes_completed
+    result_targets[#result_targets + 1] = {
+      fx_ref = plan.fx_ref,
+      envelope_ref = plan.envelope_ref,
+      owner_kind = plan.owner_kind,
+      owner_ref = plan.owner_ref,
+      slot_index = plan.slot_index,
+      param_index = plan.param_index,
+      param_ident = plan.param_ident or JSON_NULL,
+      param_name = plan.param_name,
+      created = plan.created,
+      requested = plan.overlay.requested,
+      replaced = plan.overlay.replaced,
+      net_new = plan.overlay.net_new,
+      before = plan.overlay.before,
+      after = plan.overlay.after,
+      processed_count = writes_completed,
+      before_points = before_project,
+      after_points = after_project,
+    }
+  end
+  return e5_routing_summary(request, {
+    targets = result_targets,
+    target_count = #result_targets,
+    total_requested_points = total_points,
+    total_processed_points = total_processed,
+    execution_shape = "single_bridge_request_native_batch",
+    aggregate_readback = true,
+  }), nil, json_array({}), json_array({}), e5_routing_refs()
 end
 
 local function insert_sine_wave_points(request)

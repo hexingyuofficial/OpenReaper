@@ -9,16 +9,19 @@ import {
   ALPHA345_NOVICE_MACRO_IDS,
   ALPHA345_NOVICE_OFFICIAL_RECIPE_IDS,
   ALPHA345_NOVICE_RECIPE_OPS,
+  createNoviceResumeRecipeDraft,
   createNoviceUserRecipeDraft,
   runInstalledNoviceTrial,
 } from "../../scripts/trial-alpha3-45-installed-novice.mjs";
+import { validateExecutableRecipeDraft } from "../../packages/core/src/executable-recipe-contract-v1.mjs";
+import { createExecutableRecipeProductCatalog } from "../../packages/mcp-server/src/executable-recipe-product-catalog-v1.mjs";
 
 const roots = [];
 const HARNESS_PATH = path.resolve("scripts/trial-alpha3-45-installed-novice.mjs");
 
 after(async () => Promise.all(roots.map((root) => rm(root, { recursive: true, force: true }))));
 
-test("fake transport proves manuals, lifecycle, official recipes, authoring, reconnect one-call run", async () => {
+test("fake transport proves manuals, exact-four official recipes, resume, authoring, and reconnect", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "openreaper-alpha345-novice-"));
   roots.push(root);
   const wrapper = path.join(root, "openreaper-mcp");
@@ -47,11 +50,16 @@ test("fake transport proves manuals, lifecycle, official recipes, authoring, rec
   assert.deepEqual(report.discovery.recipe_lifecycle_ops, [...ALPHA345_NOVICE_RECIPE_OPS]);
   assert.deepEqual(report.discovery.official_recipe_ids, [...ALPHA345_NOVICE_OFFICIAL_RECIPE_IDS]);
   assert.deepEqual(report.discovery.official_manual_ids, [...ALPHA345_NOVICE_OFFICIAL_RECIPE_IDS]);
+  assert.equal(report.discovery.official_catalog_count, 4);
+  assert.equal(report.discovery.official_legacy_or_draft_leak_count, 0);
   assert.equal(report.discovery.direct_template_fallback, true);
   assert.equal(report.exact_expansions.macros_expanded, 15);
   assert.equal(report.exact_expansions.official_recipes_expanded, 4);
   assert.equal(report.authoring.temp_run_ok, true);
   assert.equal(report.authoring.persistent_save_ok, true);
+  assert.equal(report.authoring.resume_partial_ok, true);
+  assert.equal(report.authoring.resume_recovery_ok, true);
+  assert.equal(report.authoring.resume_success_ok, true);
   assert.equal(report.authoring.rediscovered_after_reconnect, true);
   assert.equal(report.authoring.one_public_run_after_reconnect, true);
   assert.equal(report.final_state.clients_closed, true);
@@ -64,13 +72,14 @@ test("fake transport proves manuals, lifecycle, official recipes, authoring, rec
   assert.equal(report.prohibited_paths.raw_lua_action_shell_ui, false);
   assert.equal(report.prohibited_paths.non_public_tools, false);
   assert.equal(report.prohibited_paths.mutation_parallelism, false);
-  assert.ok(report.call_counts.total >= 12);
+  assert.ok(report.call_counts.total >= 18);
   assert.ok(report.call_counts.by_tool.list_recipes >= 3);
-  assert.ok(report.call_counts.by_tool.call_recipe >= 6);
-  assert.ok(report.call_counts.recipe_ops.validate >= 1);
-  assert.ok(report.call_counts.recipe_ops.save >= 2);
-  assert.ok(report.call_counts.recipe_ops.run >= 2);
-  assert.ok(report.call_counts.recipe_ops.delete >= 1);
+  assert.ok(report.call_counts.by_tool.call_recipe >= 12);
+  assert.ok(report.call_counts.recipe_ops.validate >= 2);
+  assert.ok(report.call_counts.recipe_ops.save >= 3);
+  assert.ok(report.call_counts.recipe_ops.run >= 3);
+  assert.ok(report.call_counts.recipe_ops.resume >= 1);
+  assert.ok(report.call_counts.recipe_ops.delete >= 2);
   assert.ok(report.call_counts.recipe_ops.get >= 1);
   assert.ok(report.timings.total_duration_ms >= 0);
   assert.ok(report.response_sizes.total_bytes > 0);
@@ -94,7 +103,9 @@ test("fake transport proves manuals, lifecycle, official recipes, authoring, rec
   ));
   assert.ok(exactMacroRequest, "novice did not request exact Macro expansion");
   const submittedDraft = requests.find((request) => (
-    request.name === "call_recipe" && request.arguments?.operation === "validate"
+    request.name === "call_recipe"
+    && request.arguments?.operation === "validate"
+    && request.arguments?.draft?.stages?.[0]?.id === "inspect"
   ))?.arguments?.draft;
   const publicDependency = macroDependency("macro.project.inspect");
   assert.deepEqual(submittedDraft.dependencies[0], {
@@ -173,6 +184,22 @@ test("rejects non-absolute installed wrapper and non-fresh evidence root", async
     }),
     /evidenceRoot must be fresh and empty/,
   );
+});
+
+test("resume fixture draft validates against exact public product dependencies", () => {
+  const catalog = createExecutableRecipeProductCatalog();
+  const dependency = (id) => ({ kind: "macro", ...catalog.getMacro(id) });
+  const draft = createNoviceResumeRecipeDraft({
+    projectFileDependency: dependency("macro.project.file"),
+    projectQueryDependency: dependency("macro.project.query"),
+    portability: {
+      project_identity: "project:tab:fixture",
+      bridge_owner: "owner:fixture",
+      bridge_generation: "1",
+      platform: "darwin",
+    },
+  });
+  assert.deepEqual(validateExecutableRecipeDraft(draft, { catalog }), { ok: true, errors: [] });
 });
 
 test("statically verifies installed-wrapper-only public-tool truth and no REAPER mutation parallelism", async () => {
@@ -299,7 +326,8 @@ function createMockClient({
             validation_result_id: entry.validation_result_id,
             source: "user",
           }));
-        const officialItems = ids
+        const requestedOfficialIds = ids.length === 0 ? ALPHA345_NOVICE_OFFICIAL_RECIPE_IDS : ids;
+        const officialItems = requestedOfficialIds
           .filter((id) => ALPHA345_NOVICE_OFFICIAL_RECIPE_IDS.includes(id))
           .map((id) => ({ id, source: "official" }));
         return json({
@@ -340,6 +368,9 @@ function createMockClient({
           },
         });
       }
+      if (request.name === "call_template" && args.id === "macro.project.query") {
+        return json({ ok: true, status: "completed", mutation_truth: "not_applied", zero_write: true });
+      }
       if (request.name === "call_recipe") {
         return json(handleCallRecipe(store, args));
       }
@@ -372,8 +403,8 @@ function macroDependency(id) {
   return {
     kind: "macro",
     id,
-    version: "1.0.0",
-    risk: "read",
+    version: id === "macro.project.file" ? "1.2.0" : "1.0.0",
+    risk: id === "macro.project.file" ? "write" : "read",
     descriptor_hash: "a".repeat(64),
     capabilities: ["project.index"],
   };
@@ -427,6 +458,19 @@ function handleCallRecipe(store, args) {
   if (op === "run") {
     const entry = store.get(identityKey(args));
     if (!entry) return { ok: false, error: { code: "NOT_FOUND", message: "missing revision for run" } };
+    if (entry.draft.id.includes("novice_resume_") && entry.resume_started !== true) {
+      entry.resume_started = true;
+      return {
+        ok: false,
+        operation: "run",
+        status: "partial",
+        resume_safe: true,
+        recipe_id: entry.recipe_id,
+        run_id: `run_${entry.recipe_id}`,
+        latest_checkpoint: { checkpoint_id: "checkpoint_projects_listed", stage_id: "list_open_projects" },
+        error: { code: "INDEX_NOT_READY", message: "hydrate the cold Project Index", details: { zero_write: true } },
+      };
+    }
     return {
       ok: true,
       status: "completed",
@@ -437,7 +481,19 @@ function handleCallRecipe(store, args) {
     };
   }
   if (op === "resume") {
-    return { ok: false, error: { code: "NOT_USED", message: "resume not exercised in novice happy path" } };
+    const entry = store.get(identityKey(args));
+    if (!entry || entry.resume_started !== true) {
+      return { ok: false, error: { code: "RESUME_IDENTITY_INVALID", message: "resume fixture not started" } };
+    }
+    entry.resume_completed = true;
+    return {
+      ok: true,
+      operation: "resume",
+      status: "succeeded",
+      recipe_id: entry.recipe_id,
+      run_id: args.run_id,
+      evidence_ref: `evidence:${entry.recipe_id}`,
+    };
   }
   return { ok: false, error: { code: "UNSUPPORTED_OP", message: String(op) } };
 }

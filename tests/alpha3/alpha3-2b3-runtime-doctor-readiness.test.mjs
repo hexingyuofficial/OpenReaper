@@ -26,6 +26,7 @@ import {
 import {
   LIVE_BRIDGE_HEARTBEAT_FILENAME,
   LIVE_BRIDGE_LIVENESS_CONTRACT,
+  LIVE_BRIDGE_LIVENESS_DEFAULT_MAX_AGE_MS,
   LIVE_BRIDGE_LIVENESS_PROBE_CONTRACT,
   LIVE_BRIDGE_LIVENESS_STATUS,
   createLiveBridgeExecutorFromEnv,
@@ -109,7 +110,9 @@ describe("Alpha3.2-B3 runtime / doctor live readiness", () => {
     assert.equal(absent.bridge.diagnosis, "bridge_action_not_running");
     assert.deepEqual(await readdir(fixture.requests), []);
 
-    await writeHeartbeat(fixture.root, { mtime: new Date(Date.now() - 4_000) });
+    await writeHeartbeat(fixture.root, {
+      mtime: new Date(Date.now() - LIVE_BRIDGE_LIVENESS_DEFAULT_MAX_AGE_MS - 1_000),
+    });
     const stale = await composeAlpha3_2B3RuntimeDoctorReadiness({ env, liveBridge });
     assert.equal(stale.bridge.status, LIVE_BRIDGE_LIVENESS_STATUS.LOOP_UNRESPONSIVE);
 

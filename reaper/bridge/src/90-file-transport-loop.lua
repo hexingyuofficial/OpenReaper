@@ -23,15 +23,15 @@ local function write_terminal_result(filename, result_path, result_json, result_
     completed_request_files[filename] = true
     return true
   end
+  -- A long synchronous handler can block reaper.defer long enough for the
+  -- next client dispatch to observe a stale heartbeat. Refresh before the
+  -- terminal result becomes visible so its consumer cannot race the refresh.
+  local heartbeat_ok, heartbeat_error = write_bridge_heartbeat()
+  if not heartbeat_ok then
+    log("heartbeat refresh before result failed: " .. tostring(heartbeat_error))
+  end
   local ok, write_error = write_file_atomic(result_path, result_json .. "\n")
   if ok then
-    -- A long synchronous handler can block reaper.defer long enough for the
-    -- next client dispatch to observe a stale heartbeat. Refresh after the
-    -- terminal result is durable so the completed request proves loop health.
-    local heartbeat_ok, heartbeat_error = write_bridge_heartbeat()
-    if not heartbeat_ok then
-      log("heartbeat refresh after result failed: " .. tostring(heartbeat_error))
-    end
     finish_claim(filename)
     completed_request_files[filename] = true
     return true

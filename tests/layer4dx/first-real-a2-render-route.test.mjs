@@ -5,6 +5,7 @@ import { mkdir, mkdtemp, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
+import { fileURLToPath } from "node:url";
 import {
   FOUNDATION_BRIDGE_CONTRACT,
   createArtifactRef,
@@ -26,7 +27,8 @@ import {
 
 const ROOT = new URL("../..", import.meta.url);
 const SMOKE_SCRIPT = "scripts/smoke-template-runtime-live.mjs";
-const BRIDGE_SOURCE = readFileSync(new URL("../../reaper/bridge/openreaper-live-bridge.lua", import.meta.url), "utf8");
+const BRIDGE_SCRIPT_PATH = fileURLToPath(new URL("../../reaper/bridge/openreaper-live-bridge.lua", import.meta.url));
+const BRIDGE_SOURCE = readFileSync(BRIDGE_SCRIPT_PATH, "utf8");
 const A2_FLAG = "--first-real-a2-render";
 const A2_OPT_IN_ENV = "OPENREAPER_FIRST_REAL_A2_LIVE_SMOKE";
 const A2_REGION_REF_ENV = "OPENREAPER_FIRST_REAL_A_REGION_REF";
@@ -557,6 +559,7 @@ function runSmoke(args, env) {
         [A2_ARTIFACT_ROOT_ENV]: "",
         [A2_RENDER_ROOT_ENV]: "",
         [LIVE_BRIDGE_EXECUTOR_ENV.transport_dir]: "",
+        [LIVE_BRIDGE_EXECUTOR_ENV.bridge_script_path]: BRIDGE_SCRIPT_PATH,
         ...env,
       },
     }).trim(),
@@ -574,6 +577,7 @@ function runSmokeExpectingFailure(args, env) {
         [A2_ARTIFACT_ROOT_ENV]: "",
         [A2_RENDER_ROOT_ENV]: "",
         [LIVE_BRIDGE_EXECUTOR_ENV.transport_dir]: "",
+        [LIVE_BRIDGE_EXECUTOR_ENV.bridge_script_path]: BRIDGE_SCRIPT_PATH,
         ...env,
       },
     });

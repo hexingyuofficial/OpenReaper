@@ -173,6 +173,7 @@ describe("Layer 4C template catalog and smoke gate", () => {
       "template.media.read_take_source",
       "template.media.import_file_to_track",
       "template.media.import_file_section_to_track",
+      "template.media.import_files_batch",
       "template.media.read_project_media_files",
       "template.media.relink_take_source",
     ];

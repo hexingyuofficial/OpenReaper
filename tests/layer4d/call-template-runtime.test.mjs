@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
+import { fileURLToPath } from "node:url";
 import {
   FakeFoundationBridge,
   createArtifactRef,
@@ -90,6 +91,8 @@ import {
   LIVE_BRIDGE_EXECUTOR_ENV,
 } from "../../packages/mcp-server/src/live-bridge-executor-v1.mjs";
 import { TOOL_ABI_V1_TOOL_NAMES } from "../../packages/mcp-server/src/tool-abi-v1.mjs";
+
+const REPO_BRIDGE_SCRIPT_PATH = fileURLToPath(new URL("../../reaper/bridge/openreaper-live-bridge.lua", import.meta.url));
 
 const EXPECTED_PRODUCT_SURFACE_EXPANDED_DETAIL_FIELDS = [
   "agent_startup_guidance_snapshot",
@@ -350,6 +353,30 @@ describe("Layer 4D call_template runtime binding", () => {
     });
     assert.equal(oversized.error.source, "harness");
     assert.equal(oversized.error.code, "RESPONSE_TOO_LARGE");
+
+    const aggregateSummary = await createCallTemplateRuntime({
+      executor: (request) =>
+        oversizedBridge.okEnvelope(request, "2026-07-03T00:00:00.000Z", {
+          summary: {
+            rows: Array.from({ length: 24 }, (_, index) => ({
+              id: `row-${index}`,
+              ref: `item:guid:{${String(index).padStart(32, "0")}}`,
+              status: "passed",
+            })),
+          },
+        }),
+    }).call_template({
+      id: "template.tracks.create_track",
+      input: { name: "Aggregate summary" },
+      context: context(),
+      budget: {
+        max_response_bytes: 65_536,
+        max_items: 50,
+        max_inline_value_bytes: 64,
+      },
+    });
+    assert.equal(aggregateSummary.ok, true, JSON.stringify(aggregateSummary));
+    assert.equal(aggregateSummary.result.summary.rows.length, 24);
   });
 
   it("returns canonical refs, readback, and session ledger for static chained calls", async () => {
@@ -772,11 +799,12 @@ describe("Layer 4D call_template runtime binding", () => {
       },
     });
     const graduatedMenu = graduatedRuntime.list_templates({ limit: 100 });
-    assert.equal(CALL_TEMPLATE_RUNTIME_ALPHA2_HISTORICAL_EVIDENCE_TEMPLATE_IDS.length, 214);
+    assert.equal(CALL_TEMPLATE_RUNTIME_ALPHA2_HISTORICAL_EVIDENCE_TEMPLATE_IDS.length, 215);
     assert.equal(CALL_TEMPLATE_RUNTIME_ALPHA2_HISTORICAL_EVIDENCE_TEMPLATE_IDS.includes("template.items.set_item_pan"), true);
-    assert.equal(CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS.length, 213);
+    assert.equal(CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS.length, 214);
     assert.equal(CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS.includes("template.items.set_item_pan"), false);
-    assert.equal(graduatedRuntime.live_gate.allowed_template_ids.length, 213);
+    assert.equal(CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS.includes("template.items.set_item_take_controls_batch"), false);
+    assert.equal(graduatedRuntime.live_gate.allowed_template_ids.length, 214);
     assert.equal(CALL_TEMPLATE_RUNTIME_ALPHA3_2C3A_PROJECT_FILE_READ_TEMPLATE_IDS.length, 2);
     assert.equal(CALL_TEMPLATE_RUNTIME_ALPHA3_2C3BC_PROJECT_FILE_SAVE_TEMPLATE_IDS.length, 2);
     assert.equal(
@@ -784,7 +812,7 @@ describe("Layer 4D call_template runtime binding", () => {
         CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS.includes(id)),
       false,
     );
-    assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 236);
+    assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 239);
     const currentProductRuntime = createCallTemplateRuntime({
       live: {
         opted_in: true,
@@ -792,7 +820,7 @@ describe("Layer 4D call_template runtime binding", () => {
         allowed_template_ids: CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS,
       },
     });
-    assert.equal(currentProductRuntime.live_gate.allowed_template_ids.length, 236);
+    assert.equal(currentProductRuntime.live_gate.allowed_template_ids.length, 239);
     assert.equal(
       currentProductRuntime.list_templates({
         ids: CALL_TEMPLATE_RUNTIME_ALPHA3_2C3A_PROJECT_FILE_READ_TEMPLATE_IDS,
@@ -1146,6 +1174,7 @@ describe("Layer 4D call_template runtime binding", () => {
       "template.automation.resolve_send_envelope",
       "template.automation.ensure_fx_parameter_envelope",
       "template.automation.insert_fx_parameter_envelope_points",
+      "template.automation.insert_fx_parameter_envelope_points_batch",
       "template.automation.insert_sine_wave_points",
     ]);
 
@@ -1158,7 +1187,7 @@ describe("Layer 4D call_template runtime binding", () => {
         opt_in_env: "OPENREAPER_E5_ROUTING_AUTOMATION_LIVE_SMOKE",
         opt_in_flag: "--live",
       },
-      evidenceLimit: 40,
+        evidenceLimit: 41,
     });
 
     for (const [index, id] of CALL_TEMPLATE_RUNTIME_E5_ROUTING_AUTOMATION_ROUTE_TEMPLATE_IDS.entries()) {
@@ -1172,11 +1201,11 @@ describe("Layer 4D call_template runtime binding", () => {
       assert.equal(response.ok, true, id);
     }
 
-    assert.equal(bridge.seen.length, 40);
+    assert.equal(bridge.seen.length, 41);
     assert.equal(bridge.seen.filter((request) => request.operation.family === "query_state").length, 14);
-    assert.equal(bridge.seen.filter((request) => request.operation.family === "run_command").length, 26);
+    assert.equal(bridge.seen.filter((request) => request.operation.family === "run_command").length, 27);
     assert.equal(bridge.seen.filter((request) => request.pack.id === "routing").length, 19);
-    assert.equal(bridge.seen.filter((request) => request.pack.id === "automation").length, 21);
+    assert.equal(bridge.seen.filter((request) => request.pack.id === "automation").length, 22);
     for (const request of bridge.seen.filter((entry) => entry.pack.risk === "read")) {
       assert.equal(request.undo.mode, "none");
       assert.equal(request.artifacts.allow, false);
@@ -1225,10 +1254,10 @@ describe("Layer 4D call_template runtime binding", () => {
       "query_state:automation.resolve_send_envelope",
       "run_command:template.execute",
     ]);
-    assert.equal(fake.executions.length, 38);
+    assert.equal(fake.executions.length, 39);
     assert.equal(fake.executions.every((execution) => execution.ok), true);
     assert.equal(fake.executions.filter((execution) => execution.risk === "read").length, 14);
-    assert.equal(fake.executions.filter((execution) => execution.risk === "write").length, 23);
+    assert.equal(fake.executions.filter((execution) => execution.risk === "write").length, 24);
     assert.equal(fake.executions.filter((execution) => execution.artifacts_allowed === true).length, 0);
     assert.deepEqual(fake.preflight_blockers_covered, [
       "e5_track_ref_missing",
@@ -1240,7 +1269,7 @@ describe("Layer 4D call_template runtime binding", () => {
       "e5_automation_point_value_invalid",
     ]);
     assert.equal(fake.routing_template_ids.length, 19);
-    assert.equal(fake.automation_template_ids.length, 19);
+    assert.equal(fake.automation_template_ids.length, 20);
 
     const root = mkdtempSync(join(tmpdir(), "openreaper-e5-routing-automation-"));
     const transportDir = join(root, "transport");
@@ -1616,7 +1645,7 @@ describe("Layer 4D call_template runtime binding", () => {
     }).trim();
     const preview = JSON.parse(previewOutput);
     assert.equal(preview.contract, CALL_TEMPLATE_RUNTIME_PRODUCT_SURFACE_CONTRACT);
-    assert.equal(preview.allowed_template_count, 213);
+    assert.equal(preview.allowed_template_count, 214);
     assert.deepEqual(preview.workflow_rhythm.steps, ["discover", "observe", "target", "confirm", "execute_one", "readback"]);
     assert.equal(preview.startup_preflight[0].id, "manual_session_visible");
     assert.equal(preview.startup_health.contract, ALPHA3_D1_STARTUP_HEALTH_CONTRACT);
@@ -1741,6 +1770,7 @@ function runFxB1RouteSmoke(args, env = {}) {
       OPENREAPER_TEMPLATE_RUNTIME_LIVE_SMOKE: "",
       OPENREAPER_E2_FX_B1_LIVE_SMOKE: "",
       [LIVE_BRIDGE_EXECUTOR_ENV.transport_dir]: "",
+      [LIVE_BRIDGE_EXECUTOR_ENV.bridge_script_path]: REPO_BRIDGE_SCRIPT_PATH,
       ...env,
     },
   }).trim();
@@ -1843,6 +1873,7 @@ function runMediaRouteSmoke(args, env = {}) {
       OPENREAPER_TEMPLATE_RUNTIME_LIVE_SMOKE: "",
       OPENREAPER_E3_MEDIA_ROUTE_LIVE_SMOKE: "",
       [LIVE_BRIDGE_EXECUTOR_ENV.transport_dir]: "",
+      [LIVE_BRIDGE_EXECUTOR_ENV.bridge_script_path]: REPO_BRIDGE_SCRIPT_PATH,
       ...env,
     },
   }).trim();
@@ -1903,6 +1934,7 @@ function runItemRouteSmoke(args, env = {}) {
       OPENREAPER_TEMPLATE_RUNTIME_LIVE_SMOKE: "",
       OPENREAPER_E4_ITEM_ROUTE_LIVE_SMOKE: "",
       [LIVE_BRIDGE_EXECUTOR_ENV.transport_dir]: "",
+      [LIVE_BRIDGE_EXECUTOR_ENV.bridge_script_path]: REPO_BRIDGE_SCRIPT_PATH,
       ...env,
     },
   }).trim();
@@ -1979,6 +2011,20 @@ function e5RouteInput(id) {
         { time_seconds: 1, value: 0.8, shape: 0, tension: 0 },
       ],
     },
+    "template.automation.insert_fx_parameter_envelope_points_batch": {
+      param_index: 0,
+      create_if_missing: true,
+      targets: [
+        {
+          fx_ref: "fx:track:guid:{E5-SOURCE-TRACK}:0",
+          points: [{ time_seconds: 0, value: 0.2, shape: 0, tension: 0 }],
+        },
+        {
+          fx_ref: "fx:track:guid:{E5-DESTINATION-TRACK}:0",
+          points: [{ time_seconds: 0, value: 0.8, shape: 0, tension: 0 }],
+        },
+      ],
+    },
     "template.automation.insert_sine_wave_points": {
       start_seconds: 0,
       end_seconds: 2,
@@ -2030,6 +2076,9 @@ function e5RouteRefs(id) {
   }
   if (id === "template.automation.insert_fx_parameter_envelope_points") {
     return { fx_ref: fxRef, envelope_ref: envelopeRef };
+  }
+  if (id === "template.automation.insert_fx_parameter_envelope_points_batch") {
+    return { fx_refs: [fxRef] };
   }
   if (id.startsWith("template.routing.set_send_")
     || id === "template.routing.set_send_volume"
@@ -2084,6 +2133,7 @@ function runE5RouteSmoke(args, env = {}) {
       OPENREAPER_TEMPLATE_RUNTIME_LIVE_SMOKE: "",
       OPENREAPER_E5_ROUTING_AUTOMATION_LIVE_SMOKE: "",
       [LIVE_BRIDGE_EXECUTOR_ENV.transport_dir]: "",
+      [LIVE_BRIDGE_EXECUTOR_ENV.bridge_script_path]: REPO_BRIDGE_SCRIPT_PATH,
       ...env,
     },
   }).trim();

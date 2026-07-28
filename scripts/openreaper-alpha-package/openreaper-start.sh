@@ -1494,17 +1494,20 @@ verify_public_bridge_read() {
     echo "[OpenReaper] installed Doctor is missing or not executable: ${doctor}" >&2
     return 1
   fi
-  if OPENREAPER_SESSION_ROOT="${SESSION_ROOT}" \
-      OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR="${TRANSPORT_DIR}" \
-      OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH="${BRIDGE_SCRIPT}" \
-      OPENREAPER_ARTIFACT_ROOT="${ARTIFACT_ROOT}" \
-      OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT="${ARTIFACT_ROOT}" \
-      OPENREAPER_LIVE_SMOKE_RENDER_ROOT="${RENDER_ROOT}" \
-      OPENREAPER_LIVE_BRIDGE_OWNER="${BRIDGE_OWNER}" \
-      OPENREAPER_LIVE_BRIDGE_GENERATION="${BRIDGE_GENERATION}" \
-      OPENREAPER_DOCTOR_SMOKE_TIMEOUT_MS=10000 \
-      OPENREAPER_DOCTOR_READ_PROBE_TIMEOUT_MS=3000 \
-      "${doctor}" --wait-bridge=2 > "${doctor_log}" 2>&1; then
+  if (
+    cd "${INSTALL_ROOT}" || exit 1
+    OPENREAPER_SESSION_ROOT="${SESSION_ROOT}" \
+        OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR="${TRANSPORT_DIR}" \
+        OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH="${BRIDGE_SCRIPT}" \
+        OPENREAPER_ARTIFACT_ROOT="${ARTIFACT_ROOT}" \
+        OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT="${ARTIFACT_ROOT}" \
+        OPENREAPER_LIVE_SMOKE_RENDER_ROOT="${RENDER_ROOT}" \
+        OPENREAPER_LIVE_BRIDGE_OWNER="${BRIDGE_OWNER}" \
+        OPENREAPER_LIVE_BRIDGE_GENERATION="${BRIDGE_GENERATION}" \
+        OPENREAPER_DOCTOR_SMOKE_TIMEOUT_MS=10000 \
+        OPENREAPER_DOCTOR_READ_PROBE_TIMEOUT_MS=3000 \
+        "${doctor}" --wait-bridge=2
+  ) > "${doctor_log}" 2>&1; then
     echo "[OpenReaper] bridge-read-probe=passed"
     echo "[OpenReaper] doctor-log=${doctor_log}"
     return 0
@@ -1546,31 +1549,19 @@ run_startup_dialog_assist() {
     echo "unavailable"
     return 0
   fi
-  local reaper_pid assist_status=0
+  local reaper_pid assist_result="" assist_status=0
   reaper_pid="$(cat "${PID_FILE}")"
-  if /usr/bin/perl -e 'my $seconds = shift @ARGV; alarm $seconds; exec @ARGV or die "exec failed: $!"' \
+  if assist_result="$(/usr/bin/perl -e 'my $seconds = shift @ARGV; alarm $seconds; exec @ARGV or die "exec failed: $!"' \
       "${STARTUP_DIALOG_TIMEOUT_SECONDS}" \
       /usr/bin/osascript - "${STARTUP_DIALOG_ASSIST}" "${IGNORE_MISSING_MEDIA}" "${reaper_pid}" <<'APPLESCRIPT' 2>> "${START_LOG}"
-on uiElementNamed(theWindow, targetName)
-  tell application "System Events"
-    try
-      set uiElements to entire contents of theWindow
-      repeat with uiElement in uiElements
-        try
-          set uiName to name of uiElement
-          if uiName is not missing value and (uiName as text) is targetName then return true
-        end try
-      end repeat
-    end try
-  end tell
-  return false
-end uiElementNamed
-
 on exactUiElementCount(theWindow, targetName, targetRole)
   tell application "System Events"
     set matchCount to 0
     try
-      set uiElements to entire contents of theWindow
+      -- The allowlisted media-warning buttons are direct children of the
+      -- modal window. A recursive AX expansion can block for the full
+      -- inspection budget while REAPER is already progressing startup.
+      set uiElements to every button of theWindow whose name is targetName
       repeat with uiElement in uiElements
         try
           set uiName to name of uiElement
@@ -1585,24 +1576,19 @@ end exactUiElementCount
 
 on isExactProjectNotesWindow(theWindow)
   tell application "System Events"
-    set hasProjectNotesMarker to false
     set notesCheckboxCount to 0
     set okButtonCount to 0
     try
-      set uiElements to entire contents of theWindow
-      repeat with uiElement in uiElements
-        try
-          set uiName to name of uiElement
-          set uiRole to role of uiElement
-          if uiName is not missing value and (uiName as text) is "Notes" then set hasProjectNotesMarker to true
-          if uiName is not missing value and (uiName as text) is "Show notes on project load" then
-            set hasProjectNotesMarker to true
-            if uiRole is not missing value and (uiRole as text) is "AXCheckBox" then set notesCheckboxCount to notesCheckboxCount + 1
-          end if
-          if uiName is not missing value and (uiName as text) is "OK" and uiRole is not missing value and (uiRole as text) is "AXButton" then set okButtonCount to okButtonCount + 1
-        end try
-      end repeat
-      return hasProjectNotesMarker and notesCheckboxCount is 1 and okButtonCount is 1
+      -- Query the two exact direct children instead of expanding any AX
+      -- subtree. REAPER's Project Settings window can make both `entire
+      -- contents` and `UI elements` block even after the bridge hook has
+      -- completed. Unknown/decision-bearing dialogs still go through the
+      -- fail-closed classifier below.
+      set matchingNotesCheckboxes to every checkbox of theWindow whose name is "Show notes on project load"
+      set matchingOkButtons to every button of theWindow whose name is "OK"
+      set notesCheckboxCount to count of matchingNotesCheckboxes
+      set okButtonCount to count of matchingOkButtons
+      return notesCheckboxCount is 1 and okButtonCount is 1
     end try
   end tell
   return false
@@ -1611,18 +1597,15 @@ end isExactProjectNotesWindow
 on clickUniqueExactButton(theWindow, targetName)
   tell application "System Events"
     try
-      set uiElements to entire contents of theWindow
+      -- Safe buttons used by the startup allowlist are direct dialog
+      -- children. Avoid a second unbounded AX-tree traversal after the
+      -- classifier has already identified the exact dialog.
+      set uiElements to every button of theWindow whose name is targetName
       set matchingElement to missing value
       set matchCount to 0
       repeat with uiElement in uiElements
-        try
-          set uiName to name of uiElement
-          set uiRole to role of uiElement
-          if uiName is not missing value and uiRole is not missing value and (uiName as text) is targetName and (uiRole as text) is "AXButton" then
-            set matchCount to matchCount + 1
-            set matchingElement to uiElement
-          end if
-        end try
+        set matchCount to matchCount + 1
+        set matchingElement to uiElement
       end repeat
       if matchCount is not 1 then error "exact button is not unique"
       click matchingElement
@@ -1729,16 +1712,27 @@ end tell
 return "no_safe_dialog"
 end run
 APPLESCRIPT
-  then
-    :
+  )"; then
+    if [[ -z "${assist_result}" ]]; then
+      assist_status=1
+      assist_result="blocked_dialog_inspection_failed:status=empty"
+    fi
   else
     assist_status=$?
+    if (( assist_status == 142 )); then
+      assist_result="blocked_dialog_inspection_timeout:seconds=${STARTUP_DIALOG_TIMEOUT_SECONDS}"
+    elif (( assist_status != 0 )); then
+      assist_result="blocked_dialog_inspection_failed:status=${assist_status}"
+    else
+      assist_result="blocked_dialog_inspection_failed:status=unknown"
+    fi
   fi
   if (( assist_status == 142 )); then
-    echo "blocked_dialog_inspection_timeout:seconds=${STARTUP_DIALOG_TIMEOUT_SECONDS}"
+    echo "blocked_dialog_inspection_timeout:seconds=${STARTUP_DIALOG_TIMEOUT_SECONDS}" >&2
   elif (( assist_status != 0 )); then
-    echo "blocked_dialog_inspection_failed:status=${assist_status}"
+    echo "blocked_dialog_inspection_failed:status=${assist_status}" >&2
   fi
+  printf '%s\n' "${assist_result}"
 }
 
 startup_dialog_result_is_safe() {

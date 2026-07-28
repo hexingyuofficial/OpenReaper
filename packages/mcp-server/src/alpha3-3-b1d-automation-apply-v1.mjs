@@ -42,6 +42,7 @@ export const ALPHA3_3_B1D_AUTOMATION_APPLY_TEMPLATE_IDS = deepFreeze([
   "template.automation.delete_automation_item",
   "template.fx.parameter_to_envelope_mapping",
   "template.automation.ensure_fx_parameter_envelope",
+  "template.automation.insert_fx_parameter_envelope_points_batch",
 ]);
 
 const RESOLVE_TRACK_ID = "template.tracks.resolve_track_ref";
@@ -58,6 +59,7 @@ const SET_AUTOMATION_ITEM_BOUNDS_ID = "template.automation.set_automation_item_b
 const DELETE_AUTOMATION_ITEM_ID = "template.automation.delete_automation_item";
 const MAP_FX_PARAMETER_ENVELOPE_ID = "template.fx.parameter_to_envelope_mapping";
 const ENSURE_FX_PARAMETER_ENVELOPE_ID = "template.automation.ensure_fx_parameter_envelope";
+const INSERT_FX_PARAMETER_ENVELOPE_POINTS_BATCH_ID = "template.automation.insert_fx_parameter_envelope_points_batch";
 const MAX_TARGETS = 64;
 const MAX_NEW_POINTS = 512;
 const MAX_COMPLETE_READ_POINTS = 64;
@@ -498,6 +500,37 @@ async function prepareFxOperations({ request, input, executeAtomic, state }) {
   if (new Set(targets.map((target) => target.fx_ref)).size !== targets.length) return failed("AUTOMATION_TARGETS_DUPLICATED", "FX targets must resolve once each.");
   if (targets.reduce((total, target) => total + target.points.length, 0) > MAX_NEW_POINTS) return failed("AUTOMATION_POINT_LIMIT_EXCEEDED", `Total inserted point work exceeds ${MAX_NEW_POINTS} across all target FX.`);
   if (targets.some((target) => target.points.some((point) => point.value < 0 || point.value > 1))) return failed("AUTOMATION_POINT_VALUE_OUT_OF_RANGE", "FX parameter Envelope values must be normalized within 0..1.");
+  if (executeAtomic.supportsAutomationFxParameterEnvelopePointsBatch === true && input.dry_run === false) {
+    if (targets.some((target) => !isExactFxRef(target.fx_ref))) return failed("AUTOMATION_EXACT_FX_REQUIRED", "Every batch FX target must be an exact fx:track:guid or fx:take:guid ref.");
+    const targetRows = targets.map((target) => ({ fx_ref: target.fx_ref, points: clone(target.points) }));
+    const fxRefs = targets.map((target) => fxObjectRef(target.fx_ref));
+    const operation = {
+      operation_id: "automation-fx-parameter-points-batch",
+      mode: input.mode,
+      template_id: INSERT_FX_PARAMETER_ENVELOPE_POINTS_BATCH_ID,
+      target_ref: "fx:batch",
+      refs: { fx_refs: fxRefs },
+      input: {
+        param_index: input.fx_parameter.param_index,
+        ...(input.fx_parameter.param_ident ? { param_ident: input.fx_parameter.param_ident } : {}),
+        create_if_missing: input.fx_parameter.create_if_missing,
+        targets: targetRows,
+      },
+      requested: {
+        param_index: input.fx_parameter.param_index,
+        param_ident: input.fx_parameter.param_ident ?? null,
+        create_if_missing: input.fx_parameter.create_if_missing,
+        target_count: targets.length,
+        total_requested_points: targets.reduce((total, target) => total + target.points.length, 0),
+        execution_shape: "single_bridge_request_native_batch",
+      },
+      targets: targetRows,
+    };
+    state.targetKind = "fx";
+    state.targetCount = targets.length;
+    state.canonicalRefs.push(...targets.map((target) => target.fx_ref));
+    return { ok: true, operations: [operation] };
+  }
   const operations = [];
   for (const [index, target] of targets.entries()) {
     const token = target.fx_ref;
@@ -556,6 +589,11 @@ async function executeOperations({ request, executeAtomic, state }) {
     const change = pendingChange(operation);
     state.changes.push(change);
     if (operation.mode === "insert_fx_parameter_points") {
+      if (operation.template_id === INSERT_FX_PARAMETER_ENVELOPE_POINTS_BATCH_ID) {
+        const failure = await executeFxBatchOperation({ operation, change, request, executeAtomic, state });
+        if (failure) return failure;
+        continue;
+      }
       const failure = await executeFxOperation({ operation, change, request, executeAtomic, state });
       if (failure) return failure;
       continue;
@@ -607,6 +645,70 @@ async function executeOperations({ request, executeAtomic, state }) {
     change.status = "applied";
     change.live_readback = { status: "passed", source: verified.source, ...verified.facts };
   }
+  return null;
+}
+
+async function executeFxBatchOperation({ operation, change, request, executeAtomic, state }) {
+  let execution;
+  try {
+    execution = await runAtomic(executeAtomic, request, {
+      id: INSERT_FX_PARAMETER_ENVELOPE_POINTS_BATCH_ID,
+      input: operation.input,
+      refs: operation.refs,
+    });
+  } catch (error) {
+    change.mutation = { status: "unknown_or_partial", template_id: INSERT_FX_PARAMETER_ENVELOPE_POINTS_BATCH_ID, stage: "batch_mutation" };
+    change.status = "readback_failed";
+    change.live_readback = { status: "failed", source: "fx_parameter_batch_readback" };
+    return executionError(error, INSERT_FX_PARAMETER_ENVELOPE_POINTS_BATCH_ID, "mutation");
+  }
+  collectEvidence(state, execution);
+  if (execution?.ok !== true) {
+    const failure = atomicFailure(execution, INSERT_FX_PARAMETER_ENVELOPE_POINTS_BATCH_ID);
+    const mutationApplied = execution?.error?.details?.mutation_applied === true;
+    change.mutation = { status: mutationApplied ? "unknown_or_partial" : "not_completed", template_id: INSERT_FX_PARAMETER_ENVELOPE_POINTS_BATCH_ID, stage: "batch_mutation" };
+    change.status = mutationApplied ? "readback_failed" : "blocked";
+    change.live_readback = { status: "failed", source: "fx_parameter_batch_readback" };
+    return { ...failure, phase: mutationApplied ? "mutation" : "preflight" };
+  }
+  const summary = executionSummary(execution);
+  const rows = Array.isArray(summary.targets) ? summary.targets : [];
+  if (rows.length !== operation.targets.length) {
+    change.mutation = { status: "unknown_or_partial", template_id: INSERT_FX_PARAMETER_ENVELOPE_POINTS_BATCH_ID, stage: "batch_readback" };
+    change.status = "readback_failed";
+    change.live_readback = { status: "failed", source: "fx_parameter_batch_readback" };
+    return { ...failed("AUTOMATION_BATCH_READBACK_MISMATCH", "FX parameter batch returned a target count different from the requested batch."), phase: "readback" };
+  }
+  const verifiedRows = [];
+  for (const target of operation.targets) {
+    const row = rows.find((candidate) => candidate?.fx_ref === target.fx_ref);
+    if (!row || !/^envelope:guid:.+/u.test(row.envelope_ref) || row.param_index !== operation.input.param_index || typeof row.param_ident !== "string" || !Array.isArray(row.before_points) || !Array.isArray(row.after_points)) {
+      change.mutation = { status: "completed", template_id: INSERT_FX_PARAMETER_ENVELOPE_POINTS_BATCH_ID, stage: "batch_readback" };
+      change.status = "readback_failed";
+      change.live_readback = { status: "failed", source: "fx_parameter_batch_readback" };
+      return { ...failed("AUTOMATION_BATCH_READBACK_MISMATCH", `FX parameter batch did not return complete identity/readback for ${target.fx_ref}.`), phase: "readback" };
+    }
+    const before = row.before_points.map(normalizeReadPoint);
+    const after = row.after_points.map(normalizeReadPoint);
+    if (before.some((point) => !point.ok) || after.some((point) => !point.ok)) {
+      change.mutation = { status: "completed", template_id: INSERT_FX_PARAMETER_ENVELOPE_POINTS_BATCH_ID, stage: "batch_readback" };
+      change.status = "readback_failed";
+      change.live_readback = { status: "failed", source: "fx_parameter_batch_readback" };
+      return { ...failed("AUTOMATION_BATCH_READBACK_INVALID", `FX parameter batch returned an invalid point row for ${target.fx_ref}.`), phase: "readback" };
+    }
+    const overlay = buildPointOverlay(before.map((point) => point.value), target.points);
+    if (!overlay.ok || !pointMultisetEquals(after.map((point) => point.value).map(stripPointIndex), overlay.expected)) {
+      change.mutation = { status: "completed", template_id: INSERT_FX_PARAMETER_ENVELOPE_POINTS_BATCH_ID, stage: "batch_readback" };
+      change.status = "readback_failed";
+      change.live_readback = { status: "failed", source: "fx_parameter_batch_readback" };
+      return { ...failed("AUTOMATION_BATCH_READBACK_MISMATCH", `FX parameter batch did not match the complete expected lane for ${target.fx_ref}.`), phase: "readback" };
+    }
+    verifiedRows.push({ fx_ref: row.fx_ref, envelope_ref: row.envelope_ref, requested: row.requested, before: row.before, after: row.after, processed_count: row.processed_count });
+    state.canonicalRefs.push(row.fx_ref, row.envelope_ref);
+  }
+  change.mutation = { status: "completed", template_id: INSERT_FX_PARAMETER_ENVELOPE_POINTS_BATCH_ID, target_count: rows.length, total_processed_points: summary.total_processed_points };
+  change.status = "applied";
+  change.live_readback = { status: "passed", source: "fx_parameter_batch_readback", target_count: rows.length, total_requested_points: summary.total_requested_points, total_processed_points: summary.total_processed_points, targets: verifiedRows };
   return null;
 }
 

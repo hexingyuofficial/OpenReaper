@@ -5,6 +5,7 @@ import { mkdir, mkdtemp, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
+import { fileURLToPath } from "node:url";
 import { lauxlib, lua, lualib, to_jsstring, to_luastring } from "fengari";
 import {
   FakeFoundationBridge,
@@ -21,7 +22,8 @@ import {
 
 const ROOT = new URL("../..", import.meta.url);
 const SMOKE_SCRIPT = "scripts/smoke-template-runtime-live.mjs";
-const BRIDGE_SOURCE = readFileSync(new URL("../../reaper/bridge/openreaper-live-bridge.lua", import.meta.url), "utf8");
+const BRIDGE_SCRIPT_PATH = fileURLToPath(new URL("../../reaper/bridge/openreaper-live-bridge.lua", import.meta.url));
+const BRIDGE_SOURCE = readFileSync(BRIDGE_SCRIPT_PATH, "utf8");
 const E5_R1_HANDLER_SOURCE = readFileSync(new URL("../../reaper/bridge/src/handlers/routing/e5_r1_routing_read_route.lua", import.meta.url), "utf8");
 const E5_R1_ROUTING_ONLY_SOURCE = E5_R1_HANDLER_SOURCE.slice(0, E5_R1_HANDLER_SOURCE.indexOf("\nlocal function e5_automation_envelope_key"));
 const E5_R1_FLAG = "--routing-read";
@@ -484,6 +486,7 @@ function runSmoke(args, env) {
         OPENREAPER_TEMPLATE_RUNTIME_LIVE_SMOKE: "",
         [E5_R1_OPT_IN_ENV]: "",
         [LIVE_BRIDGE_EXECUTOR_ENV.transport_dir]: "",
+        [LIVE_BRIDGE_EXECUTOR_ENV.bridge_script_path]: BRIDGE_SCRIPT_PATH,
         ...env,
       },
     }).trim(),

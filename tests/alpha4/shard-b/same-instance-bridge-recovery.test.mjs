@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
@@ -11,12 +11,14 @@ const execFileAsync = promisify(execFile);
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const START_SOURCE = path.join(REPO_ROOT, "scripts/openreaper-alpha-package/openreaper-start.sh");
 
-it("reuses a verified healthy PID and truthfully blocks when that same PID's Bridge is stale", async () => {
+it("reuses a verified healthy PID, isolates the Doctor from caller cwd, and truthfully blocks a stale Bridge", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "openreaper-alpha4-b-recovery-"));
   const packageRoot = path.join(root, "OpenReaper-alpha");
   const startPath = path.join(packageRoot, "bin", "openreaper-start");
   const readinessPath = path.join(packageRoot, "vendor", "openreaper-kernel", "packages", "mcp-server", "src", "alpha3-2b3-runtime-doctor-readiness-v1.mjs");
   const doctorPath = path.join(packageRoot, "bin", "openreaper-doctor");
+  const doctorCwdMarker = path.join(root, "doctor-cwd.marker");
+  const callerRoot = path.join(root, "caller-with-invalid-package-scope");
   const fakeReaper = path.join(root, "fake-reaper");
   const launchMarker = path.join(root, "duplicate-launch.marker");
   const sessionRoot = path.join(root, "session");
@@ -29,6 +31,7 @@ it("reuses a verified healthy PID and truthfully blocks when that same PID's Bri
     await mkdir(path.dirname(startPath), { recursive: true });
     await mkdir(path.dirname(readinessPath), { recursive: true });
     await mkdir(path.dirname(doctorPath), { recursive: true });
+    await mkdir(callerRoot, { recursive: true });
     await mkdir(transportRoot, { recursive: true });
     await mkdir(renderRoot, { recursive: true });
     await writeFile(startPath, (await readFile(START_SOURCE, "utf8"))
@@ -38,8 +41,17 @@ it("reuses a verified healthy PID and truthfully blocks when that same PID's Bri
       ),
       "utf8");
     await chmod(startPath, 0o755);
-    await writeFile(doctorPath, "#!/bin/zsh\nexit 0\n", "utf8");
+    await writeFile(doctorPath, `#!/bin/zsh
+expected_root=${JSON.stringify(packageRoot)}
+if [[ "\${PWD:A}" != "\${expected_root:A}" ]]; then
+  print -ru2 -- "Doctor inherited caller cwd: \${PWD}"
+  exit 91
+fi
+print -r -- "\${PWD}" > ${JSON.stringify(doctorCwdMarker)}
+exit 0
+`, "utf8");
     await chmod(doctorPath, 0o755);
+    await writeFile(path.join(callerRoot, "package.json"), "{ invalid package scope\n", "utf8");
     await writeFile(fakeReaper, `#!/bin/zsh\nprint -r -- launched > ${JSON.stringify(launchMarker)}\n`, "utf8");
     await chmod(fakeReaper, 0o755);
     await writeFile(readinessPath, `import { readFile } from "node:fs/promises";
@@ -75,6 +87,7 @@ export async function inspectAlpha3_2B3ReaperProcess({ sessionRoot }) {
       sequence: 1,
     }), "utf8");
     const result = await execFileAsync(startPath, startArgs, {
+      cwd: callerRoot,
       env: { ...process.env, OPENREAPER_START_WAIT_SECONDS: "1", OPENREAPER_TEST_PARENT_PID: parentPid },
       timeout: 10_000,
       maxBuffer: 1_048_576,
@@ -83,6 +96,7 @@ export async function inspectAlpha3_2B3ReaperProcess({ sessionRoot }) {
     assert.match(result.stdout, /startup-mode=recover_existing/u);
     assert.match(result.stdout, new RegExp(`existing-session=reaper_pid=${parentPid};identity=verified`, "u"));
     assert.match(result.stdout, /startup-status=ready/u);
+    assert.equal((await readFile(doctorCwdMarker, "utf8")).trim(), await realpath(packageRoot));
     await assert.rejects(readFile(launchMarker), { code: "ENOENT" });
     assert.equal((await readFile(pidFile, "utf8")).trim(), parentPid);
 
@@ -96,6 +110,7 @@ export async function inspectAlpha3_2B3ReaperProcess({ sessionRoot }) {
     }), "utf8");
     await assert.rejects(
       execFileAsync(startPath, startArgs, {
+        cwd: callerRoot,
         env: { ...process.env, OPENREAPER_START_WAIT_SECONDS: "1", OPENREAPER_TEST_PARENT_PID: parentPid },
         timeout: 10_000,
         maxBuffer: 1_048_576,
@@ -112,6 +127,7 @@ export async function inspectAlpha3_2B3ReaperProcess({ sessionRoot }) {
 
     await assert.rejects(
       execFileAsync(startPath, startArgs.filter((arg) => arg !== "--recover-existing"), {
+        cwd: callerRoot,
         env: { ...process.env, OPENREAPER_START_WAIT_SECONDS: "1", OPENREAPER_TEST_PARENT_PID: parentPid },
         timeout: 10_000,
         maxBuffer: 1_048_576,

@@ -271,12 +271,7 @@ async function main() {
         return jsonToolResult(callContextErrorResult(request, error), true);
       }
       const called = await runtime.call_template(normalized, { signal: extra?.signal });
-      const result = await observeProjectIndexArtifactPayload({
-        execution: called,
-        artifactRuntime,
-        projectIndexRuntime,
-      });
-      return jsonToolResult(result, !result?.ok && isHardToolError(result));
+      return jsonToolResult(called, !called?.ok && isHardToolError(called));
     },
   );
 
@@ -475,54 +470,6 @@ function compactExactMacroGuide(guide) {
   };
 }
 
-
-async function observeProjectIndexArtifactPayload({ execution, artifactRuntime, projectIndexRuntime }) {
-  const initial = execution?.result?.project_index_observation;
-  const artifactRequired = initial?.blockers?.find((entry) => entry?.code === "ARTIFACT_PAYLOAD_REQUIRED");
-  const artifactRef = artifactRequired?.details?.artifact_refs?.find((ref) => typeof ref === "string");
-  if (!artifactRuntime || !projectIndexRuntime || !artifactRef) return execution;
-
-  const artifactRead = await artifactRuntime.get_state({
-    scope: "artifact",
-    artifact_ref: artifactRef,
-    view: "payload",
-    budget: { max_response_bytes: 1_048_576 },
-  });
-  if (artifactRead?.ok !== true || !artifactRead?.result?.artifact?.payload) {
-    return {
-      ...execution,
-      result: {
-        ...execution.result,
-        project_index_initial_observation: initial,
-        project_index_artifact_read: artifactRead,
-      },
-    };
-  }
-
-  const observation = projectIndexRuntime.observeArtifactPayload({
-    templateId: execution?.template?.id,
-    artifactRef,
-    payload: artifactRead.result.artifact.payload,
-    validated: true,
-    identity: {
-      ...projectIndexRuntime.identity,
-      session_id: projectIndexRuntime.session_id,
-    },
-  });
-  return {
-    ...execution,
-    result: {
-      ...execution.result,
-      project_index_initial_observation: initial,
-      project_index_observation: observation,
-      project_index_artifact_read: {
-        ok: true,
-        artifact_ref: artifactRef,
-        view: "payload",
-      },
-    },
-  };
-}
 
 async function openConfiguredProjectIndexRuntime({ env, callContext }) {
   const stateRoot = env.OPENREAPER_PROJECT_INDEX_STATE_ROOT;

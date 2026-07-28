@@ -187,11 +187,32 @@ async function runAgentProcess({ role, command, args, input, workdir, evidenceRo
     },
   });
   let stderr = "";
+  let transportFailure = null;
+  const recordTransportFailure = (error) => {
+    if (transportFailure) return;
+    transportFailure = Object.assign(new Error("Agent stdio write failed."), {
+      code: "AGENT_STDIO_WRITE_FAILED",
+      details: { role, cause_code: error?.code ?? null },
+    });
+  };
   child.stderr.setEncoding("utf8");
   child.stderr.on("data", (chunk) => { stderr += chunk; });
+  child.stdin.on("error", recordTransportFailure);
   const exitPromise = new Promise((resolve) => child.once("close", resolve));
   const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
-  const send = (value) => child.stdin.write(stableJson(value));
+  const send = (value) => {
+    try {
+      if (child.stdin.destroyed || !child.stdin.writable) {
+        recordTransportFailure(Object.assign(new Error("Agent stdin is closed."), { code: "EPIPE" }));
+        return;
+      }
+      child.stdin.write(stableJson(value), (error) => {
+        if (error) recordTransportFailure(error);
+      });
+    } catch (error) {
+      recordTransportFailure(error);
+    }
+  };
   send({ type: "init", contract: ALPHA4_E_AGENT_PROTOCOL, role, input });
   let submission = null;
   let protocolFailure = null;
@@ -254,11 +275,12 @@ async function runAgentProcess({ role, command, args, input, workdir, evidenceRo
     if (hardTimer) clearTimeout(hardTimer);
     lines.close();
     try { await session.close?.(); } catch {}
-    child.stdin.end();
+    try { child.stdin.end(); } catch (error) { recordTransportFailure(error); }
   }
 
   const exitCode = await exitPromise;
   if (protocolFailure) throw protocolFailure;
+  if (transportFailure) throw transportFailure;
   if (submission === null) throw protocolError("Agent exited without a result submission.", { role, exit_code: exitCode });
   if (exitCode !== 0) throw Object.assign(new Error("Agent process failed."), { code: "AGENT_PROCESS_FAILED", details: { role, exit_code: exitCode, stderr: stderr.slice(0, 4096) } });
   const agentEvidence = {

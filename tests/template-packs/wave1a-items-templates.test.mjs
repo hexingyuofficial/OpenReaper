@@ -37,6 +37,7 @@ const ALLOWLIST = Object.freeze([
   "template.items.delete_item",
   "template.items.delete_items",
   "template.items.set_item_volume",
+  "template.items.set_item_take_controls_batch",
   "template.items.set_take_volume",
   "template.items.set_take_pan",
   "template.items.set_active_take",
@@ -147,7 +148,12 @@ describe("Wave 1A items template descriptors", () => {
         assert.equal(descriptor.expectedDelta.kind, "mutation", descriptor.id);
         assert.equal(descriptor.verification.mode, "required", descriptor.id);
         assert.equal(descriptor.verification.checks.length, 1, descriptor.id);
-        assert.equal(descriptor.refs.input[0].kind, "item", descriptor.id);
+        if (descriptor.id === "template.items.set_item_take_controls_batch") {
+          assert.deepEqual(descriptor.refs.input, [], descriptor.id);
+          assert.equal(descriptor.inputSchema.properties.batch.type, "array", descriptor.id);
+        } else {
+          assert.equal(descriptor.refs.input[0].kind, "item", descriptor.id);
+        }
       }
     }
   });
@@ -362,11 +368,13 @@ describe("Wave 1A items template descriptors", () => {
     for (const [index, id] of ALLOWLIST.filter((entry) => !READ_IDS.has(entry)).entries()) {
       const descriptor = catalog.require(id);
       const input = sampleInput(id);
-      const refs = id === "template.items.choose_new_source_file"
-        ? { item_ref: item, file_ref: file }
-        : id === "template.items.set_active_take"
-          ? { item_ref: item, take_ref: take }
-          : { item_ref: item };
+      const refs = id === "template.items.set_item_take_controls_batch"
+        ? {}
+        : id === "template.items.choose_new_source_file"
+          ? { item_ref: item, file_ref: file }
+          : id === "template.items.set_active_take"
+            ? { item_ref: item, take_ref: take }
+            : { item_ref: item };
       const outputRefs = outputRefsFor(id, { item, take, file, left, right });
       const executor = fakeRefsExecutor(outputRefs);
       const request = buildTemplateBridgeRequest({
@@ -488,6 +496,9 @@ function sampleInput(id) {
     case "template.items.delete_items":
       return { require_selected: false };
     case "template.items.set_item_volume":
+      return { volume_db: -3 };
+    case "template.items.set_item_take_controls_batch":
+      return { batch: [{ id: "row-1", item_ref: "item:guid:{ITEM-WRITE}", item_volume_db: -3 }] };
     case "template.items.set_take_volume":
       return { volume_db: -3 };
     case "template.items.set_take_pan":
@@ -534,6 +545,7 @@ function sampleInput(id) {
 }
 
 function outputRefsFor(id, refs) {
+  if (id === "template.items.set_item_take_controls_batch") return [];
   if (id === "template.items.split_item_at_time") return [refs.left, refs.right];
   if (id === "template.items.choose_new_source_file") return [refs.item, refs.file];
   if (id === "template.items.set_active_take") return [refs.item, refs.take];

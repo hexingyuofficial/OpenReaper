@@ -236,6 +236,139 @@ function takeFxCopyProof(sourceTakeRef, targetTakeRef, count = 1) {
   };
 }
 
+const REAEQ_PARAMETER_NAMES = Object.freeze([
+  "Freq-Low Shelf", "Gain-Low Shelf", "BW-Low Shelf",
+  "Freq-Band 2", "Gain-Band 2", "BW-Band 2",
+  "Freq-Band 3", "Gain-Band 3", "BW-Band 3",
+  "Freq-High Shelf 4", "Gain-High Shelf 4", "BW-High Shelf 4",
+  "Freq-High Pass 5", "Gain-High Pass 5", "BW-High Pass 5",
+  "Global Gain", "Bypass", "Wet", "Delta",
+]);
+
+const REAEQ_PARAMETER_IDENTS = Object.freeze([
+  "0:_Freq_Low_Shelf", "1:_Gain_Low_Shelf", "2:_BW_Low_Shelf",
+  "3:_Freq_Band_2", "4:_Gain_Band_2", "5:_BW_Band_2",
+  "6:_Freq_Band_3", "7:_Gain_Band_3", "8:_BW_Band_3",
+  "9:_Freq_High_Shelf_4", "10:_Gain_High_Shelf_4", "11:_BW_High_Shelf_4",
+  "12:_Freq_High_Pass_5", "13:_Gain_High_Pass_5", "14:_BW_High_Pass_5",
+  "15:_Global_Gain", "16:bypass", "17:wet", "18:delta",
+]);
+
+function makeCompactVariationExecutor() {
+  const calls = [];
+  let bridgeResponseBytes = null;
+  let bridgeSummary = null;
+  return {
+    calls,
+    get bridgeResponseBytes() { return bridgeResponseBytes; },
+    get bridgeSummary() { return bridgeSummary; },
+    executeAtomic: async (child) => {
+      calls.push(child);
+      assert.equal(child.id, "template.items.copy_item_to_track");
+      const batch = child.input.batch;
+      const sourceTakeRef = `take:guid:${realisticGuid("C", 1)}`;
+      const rows = batch.map((entry, index) => {
+        const newItemRef = `item:guid:${realisticGuid("A", index + 1)}`;
+        const newTakeRef = `take:guid:${realisticGuid("B", index + 1)}`;
+        return {
+          id: entry.id,
+          new_item_ref: newItemRef,
+          active_take_ref: newTakeRef,
+          source_footprint_index: 1,
+          target_track_index: 1,
+          position_seconds: entry.position_seconds,
+          ...(entry.source_offset_seconds === undefined ? {} : { source_offset_seconds: entry.source_offset_seconds }),
+          take_fx_copy: {
+            status: "passed",
+            source_count: 1,
+            copied_count: 1,
+            slots: [{
+              slot_index: 0,
+              target_fx_ref: `fx:${newTakeRef}:0`,
+            }],
+          },
+        };
+      });
+      const refs = [];
+      const takeFx = {
+        source_fx_count: 1,
+        target_fx_count: 1,
+        ordered_chain: [{
+          name: "VST: ReaEQ (Cockos)",
+          enabled: true,
+          parameter_count: REAEQ_PARAMETER_NAMES.length,
+          parameter_names: [...REAEQ_PARAMETER_NAMES],
+          parameter_idents: [...REAEQ_PARAMETER_IDENTS],
+        }],
+      };
+      const summary = {
+        rows,
+        source_footprints: [{
+          source_item_ref: batch[0].source_item_ref,
+          source_take_ref: sourceTakeRef,
+          source_footprint: {
+            canonical_source_identity: "file:path:/tmp/alpha4/recipe04-seed.wav",
+            source_type: "WAVE",
+            source_length_seconds: 8,
+            item_length_seconds: 8,
+            start_offset_seconds: 0,
+            playrate: 1,
+            pitch: 0,
+            preserve_pitch: true,
+            take_fx: takeFx,
+          },
+        }],
+        target_tracks: [{ target_track_ref: batch[0].target_track_ref }],
+        copy_depth: "active_take_footprint",
+        batch_timings: {
+          preflight_ms: 3,
+          mutation_ms: 420,
+          readback_ms: 110,
+          evidence_ms: 2,
+          transport_ms: 0,
+          native_mutation_count: rows.length,
+          native_readback_count: rows.length,
+          native_source_create_count: rows.length,
+          native_source_reuse_count: 0,
+          rows: rows.length,
+          chunk_size: 128,
+          chunks: 1,
+          runner: "e4_generic_copy_batch",
+        },
+        capability: "item.copy_to_track",
+        pack: "items",
+        risk: "write",
+        readback_status: "passed",
+        undo_evidence: "required",
+        artifacts_allowed: false,
+        loop_source_status: "held",
+        truncated: false,
+      };
+      bridgeSummary = summary;
+      const bridgeEnvelope = {
+        contract: "foundation.bridge.v1",
+        id: "cmd_20260728080556193_043_f80d25",
+        ok: true,
+        completed_at: "2026-07-28T08:05:56Z",
+        bridge: { owner: "alpha4-d-budget-regression", generation: 1 },
+        queue: { state: "done", started_at: "2026-07-28T08:05:55Z", completed_at: "2026-07-28T08:05:56Z" },
+        result: { summary, refs, artifacts: [], jobs: [], last_result: { updated: false, refs: [], truncated: false } },
+        undo: { mode: "required", label: "OpenReaper: item.copy_to_track", opened: true, closed: true },
+        verification: { mode: "required", status: "passed", checks: [] },
+        budget: { max_response_bytes: 65_536, response_bytes: 0, truncated: false },
+        idempotency: { key: null, replayed: false },
+      };
+      bridgeResponseBytes = Buffer.byteLength(JSON.stringify(bridgeEnvelope), "utf8");
+      return {
+        ok: true,
+        request: { id: child.id },
+        verification: { status: "passed" },
+        result: { summary, readback: {}, refs },
+      };
+    },
+  };
+}
+
 function realisticGuid(prefix, index) {
   const tail = String(index).padStart(12, "0");
   return `{${prefix.repeat(8).slice(0, 8)}-${prefix.repeat(4).slice(0, 4)}-${prefix.repeat(4).slice(0, 4)}-${prefix.repeat(4).slice(0, 4)}-${tail}}`;
@@ -444,6 +577,115 @@ describe("Alpha3.4-D1 upper items batch set_item_take_controls", () => {
     assert.equal(response.budget.actual_bytes <= 65_536, true);
   });
 
+  it("fits 64 realistic ReaEQ copies in one Bridge response and verifies shared Take-FX truth", async () => {
+    const sourceItemRef = `item:guid:${realisticGuid("D", 1)}`;
+    const targetTrackRef = `track:guid:${realisticGuid("E", 1)}`;
+    const rows = Array.from({ length: 64 }, (_, index) => ({
+      id: `v${String(index + 1).padStart(2, "0")}compact`.slice(0, 12),
+      source_item_ref: sourceItemRef,
+      target_track_ref: targetTrackRef,
+      position_seconds: 8.25 + index * 2.7916666666667,
+      source_offset_seconds: ((index * 0.6180339887498949) % 1) * 0.15,
+    }));
+    const executor = makeCompactVariationExecutor();
+    const response = await executeAlpha3_3B1cItemsApplyMacro({
+      request: request({ mode: "create_variations", dry_run: false, variations: rows }, { max_response_bytes: 65_536, max_items: 128, max_inline_value_bytes: 24_576 }),
+      executeAtomic: executor.executeAtomic,
+      projectIndexRuntime: fakeIndex(),
+    });
+    assert.equal(response.ok, true, JSON.stringify(response));
+    assert.equal(executor.calls.length, 1);
+    assert.equal(executor.bridgeResponseBytes < 65_536, true, `bridge response bytes=${executor.bridgeResponseBytes}`);
+    assert.equal(response.result.changes.length, 64);
+    assert.equal(response.result.changes.every((row) => row.status === "ok" && row.readback === "pass"), true);
+    assert.equal(response.result.changes.every((row) => row.take_fx_copy?.status === "passed" && row.take_fx_copy.copied_count === 1), true);
+    assert.equal(response.result.changes.every((row) => row.take_fx_copy.slots[0].target_fx_ref === `fx:${row.new_take_ref}:0`), true);
+    assert.equal(response.result.data.calls.mutation, 1);
+    assert.equal(response.result.data.calls.readback, 0);
+    assert.equal(executor.bridgeSummary.batch_timings.native_mutation_count, 64);
+    assert.equal(executor.bridgeSummary.batch_timings.native_readback_count, 64);
+    assert.deepEqual(validateMacroExecutionEnvelope(response), { valid: true, errors: [] });
+  });
+
+  it("fits 64 rows through the public Template harness canonical ref projection", async () => {
+    const sourceItemRef = `item:guid:${realisticGuid("D", 1)}`;
+    const targetTrackRef = `track:guid:${realisticGuid("E", 1)}`;
+    const variations = Array.from({ length: 64 }, (_, index) => ({
+      id: `v${String(index + 1).padStart(2, "0")}compact`.slice(0, 12),
+      source_item_ref: sourceItemRef,
+      target_track_ref: targetTrackRef,
+      position_seconds: 8.25 + index * 2.7916666666667,
+      source_offset_seconds: ((index * 0.6180339887498949) % 1) * 0.15,
+    }));
+    const compact = makeCompactVariationExecutor();
+    await compact.executeAtomic({
+      id: "template.items.copy_item_to_track",
+      input: { batch: variations },
+    });
+    const bridge = {
+      supportsItemTakeControlsBatch: true,
+      supportsAutomationFxParameterEnvelopePointsBatch: true,
+      async dispatch(request) {
+        return {
+          contract: "foundation.bridge.v1",
+          id: request.id,
+          ok: true,
+          completed_at: request.created_at,
+          bridge: {
+            owner: request.bridge.expected_owner,
+            generation: request.bridge.expected_generation,
+          },
+          queue: {
+            state: "done",
+            started_at: request.created_at,
+            completed_at: request.created_at,
+          },
+          result: {
+            summary: compact.bridgeSummary,
+            refs: [],
+            artifacts: [],
+            jobs: [],
+            last_result: { updated: false, refs: [], truncated: false },
+          },
+          undo: { mode: "required", label: "OpenReaper: item.copy_to_track", opened: true, closed: true },
+          verification: { mode: "required", status: "passed", checks: [] },
+          budget: { max_response_bytes: 65_536, response_bytes: 0, truncated: false },
+          idempotency: { key: null, replayed: false },
+        };
+      },
+    };
+    const runtime = createCallTemplateRuntime({
+      projectIndexRuntime: fakeIndex(),
+      live: {
+        opted_in: true,
+        executor: bridge,
+        allowed_template_ids: CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS,
+      },
+    });
+    const response = await runtime.call_template({
+      id: "macro.items.apply",
+      input: { mode: "create_variations", dry_run: false, variations },
+      context: {
+        request_id: "request:alpha34:d1:public-compact-fx",
+        session_id: "session:alpha34:d1:public-compact-fx",
+        expected_owner: "alpha4-d-public-compact-fx",
+        expected_generation: 1,
+        created_at: "2026-07-28T08:52:53.000Z",
+        request_sequence: 1,
+      },
+      budget: { max_response_bytes: 65_536, max_items: 128, max_inline_value_bytes: 24_576 },
+    });
+
+    assert.equal(response.ok, true, JSON.stringify(response));
+    assert.equal(response.result.changes.length, 64);
+    assert.equal(response.result.changes.every((row) => row.take_fx_copy.status === "passed"), true);
+    assert.equal(response.result.changes.every((row) => (
+      row.take_fx_copy.slots[0].target_fx_ref === `fx:${row.new_take_ref}:0`
+    )), true);
+    assert.equal(response.budget.actual_bytes <= 65_536, true, `macro response bytes=${response.budget.actual_bytes}`);
+    assert.deepEqual(validateMacroExecutionEnvelope(response), { valid: true, errors: [] });
+  });
+
   it("accepts explicit zero-FX copy proof and fails closed on a mismatched copied FX ref", async () => {
     const zeroFx = await executeAlpha3_3B1cItemsApplyMacro({
       request: request({ mode: "create_variations", dry_run: false, variations: variationRows(1) }, { max_response_bytes: 65_536, max_items: 128, max_inline_value_bytes: 24_576 }),
@@ -627,14 +869,14 @@ describe("Alpha3.4-D1 upper items batch set_item_take_controls", () => {
     assert.equal(inlineDetailBytes(success) <= 24_576, true, `success inline bytes=${inlineDetailBytes(success)}`);
     assert.deepEqual(validateMacroExecutionEnvelope(success), { valid: true, errors: [] });
   });
-  it("keeps mode list and exact public counts 6/15/237/91", () => {
+  it("keeps mode list and exact public counts 6/15/239/91", () => {
     assert.equal(ALPHA3_3_B1C_ITEMS_APPLY_MODES.includes("set_item_take_controls"), true);
     assert.equal(OPENREAPER_PUBLIC_TOOL_IDS.length, 6);
     assert.equal(ALPHA3_3_B1_VISIBLE_EXECUTABLE_IDS.length, 15);
-    assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 237);
+    assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 239);
     const registry = loadBridgeHandlerRegistry({ cwd: ROOT });
     validateBridgeHandlerRegistry({ cwd: ROOT, registry });
-    assert.equal(registry.entries.length, 237);
+    assert.equal(registry.entries.length, 239);
     assert.equal(new Set(registry.entries.map((entry) => entry.handler_file)).size, 91);
     assert.equal(countLua(path.join(ROOT, "reaper/bridge/src/handlers")), 91);
     assert.equal(ALPHA3_3_B1C_ITEMS_APPLY_REGISTRY.ids.includes(ALPHA3_3_B1C_ITEMS_APPLY_MACRO_ID), true);

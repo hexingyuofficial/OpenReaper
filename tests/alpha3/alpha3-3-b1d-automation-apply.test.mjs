@@ -373,6 +373,49 @@ describe("Alpha3.3-B1d executable macro.automation.apply", () => {
     assert.deepEqual(bridge.envelopes.get(ENV_FX_TAKE).points.map((row) => row.time_seconds), [7.5]);
   });
 
+  it("passes canonical FX refs through the generic native batch Template", async () => {
+    const calls = [];
+    const executeAtomic = async ({ id, input, refs }) => {
+      calls.push({ id, input: structuredClone(input), refs: structuredClone(refs) });
+      assert.equal(id, "template.automation.insert_fx_parameter_envelope_points_batch");
+      const rows = input.targets.map((target) => ({
+        fx_ref: target.fx_ref,
+        envelope_ref: ENV_FX_TAKE,
+        param_index: input.param_index,
+        param_ident: "take_gain",
+        before_points: [],
+        after_points: target.points.map((row, pointIndex) => ({ point_index: pointIndex, ...row })),
+        requested: target.points.length,
+        before: 0,
+        after: target.points.length,
+        processed_count: target.points.length,
+      }));
+      return execution(id, {
+        targets: rows,
+        target_count: rows.length,
+        total_requested_points: rows.length,
+        total_processed_points: rows.length,
+      }, [fxRef(FX_TAKE), envelopeRef(ENV_FX_TAKE)]);
+    };
+    executeAtomic.supportsAutomationFxParameterEnvelopePointsBatch = true;
+
+    const result = await executeAlpha3_3B1dAutomationApplyMacro({
+      request: request({
+        mode: "insert_fx_parameter_points",
+        fx_targets: [{ fx_ref: FX_TAKE, points: [point(1, 0.6)] }],
+        fx_parameter: { param_index: 0 },
+        dry_run: false,
+      }),
+      executeAtomic,
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0].refs.fx_refs, [fxRef(FX_TAKE)]);
+    assert.equal(result.result.changes[0].live_readback.status, "passed");
+  });
+
   it("rejects 65 per-FX rows and over-512 per-target point work before dispatch", async () => {
     for (const [fx_targets, code] of [
       [Array.from({ length: 65 }, (_, index) => ({ fx_ref: `fx:take:guid:{TAKE-${index}}:0`, points: [point(index, 0.5)] })), "AUTOMATION_FX_TARGETS_INVALID"],

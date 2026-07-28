@@ -540,6 +540,32 @@ assert(calls.set == 0 and calls.insert == 0 and #points[track_env][-1] == 4)
 `);
   });
 
+  it("returns canonical point indexes in FX parameter batch aggregate readback", () => {
+    runLua(`
+install_fake()
+local summary, failure = insert_fx_parameter_envelope_points_batch(make_request(
+  "automation.insert_fx_parameter_envelope_points_batch",
+  {
+    param_index = 0,
+    create_if_missing = true,
+    targets = {
+      {
+        fx_ref = "fx:track:guid:{TRACK}:0",
+        points = {
+          { time_seconds = 1, value = 0.2, shape = 0, tension = 0, selected = false },
+          { time_seconds = 2, value = 0.8, shape = 0, tension = 0, selected = true },
+        },
+      },
+    },
+  }
+))
+assert(failure == nil and summary.target_count == 1)
+assert(#summary.targets[1].before_points == 0 and #summary.targets[1].after_points == 2)
+assert(summary.targets[1].after_points[1].point_index == 0)
+assert(summary.targets[1].after_points[2].point_index == 1)
+`);
+  });
+
   it("applies exact tuple overlays, preserves a 64-point lane, and rejects mismatched final truth", () => {
     runLua(`
 install_fake()

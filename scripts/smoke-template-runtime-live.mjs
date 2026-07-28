@@ -454,6 +454,7 @@ const E5_ROUTING_AUTOMATION_ROUTE_TEMPLATE_SPECS = Object.freeze([
   routeSpec("template.automation.set_automation_item_bounds", "run_command:template.execute", "automation", "write", "automation.set_automation_item_bounds", "envelope", "automation_write", true),
   routeSpec("template.automation.resolve_send_envelope", "query_state:automation.resolve_send_envelope", "automation", "read", "automation.resolve_send_envelope", "send", "automation_read"),
   routeSpec("template.automation.insert_fx_parameter_envelope_points", "run_command:template.execute", "automation", "write", "automation.insert_fx_parameter_envelope_points", "fx_envelope", "automation_write"),
+  routeSpec("template.automation.insert_fx_parameter_envelope_points_batch", "run_command:template.execute", "automation", "write", "automation.insert_fx_parameter_envelope_points_batch", "fx_batch", "automation_write"),
   routeSpec("template.automation.insert_sine_wave_points", "run_command:template.execute", "automation", "write", "automation.insert_sine_wave_points", "envelope", "automation_write"),
 ]);
 
@@ -3895,6 +3896,16 @@ function e5RoutingAutomationRouteInput(spec, fixtureInputsForRun) {
         { time_seconds: 1, value: fixtureInputsForRun.point_value, shape: 0, tension: 0 },
       ],
     },
+    "template.automation.insert_fx_parameter_envelope_points_batch": {
+      param_index: 0,
+      create_if_missing: true,
+      targets: [
+        {
+          fx_ref: fixtureInputsForRun.fx_ref,
+          points: [{ time_seconds: 0, value: Math.max(0, fixtureInputsForRun.point_value - 0.1), shape: 0, tension: 0 }],
+        },
+      ],
+    },
     "template.automation.insert_sine_wave_points": {
       start_seconds: 0,
       end_seconds: 2,
@@ -3973,6 +3984,10 @@ function e5RoutingAutomationRouteRefs(spec, fixtureInputsForRun) {
     if (!fxRef) return { blocker: "e5_fx_ref_missing" };
     if (!envelopeRef) return { blocker: "e5_envelope_ref_missing" };
     return { value: { fx_ref: fxRef, envelope_ref: envelopeRef } };
+  }
+  if (spec.ref_group === "fx_batch") {
+    if (!fxRef) return { blocker: "e5_fx_ref_missing" };
+    return { value: { fx_refs: [fxRef] } };
   }
   return { value: {} };
 }

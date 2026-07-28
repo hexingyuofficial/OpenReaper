@@ -20,6 +20,7 @@ export const WAVE2A_AUTOMATION_TEMPLATE_IDS = Object.freeze([
   "template.automation.resolve_send_envelope",
   "template.automation.ensure_fx_parameter_envelope",
   "template.automation.insert_fx_parameter_envelope_points",
+  "template.automation.insert_fx_parameter_envelope_points_batch",
   "template.automation.insert_sine_wave_points",
 ]);
 
@@ -740,6 +741,54 @@ export const WAVE2A_AUTOMATION_TEMPLATES = deepFreeze([
           points: [
             { time_seconds: 0, value: 0.2, shape: 0, tension: 0 },
             { time_seconds: 2, value: 0.8, shape: 0, tension: 0 },
+          ],
+        },
+      },
+    ],
+  }),
+  commandDescriptor({
+    id: "template.automation.insert_fx_parameter_envelope_points_batch",
+    title: "Insert FX parameter envelope points batch",
+    summary: "Preflight and insert bounded point batches across exact Track-FX or Take-FX parameter envelopes in one native Bridge request.",
+    entity_kind: "automation_point",
+    tags: ["automation", "fx", "parameter", "point", "batch", "wave2a", "alpha4"],
+    capability: "automation.insert_fx_parameter_envelope_points_batch",
+    inputSchema: objectSchema({
+      param_index: { type: "integer" },
+      param_ident: { type: "string" },
+      create_if_missing: { type: "boolean" },
+      targets: { type: "array", maxItems: 64 },
+    }, ["param_index", "targets"]),
+    outputSchema: objectSchema({
+      targets: { type: "array" },
+      target_count: { type: "integer" },
+      total_requested_points: { type: "integer" },
+      total_processed_points: { type: "integer" },
+    }, ["targets", "target_count", "total_requested_points", "total_processed_points"]),
+    refs: refs({
+      input: [ref("fx_refs", "fx", true, "Exact FX refs are carried by the target rows and resolved together before any mutation.")],
+      output: [ref("fx_refs", "fx", true, "All exact FX refs after the aggregate batch mutation."), ref("envelope_refs", "envelope", true, "All canonical parameter Envelope refs after aggregate readback.")],
+    }),
+    expectedDelta: mutationDelta({
+      summary: "Creates or updates bounded FX parameter automation point lanes after every target passes batch preflight.",
+      entities: [entity("automation_point", "create", "FX parameter automation points are inserted across the batch targets.")],
+      idempotent: false,
+    }),
+    verification: requiredVerification({
+      name: "fx_parameter_points_batch_readback_matches",
+      kind: "state_delta",
+      summary: "Every target returns exact FX and Envelope identity, complete before/after point lanes, and aggregate counts.",
+    }),
+    examples: [
+      {
+        name: "insert_fx_parameter_batch",
+        summary: "Insert one normalized sweep point on multiple exact FX targets in one native batch.",
+        input: {
+          param_index: 0,
+          create_if_missing: true,
+          targets: [
+            { fx_ref: "fx:track:guid:{TRACK-A}:0", points: [{ time_seconds: 0, value: 0.2, shape: 0, tension: 0 }] },
+            { fx_ref: "fx:track:guid:{TRACK-B}:0", points: [{ time_seconds: 0, value: 0.8, shape: 0, tension: 0 }] },
           ],
         },
       },

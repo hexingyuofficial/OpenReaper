@@ -353,6 +353,45 @@ describe("Alpha4 Shard B Recipe truth", () => {
     }
   });
 
+  it("keeps early hydration blockers on the shared Recipe performance envelope", async () => {
+    const fixture = makeRuntime();
+    try {
+      const draft = makeDraft();
+      const saved = await saveDraft(fixture.runtime, draft);
+      const blockedRuntime = createCallRecipeRuntime({
+        store: fixture.runtime.store,
+        catalog: fixture.catalog,
+        evidenceStore: fixture.evidenceStore,
+        runStore: fixture.runStore,
+        undoController: fixture.undoController,
+        dispatchers: {
+          macro: async () => macroSuccess(),
+          template: async ({ stage }) => templateSuccess(stage),
+        },
+        runtimeFactsProvider: async ({ revision }) => runtimeFacts(revision, fixture.catalog),
+        runHydrator: async () => ({
+          ok: false,
+          message: "typed hydration blocker",
+          details: { blocker_code: "HYDRATION_TEST_BLOCKED" },
+        }),
+      });
+      const response = await blockedRuntime.call_recipe({
+        operation: "run",
+        ...identity(saved),
+        inputs: { track_name: "Dialog" },
+      });
+
+      assert.equal(response.ok, false, JSON.stringify(response));
+      assert.equal(response.error.code, "PREFLIGHT_FAILED");
+      assert.equal(response.performance.contract, "openreaper.execution_performance.v1");
+      assert.equal(response.execution_truth.performance.contract, "openreaper.execution_performance.v1");
+      assert.equal(response.performance.total_ms, response.execution_truth.performance.total_ms);
+      assert.equal(response.performance.gate_ok, true);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
   it("passes one shared performance envelope through every Recipe stage", async () => {
     const fixture = makeRuntime();
     const seen = [];

@@ -24,6 +24,7 @@ import { createCallTemplateRuntime } from "../../packages/mcp-server/src/call-te
 import { listTemplates } from "../../packages/mcp-server/src/discovery-menu-v1.mjs";
 
 const STDIO_SERVER = "packages/mcp-server/src/openreaper-mcp-stdio.mjs";
+const REPO_BRIDGE_SCRIPT_PATH = path.resolve("reaper/bridge/openreaper-live-bridge.lua");
 const EXACT_TOOLS = ["call_recipe", "call_template", "get_state", "list_recipes", "list_templates", "ping"];
 const context = () => ({
   client_id: "alpha32-c2-test",
@@ -380,6 +381,18 @@ describe("Alpha3.2-C2 repairable refs", () => {
     const transportDir = path.join(root, "transport");
     await mkdir(path.join(transportDir, "requests"), { recursive: true });
     await mkdir(path.join(transportDir, "results"), { recursive: true });
+    await writeFile(
+      path.join(transportDir, "openreaper-bridge-liveness-v1.json"),
+      `${JSON.stringify({
+        contract: "openreaper.bridge_liveness.v1",
+        active_owner: "openreaper-alpha",
+        active_generation: 1,
+        sequence: 1,
+        refreshed_at_unix_s: Math.floor(Date.now() / 1000),
+        interval_ms: 500,
+      })}\n`,
+      "utf8",
+    );
     const client = new Client({ name: "alpha32-c2-test", version: "0.0.0" });
     const transport = new StdioClientTransport({
       command: process.execPath,
@@ -387,6 +400,7 @@ describe("Alpha3.2-C2 repairable refs", () => {
       env: {
         ...process.env,
         OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR: transportDir,
+        OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH: REPO_BRIDGE_SCRIPT_PATH,
         OPENREAPER_LIVE_BRIDGE_OWNER: "openreaper-alpha",
         OPENREAPER_LIVE_BRIDGE_GENERATION: "1",
       },

@@ -7,7 +7,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { FakeFoundationBridge } from "../../packages/core/src/foundation-bridge-v1.mjs";
-import { buildTemplateBridgeRequest } from "../../packages/core/src/template-execution-harness-v1.mjs";
+import {
+  buildTemplateBridgeRequest,
+  TEMPLATE_EXECUTION_DEFAULT_DISPATCH_TIMEOUT_MS,
+} from "../../packages/core/src/template-execution-harness-v1.mjs";
 import { createTemplateCatalogWave1aTemplates } from "../../packages/core/src/template-catalog-fixtures-v1.mjs";
 import {
   CALL_TEMPLATE_RUNTIME_ACCEPTED_TEMPLATE_IDS,
@@ -38,6 +41,8 @@ describe("Layer 4D.1 live bridge executor binding", () => {
     assert.equal(config.spawned_reaper, false);
     const configured = createLiveBridgeExecutor({ transportDir: "/tmp/openreaper-test-transport" });
     assert.equal(configured.config.heartbeat_max_age_ms, LIVE_BRIDGE_LIVENESS_DEFAULT_MAX_AGE_MS);
+    assert.equal(configured.supportsItemTakeControlsBatch, true);
+    assert.equal(configured.supportsAutomationFxParameterEnvelopePointsBatch, true);
     assert.deepEqual(CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS, [
       "template.project.read_summary",
       "template.transport.read_state",
@@ -240,7 +245,7 @@ describe("Layer 4D.1 live bridge executor binding", () => {
     assert.deepEqual(await readdir(join(invalidTransport.root, "requests")), []);
   });
 
-  it("uses the descriptor timeout as the live transport wait budget", async () => {
+  it("uses the shared no-deadline safety cap as the live transport wait budget", async () => {
     const transport = await makeTransport();
     const bridgeScriptPath = join(transport.root, "openreaper-live-bridge.lua");
     await writeFile(bridgeScriptPath, "-- minimal test fixture; not a runtime\n");
@@ -271,7 +276,7 @@ describe("Layer 4D.1 live bridge executor binding", () => {
     });
     const requestPath = await waitForSingleRequest(transport.root);
     const request = JSON.parse(await readFile(requestPath, "utf8"));
-    assert.equal(request.timeout_ms, 300_000);
+    assert.equal(request.timeout_ms, TEMPLATE_EXECUTION_DEFAULT_DISPATCH_TIMEOUT_MS);
 
     await delay(20);
     const bridge = new FakeFoundationBridge({ owner: "owner-test", generation: 1 });
@@ -282,7 +287,7 @@ describe("Layer 4D.1 live bridge executor binding", () => {
 
     const response = await responsePromise;
     assert.equal(response.ok, true);
-    assert.equal(response.request.timeout_ms, 300_000);
+    assert.equal(response.request.timeout_ms, TEMPLATE_EXECUTION_DEFAULT_DISPATCH_TIMEOUT_MS);
     assert.equal((await readdir(join(transport.root, "requests"))).length, 1);
   });
 

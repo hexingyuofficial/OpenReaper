@@ -17,6 +17,10 @@ import {
 import {
   createCallTemplateRuntime,
 } from "../../packages/mcp-server/src/call-template-runtime-v1.mjs";
+import {
+  LIVE_BRIDGE_HEARTBEAT_FILENAME,
+  LIVE_BRIDGE_LIVENESS_CONTRACT,
+} from "../../packages/mcp-server/src/live-bridge-executor-v1.mjs";
 
 const STDIO_SERVER = "packages/mcp-server/src/openreaper-mcp-stdio.mjs";
 const EXACT_TOOLS = ["call_recipe", "call_template", "get_state", "list_recipes", "list_templates", "ping"];
@@ -158,6 +162,14 @@ describe("Alpha3.2-C1 server-managed call context", () => {
     const transportDir = path.join(fixtureRoot, "transport");
     await mkdir(path.join(transportDir, "requests"), { recursive: true });
     await mkdir(path.join(transportDir, "results"), { recursive: true });
+    await writeFile(path.join(transportDir, LIVE_BRIDGE_HEARTBEAT_FILENAME), `${JSON.stringify({
+      active_generation: 1,
+      active_owner: "openreaper-alpha",
+      contract: LIVE_BRIDGE_LIVENESS_CONTRACT,
+      interval_ms: 500,
+      refreshed_at_unix_s: Math.floor(Date.now() / 1_000),
+      sequence: 1,
+    })}\n`, "utf8");
     const client = new Client({ name: "alpha3-2c1-test", version: "0.0.0" });
     const transport = new StdioClientTransport({
       command: process.execPath,

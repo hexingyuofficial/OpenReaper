@@ -291,6 +291,11 @@ export function createLiveBridgeExecutor(options = {}) {
     contract: LIVE_BRIDGE_EXECUTOR_CONTRACT,
     config,
     spawned_reaper: false,
+    // These capabilities are implemented by the managed OpenReaper bridge
+    // routes. Exposing them here lets the generic Macro runtime select the
+    // existing aggregate Item/Take and Automation batch paths.
+    supportsItemTakeControlsBatch: true,
+    supportsAutomationFxParameterEnvelopePointsBatch: true,
     dispatch,
     probeLiveness,
   });

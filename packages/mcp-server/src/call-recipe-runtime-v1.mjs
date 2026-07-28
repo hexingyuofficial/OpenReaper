@@ -55,7 +55,6 @@ import {
 import {
   addExecutionPerformanceCounter,
   addExecutionPerformancePhase,
-  attachExecutionPerformance,
   createExecutionPerformance,
   finishExecutionPerformance,
   snapshotExecutionPerformance,
@@ -288,14 +287,14 @@ export async function callRecipe(request = {}, options = {}) {
         throw new CallRecipeRuntimeError("Unsupported operation.", "OPERATION_INVALID");
     }
     return enforceCallRecipeResponseBudget(
-      attachExecutionPerformance(response, performance, Date.now() - startedAt),
+      attachRecipeExecutionPerformance(response, performance, Date.now() - startedAt),
       budget,
       { operation },
     );
   } catch (error) {
     const response = finalizeError(error, request, runtimeOptions, startedAt);
     return enforceCallRecipeResponseBudget(
-      attachExecutionPerformance(response, performance, Date.now() - startedAt),
+      attachRecipeExecutionPerformance(response, performance, Date.now() - startedAt),
       safeCallRecipeBudget(request?.budget, { operation: request?.operation }),
       { operation: request?.operation },
     );
@@ -653,7 +652,7 @@ async function opRun(request, options, { startedAt, resume, budget }) {
   });
   assertRecipeRequestActive(options.signal, options.deadline);
   if (!hydration.ok) {
-    const retained = retainedFailureTruth(revision, resumeState, runId);
+    const retained = retainedFailureTruth(revision, resumeState, runId, options.performance);
     return withRunExecutionTruth(projectRunFailureEnvelope({
       operation: resume ? "resume" : "run",
       revision,
@@ -686,7 +685,7 @@ async function opRun(request, options, { startedAt, resume, budget }) {
   const trust = evaluateRunTrust(revision, trustRuntimeFacts, { catalog });
   const resumeBindingMatches = !resume || sameRuntimeBinding(runtimeBinding, resumeState?.runtime_binding);
   if (!trust.trusted || !resumeBindingMatches) {
-    const retained = retainedFailureTruth(revision, resumeState, runId);
+    const retained = retainedFailureTruth(revision, resumeState, runId, options.performance);
     return withRunExecutionTruth(projectRunFailureEnvelope({
       operation: resume ? "resume" : "run",
       revision,
@@ -730,7 +729,7 @@ async function opRun(request, options, { startedAt, resume, budget }) {
   });
   addExecutionPerformancePhase(options.performance, "validation", Date.now() - validationStartedAt);
   if (!preflight.ok) {
-    const retained = retainedFailureTruth(revision, resumeState, runId);
+    const retained = retainedFailureTruth(revision, resumeState, runId, options.performance);
     return withRunExecutionTruth(projectRunFailureEnvelope({
       operation: resume ? "resume" : "run",
       revision,
@@ -2402,12 +2401,32 @@ function finalizeRunSummaryPerformance(runSummary, performance, startedAt, telem
   };
 }
 
+function attachRecipeExecutionPerformance(response, performance, totalMs) {
+  // Run paths finalize the shared envelope when evidence is complete. Preserve
+  // that boundary so the public response, execution truth, and run summary do
+  // not report three subtly different totals.
+  if (performance && (performance.gate_ok === null || performance.gate_ok === undefined)) {
+    finishExecutionPerformance(performance, totalMs);
+  }
+  const snapshot = snapshotExecutionPerformance(performance);
+  return freeze({
+    ...(response && typeof response === "object" ? response : {}),
+    performance: snapshot,
+    ...(isPlainObject(response?.execution_truth)
+      ? { execution_truth: { ...response.execution_truth, performance: snapshot } }
+      : {}),
+  });
+}
+
 function withRunExecutionTruth(response, {
   startedAt,
   telemetry = createRunTelemetry(),
   undo = defaultRecipeUndoTruth(),
   mutationTruth = "not_applied",
 }) {
+  if (telemetry.performance && (telemetry.performance.gate_ok === null || telemetry.performance.gate_ok === undefined)) {
+    finishExecutionPerformance(telemetry.performance, Date.now() - startedAt);
+  }
   const snapshot = snapshotRunTelemetry(telemetry);
   return freeze({
     ...response,
@@ -2549,7 +2568,7 @@ function allocateRunId(runStore) {
   );
 }
 
-function retainedFailureTruth(revision, resumeState, runId) {
+function retainedFailureTruth(revision, resumeState, runId, performance = null) {
   const completedSet = new Set(resumeState?.completed_stage_ids ?? []);
   const stageIds = (revision.draft?.stages ?? []).map((stage) => stage.id);
   return {
@@ -2560,7 +2579,7 @@ function retainedFailureTruth(revision, resumeState, runId) {
     evidenceRef: resumeState && typeof runId === "string"
       ? createExecutableRecipeEvidenceRef(runId, 0)
       : null,
-    telemetry: createRunTelemetry(resumeState?.telemetry),
+    telemetry: Object.assign(createRunTelemetry(resumeState?.telemetry), { performance }),
     mutationTruth: summarizeMutationTruth(resumeState?.telemetry, resumeState?.evidence_items),
     undo: resumeState?.undo ?? defaultRecipeUndoTruth(),
   };
@@ -2613,7 +2632,7 @@ function finalizeError(error, request, options, startedAt) {
   return operation === "run" || operation === "resume"
     ? withRunExecutionTruth(response, {
         startedAt,
-        telemetry: createRunTelemetry(),
+        telemetry: Object.assign(createRunTelemetry(), { performance: options.performance ?? null }),
         undo: defaultRecipeUndoTruth(),
         mutationTruth: "not_applied",
       })

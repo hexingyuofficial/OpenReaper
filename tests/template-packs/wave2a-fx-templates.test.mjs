@@ -41,6 +41,7 @@ const ALLOWLIST = Object.freeze([
   "template.fx.add_take_fx",
   "template.fx.set_fx_bypass",
   "template.fx.set_fx_parameter_normalized",
+  "template.fx.set_parameter_assignments_batch",
   "template.fx.set_fx_preset_by_name",
   "template.fx.set_fx_preset_by_index",
   "template.fx.reorder_fx",

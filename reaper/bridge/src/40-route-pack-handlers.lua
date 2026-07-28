@@ -845,6 +845,7 @@ local E5_AUTOMATION_WRITE_HANDLERS = {
   ["automation.delete_automation_item"] = delete_automation_item,
   ["automation.ensure_fx_parameter_envelope"] = ensure_fx_parameter_envelope,
   ["automation.insert_fx_parameter_envelope_points"] = insert_fx_parameter_envelope_points,
+  ["automation.insert_fx_parameter_envelope_points_batch"] = insert_fx_parameter_envelope_points_batch,
   ["automation.insert_sine_wave_points"] = insert_sine_wave_points,
 }
 
@@ -896,6 +897,7 @@ local D12_TRANSPORT_SAFE_HANDLERS = {
 
 local D13_ITEMS_CORE_WRITE_HANDLERS = {
   ["items.set_item_volume"] = d13_items_set_item_volume,
+  ["items.set_item_take_controls_batch"] = d13_items_set_item_take_controls_batch,
   ["items.set_take_volume"] = d13_items_set_take_volume,
   ["items.set_take_pan"] = d13_items_set_take_pan,
   ["items.set_active_take"] = set_active_take,

@@ -77,7 +77,7 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
       "validate", "save", "list", "get", "delete", "run", "resume",
     ]);
     assert.equal(ALPHA3_3_B1_VISIBLE_EXECUTABLE_IDS.length, 15);
-    assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 237);
+    assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 239);
 
     const stdio = readFileSync(new URL("../../packages/mcp-server/src/openreaper-mcp-stdio.mjs", import.meta.url), "utf8");
     assert.equal((stdio.match(/server\.tool\(/g) ?? []).length, 6);

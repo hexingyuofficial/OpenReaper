@@ -6,7 +6,7 @@ import {
 } from "./call-template-runtime-v1.mjs";
 
 export const EXECUTABLE_RECIPE_PRODUCT_CATALOG_CONTRACT = "recipe.executable.dependency_catalog.v1";
-export const EXECUTABLE_RECIPE_PRODUCT_CATALOG_COUNTS = Object.freeze({ macros: 15, templates: 237 });
+export const EXECUTABLE_RECIPE_PRODUCT_CATALOG_COUNTS = Object.freeze({ macros: 15, templates: 239 });
 
 export function createExecutableRecipeProductCatalog() {
   const macroFacts = createAcceptedOfficialMacroDependencyFacts();
@@ -41,7 +41,7 @@ export function createExecutableRecipeProductCatalog() {
     ...templateEntries.flatMap((entry) => entry.capabilities),
   ])].sort();
   const catalog = createExecutableDependencyCatalog({ macros, templates: templateEntries, capabilities });
-  if (catalog.macros.length !== 15 || catalog.templates.length !== 237) {
+  if (catalog.macros.length !== 15 || catalog.templates.length !== 239) {
     throw new Error("Executable Recipe product catalog normalization drift.");
   }
   return catalog;

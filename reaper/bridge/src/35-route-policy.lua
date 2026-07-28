@@ -75,6 +75,7 @@ local E5_AUTOMATION_WRITE_CAPABILITIES = {
   ["automation.delete_automation_item"] = { pack = "automation", risk = "destructive" },
   ["automation.ensure_fx_parameter_envelope"] = { pack = "automation", risk = "write" },
   ["automation.insert_fx_parameter_envelope_points"] = { pack = "automation", risk = "write" },
+  ["automation.insert_fx_parameter_envelope_points_batch"] = { pack = "automation", risk = "write" },
   ["automation.insert_sine_wave_points"] = { pack = "automation", risk = "write" },
 }
 
@@ -115,6 +116,7 @@ local D12_TRANSPORT_SAFE_CAPABILITIES = {
 
 local D13_ITEMS_CORE_WRITE_CAPABILITIES = {
   ["items.set_item_volume"] = { pack = "items", risk = "write" },
+  ["items.set_item_take_controls_batch"] = { pack = "items", risk = "write" },
   ["items.set_take_volume"] = { pack = "items", risk = "write" },
   ["items.set_take_pan"] = { pack = "items", risk = "write" },
   ["items.set_active_take"] = { pack = "items", risk = "write" },

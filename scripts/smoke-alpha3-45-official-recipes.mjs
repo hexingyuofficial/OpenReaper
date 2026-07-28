@@ -491,7 +491,7 @@ function concreteRecipe04Features(run, inputs, semanticRecipeId = run.semantic_r
 function linkedRecipe04Rows(rows, sourceItems) {
   const controls = new Map(rows.controls.map((row) => [`${row.item_ref}\u0000${row.take_ref}`, row]));
   const tone = new Map(rows.tone.map((row) => [row.fx_ref, row]));
-  const automation = new Map(rows.automation.map((row) => [row.target_ref, row]));
+  const automation = recipe04AutomationByFxRef(rows.automation);
   const sourceItemRefs = new Set(sourceItems.map((row) => row.item_ref));
   const sourceTakeRefs = new Set(sourceItems.map((row) => row.take_ref));
   const seenCopies = new Set();
@@ -532,14 +532,67 @@ function linkedRecipe04Rows(rows, sourceItems) {
       && Number.isFinite(toneRow.normalized_value);
     const automationProven = provenChange(automationRow)
       && automationRow.mode === "insert_fx_parameter_points"
-      && isExactGuidRef(automationRow.live_readback?.envelope_ref, "envelope")
-      && Number.isSafeInteger(automationRow.requested?.point_count)
-      && automationRow.requested.point_count > 0;
+      && recipe04AutomationTargetProven(automationRow, fxRef);
     if (!controlsProven || !toneProven || !automationProven) continue;
     seenCopies.add(copyKey);
     linked.push({ controls_proven: true, tone_proven: true, automation_proven: true });
   }
   return linked;
+}
+
+function recipe04AutomationByFxRef(rows) {
+  const indexed = new Map();
+  const duplicated = new Set();
+  for (const row of rows) {
+    const refs = row?.target_ref === "fx:batch"
+      ? (row.live_readback?.targets ?? []).map((target) => target?.fx_ref)
+      : [row?.target_ref];
+    for (const ref of refs) {
+      if (typeof ref !== "string") continue;
+      if (indexed.has(ref)) duplicated.add(ref);
+      else indexed.set(ref, row);
+    }
+  }
+  for (const ref of duplicated) indexed.delete(ref);
+  return indexed;
+}
+
+function recipe04AutomationTargetProven(row, fxRef) {
+  if (row.target_ref !== "fx:batch") {
+    return row.target_ref === fxRef
+      && isExactGuidRef(row.live_readback?.envelope_ref, "envelope")
+      && Number.isSafeInteger(row.requested?.point_count)
+      && row.requested.point_count > 0;
+  }
+  const requested = row.requested ?? {};
+  const mutation = row.mutation ?? {};
+  const readback = row.live_readback ?? {};
+  const targets = Array.isArray(readback.targets) ? readback.targets : [];
+  const targetRefs = targets.map((target) => target?.fx_ref);
+  if (row.operation_id !== "automation-fx-parameter-points-batch"
+    || row.template_id !== "template.automation.insert_fx_parameter_envelope_points_batch"
+    || requested.execution_shape !== "single_bridge_request_native_batch"
+    || !Number.isSafeInteger(requested.target_count)
+    || requested.target_count < 1
+    || !Number.isSafeInteger(requested.total_requested_points)
+    || requested.total_requested_points < requested.target_count
+    || mutation.target_count !== requested.target_count
+    || mutation.total_processed_points !== requested.total_requested_points
+    || readback.source !== "fx_parameter_batch_readback"
+    || readback.target_count !== requested.target_count
+    || readback.total_requested_points !== requested.total_requested_points
+    || readback.total_processed_points !== requested.total_requested_points
+    || targets.length !== requested.target_count
+    || new Set(targetRefs).size !== targets.length) return false;
+  const target = targets.find((candidate) => candidate?.fx_ref === fxRef);
+  return target != null
+    && isExactGuidRef(target.envelope_ref, "envelope")
+    && Number.isSafeInteger(target.requested)
+    && target.requested > 0
+    && target.processed_count === target.requested
+    && Number.isSafeInteger(target.before)
+    && Number.isSafeInteger(target.after)
+    && target.after >= target.before;
 }
 
 function outputRows(run, id) {
@@ -565,26 +618,70 @@ function summarizeCapacity(count, call, requiredMutationRows, evidence, inputs) 
     && value.undo?.proven === true
     && ["not_applied", "not_run"].includes(value.execution_truth?.mutation)
   );
-  const stageCounters = Object.fromEntries((evidence?.items ?? [])
-    .filter((item) => typeof item?.stage_id === "string")
+  const evidenceItems = (evidence?.items ?? [])
+    .filter((item) => typeof item?.stage_id === "string");
+  const stageCounters = Object.fromEntries(evidenceItems
     .map((item) => [item.stage_id, item.counters ?? {}]));
-  const requiredStages = ["copy", "controls", "tone", "automation"];
-  const stageProof = requiredStages.every((stageId) => (
-    stageCounters[stageId]?.native_mutation_count === requiredMutationRows
-    && stageCounters[stageId]?.readback_count === requiredMutationRows
-  ));
-  const requiredTotalRows = requiredMutationRows * requiredStages.length;
-  const inlineValues = Object.fromEntries((value.verified_outputs ?? [])
-    .filter((output) => output?.verified === true && typeof output?.id === "string")
-    .map((output) => [output.id, output.value]));
+  const verifiedOutputs = (value.verified_outputs ?? [])
+    .filter((output) => output?.verified === true && typeof output?.id === "string");
+  const inlineValues = Object.fromEntries(verifiedOutputs.map((output) => [output.id, output.value]));
   const inlineRows = {
     variation: Array.isArray(inlineValues.variation_changes) ? inlineValues.variation_changes : [],
     controls: Array.isArray(inlineValues.control_changes) ? inlineValues.control_changes : [],
     tone: Array.isArray(inlineValues.tone_changes) ? inlineValues.tone_changes : [],
     automation: Array.isArray(inlineValues.automation_changes) ? inlineValues.automation_changes : [],
   };
-  const inlineProof = Object.values(inlineRows).every((rows) => rows.length === requiredMutationRows && rows.every(provenOutputRow))
-    && linkedRecipe04Rows(inlineRows, inputs?.source_items ?? []).length === requiredMutationRows;
+  const perTargetRows = [inlineRows.variation, inlineRows.controls, inlineRows.tone];
+  const linkedAutomationTargetCount = linkedRecipe04Rows(inlineRows, inputs?.source_items ?? []).length;
+  const inlineAggregateAutomation = inlineRows.automation.length === 1
+    && inlineRows.automation[0]?.target_ref === "fx:batch"
+    && linkedAutomationTargetCount === requiredMutationRows;
+  const expectedStageIds = ["copy", "controls", "tone", "automation"];
+  const evidenceLinked = evidence?.ok === true
+    && evidence?.evidence_ref === value.evidence_ref
+    && typeof value.run_id === "string"
+    && evidence?.run_id === value.run_id
+    && typeof value.recipe_id === "string"
+    && evidence?.recipe_id === value.recipe_id
+    && evidenceItems.length === expectedStageIds.length
+    && new Set(evidenceItems.map((item) => item.stage_id)).size === expectedStageIds.length
+    && expectedStageIds.every((stageId) => Object.hasOwn(stageCounters, stageId));
+  const exactStageCount = (stageId, expectedRows) => (
+    stageCounters[stageId]?.transport_call_count === 1
+    && stageCounters[stageId]?.native_mutation_count === expectedRows
+    && stageCounters[stageId]?.readback_count === expectedRows
+  );
+  const projectedOutputIds = ["variation_changes", "control_changes", "tone_changes", "automation_changes"];
+  const budgetOmitted = (id) => inlineValues[id]?.omitted === true
+    && inlineValues[id]?.reason === "inline_value_exceeds_call_recipe_budget";
+  const evidenceAggregateAutomation = evidenceLinked
+    && budgetOmitted("automation_changes")
+    && ["copy", "controls", "tone"].every((stageId) => exactStageCount(stageId, requiredMutationRows))
+    && exactStageCount("automation", 1)
+    && evidence?.run_summary?.mutation_truth === "applied_verified"
+    && evidence?.run_summary?.counters?.native_mutation_count === (requiredMutationRows * 3) + 1
+    && evidence?.run_summary?.counters?.readback_count === (requiredMutationRows * 3) + 1;
+  const aggregateAutomation = inlineAggregateAutomation || evidenceAggregateAutomation;
+  const expectedStageRows = {
+    copy: requiredMutationRows,
+    controls: requiredMutationRows,
+    tone: requiredMutationRows,
+    automation: aggregateAutomation ? 1 : requiredMutationRows,
+  };
+  const stageProof = evidenceLinked
+    && Object.entries(expectedStageRows).every(([stageId, expectedRows]) => exactStageCount(stageId, expectedRows));
+  const requiredTotalRows = Object.values(expectedStageRows).reduce((sum, count_) => sum + count_, 0);
+  const inlineProof = perTargetRows.every((rows) => rows.length === requiredMutationRows && rows.every(provenOutputRow))
+    && inlineRows.automation.length > 0
+    && inlineRows.automation.every(provenOutputRow)
+    && linkedAutomationTargetCount === requiredMutationRows;
+  const projectedOutputProof = evidenceAggregateAutomation
+    && projectedOutputIds.every((id) => {
+      const rows = inlineValues[id];
+      if (budgetOmitted(id)) return true;
+      const expectedRows = id === "automation_changes" ? 1 : requiredMutationRows;
+      return Array.isArray(rows) && rows.length === expectedRows && rows.every(provenOutputRow);
+    });
   return {
     count,
     ok,
@@ -595,14 +692,17 @@ function summarizeCapacity(count, call, requiredMutationRows, evidence, inputs) 
     native_mutation_count: value.execution_truth?.native_mutation_count ?? 0,
     readback_count: value.execution_truth?.readback_count ?? 0,
     stage_counters: stageCounters,
+    evidence_linked: evidenceLinked,
+    aggregate_automation_proven: aggregateAutomation,
     stage_proven: stageProof,
     inline_rows_proven: inlineProof,
+    projected_outputs_proven: projectedOutputProof,
     batch_proven: count <= 64
       && requiredMutationRows > 0
       && value.execution_truth?.native_mutation_count === requiredTotalRows
       && value.execution_truth?.readback_count === requiredTotalRows
       && stageProof
-      && (inlineProof || Object.values(inlineValues).some((output) => output?.omitted === true)),
+      && (inlineProof || projectedOutputProof),
     fail_closed: count === 65 && !ok && zeroWrite && undoZeroWriteSafe,
     zero_write: zeroWrite,
     error_code: value.error?.code ?? value.details?.code ?? null,
