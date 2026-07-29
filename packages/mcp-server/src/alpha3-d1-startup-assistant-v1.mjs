@@ -18,7 +18,7 @@ export const ALPHA3_D1_STARTUP_ASSISTANT_DISCOVERY_SUMMARY = deepFreeze({
     discovery_tool: "list_templates",
     health_source: ALPHA3_D1_STARTUP_HEALTH_CONTRACT,
     local_helper: "npm run prepare:startup-session",
-    local_launch_helper: "npm run start:openreaper -- --launch",
+    local_launch_helper: "~/.openreaper/current/bin/openreaper-start",
   },
   statuses: ["ready", "prepare_session", "reconnect_existing", "blocked"],
   safety_policy: {
@@ -48,8 +48,8 @@ export const ALPHA3_D1_STARTUP_WRAPPER_DISCOVERY_SUMMARY = deepFreeze({
     discovery_tool: "list_templates",
     assistant_source: ALPHA3_D1_STARTUP_ASSISTANT_CONTRACT,
     local_helper: "npm run prepare:startup-wrapper",
-    local_launch_helper: "npm run start:openreaper -- --launch",
-    local_one_command_helper: "npm run start:openreaper -- --install-startup-hook --launch",
+    local_launch_helper: "~/.openreaper/current/bin/openreaper-start",
+    local_one_command_helper: "~/.openreaper/current/bin/openreaper-start",
   },
   wrapper_types: ["startup_package", "macos_launcher_candidate", "codex_session_card"],
   statuses: ["ready", "prepare_wrapper", "reconnect_existing", "blocked"],
@@ -122,7 +122,8 @@ export function planAlpha3D1StartupAssistant(input = {}) {
       hidden_executor: false,
       public_call_recipe: false,
       spawned_reaper: false,
-      requires_user_reaper_action: status !== "ready",
+      requires_user_reaper_action: false,
+      manual_recovery_action_only: true,
     },
   });
 }
@@ -210,7 +211,8 @@ export function planAlpha3D1StartupWrapper(input = {}) {
       one_command_helper: ALPHA3_D1_STARTUP_WRAPPER_DISCOVERY_SUMMARY.tool_surface.local_one_command_helper,
       one_command_evidence: {
         status: status === "blocked" ? "blocked" : "accepted_local_macos_with_dialog_caveat",
-        requires_conditional_reaper_startup_hook: true,
+        requires_conditional_reaper_startup_hook: false,
+        uses_trusted_package_command_line_reascript: true,
         user_may_need_to_dismiss_startup_dialog: true,
       },
       live_evidence_root: liveEvidenceRoot,
@@ -512,8 +514,8 @@ function userSteps(status, sessionCard) {
   }
   return deepFreeze([
     "Open or restart REAPER through the OpenReaper startup helper so the MCP session env is present.",
-    "Run the bundled OpenReaper script in REAPER if the conditional startup hook is not installed.",
-    "Tell the agent you reconnected once REAPER says the OpenReaper loop started.",
+    "Use the registered OpenReaper Bridge Action only if the startup helper reports it as the manual recovery fallback.",
+    "Tell the agent you reconnected once the startup helper reports the Bridge ready.",
   ]);
 }
 

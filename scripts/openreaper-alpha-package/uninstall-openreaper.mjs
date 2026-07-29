@@ -1,12 +1,42 @@
 #!/usr/bin/env node
 
+import { createHash } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import { lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-const STARTUP_BEGIN = "-- >>> OpenReaper alpha MCP startup hook >>>";
-const STARTUP_END = "-- <<< OpenReaper alpha MCP startup hook <<<";
+const STARTUP_HOOKS = Object.freeze([
+  Object.freeze({
+    path: "__startup.eel",
+    blocks: Object.freeze([
+      Object.freeze({
+        begin: "// >>> OpenReaper alpha MCP startup hook >>>",
+        end: "// <<< OpenReaper alpha MCP startup hook <<<",
+      }),
+    ]),
+  }),
+  Object.freeze({
+    path: "__startup.lua",
+    blocks: Object.freeze([
+      Object.freeze({
+        begin: "-- >>> OpenReaper alpha MCP startup hook >>>",
+        end: "-- <<< OpenReaper alpha MCP startup hook <<<",
+      }),
+      Object.freeze({
+        begin: "-- >>> OpenReaper Alpha3 MCP startup hook >>>",
+        end: "-- <<< OpenReaper Alpha3 MCP startup hook <<<",
+      }),
+      Object.freeze({
+        begin: "-- >>> Streetlight MCP startup hook >>>",
+        end: "-- <<< Streetlight MCP startup hook <<<",
+      }),
+    ]),
+  }),
+]);
+const BRIDGE_ACTION_TITLE = "OpenReaper: Start MCP bridge";
+const BRIDGE_ACTION_RELATIVE_SCRIPT = "OpenReaper/openreaper-start-mcp-bridge.lua";
+const BRIDGE_ACTION_COMMAND_ID = `RS${createHash("sha1").update("openreaper.alpha.start_mcp_bridge.v1").digest("hex")}`;
 const MANAGED_RENDER_ROOT_RECORD_MAX_BYTES = 4096;
 const MANAGED_RENDER_ROOT_PATH_MAX_BYTES = 3072;
 
@@ -60,9 +90,9 @@ const report = {
 };
 
 if (!skipStartupHook) {
-  await removeStartupHook();
+  await removeStartupIntegration();
 } else {
-  report.skipped.push("REAPER startup hook cleanup skipped because --skip-startup-hook was set");
+  report.skipped.push("manual REAPER bridge Action and legacy startup-hook cleanup skipped because --skip-startup-hook was set");
 }
 if (!skipClientConfig) {
   await removeCodexSection();
@@ -316,20 +346,63 @@ Usage:
 Options:
   --install-root <path>       Install destination (default: ~/.openreaper/current)
   --skip-client-config        Do not update supported MCP client configs
-  --skip-startup-hook         Do not remove the conditional REAPER startup hook
+  --skip-startup-hook         Keep the manual Action and legacy startup blocks
   --help                      Show this help without uninstalling
 `);
 }
 
-async function removeStartupHook() {
-  const hookPath = path.join(home, "Library", "Application Support", "REAPER", "Scripts", "__startup.lua");
-  const existing = await readTextIfExists(hookPath);
-  if (existing === "") return;
-  const next = removeMarkedBlock(existing, STARTUP_BEGIN, STARTUP_END);
-  if (next !== existing) {
-    await writeFile(hookPath, next, "utf8");
-    report.changed.push(`removed REAPER startup hook from ${hookPath}`);
+async function removeStartupIntegration() {
+  await removeBridgeAction();
+  const scriptsRoot = path.join(home, "Library", "Application Support", "REAPER", "Scripts");
+  for (const hook of STARTUP_HOOKS) {
+    const hookPath = path.join(scriptsRoot, hook.path);
+    const status = await safeLstat(hookPath);
+    if (!status) continue;
+    if (!status.isFile()) {
+      report.warnings.push(`REAPER startup hook is not a regular file and was preserved: ${hookPath}`);
+      continue;
+    }
+    const existing = await readFile(hookPath, "utf8");
+    let next = existing;
+    for (const block of hook.blocks) next = removeMarkedBlock(next, block.begin, block.end);
+    if (next !== existing) {
+      await writeFile(hookPath, next, "utf8");
+      report.changed.push(`removed obsolete OpenReaper startup blocks from ${hookPath}`);
+    }
   }
+}
+
+async function removeBridgeAction() {
+  const resourceRoot = path.join(home, "Library", "Application Support", "REAPER");
+  const actionPath = path.join(resourceRoot, "Scripts", ...BRIDGE_ACTION_RELATIVE_SCRIPT.split("/"));
+  const actionStatus = await safeLstat(actionPath);
+  if (actionStatus) {
+    if (actionStatus.isSymbolicLink() || !actionStatus.isFile()) {
+      report.warnings.push(`REAPER bridge Action path is not a regular non-symlink file and was preserved: ${actionPath}`);
+    } else {
+      await rm(actionPath, { force: true });
+      report.changed.push(`removed REAPER bridge Action ${BRIDGE_ACTION_TITLE} from ${actionPath}`);
+    }
+  }
+
+  const kbPath = path.join(resourceRoot, "reaper-kb.ini");
+  const kbStatus = await safeLstat(kbPath);
+  if (!kbStatus) return;
+  if (kbStatus.isSymbolicLink() || !kbStatus.isFile()) {
+    report.warnings.push(`REAPER Action registry is not a regular non-symlink file and was preserved: ${kbPath}`);
+    return;
+  }
+  const existing = await readFile(kbPath, "utf8");
+  const actionLine = bridgeActionRegistryLine();
+  const next = removeLinesPreservingBytes(existing, (line) => line !== actionLine);
+  if (next !== existing) {
+    await writeFile(kbPath, next, "utf8");
+    report.changed.push(`removed REAPER bridge Action registration from ${kbPath}`);
+  }
+}
+
+function bridgeActionRegistryLine() {
+  return `SCR 4 0 ${BRIDGE_ACTION_COMMAND_ID} "Custom: ${BRIDGE_ACTION_TITLE}" "${BRIDGE_ACTION_RELATIVE_SCRIPT}"`;
 }
 
 async function removeCodexSection() {
@@ -368,10 +441,31 @@ async function removeJsonServer(configPath, label) {
 }
 
 function removeMarkedBlock(existing, begin, end) {
-  const start = existing.indexOf(begin);
-  const finish = existing.indexOf(end);
-  if (start === -1 || finish === -1 || finish <= start) return existing;
-  return `${existing.slice(0, start).trimEnd()}\n${existing.slice(finish + end.length).trimStart()}`.trimEnd() + "\n";
+  let next = existing;
+  while (true) {
+    const start = next.indexOf(begin);
+    const finish = next.indexOf(end, start + begin.length);
+    if (start === -1 || finish === -1 || finish <= start) return next;
+    let after = finish + end.length;
+    if (next.startsWith("\r\n", after)) after += 2;
+    else if (next[after] === "\n" || next[after] === "\r") after += 1;
+    next = `${next.slice(0, start)}${next.slice(after)}`;
+  }
+}
+
+function removeLinesPreservingBytes(existing, keepLine) {
+  let next = "";
+  let cursor = 0;
+  while (cursor < existing.length) {
+    let lineEnd = cursor;
+    while (lineEnd < existing.length && existing[lineEnd] !== "\n" && existing[lineEnd] !== "\r") lineEnd += 1;
+    let segmentEnd = lineEnd;
+    if (existing.startsWith("\r\n", segmentEnd)) segmentEnd += 2;
+    else if (segmentEnd < existing.length) segmentEnd += 1;
+    if (keepLine(existing.slice(cursor, lineEnd))) next += existing.slice(cursor, segmentEnd);
+    cursor = segmentEnd;
+  }
+  return next;
 }
 
 function removeTomlSection(existing, sectionName) {

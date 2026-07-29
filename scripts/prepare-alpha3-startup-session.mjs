@@ -44,10 +44,10 @@ console.log(JSON.stringify({
     spawned_reaper: false,
   },
   next_steps: [
-    `Source ${card.paths.env_file_path} in the terminal/session that will prepare REAPER.`,
-    "Open or restart REAPER so it sees the OPENREAPER_* environment.",
-    `Run the bundled bridge script in REAPER: ${card.paths.bridge_script_path}`,
-    "Tell the agent you reconnected, then rerun startup health before live work.",
+    `Keep ${card.paths.env_file_path} as the prepared session identity record.`,
+    "Start or restart REAPER through the installed openreaper-start helper with the run root, transport, artifact root, owner, and generation from this card.",
+    "Use the registered OpenReaper Bridge Action only if openreaper-start reports it as the manual recovery fallback.",
+    "Tell the agent you reconnected after openreaper-start reports ready, then rerun startup health before live work.",
   ],
 }, null, 2));
 

@@ -136,6 +136,7 @@ describe("Alpha3.2.5-F product truth", () => {
     try {
       const packageRoot = path.join(fixture, "OpenReaper-alpha");
       const startPath = path.join(packageRoot, "bin", "openreaper-start");
+      const launcherPath = path.join(packageRoot, "bin", "openreaper-start-mcp-bridge.lua");
       const doctorPath = path.join(packageRoot, "bin", "openreaper-doctor");
       const bridgePath = path.join(packageRoot, "vendor", "openreaper-kernel", "reaper", "bridge", "openreaper-live-bridge.lua");
       const fakeReaper = path.join(fixture, "fake-reaper");
@@ -152,6 +153,11 @@ describe("Alpha3.2.5-F product truth", () => {
       assert.notEqual(fixtureStartSource, productStartSource);
       await writeFile(startPath, fixtureStartSource, "utf8");
       await chmod(startPath, 0o755);
+      await copyFile(
+        path.join(root, "scripts", "openreaper-alpha-package", "openreaper-start-mcp-bridge.lua"),
+        launcherPath,
+      );
+      await chmod(launcherPath, 0o444);
       await writeFile(doctorPath, "#!/bin/zsh\nexit 0\n", "utf8");
       await chmod(doctorPath, 0o755);
       await writeFile(bridgePath, "-- fixture\n", "utf8");

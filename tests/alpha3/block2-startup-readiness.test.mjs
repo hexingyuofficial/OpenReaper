@@ -31,6 +31,8 @@ import {
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const START_HELPER = path.join(REPO_ROOT, "scripts/openreaper-alpha-package/openreaper-start.sh");
+const BRIDGE_LAUNCHER = path.join(REPO_ROOT, "scripts/openreaper-alpha-package/openreaper-start-mcp-bridge.lua");
+const STARTUP_ASSISTANT = path.join(REPO_ROOT, "packages/mcp-server/src/alpha3-d1-startup-assistant-v1.mjs");
 
 describe("Alpha3 Block2 startup and connection readiness", () => {
   it("requires an explicit first-use choice and persists only always or manual", () => {
@@ -40,6 +42,7 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
     const missingReaperApp = path.join(root, "MissingREAPER.app");
     mkdirSync(path.dirname(startPath), { recursive: true });
     copyFileSync(START_HELPER, startPath);
+    copyFileSync(BRIDGE_LAUNCHER, path.join(path.dirname(startPath), "openreaper-start-mcp-bridge.lua"));
     chmodSync(startPath, 0o755);
     try {
       const first = spawnSync(startPath, [], { encoding: "utf8" });
@@ -98,6 +101,51 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
     }
   });
 
+  it("requires one fixed package-local launcher and keeps it after project and extra arguments", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "openreaper-start-launcher-"));
+    const binRoot = path.join(root, "current", "bin");
+    const startPath = path.join(binRoot, "openreaper-start");
+    const launcherPath = path.join(binRoot, "openreaper-start-mcp-bridge.lua");
+    mkdirSync(binRoot, { recursive: true });
+    copyFileSync(START_HELPER, startPath);
+    chmodSync(startPath, 0o755);
+    try {
+      const missing = spawnSync(startPath, ["--startup-dialog-consent", "once"], { encoding: "utf8" });
+      assert.equal(missing.status, 2);
+      assert.match(missing.stderr, /trusted Bridge launcher must be a regular non-symlink package file/u);
+
+      mkdirSync(launcherPath);
+      const directory = spawnSync(startPath, ["--startup-dialog-consent", "once"], { encoding: "utf8" });
+      assert.equal(directory.status, 2);
+      assert.match(directory.stderr, /regular non-symlink package file/u);
+      rmSync(launcherPath, { recursive: true, force: true });
+
+      const outsideLauncher = path.join(root, "outside.lua");
+      writeFileSync(outsideLauncher, "-- outside fixture\n", "utf8");
+      symlinkSync(outsideLauncher, launcherPath);
+      const linked = spawnSync(startPath, ["--startup-dialog-consent", "once"], { encoding: "utf8" });
+      assert.equal(linked.status, 2);
+      assert.match(linked.stderr, /regular non-symlink package file/u);
+
+      rmSync(launcherPath, { force: true });
+      copyFileSync(BRIDGE_LAUNCHER, launcherPath);
+      chmodSync(launcherPath, 0o000);
+      const unreadable = spawnSync(startPath, ["--startup-dialog-consent", "once"], { encoding: "utf8" });
+      assert.equal(unreadable.status, 2);
+      assert.match(unreadable.stderr, /trusted Bridge launcher is not readable/u);
+      chmodSync(launcherPath, 0o444);
+
+      const untrustedScript = spawnSync(startPath, ["--startup-dialog-consent", "once", path.join(root, "untrusted.lua")], { encoding: "utf8" });
+      assert.equal(untrustedScript.status, 2);
+      assert.match(untrustedScript.stderr, /refusing an untrusted command-line ReaScript argument/u);
+
+      const source = readFileSync(startPath, "utf8");
+      assert.doesNotMatch(source, /reaper_args\+=\("\$\{BRIDGE_SCRIPT\}"\)/u);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps missing-media dialog automation consent-bound and exact", () => {
     const source = readFileSync(START_HELPER, "utf8");
     assert.match(source, /--recover-existing/u);
@@ -151,6 +199,15 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
     assert.match(source, /if not allowSafeActions then return "blocked_manual_dialog:title=Project Settings"/u);
     assert.match(source, /blocked_dialog_classification:title=/u);
     assert.doesNotMatch(source, /echo "disabled"/u);
+  });
+
+  it("does not expose the retired conditional-hook or manual bridge-script startup guidance", () => {
+    const source = readFileSync(STARTUP_ASSISTANT, "utf8");
+    assert.match(source, /requires_conditional_reaper_startup_hook: false/u);
+    assert.match(source, /uses_trusted_package_command_line_reascript: true/u);
+    assert.doesNotMatch(source, /Run the bundled OpenReaper script in REAPER/u);
+    assert.doesNotMatch(source, /--install-startup-hook/u);
+    assert.match(source, /manual recovery fallback/u);
   });
 
   it("fails closed for every dialog-assist result outside the exact safe allowlist", () => {
@@ -333,7 +390,7 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
     );
     assert.equal(expandedProductSurface.agent_startup_guidance_snapshot.bridge_action.agent_should_try_to_run_action, false);
     assert.equal(expandedProductSurface.agent_startup_guidance_snapshot.bridge_action.sws_required, false);
-    assert.equal(expandedProductSurface.agent_startup_guidance_snapshot.bridge_action.command_line_reascript_bridge, false);
+    assert.equal(expandedProductSurface.agent_startup_guidance_snapshot.bridge_action.command_line_reascript_bridge, true);
     assert.equal(expandedProductSurface.agent_startup_guidance_snapshot.bridge_action.verification_probe, "call_template(template.transport.read_state)");
     assert.deepEqual(
       expandedProductSurface.agent_startup_guidance_snapshot.startup_dialog_assist.auto_dismisses,
@@ -386,7 +443,7 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
     assert.equal(guidance.bridge_action.installed_action_name, "OpenReaper: Start MCP bridge");
     assert.equal(guidance.bridge_action.agent_should_try_to_run_action, false);
     assert.equal(guidance.bridge_action.sws_required, false);
-    assert.equal(guidance.bridge_action.command_line_reascript_bridge, false);
+    assert.equal(guidance.bridge_action.command_line_reascript_bridge, true);
     assert.equal(guidance.bridge_action.reconnect_after_action, true);
     assert.equal(guidance.bridge_action.verification_probe, "call_template(template.transport.read_state)");
     assert.deepEqual(guidance.startup_dialog_assist.auto_dismisses, ["project_settings_notes_show_notes_on_project_load"]);

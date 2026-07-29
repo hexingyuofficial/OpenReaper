@@ -180,6 +180,7 @@ const report = {
     user_fallback: `Only after autonomous startup reports a Bridge blocker: in REAPER, open Actions, search "${bridgeActionName}", click Run, then rerun Doctor.`,
     verification_probe: "call_template(template.transport.read_state)",
     sws_required: false,
+    command_line_reascript_bridge: true,
   },
   startup_dialog_assist: {
     requires_first_use_consent: true,
@@ -447,7 +448,7 @@ function compactDoctorRecoveryCard(diagnosis, bridge, processEvidence) {
     likely_cause: diagnosis === "bridge_loop_unresponsive"
       ? "The heartbeat is stale; it cannot distinguish a stopped Action from an unresponsive loop."
       : diagnosis === "bridge_action_not_running"
-        ? "REAPER is present but the conditional startup hook has not produced a heartbeat."
+        ? "REAPER is present but the trusted package launcher has not produced a heartbeat."
         : diagnosis === "owner_generation_mismatch"
           ? "The heartbeat belongs to a different OpenReaper session identity."
           : diagnosis === "reaper_not_running"

@@ -37,7 +37,6 @@
     "check:alpha3-block6": "node --test tests/alpha3/block6-stock-plugin-product-gate.test.mjs",
     "prepare:startup-session": "node scripts/prepare-alpha3-startup-session.mjs",
     "prepare:startup-wrapper": "node scripts/prepare-alpha3-startup-wrapper.mjs",
-    "start:openreaper": "node scripts/start-openreaper-alpha3.mjs",
     "workflow:portability": "node scripts/alpha3-d2-workflow-entrypoint.mjs",
     "pack:portability": "node scripts/alpha3-d2-extension-pack-entrypoint.mjs",
     "package:openreaper-alpha": "node scripts/package-openreaper-alpha.mjs",

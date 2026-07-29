@@ -22,6 +22,7 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
 const INSTALLER_SOURCE = path.join(REPO_ROOT, "scripts/openreaper-alpha-package/install-openreaper.mjs");
 const UNINSTALLER_SOURCE = path.join(REPO_ROOT, "scripts/openreaper-alpha-package/uninstall-openreaper.mjs");
 const START_SOURCE = path.join(REPO_ROOT, "scripts/openreaper-alpha-package/openreaper-start.sh");
+const BRIDGE_LAUNCHER_SOURCE = path.join(REPO_ROOT, "scripts/openreaper-alpha-package/openreaper-start-mcp-bridge.lua");
 const MCP_SOURCE = path.join(REPO_ROOT, "scripts/openreaper-alpha-package/openreaper-mcp.sh");
 const PACKAGE_BUILDER_SOURCE = path.join(REPO_ROOT, "scripts/package-openreaper-alpha.mjs");
 const FIXTURE_ROOTS = [];
@@ -30,8 +31,10 @@ const RENDER_ENV = "OPENREAPER_LIVE_SMOKE_RENDER_ROOT";
 const RECORD_NAME = "managed-render-root.path";
 const RECORD_MAX = 4096;
 const PROVENANCE_NAME = "provenance.json";
-const STARTUP_BEGIN = "-- >>> OpenReaper alpha MCP startup hook >>>";
-const STARTUP_END = "-- <<< OpenReaper alpha MCP startup hook <<<";
+const STARTUP_BEGIN = "// >>> OpenReaper alpha MCP startup hook >>>";
+const STARTUP_END = "// <<< OpenReaper alpha MCP startup hook <<<";
+const LEGACY_LUA_STARTUP_BEGIN = "-- >>> OpenReaper alpha MCP startup hook >>>";
+const LEGACY_LUA_STARTUP_END = "-- <<< OpenReaper alpha MCP startup hook <<<";
 
 async function freshTmp(prefix) {
   const root = await mkdtemp(path.join("/tmp", prefix));
@@ -64,7 +67,7 @@ describe("Alpha3.2-B2 managed render root", () => {
       [path.join(fixture.installRoot, "session", "renders", "render.wav"), "render\n"],
       [path.join(fixture.home, ".openreaper", "data", "executable-recipes", "revision.json"), "recipe\n"],
       [path.join(fixture.home, ".openreaper", "data", "startup-dialog-consent"), "always\n"],
-      [path.join(fixture.home, "Library", "Application Support", "REAPER", "Scripts", "__startup.lua"), `${STARTUP_BEGIN}\nmanaged startup\n${STARTUP_END}\nuser startup\n`],
+      [path.join(fixture.home, "Library", "Application Support", "REAPER", "Scripts", "__startup.eel"), `${STARTUP_BEGIN}\nmanaged startup;\n${STARTUP_END}\nuser startup;\n`],
       [path.join(fixture.home, ".codex", "config.toml"), "[mcp_servers.openreaper]\ncommand = 'openreaper'\n\n[user]\nkeep = true\n"],
       [path.join(fixture.home, ".cursor", "mcp.json"), '{"mcpServers":{"openreaper":{"command":"openreaper"},"keep":{"command":"keep"}}}\n'],
       [path.join(fixture.home, "Library", "Application Support", "Claude", "claude_desktop_config.json"), '{"mcpServers":{"openreaper":{"command":"openreaper"},"keep":{"command":"keep"}}}\n'],
@@ -134,60 +137,128 @@ describe("Alpha3.2-B2 managed render root", () => {
     assert.equal(await readFile(path.join(recipeRoot, "revision.json"), "utf8"), "immutable-revision\n");
   });
 
-  it("installs an idempotent environment-gated startup hook while preserving and backing up user content", async () => {
+  it("uses one trusted package launcher while removing only legacy managed blocks byte-for-byte", async () => {
     const fixture = await makeInstallerFixture();
     const scriptsRoot = path.join(fixture.home, "Library", "Application Support", "REAPER", "Scripts");
-    const hookPath = path.join(scriptsRoot, "__startup.lua");
-    const original = [
-      "-- user startup content",
-      "reaper.ShowConsoleMsg('keep user startup')",
-      "",
-      "-- >>> OpenReaper Alpha3 MCP startup hook >>>",
-      "print('legacy openreaper hook')",
-      "-- <<< OpenReaper Alpha3 MCP startup hook <<<",
+    const hookPath = path.join(scriptsRoot, "__startup.eel");
+    const legacyLuaPath = path.join(scriptsRoot, "__startup.lua");
+    const eelPrefix = [
+      " ",
+      "// user startup content",
+      "ShowConsoleMsg(\"keep user startup\");",
       "",
     ].join("\n");
+    const eelSuffix = "\t// trailing user bytes\n\n";
+    const original = `${eelPrefix}${STARTUP_BEGIN}\nmanaged EEL startup;\n${STARTUP_END}\n${eelSuffix}`;
+    const expectedEel = `${eelPrefix}${eelSuffix}`;
+    const legacyLua = [
+      " ",
+      "-- user Lua startup content",
+      "reaper.ShowConsoleMsg('keep user Lua startup')",
+      "",
+      LEGACY_LUA_STARTUP_BEGIN,
+      "print('legacy openreaper hook')",
+      LEGACY_LUA_STARTUP_END,
+      "\t-- trailing Lua bytes",
+      "",
+      "",
+    ].join("\n");
+    const expectedLua = [
+      " ",
+      "-- user Lua startup content",
+      "reaper.ShowConsoleMsg('keep user Lua startup')",
+      "",
+      "\t-- trailing Lua bytes",
+      "",
+      "",
+    ].join("\n");
+    const kbPath = path.join(fixture.home, "Library", "Application Support", "REAPER", "reaper-kb.ini");
+    const originalKb = [
+      "",
+      'SCR 4 0 RSother "Custom: User Action" "User/action.lua"\r\n',
+      'SCR 4 0 RSuserTitle "Custom: OpenReaper: Start MCP bridge" "User/lookalike-title.lua"\n',
+      'SCR 4 0 RSuserPath "Custom: User Path Lookalike" "OpenReaper/openreaper-start-mcp-bridge.lua"\r\n',
+      "\r\n",
+    ].join("");
     await mkdir(scriptsRoot, { recursive: true });
     await writeFile(hookPath, original, "utf8");
+    await writeFile(legacyLuaPath, legacyLua, "utf8");
+    await writeFile(kbPath, originalKb, "utf8");
 
     const first = await runInstallerWithStartupHook(fixture);
     assert.equal(first.code, 0, first.stderr || first.stdout);
     const firstReport = parseInstallerReport(first.stdout);
     const installed = await readFile(hookPath, "utf8");
-    assert.match(installed, /keep user startup/);
-    assert.doesNotMatch(installed, /legacy openreaper hook/);
-    assert.equal((installed.match(/-- >>> OpenReaper alpha MCP startup hook >>>/g) ?? []).length, 1);
-    assert.match(installed, /OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH/);
-    assert.match(installed, /OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR/);
-    assert.match(installed, /pcall\(dofile, bridge_script\)/);
-    assert.match(installed, /openreaper-startup-status-v1\.json/);
-    assert.match(installed, /bridge_dofile_failed/);
-    assert.ok(
-      installed.indexOf("-- >>> OpenReaper alpha MCP startup hook >>>")
-        < installed.indexOf("-- user startup content"),
-      "managed startup hook must run before existing user startup content",
-    );
-    assert.equal(await readFile(firstReport.startup_hook.backup_path, "utf8"), original);
+    assert.equal(installed, expectedEel);
+    assert.equal(firstReport.startup_hook.path, path.join(fixture.installRoot, "bin", "openreaper-start-mcp-bridge.lua"));
+    assert.equal(firstReport.startup_hook.mode, "trusted_package_command_line_reascript");
+    assert.equal(firstReport.startup_hook.package_local, true);
+    assert.equal(firstReport.startup_hook.always_enabled, true);
+    assert.equal(firstReport.startup_hook.installed, true);
+    assert.deepEqual(firstReport.startup_hook.legacy_cleanup_paths.sort(), [hookPath, legacyLuaPath].sort());
+    assert.equal(await readFile(firstReport.startup_hook.legacy_backup_paths[0], "utf8"), original);
+    assert.equal(firstReport.startup_hook.migrated_legacy_lua_path, legacyLuaPath);
+    assert.equal(await readFile(firstReport.startup_hook.legacy_backup_path, "utf8"), legacyLua);
+    const migratedLua = await readFile(legacyLuaPath, "utf8");
+    assert.equal(migratedLua, expectedLua);
+    const actionScript = await readFile(firstReport.bridge_action.script, "utf8");
+    const installedLauncher = await readFile(firstReport.startup_hook.path, "utf8");
+    assert.equal(actionScript, installedLauncher);
+    assert.match(actionScript, /pcall\(dofile, bridge\)/);
+    assert.match(actionScript, /openreaper-startup-status-v1\.json/);
+    assert.match(actionScript, /bridge_dofile_failed/);
+    assert.equal((await lstat(firstReport.startup_hook.path)).mode & 0o777, 0o444);
+    assert.equal((await lstat(firstReport.bridge_action.script)).mode & 0o777, 0o444);
+    const installedKb = await readFile(kbPath, "utf8");
+    assert.equal(installedKb.startsWith(originalKb), true);
+    assert.match(installedKb, /Custom: OpenReaper: Start MCP bridge/u);
 
     const second = await runInstallerWithStartupHook(fixture);
     assert.equal(second.code, 0, second.stderr || second.stdout);
     const secondReport = parseInstallerReport(second.stdout);
-    assert.equal(secondReport.startup_hook.backup_path, null);
+    assert.deepEqual(secondReport.startup_hook.legacy_backup_paths, []);
+    assert.equal(secondReport.startup_hook.legacy_backup_path, null);
     assert.equal(await readFile(hookPath, "utf8"), installed);
+    assert.equal(await readFile(legacyLuaPath, "utf8"), migratedLua);
+    assert.equal(await readFile(kbPath, "utf8"), installedKb);
+
+    const uninstall = await runUninstallerWithStartupHook(fixture);
+    assert.equal(uninstall.code, 0, uninstall.stderr || uninstall.stdout);
+    assert.equal(await pathExists(firstReport.bridge_action.script), false);
+    assert.equal(await readFile(kbPath, "utf8"), originalKb);
+    assert.equal(await readFile(hookPath, "utf8"), expectedEel);
+    assert.equal(await readFile(legacyLuaPath, "utf8"), expectedLua);
   });
 
-  it("rejects a symlinked startup hook without modifying its target", async () => {
+  it("preserves a symlinked Bridge Action during uninstall without following its target", async () => {
     const fixture = await makeInstallerFixture();
     const scriptsRoot = path.join(fixture.home, "Library", "Application Support", "REAPER", "Scripts");
-    const hookPath = path.join(scriptsRoot, "__startup.lua");
-    const targetPath = path.join(fixture.root, "external-startup.lua");
+    const actionPath = path.join(scriptsRoot, "OpenReaper", "openreaper-start-mcp-bridge.lua");
+    const targetPath = path.join(fixture.root, "user-action-target.lua");
+    await mkdir(path.dirname(actionPath), { recursive: true });
+    await writeFile(targetPath, "-- user-owned target\n", "utf8");
+    await symlink(targetPath, actionPath);
+
+    const uninstall = await runUninstallerWithStartupHook(fixture);
+    assert.equal(uninstall.code, 0, uninstall.stderr || uninstall.stdout);
+    assert.equal((await lstat(actionPath)).isSymbolicLink(), true);
+    assert.equal(await readFile(targetPath, "utf8"), "-- user-owned target\n");
+    assert.match(uninstall.stdout, /not a regular non-symlink file and was preserved/u);
+  });
+
+  it("preserves and warns on a symlinked legacy startup hook without following its target", async () => {
+    const fixture = await makeInstallerFixture();
+    const scriptsRoot = path.join(fixture.home, "Library", "Application Support", "REAPER", "Scripts");
+    const hookPath = path.join(scriptsRoot, "__startup.eel");
+    const targetPath = path.join(fixture.root, "external-startup.eel");
     await mkdir(scriptsRoot, { recursive: true });
     await writeFile(targetPath, "external startup\n", "utf8");
     await symlink(targetPath, hookPath);
 
     const result = await runInstallerWithStartupHook(fixture);
-    assert.notEqual(result.code, 0);
-    assert.match(result.stderr, /startup hook must be a regular file/);
+    assert.equal(result.code, 0, result.stderr || result.stdout);
+    const report = parseInstallerReport(result.stdout);
+    assert.equal(report.warnings.some((warning) => warning.includes("not a regular file") && warning.includes(hookPath)), true);
     assert.equal(await readFile(targetPath, "utf8"), "external startup\n");
     assert.equal((await lstat(hookPath)).isSymbolicLink(), true);
   });
@@ -976,6 +1047,29 @@ describe("Alpha3.2-B2 managed render root", () => {
     assert.equal(packageEmptyEquals.code, 2);
   });
 
+  it("passes project and extra arguments before the trusted launcher in a direct binary launch", async () => {
+    const fixture = await makeStartFixture("direct-argv-order");
+    const projectPath = path.join(fixture.root, "project with spaces.RPP");
+    const configPath = path.join(fixture.root, "fixture config.ini");
+    await writeFile(projectPath, "<REAPER_PROJECT 0.1\n>\n", "utf8");
+    await writeFile(configPath, "fixture=true\n", "utf8");
+
+    const run = await runFakeStartResult({
+      fixture,
+      label: "direct-argv-order",
+      extraArgs: ["--project-path", projectPath, "-cfgfile", configPath],
+    });
+    assert.equal(run.result.code, 0, run.result.stderr || run.result.stdout);
+    assert.deepEqual(JSON.parse(await readFile(run.argvCapturePath, "utf8")), [
+      "-newinst",
+      "-nosplash",
+      projectPath,
+      "-cfgfile",
+      configPath,
+      path.join(await realpath(fixture.installRoot), "bin", "openreaper-start-mcp-bridge.lua"),
+    ]);
+  });
+
   it("restores LaunchServices values with spaces, empty-but-set presence, and unset presence", async () => {
     const harness = await makeLaunchServicesHarness("presence");
     await harness.setState("OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR", true, "previous transport with spaces");
@@ -991,6 +1085,26 @@ describe("Alpha3.2-B2 managed render root", () => {
     assert.deepEqual(await harness.getState("OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR"), { present: true, value: "previous transport with spaces" });
     assert.deepEqual(await harness.getState(RENDER_ENV), { present: true, value: "" });
     assert.deepEqual(await harness.getState("OPENREAPER_LIVE_BRIDGE_OWNER"), { present: false, value: "" });
+    await harness.assertLockRemoved();
+  });
+
+  it("passes project and extra arguments before the trusted launcher through LaunchServices", async () => {
+    const harness = await makeLaunchServicesHarness("argv-order");
+    const projectPath = path.join(harness.root, "project with spaces.RPP");
+    const configPath = path.join(harness.root, "fixture config.ini");
+    await writeFile(projectPath, "<REAPER_PROJECT 0.1\n>\n", "utf8");
+    await writeFile(configPath, "fixture=true\n", "utf8");
+
+    const result = await harness.run(["--project-path", projectPath, "-cfgfile", configPath]);
+    assert.equal(result.code, 0, result.stderr || result.stdout);
+    assert.deepEqual(JSON.parse(await readFile(harness.argvCapturePath, "utf8")), [
+      "-newinst",
+      "-nosplash",
+      projectPath,
+      "-cfgfile",
+      configPath,
+      path.join(await realpath(harness.installRoot), "bin", "openreaper-start-mcp-bridge.lua"),
+    ]);
     await harness.assertLockRemoved();
   });
 
@@ -1024,7 +1138,7 @@ describe("Alpha3.2-B2 managed render root", () => {
     await harness.assertLockRemoved();
   });
 
-  it("accepts matching Bridge readiness before a bounded dialog scan", async () => {
+  it("accepts matching Bridge readiness before and after a bounded dialog scan", async () => {
     const source = await readFile(START_SOURCE, "utf8");
     const functionStart = source.indexOf("wait_for_startup_readiness() {");
     const functionEnd = source.indexOf("\n}\n\ntrap 'launchservices_cleanup_on_exit'", functionStart);
@@ -1033,10 +1147,30 @@ describe("Alpha3.2-B2 managed render root", () => {
     const heartbeatCheck = readinessSource.indexOf("if bridge_heartbeat_ready; then");
     const publicProbe = readinessSource.indexOf("verify_public_bridge_read || return 1", heartbeatCheck);
     const dialogCheck = readinessSource.indexOf('dialog_result="$(run_startup_dialog_assist)"');
+    const heartbeatRecheck = readinessSource.indexOf("if bridge_heartbeat_ready; then", dialogCheck);
+    const blocker = readinessSource.indexOf("startup-dialog-blocker=", dialogCheck);
     assert.ok(heartbeatCheck >= 0, "readiness must check the matching Bridge heartbeat");
     assert.ok(publicProbe > heartbeatCheck, "matching Bridge readiness must include a real public read probe");
     assert.ok(dialogCheck > publicProbe, "Accessibility must not override successful Bridge readiness");
+    assert.ok(heartbeatRecheck > dialogCheck, "readiness must recheck Bridge truth after a bounded Accessibility scan");
+    assert.ok(blocker > heartbeatRecheck, "an older dialog snapshot must not override Bridge truth published during the scan");
     assert.match(readinessSource, /if ! startup_dialog_result_is_safe "\$\{dialog_result\}"; then[\s\S]+startup-dialog-blocker=/u);
+    assert.match(readinessSource, /pending_dialog_blocker/u);
+
+    const hookStart = source.indexOf("wait_for_startup_hook() {");
+    const hookEnd = source.indexOf("\n}\n\nverify_public_bridge_read()", hookStart);
+    const hookSource = source.slice(hookStart, hookEnd);
+    const hookDialogCheck = hookSource.indexOf('dialog_result="$(run_startup_dialog_assist)"');
+    const stageRecheck = hookSource.indexOf("if startup_status_stage_ready; then", hookDialogCheck);
+    const hookBlocker = hookSource.indexOf("startup-dialog-blocker=", hookDialogCheck);
+    assert.ok(stageRecheck > hookDialogCheck, "startup-hook wait must recheck the stage after Accessibility returns");
+    assert.ok(hookBlocker > stageRecheck, "a stale dialog result must not override a stage published during the scan");
+    assert.match(source, /blocked_unknown_dialog:\*\|blocked_user_decision:\*\|project_settings_seen_but_not_notes/u);
+    assert.doesNotMatch(
+      source.slice(source.indexOf("startup_dialog_result_allows_transient_observation()"), source.indexOf("wait_for_startup_readiness()")),
+      /blocked_dialog_inspection_timeout/u,
+      "an AX timeout must remain an immediate fail-closed blocker when no live stage or Bridge supersedes it",
+    );
   });
 
   it("serializes staggered LaunchServices starts with one stable installed-scope lock", async () => {
@@ -1428,6 +1562,7 @@ async function makeInstallerFixture({ installerSource = null, uninstallerSource 
     await writeFile(filePath, body, "utf8");
     await chmod(filePath, 0o755);
   }
+  await cp(BRIDGE_LAUNCHER_SOURCE, path.join(packageRoot, "bin", "openreaper-start-mcp-bridge.lua"));
   await writeFile(path.join(packageRoot, "install.command"), "#!/bin/zsh\n", "utf8");
   await writeFile(path.join(packageRoot, "uninstall.command"), "#!/bin/zsh\n", "utf8");
   await writeFile(path.join(packageRoot, PROVENANCE_NAME), '{"contract":"openreaper.package.provenance.v1"}\n', "utf8");
@@ -1445,6 +1580,7 @@ async function makeStartFixture(label, { source = null } = {}) {
   await mkdir(path.dirname(recordPath), { recursive: true });
   const startSource = withFixtureCleanDialogInspection(source ?? await readFile(START_SOURCE, "utf8"));
   await writeFile(startPath, startSource, "utf8");
+  await cp(BRIDGE_LAUNCHER_SOURCE, path.join(installRoot, "bin", "openreaper-start-mcp-bridge.lua"));
   const doctorPath = path.join(installRoot, "bin", "openreaper-doctor");
   await writeFile(doctorPath, "#!/bin/zsh\nexit 0\n", "utf8");
   await Promise.all([startPath, doctorPath].map((file) => chmod(file, 0o755)));
@@ -1495,15 +1631,26 @@ function runUninstaller(fixture) {
   ], { cwd: fixture.root, env: { ...process.env, HOME: fixture.home } });
 }
 
+function runUninstallerWithStartupHook(fixture) {
+  return runCaptured(process.execPath, [
+    fixture.uninstallerPath,
+    "--install-root",
+    fixture.installRoot,
+    "--skip-client-config",
+  ], { cwd: fixture.root, env: { ...process.env, HOME: fixture.home } });
+}
+
 async function runFakeStartResult({ fixture, label, extraArgs, staleRoot = null }) {
   const capturePath = path.join(fixture.root, `${label}.capture`);
   const projectIndexCapturePath = path.join(fixture.root, `${label}.project-index.capture`);
+  const argvCapturePath = path.join(fixture.root, `${label}.argv.json`);
   const fakeBinary = path.join(fixture.root, `${label}-fake-reaper`);
   const fakePidPath = path.join(fixture.root, `${label}-fake-reaper.pid`);
   const fakeReleasePath = path.join(fixture.root, `${label}-release-fake-reaper`);
   const fakeExitedPath = path.join(fixture.root, `${label}-fake-reaper.exited`);
   await writeFile(fakeBinary, `#!/bin/zsh
 print -rn -- "$$" > ${shellQuote(fakePidPath)}
+${shellQuote(process.execPath)} -e 'const fs=require("node:fs"); fs.writeFileSync(process.argv[1], JSON.stringify(process.argv.slice(2)))' ${shellQuote(argvCapturePath)} "$@"
 print -r -- "$${RENDER_ENV}" > ${shellQuote(capturePath)}
   print -r -- "$OPENREAPER_PROJECT_INDEX_STATE_ROOT" > ${shellQuote(projectIndexCapturePath)}
   mkdir -p "$OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR"
@@ -1539,7 +1686,7 @@ print -rn -- "exited" > ${shellQuote(fakeExitedPath)}
   await rm(fakeReleasePath, { force: true });
   await rm(fakeExitedPath, { force: true });
   await rm(path.join(fixture.installRoot, "session", "reaper.pid"), { force: true });
-  return { result, capturePath, projectIndexCapturePath, fixturePid };
+  return { result, capturePath, projectIndexCapturePath, argvCapturePath, fixturePid };
 }
 
 async function runMcpResult({
@@ -1598,6 +1745,7 @@ async function makeLaunchServicesHarness(label, { source = null, fakePidDelayMs 
   const controlRoot = path.join(root, "control");
   const logPath = path.join(root, "launchctl.log");
   const capturePath = path.join(root, "capture");
+  const argvCapturePath = path.join(root, "reaper-argv.json");
   const launchctlPath = path.join(binRoot, "launchctl");
   const openPath = path.join(binRoot, "open");
   const unamePath = path.join(binRoot, "uname");
@@ -1626,19 +1774,21 @@ async function makeLaunchServicesHarness(label, { source = null, fakePidDelayMs 
     .replace('LAUNCHCTL_BIN="/bin/launchctl"', `LAUNCHCTL_BIN=${shellQuote(launchctlPath)}`)
     .replace('OPEN_BIN="/usr/bin/open"', `OPEN_BIN=${shellQuote(openPath)}`);
   await writeFile(startPath, startSource, "utf8");
+  await cp(BRIDGE_LAUNCHER_SOURCE, path.join(installRoot, "bin", "openreaper-start-mcp-bridge.lua"));
   const doctorPath = path.join(installRoot, "bin", "openreaper-doctor");
   await writeFile(doctorPath, "#!/bin/zsh\nexit 0\n", "utf8");
   await writeFile(unamePath, "#!/bin/zsh\necho Darwin\n", "utf8");
   await writeFile(fakeBinary, `#!/bin/zsh
-set -u
+  set -u
 pid_path="$OPENREAPER_B2_FAKE_PID_PATH"
 release_path="$OPENREAPER_B2_FAKE_RELEASE_PATH"
 exited_path="$OPENREAPER_B2_FAKE_EXITED_PATH"
 if [[ -n "\${OPENREAPER_B2_FAKE_PID_DELAY_SECONDS:-}" ]]; then
   sleep "$OPENREAPER_B2_FAKE_PID_DELAY_SECONDS"
 fi
-print -rn -- "$$" > "$pid_path"
-print -r -- "$${RENDER_ENV}" > ${shellQuote(capturePath)}
+  print -rn -- "$$" > "$pid_path"
+${shellQuote(process.execPath)} -e 'const fs=require("node:fs"); fs.writeFileSync(process.argv[1], JSON.stringify(process.argv.slice(2)))' ${shellQuote(argvCapturePath)} "$@"
+  print -r -- "$${RENDER_ENV}" > ${shellQuote(capturePath)}
 if [[ "\${OPENREAPER_B2_FAKE_STARTUP_HOOK_ENV_RACE:-false}" == "true" ]]; then
   sleep 0.25
   mkdir -p "$OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR"
@@ -1783,6 +1933,7 @@ print -rn -- "exited" > "$exited_path"
     controlRoot,
     logPath,
     capturePath,
+    argvCapturePath,
     startupStatusPath,
     lockPath,
     snapshotPath: path.join(lockPath, "snapshot"),

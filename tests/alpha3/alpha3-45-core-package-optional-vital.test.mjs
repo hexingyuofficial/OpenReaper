@@ -11,6 +11,7 @@ const execFileAsync = promisify(execFile);
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const packageBuilder = path.join(repoRoot, "scripts", "package-openreaper-alpha.mjs");
 const installerSource = path.join(repoRoot, "scripts", "openreaper-alpha-package", "install-openreaper.mjs");
+const bridgeLauncherSource = path.join(repoRoot, "scripts", "openreaper-alpha-package", "openreaper-start-mcp-bridge.lua");
 
 test("package CLI defaults to core and requires explicit --with-vital", async () => {
   const help = await execFileAsync(process.execPath, [packageBuilder, "--help"]);
@@ -69,6 +70,7 @@ async function createInstallerFixture({ withVital }) {
   await mkdir(path.join(home, ".cursor"), { recursive: true });
   await mkdir(path.join(home, "Library", "Application Support", "Claude"), { recursive: true });
   await cp(installerSource, installer);
+  await cp(bridgeLauncherSource, path.join(packageRoot, "bin", "openreaper-start-mcp-bridge.lua"));
 
   for (const name of ["openreaper-mcp", "openreaper-start", "openreaper-doctor"]) {
     const body = name === "openreaper-mcp"

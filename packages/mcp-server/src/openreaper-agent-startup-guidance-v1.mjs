@@ -32,7 +32,7 @@ export const OPENREAPER_AGENT_STARTUP_GUIDANCE_SUMMARY = deepFreeze({
     only_openreaper_startup_supported: true,
     startup_lifetime_action: "openreaper-start launches REAPER with the OpenReaper bridge environment and returns only after a matching heartbeat and bounded public read probe pass.",
     startup_dialog_assist: "On first use, ask the user whether exact safe startup-window assistance is allowed once, always, or should remain manual. Unknown and decision-bearing dialogs always fail closed.",
-    bridge_start_action: `The conditional startup hook starts the Bridge automatically. The REAPER action "${OPENREAPER_BRIDGE_ACTION_NAME}" is a manual recovery fallback.`,
+    bridge_start_action: `openreaper-start passes a fixed trusted package-local ReaScript to REAPER after the project and extra arguments. The REAPER action "${OPENREAPER_BRIDGE_ACTION_NAME}" is a manual recovery fallback.`,
     connection_verification: "openreaper-start performs call_template(template.transport.read_state) before reporting startup-status=ready.",
   },
   startup_lifetime: {
@@ -51,7 +51,7 @@ export const OPENREAPER_AGENT_STARTUP_GUIDANCE_SUMMARY = deepFreeze({
     role: "manual_recovery_fallback",
     user_fallback: `Only if autonomous startup reports a Bridge blocker: in REAPER, open Actions, search "${OPENREAPER_BRIDGE_ACTION_NAME}", click Run, then rerun Doctor.`,
     sws_required: false,
-    command_line_reascript_bridge: false,
+    command_line_reascript_bridge: true,
   },
   startup_dialog_assist: {
     requires_first_use_consent: true,
@@ -101,7 +101,7 @@ export function createOpenReaperAgentStartupGuidance(input = {}) {
       {
         id: "start_reaper_for_live_mcp",
         when: "The user asks for live REAPER work and no current OpenReaper session is connected.",
-        agent_action: "Run the OpenReaper startup helper. It opens REAPER, starts the Bridge through the conditional hook, and returns only after a matching heartbeat and public read probe pass.",
+        agent_action: "Run the OpenReaper startup helper. It opens REAPER with the fixed trusted package launcher last and returns only after a matching heartbeat and public read probe pass.",
         command: currentPackageStart ?? OPENREAPER_INSTALLED_START_COMMAND,
       },
       {
@@ -137,7 +137,7 @@ export function createOpenReaperAgentStartupGuidance(input = {}) {
       role: "manual_recovery_fallback",
       user_fallback: `Only after an autonomous startup blocker: in REAPER, open Actions, search "${OPENREAPER_BRIDGE_ACTION_NAME}", click Run, then rerun Doctor.`,
       sws_required: false,
-      command_line_reascript_bridge: false,
+      command_line_reascript_bridge: true,
       reconnect_after_action: true,
       verification_probe: "call_template(template.transport.read_state)",
     },

@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { describe, it } from "node:test";
 import {
   ALPHA3_D1_STARTUP_ASSISTANT_CONTRACT,
@@ -319,7 +319,8 @@ describe("Alpha3 D1 startup and connection health", () => {
 
     assert.equal(plan.status, "reconnect_existing");
     assert.equal(plan.health.status, "stale_session");
-    assert.equal(plan.safety.requires_user_reaper_action, true);
+    assert.equal(plan.safety.requires_user_reaper_action, false);
+    assert.equal(plan.safety.manual_recovery_action_only, true);
     assert.deepEqual(
       plan.verification_steps,
       [
@@ -357,7 +358,7 @@ describe("Alpha3 D1 startup and connection health", () => {
     assert.equal(summary.status, "ready");
     assert.equal(summary.ok, true);
     assert.equal(summary.helper, "npm run prepare:startup-session");
-    assert.equal(summary.launch_helper, "npm run start:openreaper -- --launch");
+    assert.equal(summary.launch_helper, "~/.openreaper/current/bin/openreaper-start");
     assert.equal(summary.mcp_connection_requirement.user_reminder, ALPHA3_D1_MCP_STARTUP_REQUIREMENT);
     assert.equal(summary.session_card.env_file_path, "/tmp/openreaper-alpha3-session/reports/openreaper-session.env");
     assert.equal(summary.session_card.openreaper_script_path, "reaper/bridge/openreaper-live-bridge.lua");
@@ -398,8 +399,8 @@ describe("Alpha3 D1 startup and connection health", () => {
     assert.equal(plan.wrapper_plan.generated_files_only, true);
     assert.equal(plan.wrapper_plan.launcher_written, false);
     assert.equal(plan.wrapper_plan.launcher_status, "local_macos_live_accepted");
-    assert.equal(plan.wrapper_plan.launch_helper, "npm run start:openreaper -- --launch");
-    assert.equal(plan.wrapper_plan.one_command_helper, "npm run start:openreaper -- --install-startup-hook --launch");
+    assert.equal(plan.wrapper_plan.launch_helper, "~/.openreaper/current/bin/openreaper-start");
+    assert.equal(plan.wrapper_plan.one_command_helper, "~/.openreaper/current/bin/openreaper-start");
     assert.equal(plan.wrapper_plan.one_command_evidence.status, "accepted_local_macos_with_dialog_caveat");
     assert.equal(plan.agent_user_reminder, ALPHA3_D1_MCP_STARTUP_REQUIREMENT);
     assert.equal(plan.mcp_connection_requirement.only_openreaper_launch_supported, true);
@@ -420,8 +421,8 @@ describe("Alpha3 D1 startup and connection health", () => {
     assert.equal(summary.customer_ready, false);
     assert.equal(summary.one_click_live_accepted, true);
     assert.equal(summary.helper, "npm run prepare:startup-wrapper");
-    assert.equal(summary.launch_helper, "npm run start:openreaper -- --launch");
-    assert.equal(summary.one_command_helper, "npm run start:openreaper -- --install-startup-hook --launch");
+    assert.equal(summary.launch_helper, "~/.openreaper/current/bin/openreaper-start");
+    assert.equal(summary.one_command_helper, "~/.openreaper/current/bin/openreaper-start");
     assert.equal(summary.agent_user_reminder, ALPHA3_D1_MCP_STARTUP_REQUIREMENT);
     assert.equal(summary.safety.support_claim_broadened, false);
 
@@ -518,103 +519,6 @@ describe("Alpha3 D1 startup and connection health", () => {
     assert.doesNotMatch(scriptSource, /child_process|spawn\(|execFile|execSync|open -a|REAPER\.app/);
   });
 
-  it("prepares a one-command startup helper in dry-run mode without spawning REAPER", () => {
-    const root = mkdtempSync(join(tmpdir(), "openreaper-alpha3-start-helper-"));
-    const projectPath = join(root, "test-project.RPP");
-    writeFileSync(projectPath, "<REAPER_PROJECT 0.1 \"7.0/x64\" 0\n>");
-    const output = execFileSync(
-      process.execPath,
-      [
-        "scripts/start-openreaper-alpha3.mjs",
-        "--run-id=test-start-openreaper",
-        `--run-root=${root}`,
-        "--dry-run",
-        `--project-path=${projectPath}`,
-        "--reaper-binary=/tmp/not-used-reaper",
-      ],
-      {
-        cwd: new URL("../..", import.meta.url),
-        encoding: "utf8",
-      },
-    ).trim();
-    const result = JSON.parse(output);
-
-    assert.equal(result.contract, "alpha3.d1.start_openreaper_helper_result.v1");
-    assert.equal(result.ok, true);
-    assert.equal(result.mode, "prepare_only");
-    assert.equal(result.dry_run, true);
-    assert.equal(result.launched_reaper, false);
-    assert.equal(result.spawned_process_now, false);
-    assert.equal(result.agent_capability.can_launch_reaper_with_session_env, true);
-    assert.equal(result.agent_capability.can_launch_specific_project_with_session_env, true);
-    assert.equal(result.agent_capability.must_not_close_reaper_without_explicit_authorization, true);
-    assert.equal(result.agent_capability.one_command_with_auto_bridge, "npm run start:openreaper -- --install-startup-hook --launch");
-    assert.equal(result.mcp_connection_requirement.user_reminder, ALPHA3_D1_MCP_STARTUP_REQUIREMENT);
-    assert.equal(result.mcp_connection_requirement.ordinary_reaper_launch_supported, false);
-    assert.equal(result.startup_dialog_policy.user_may_need_to_dismiss_dialog, true);
-    assert.match(result.startup_dialog_policy.user_reminder, /version, recovery, plugin/);
-    assert.equal(result.safety.explicit_launch_required, true);
-    assert.equal(result.safety.dry_run_default, true);
-    assert.equal(result.safety.safe_write_called, false);
-    assert.equal(result.safety.project_mutation, false);
-    assert.equal(result.safety.closes_reaper, false);
-    assert.equal(result.safety.close_reaper_requires_explicit_user_authorization, true);
-    assert.equal(result.safety.bridge_script_auto_run, false);
-    assert.equal(result.safety.bridge_script_auto_run_candidate, false);
-    assert.equal(result.safety.one_click_live_accepted, true);
-    assert.equal(result.startup_hook.status, "not_requested");
-    assert.equal(result.target_project.requested, true);
-    assert.equal(result.target_project.path, projectPath);
-    assert.equal(result.target_project.launch_argument_used, false);
-    assert.equal(existsSync(result.paths.env_file_path), true);
-    assert.equal(existsSync(result.paths.launcher_command_path), true);
-
-    const launcher = readFileSync(result.paths.launcher_command_path, "utf8");
-    assert.match(launcher, /source/);
-    assert.match(launcher, /exec/);
-    assert.match(launcher, /test-project\.RPP/);
-    assert.match(launcher, /OpenReaper MCP can connect only/);
-  });
-
-  it("installs a conditional startup hook with backup without launching REAPER", () => {
-    const root = mkdtempSync(join(tmpdir(), "openreaper-alpha3-start-hook-"));
-    const hookPath = join(root, "__startup.lua");
-    writeExistingStartupHook(hookPath);
-    const output = execFileSync(
-      process.execPath,
-      [
-        "scripts/start-openreaper-alpha3.mjs",
-        "--run-id=test-start-openreaper-hook",
-        `--run-root=${root}`,
-        "--dry-run",
-        "--install-startup-hook",
-        `--startup-hook-path=${hookPath}`,
-        "--reaper-binary=/tmp/not-used-reaper",
-      ],
-      {
-        cwd: new URL("../..", import.meta.url),
-        encoding: "utf8",
-      },
-    ).trim();
-    const result = JSON.parse(output);
-
-    assert.equal(result.ok, true);
-    assert.equal(result.launched_reaper, false);
-    assert.equal(result.startup_hook.status, "appended_with_backup");
-    assert.equal(result.startup_hook.installed, true);
-    assert.equal(result.startup_hook.conditional_on_openreaper_env, true);
-    assert.equal(existsSync(result.startup_hook.backup_path), true);
-    assert.equal(result.safety.conditional_startup_hook_installed, true);
-    assert.equal(result.safety.bridge_script_auto_run_candidate, true);
-    assert.equal(result.safety.bridge_script_auto_run, false);
-
-    const hook = readFileSync(hookPath, "utf8");
-    assert.match(hook, /existing startup/);
-    assert.match(hook, /OpenReaper Alpha3 MCP startup hook/);
-    assert.match(hook, /OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH/);
-    assert.match(hook, /pcall\(dofile, bridge_script\)/);
-  });
-
   it("exposes D1 startup assistant guidance through the existing list_templates product surface", () => {
     const runtime = createCallTemplateRuntime({
       live: {
@@ -668,18 +572,8 @@ describe("Alpha3 D1 startup and connection health", () => {
     assert.equal(expanded.startup_wrapper_snapshot.status, "reconnect_existing");
     assert.equal(expanded.startup_wrapper_snapshot.evidence_status, "live_evidence_accepted");
     assert.equal(expanded.startup_wrapper_snapshot.agent_user_reminder, ALPHA3_D1_MCP_STARTUP_REQUIREMENT);
-    assert.equal(expanded.startup_wrapper_snapshot.one_command_helper, "npm run start:openreaper -- --install-startup-hook --launch");
+    assert.equal(expanded.startup_wrapper_snapshot.one_command_helper, "~/.openreaper/current/bin/openreaper-start");
     assert.equal(expanded.startup_wrapper_snapshot.safety.opens_reaper_now, false);
     assert.equal(expanded.startup_wrapper_snapshot.safety.spawns_process_now, false);
   });
 });
-
-function writeExistingStartupHook(hookPath) {
-  const script = [
-    "-- existing startup",
-    "reaper.ShowConsoleMsg(\"existing startup\\n\")",
-    "",
-  ].join("\n");
-  mkdirSync(dirname(hookPath), { recursive: true });
-  writeFileSync(hookPath, script);
-}

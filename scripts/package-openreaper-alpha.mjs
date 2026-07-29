@@ -181,6 +181,7 @@ async function buildPackage() {
         "bin/openreaper-mcp",
         ...(withVital ? ["bin/vital-agent-mcp"] : []),
         "bin/openreaper-start",
+        "bin/openreaper-start-mcp-bridge.lua",
         "bin/openreaper-doctor",
       ],
       dependency_source: "package_root_npm_install",
@@ -319,9 +320,11 @@ async function copyInstallerTemplates() {
   await cp(path.join(templateRoot, "uninstall-openreaper.mjs"), path.join(packageRoot, "installer", "uninstall-openreaper.mjs"));
   await cp(path.join(templateRoot, "openreaper-mcp.sh"), path.join(packageRoot, "bin", "openreaper-mcp"));
   await cp(path.join(templateRoot, "openreaper-start.sh"), path.join(packageRoot, "bin", "openreaper-start"));
+  await cp(path.join(templateRoot, "openreaper-start-mcp-bridge.lua"), path.join(packageRoot, "bin", "openreaper-start-mcp-bridge.lua"));
   await cp(path.join(templateRoot, "openreaper-doctor.sh"), path.join(packageRoot, "bin", "openreaper-doctor"));
   await chmod(path.join(packageRoot, "bin", "openreaper-mcp"), 0o755);
   await chmod(path.join(packageRoot, "bin", "openreaper-start"), 0o755);
+  await chmod(path.join(packageRoot, "bin", "openreaper-start-mcp-bridge.lua"), 0o444);
   await chmod(path.join(packageRoot, "bin", "openreaper-doctor"), 0o755);
 }
 
@@ -340,10 +343,6 @@ async function copyOpenReaperKernel() {
   await cp(path.join(repoRoot, "reaper"), path.join(target, "reaper"), {
     recursive: true,
     filter: packageFilter,
-  });
-  await cp(path.join(repoRoot, "scripts", "start-openreaper-alpha3.mjs"), path.join(target, "scripts", "start-openreaper-alpha3.mjs")).catch(async () => {
-    await mkdir(path.join(target, "scripts"), { recursive: true });
-    await cp(path.join(repoRoot, "scripts", "start-openreaper-alpha3.mjs"), path.join(target, "scripts", "start-openreaper-alpha3.mjs"));
   });
   await copyAgentStartHereDocument({
     sourcePath: path.join(repoRoot, "docs", "AGENT_START_HERE.md"),
@@ -489,8 +488,9 @@ that session's own renders child unless --render-root is also supplied. New
 session and render roots must be absolute writable directories.
 
 Autonomous Bridge startup:
-The installed conditional startup hook starts the Bridge. openreaper-start
-returns ready only after a matching heartbeat and this bounded public probe pass:
+openreaper-start passes its fixed trusted package-local ReaScript after the
+project and extra arguments. It returns ready only after a matching heartbeat
+and this bounded public probe pass:
   call_template(template.transport.read_state)
 The REAPER action "OpenReaper: Start MCP bridge" remains a manual recovery fallback
 only when autonomous startup reports that blocker.
@@ -1469,7 +1469,7 @@ async function smokePackagedRuntimeDoctorReadiness() {
   await writeFile(actionScript, "-- package smoke bridge action fixture\n", "utf8");
   await writeFile(
     reaperKb,
-    'SCR 4 0 "OpenReaper/openreaper-start-mcp-bridge.lua" "Custom: OpenReaper: Start MCP bridge"\n',
+    'SCR 4 0 RS3688e0dddae0b698e3597ab51f24f47fa4500eba "Custom: OpenReaper: Start MCP bridge" "OpenReaper/openreaper-start-mcp-bridge.lua"\n',
     "utf8",
   );
 
@@ -2458,7 +2458,9 @@ function parseLeadingJsonObject(text) {
 
 async function smokePackagedOpenReaperStartHelper() {
   const startHelperPath = path.join(packageRoot, "bin", "openreaper-start");
+  const bridgeLauncherPath = path.join(packageRoot, "bin", "openreaper-start-mcp-bridge.lua");
   const source = await readFile(startHelperPath, "utf8");
+  const bridgeLauncherSource = await readFile(bridgeLauncherPath, "utf8");
   if (source.includes("OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR:-")) {
     throw new Error("openreaper-start must not inherit stale OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR by default");
   }
@@ -2486,6 +2488,9 @@ async function smokePackagedOpenReaperStartHelper() {
     "launch_reaper()",
     'reaper_args=("-newinst" "-nosplash")',
     'reaper_args+=("${PROJECT_PATH}")',
+    'reaper_args+=("${ARGS[@]}")',
+    'reaper_args+=("${BRIDGE_LAUNCHER_SCRIPT}")',
+    'BRIDGE_LAUNCHER_SCRIPT="${INSTALL_ROOT}/bin/openreaper-start-mcp-bridge.lua"',
     'USE_LAUNCHSERVICES=true',
     "REAPER_APP",
     "/usr/bin/mdfind",
@@ -2549,16 +2554,22 @@ async function smokePackagedOpenReaperStartHelper() {
   if (source.includes('exec "${REAPER_BIN}"')) {
     throw new Error("openreaper-start must not exec into REAPER; agent shell lifetime must not own the REAPER process.");
   }
-  if (source.includes("LAUNCHER_SCRIPT=") || source.includes('reaper_args+=("${LAUNCHER_SCRIPT}")')) {
-    throw new Error("openreaper-start must not pass a generated bridge launcher script to REAPER.");
+  const projectArgIndex = source.indexOf('reaper_args+=("${PROJECT_PATH}")');
+  const extraArgsIndex = source.indexOf('reaper_args+=("${ARGS[@]}")');
+  const trustedLauncherIndex = source.indexOf('reaper_args+=("${BRIDGE_LAUNCHER_SCRIPT}")');
+  if (!(projectArgIndex >= 0 && projectArgIndex < extraArgsIndex && extraArgsIndex < trustedLauncherIndex)) {
+    throw new Error(`openreaper-start must append project and extra arguments before its trusted package launcher: ${JSON.stringify({ projectArgIndex, extraArgsIndex, trustedLauncherIndex })}`);
   }
-  if (source.includes("pcall(dofile, bridge)")) {
-    throw new Error("openreaper-start must not rely on command-line ReaScript to keep the bridge alive.");
+  if (!bridgeLauncherSource.includes('write_startup_status("hook_seen")') || !bridgeLauncherSource.includes("pcall(dofile, bridge)")) {
+    throw new Error("trusted package Bridge launcher must publish startup state and load the environment-selected Bridge through pcall.");
+  }
+  if (!bridgeLauncherSource.includes("reaper.MB")) {
+    throw new Error("trusted package Bridge launcher must report a Bridge load failure inside REAPER.");
   }
   if (source.includes("--no-dialog-guard") || source.includes("dialog guard")) {
     throw new Error("openreaper-start must use the narrow startup dialog assist wording, not the old dialog guard route.");
   }
-  if (source.includes('"${PROJECT_PATH}" "${BRIDGE_SCRIPT}"') || source.includes('"${BRIDGE_SCRIPT}" "${ARGS[@]}"')) {
+  if (source.includes('reaper_args+=("${BRIDGE_SCRIPT}")') || source.includes('"${PROJECT_PATH}" "${BRIDGE_SCRIPT}"') || source.includes('"${BRIDGE_SCRIPT}" "${ARGS[@]}"')) {
     throw new Error("openreaper-start must not rely on passing the bridge script directly to REAPER.");
   }
   if (source.includes('wt contains "License"') || source.includes('wt contains "license"')) {
@@ -2639,7 +2650,8 @@ async function smokePackagedOpenReaperStartHelper() {
     startup_dialog_assist: "first_use_once_always_manual_exact_safe_allowlist",
     connection_probe: "call_template(template.transport.read_state)",
     user_fallback: "Actions search Run",
-    command_line_reascript_bridge: false,
+    command_line_reascript_bridge: true,
+    trusted_package_launcher: "bin/openreaper-start-mcp-bridge.lua",
     detached_from_agent_shell: true,
     waits_for_reaper_process: true,
     pid_file: "package_root/session/reaper.pid",
@@ -2657,6 +2669,7 @@ async function smokePackagedStartRenderPropagation(startHelperPath) {
     await mkdir(path.dirname(installedStart), { recursive: true });
     await mkdir(path.join(installRoot, "session"), { recursive: true });
     await cp(startHelperPath, installedStart);
+    await cp(path.join(packageRoot, "bin", "openreaper-start-mcp-bridge.lua"), path.join(installRoot, "bin", "openreaper-start-mcp-bridge.lua"));
     await chmod(installedStart, 0o755);
     const persistedRoot = path.join(fixtureRoot, "persisted 'quoted' renders");
     await mkdir(persistedRoot, { recursive: true });
@@ -2980,6 +2993,7 @@ async function smokeFakeLaunchServicesRenderPropagation({ source, fixtureRoot, s
       .replace('OPEN_BIN="/usr/bin/open"', `OPEN_BIN=${shellQuote(openPath)}`),
     "utf8",
   );
+  await cp(path.join(packageRoot, "bin", "openreaper-start-mcp-bridge.lua"), path.join(installRoot, "bin", "openreaper-start-mcp-bridge.lua"));
   await writeFile(fakeDoctor, "#!/bin/zsh\nexit 0\n", "utf8");
   await writeFile(unamePath, "#!/bin/zsh\necho Darwin\n", "utf8");
   await writeFile(launchctlPath, `#!/bin/zsh
@@ -3210,20 +3224,19 @@ async function smokePackagedInstallerUpgradeMigration() {
     "removeLegacyOpenReaperTomlSections",
     "isLegacyOpenReaperTomlSection",
     "installBridgeAction",
-    "bridgeActionScriptSource",
     "upsertBridgeActionInReaperKb",
     "BRIDGE_ACTION_TITLE",
     "BRIDGE_ACTION_COMMAND_ID",
     "OpenReaper: Start MCP bridge",
     "openreaper-start-mcp-bridge.lua",
-    "reaper.MB",
-    "LEGACY_STARTUP_BLOCKS",
+    "LEGACY_STARTUP_HOOKS",
+    "__startup.eel",
+    "trusted_package_command_line_reascript",
     "prior OpenReaper alpha startup hook",
     "legacy OpenReaper Alpha3 startup hook",
     "legacy Streetlight startup hook",
     "removeMarkedBlock",
-    "installConditionalStartupHook",
-    "conditionalStartupHookSource",
+    "cleanupLegacyStartupHooks",
     "inspectOptionalStartupCompatibility",
     "readIniValue",
     "OpenReaper does not require or take over SWS startup actions",
@@ -3366,7 +3379,8 @@ args = ["/tmp/other.js"]
     removes_legacy_mcp_config: true,
     removes_legacy_openreaper_alias_to_streetlight_kernel: true,
     removes_legacy_startup_hooks: true,
-    installs_conditional_startup_hook: true,
+    installs_conditional_startup_hook: false,
+    installs_trusted_package_launcher: true,
     installs_reaper_bridge_action: true,
     bridge_action_name: "OpenReaper: Start MCP bridge",
     bridge_action_manual_recovery_only: true,
@@ -3392,6 +3406,7 @@ async function smokePackagedInstallerManagedRenderRoot(installerPath) {
     await cp(installerPath, fixtureInstaller);
     await cp(path.join(repoRoot, "scripts", "openreaper-alpha-package", "uninstall-openreaper.mjs"), fixtureUninstaller);
     await cp(path.join(repoRoot, "scripts", "openreaper-alpha-package", "openreaper-start.sh"), path.join(fixturePackage, "bin", "openreaper-start"));
+    await cp(path.join(repoRoot, "scripts", "openreaper-alpha-package", "openreaper-start-mcp-bridge.lua"), path.join(fixturePackage, "bin", "openreaper-start-mcp-bridge.lua"));
     const mcpStub = `#!/bin/zsh\nprint -r -- "$OPENREAPER_LIVE_SMOKE_RENDER_ROOT" >> ${shellQuote(capturePath)}\necho "stdio server ready" >&2\n`;
     await writeFile(path.join(fixturePackage, "bin", "openreaper-mcp"), mcpStub, "utf8");
     for (const name of ["vital-agent-mcp", "openreaper-doctor"]) {
@@ -3962,8 +3977,8 @@ function assertAgentStartupGuidance(guidance, { label, expectedPackageRoot }) {
   if (guidance.bridge_action?.sws_required !== false) {
     throw new Error(`${label} must not require SWS for bridge startup`);
   }
-  if (guidance.bridge_action?.command_line_reascript_bridge !== false) {
-    throw new Error(`${label} must not claim command-line ReaScript can own bridge startup`);
+  if (guidance.bridge_action?.command_line_reascript_bridge !== true) {
+    throw new Error(`${label} must declare the fixed trusted command-line ReaScript Bridge launcher`);
   }
   if (guidance.bridge_action?.verification_probe !== "call_template(template.transport.read_state)") {
     throw new Error(`${label} must name the bridge connection verification probe`);

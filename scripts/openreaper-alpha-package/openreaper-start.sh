@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="${0:A:h}"
 INSTALL_ROOT="${SCRIPT_DIR:h}"
 BRIDGE_SCRIPT="${INSTALL_ROOT}/vendor/openreaper-kernel/reaper/bridge/openreaper-live-bridge.lua"
+BRIDGE_LAUNCHER_SCRIPT="${INSTALL_ROOT}/bin/openreaper-start-mcp-bridge.lua"
 REAPER_BIN="/Applications/REAPER.app/Contents/MacOS/REAPER"
 REAPER_APP=""
 DIRECT_BINARY=false
@@ -232,9 +233,9 @@ If REAPER is installed somewhere other than /Applications, the agent can pass
 --reaper-app or --reaper-binary. On macOS the helper also tries Spotlight app
 discovery before asking for a path.
 
-The installed conditional startup hook starts the Bridge automatically. The
-REAPER action named "OpenReaper: Start MCP bridge" remains a manual recovery
-fallback if autonomous startup is blocked.
+The helper passes its fixed trusted package-local launcher to REAPER after the
+project and every extra argument. The REAPER action named "OpenReaper: Start MCP
+bridge" remains a manual recovery fallback if autonomous startup is blocked.
 
 If the selected session already has a verified live REAPER, a normal start
 refuses to launch a duplicate instance. Use --recover-existing to reuse that
@@ -263,6 +264,23 @@ HELP
     *)
       ARGS+=("$1")
       shift
+      ;;
+  esac
+done
+
+if [[ ! -f "${BRIDGE_LAUNCHER_SCRIPT}" || -L "${BRIDGE_LAUNCHER_SCRIPT}" ]]; then
+  echo "[OpenReaper] trusted Bridge launcher must be a regular non-symlink package file: ${BRIDGE_LAUNCHER_SCRIPT}" >&2
+  exit 2
+fi
+if [[ ! -r "${BRIDGE_LAUNCHER_SCRIPT}" ]]; then
+  echo "[OpenReaper] trusted Bridge launcher is not readable: ${BRIDGE_LAUNCHER_SCRIPT}" >&2
+  exit 2
+fi
+for reaper_arg in "${ARGS[@]}"; do
+  case "${reaper_arg:l}" in
+    *.lua|*.eel|*.py)
+      echo "[OpenReaper] refusing an untrusted command-line ReaScript argument: ${reaper_arg}" >&2
+      exit 2
       ;;
   esac
 done
@@ -901,6 +919,9 @@ launch_reaper() {
     reaper_args+=("${PROJECT_PATH}")
   fi
   reaper_args+=("${ARGS[@]}")
+  # REAPER stops a deferred command-line ReaScript when it subsequently loads
+  # a project. Keep the fixed package launcher last so its Bridge loop survives.
+  reaper_args+=("${BRIDGE_LAUNCHER_SCRIPT}")
 
   local reaper_pid
   if [[ "${USE_LAUNCHSERVICES}" == "true" ]]; then
@@ -1459,7 +1480,7 @@ prepare_startup_status_for_new_launch() {
 wait_for_startup_hook() {
   local reaper_pid="$1"
   local max_ticks=$(( START_WAIT_SECONDS * 4 ))
-  local tick dialog_result
+  local tick dialog_result pending_dialog_blocker=""
   for (( tick = 1; tick <= max_ticks; tick++ )); do
     if ! kill -0 "${reaper_pid}" 2>/dev/null; then
       echo "[OpenReaper] REAPER exited before its startup hook published a stage. pid=${reaper_pid}" >&2
@@ -1471,19 +1492,34 @@ wait_for_startup_hook() {
     if startup_status_stage_ready; then
       return 0
     fi
-    # A project-load dialog can prevent REAPER from reaching __startup.lua.
+    # A project-load dialog can prevent REAPER from reaching the package launcher.
     # Reuse the exact safe classifier while LaunchServices still carries the
     # session environment; unknown and decision-bearing dialogs stay blocked.
     dialog_result="$(run_startup_dialog_assist)"
     record_dialog_result "${dialog_result}"
+    # The hook can publish while a bounded AX query is in flight. Its stage is
+    # newer startup truth than the dialog snapshot returned by that query.
+    if startup_status_stage_ready; then
+      return 0
+    fi
     if ! startup_dialog_result_is_safe "${dialog_result}"; then
       if startup_dialog_result_requires_manual_clearance "${dialog_result}"; then
+        sleep 0.25
+        continue
+      fi
+      # Never click an unknown or decision-bearing dialog. Require one stable
+      # repeat before failing so a transient window or an explicit external
+      # user dismissal cannot race the startup hook by a few milliseconds.
+      if startup_dialog_result_allows_transient_observation "${dialog_result}" \
+          && [[ "${pending_dialog_blocker}" != "${dialog_result}" ]]; then
+        pending_dialog_blocker="${dialog_result}"
         sleep 0.25
         continue
       fi
       echo "[OpenReaper] startup-dialog-blocker=${dialog_result}" >&2
       return 2
     fi
+    pending_dialog_blocker=""
     if [[ "${dialog_result}" != "no_safe_dialog" ]]; then
       sleep 0.25
       continue
@@ -1768,9 +1804,18 @@ startup_dialog_result_requires_manual_clearance() {
   return 1
 }
 
+startup_dialog_result_allows_transient_observation() {
+  case "$1" in
+    blocked_unknown_dialog:*|blocked_user_decision:*|project_settings_seen_but_not_notes)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
 wait_for_startup_readiness() {
   local max_ticks=$(( START_WAIT_SECONDS * 4 ))
-  local tick dialog_result
+  local tick dialog_result pending_dialog_blocker=""
   if (( max_ticks < 1 )); then
     echo "[OpenReaper] OPENREAPER_START_WAIT_SECONDS must be at least 1 for verified startup." >&2
     return 1
@@ -1786,14 +1831,28 @@ wait_for_startup_readiness() {
     fi
     dialog_result="$(run_startup_dialog_assist)"
     record_dialog_result "${dialog_result}"
+    # Accessibility can finish after the Bridge became healthy. Re-read live
+    # truth before acting on the older dialog snapshot.
+    if bridge_heartbeat_ready; then
+      verify_public_bridge_read || return 1
+      echo "[OpenReaper] bridge-heartbeat=ready owner=${BRIDGE_OWNER} generation=${BRIDGE_GENERATION}"
+      return 0
+    fi
     if ! startup_dialog_result_is_safe "${dialog_result}"; then
       if startup_dialog_result_requires_manual_clearance "${dialog_result}"; then
+        sleep 0.25
+        continue
+      fi
+      if startup_dialog_result_allows_transient_observation "${dialog_result}" \
+          && [[ "${pending_dialog_blocker}" != "${dialog_result}" ]]; then
+        pending_dialog_blocker="${dialog_result}"
         sleep 0.25
         continue
       fi
       echo "[OpenReaper] startup-dialog-blocker=${dialog_result}" >&2
       return 2
     fi
+    pending_dialog_blocker=""
     if [[ "${dialog_result}" != "no_safe_dialog" ]]; then
       sleep 0.25
       continue

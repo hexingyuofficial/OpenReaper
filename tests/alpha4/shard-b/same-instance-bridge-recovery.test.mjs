@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
@@ -10,6 +10,7 @@ import { it } from "node:test";
 const execFileAsync = promisify(execFile);
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const START_SOURCE = path.join(REPO_ROOT, "scripts/openreaper-alpha-package/openreaper-start.sh");
+const BRIDGE_LAUNCHER_SOURCE = path.join(REPO_ROOT, "scripts/openreaper-alpha-package/openreaper-start-mcp-bridge.lua");
 
 it("reuses a verified healthy PID, isolates the Doctor from caller cwd, and truthfully blocks a stale Bridge", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "openreaper-alpha4-b-recovery-"));
@@ -40,6 +41,7 @@ it("reuses a verified healthy PID, isolates the Doctor from caller cwd, and trut
         "run_startup_dialog_assist() {\n  echo \"no_safe_dialog\"\n}\n\nstartup_dialog_result_is_safe() {",
       ),
       "utf8");
+    await copyFile(BRIDGE_LAUNCHER_SOURCE, path.join(packageRoot, "bin", "openreaper-start-mcp-bridge.lua"));
     await chmod(startPath, 0o755);
     await writeFile(doctorPath, `#!/bin/zsh
 expected_root=${JSON.stringify(packageRoot)}

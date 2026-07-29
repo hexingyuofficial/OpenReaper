@@ -88,15 +88,16 @@ REAPER Action、任意 shell、raw SQL 或隐藏 recipe executor。
 对于可安装的 macOS alpha 包，代理应该：
 
 1. 运行 `~/.openreaper/current/bin/openreaper-start`。
-2. 等 REAPER 保持运行，并读取命令输出的提示。
-3. 在可能时运行 REAPER Action：`OpenReaper: Start MCP bridge`。
-4. 只有代理无法运行该 Action 时，才请你做一次很小的 UI 协助。
-5. 重连名为 `openreaper` 的 MCP server。
-6. 在声称 bridge 已连接前，先运行一次有界 live probe。
+2. 等固定的包内 launcher 自动启动 Bridge，并读取命令输出的提示。
+3. 仅当启动助手明确报告 manual recovery fallback 时，才运行 REAPER
+   Action：`OpenReaper: Start MCP bridge`。
+4. 重连名为 `openreaper` 的 MCP server。
+5. 在声称 bridge 已连接前，先运行一次有界 live probe。
 
-OpenReaper 只可以自动关闭已知的 Project Settings / Notes 中
-“show notes on project load”窗口。license、recovery、plugin、version 和未知窗口
-仍然是用户选择阻塞。此启动路径不要求 SWS。
+首次启动必须选择 `once`、`always` 或 `manual`。只有获得许可后，OpenReaper
+才可以自动关闭精确匹配的 Project Settings / Notes、`Ignore all missing files`
+以及 media-items-offline warning。license、recovery、plugin、version、含决策的
+窗口和未知窗口始终 fail-closed。此启动路径不要求 SWS。
 
 ## Project Index 与 live 真相
 

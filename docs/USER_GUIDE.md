@@ -118,8 +118,9 @@ can report the Bridge ready.
 Consent covers only Project Settings / Notes, `Ignore all missing files`, and
 the exact media-items-offline warning. License, recovery, plugin, version,
 ambiguous, decision-bearing, and unknown windows always fail closed, including
-after an `always` choice. The installed startup hook starts the Bridge automatically;
-the `OpenReaper: Start MCP bridge` Action is recovery-only. SWS is not required.
+after an `always` choice. The fixed package-local launcher starts the Bridge
+automatically; the `OpenReaper: Start MCP bridge` Action is recovery-only. SWS
+is not required.
 
 ## Project Index And Live Truth
 
