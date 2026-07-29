@@ -1621,8 +1621,17 @@ export function createCallTemplateRuntime(options = {}) {
         budget: safeRuntimeBudget(request?.budget),
         request,
       });
-      retainEvidence(retainedEvidence, evidenceFromRuntimeError(envelope, live.evidence), evidenceLimit);
-      return envelope;
+      const terminalEnvelope = typeof id === "string"
+        && id.startsWith("macro.")
+        && (deadline?.isExpired?.() === true || deadline?.signal?.aborted === true)
+        ? lateMacroExecutionEnvelope(envelope, deadline)
+        : envelope;
+      retainEvidence(
+        retainedEvidence,
+        evidenceFromRuntimeError(terminalEnvelope, live.evidence),
+        evidenceLimit,
+      );
+      return terminalEnvelope;
     } finally {
       if (ownsDeadline) deadline?.cleanup();
     }
@@ -1693,7 +1702,7 @@ function lateMacroExecutionEnvelope(envelope, deadline = null) {
     message: "Macro returned after cancellation or deadline expiry; inspect preserved changes before retrying.",
     recoverable: false,
   };
-  return {
+  const terminal = {
     ...envelope,
     ok: false,
     execution: {
@@ -1701,7 +1710,7 @@ function lateMacroExecutionEnvelope(envelope, deadline = null) {
       status: "failed",
       completed_at: new Date().toISOString(),
     },
-    blockers: [...blockers, blocker].slice(0, 32),
+    blockers: blockers.length > 0 ? blockers.slice(0, 32) : [blocker],
     error: {
       code: "CALL_TEMPLATE_EXECUTION_FAILED",
       message: blocker.message,
@@ -1713,6 +1722,52 @@ function lateMacroExecutionEnvelope(envelope, deadline = null) {
       action: "Inspect preserved Macro evidence and project state before retrying.",
     },
   };
+  return fitLateMacroExecutionBudget(terminal, details);
+}
+
+function fitLateMacroExecutionBudget(envelope, truthDetails) {
+  if (!isPlainObject(envelope?.budget) || !Number.isInteger(envelope.budget.max_bytes)) {
+    return envelope;
+  }
+  const candidate = cloneJson(envelope);
+  const measure = () => {
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      candidate.budget.actual_bytes = encodedBytes(candidate);
+    }
+    return candidate.budget.actual_bytes;
+  };
+  if (measure() <= candidate.budget.max_bytes) return deepFreeze(candidate);
+
+  // Deadline truth is terminal and must survive the Macro's public byte
+  // ceiling. Stage detail remains in retained evidence; the public response
+  // keeps result/change truth and the original typed blocker.
+  candidate.execution = {
+    ...candidate.execution,
+    stage_count: 0,
+    stages: [],
+  };
+  if (measure() <= candidate.budget.max_bytes) return deepFreeze(candidate);
+
+  const data = isPlainObject(candidate.result?.data) ? candidate.result.data : {};
+  candidate.result = {
+    ...candidate.result,
+    summary: boundedString(candidate.result?.summary ?? "Macro deadline expired.", 64),
+    artifact_refs: [],
+    data: {
+      ...(typeof data.operation === "string" ? { operation: boundedString(data.operation, 32) } : {}),
+      ...(typeof data.partial_state === "string"
+        ? { partial_state: boundedString(data.partial_state, 64) }
+        : {}),
+      mutation_truth: truthDetails.mutation_truth,
+      zero_write: truthDetails.zero_write,
+    },
+  };
+  candidate.recovery = {
+    partial_changes_possible: truthDetails.zero_write !== true,
+    action: "Inspect preserved Macro evidence and project state before retrying.",
+  };
+  measure();
+  return deepFreeze(candidate);
 }
 
 async function observeProjectIndexExecution({

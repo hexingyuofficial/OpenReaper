@@ -206,6 +206,79 @@ describe("Alpha4 execution deadline contract", () => {
     assert.equal(response.error.details.zero_write, true);
   });
 
+  it("preserves late project-file mutation truth within the Macro response budget", async () => {
+    const bridge = new FakeFoundationBridge({ owner: "owner-test", generation: 1 });
+    const executor = {
+      async dispatch(request) {
+        if (request.pack?.capability === "project.create_project_tab") {
+          await new Promise((resolve) => setTimeout(resolve, 250));
+        }
+        const response = structuredClone(bridge.dispatch(request));
+        if (request.operation?.name === "project.list_open_projects") {
+          response.result = {
+            ...response.result,
+            readback: {
+              projects: [{
+                project_ref: "project:tab:1",
+                active: true,
+                saved: false,
+                path_state: "unsaved_project",
+                name: "Fixture",
+                path: "",
+                path_truncated: false,
+                dirty: false,
+                raw_dirty_state: 0,
+                tab_index: 0,
+              }],
+              total_count: 1,
+              returned_count: 1,
+              cursor: 0,
+              next_cursor: null,
+              coverage_status: "complete",
+              truncated: false,
+            },
+          };
+        }
+        return response;
+      },
+    };
+    const runtime = createCallTemplateRuntime({
+      live: {
+        opted_in: true,
+        executor,
+        allowed_template_ids: CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS,
+      },
+    });
+    const response = await runtime.call_template({
+      id: "macro.project.file",
+      input: {
+        operation: "create_project_tab",
+        name: "Deadline fixture",
+        target_path: "/tmp/openreaper-project-file-deadline.RPP",
+        overwrite: true,
+        copy_active_project_settings: false,
+      },
+      context: {
+        session_id: "deadline-project-file",
+        expected_owner: "owner-test",
+        expected_generation: 1,
+        created_at: "2026-07-29T00:00:00.000Z",
+      },
+      deadline_ms: 100,
+    });
+
+    assert.equal(response.contract, "macro.execution.v1", JSON.stringify(response));
+    assert.equal(response.ok, false);
+    assert.equal(response.error.code, "CALL_TEMPLATE_EXECUTION_FAILED");
+    assert.equal(response.error.details.deadline_exceeded, true);
+    assert.equal(response.error.details.result_available_after_cancellation, false);
+    assert.equal(response.error.details.mutation_truth, "unknown");
+    assert.equal(response.error.details.zero_write, false);
+    assert.equal(response.blockers.length, 1);
+    assert.equal(response.budget.actual_bytes, Buffer.byteLength(JSON.stringify(response)));
+    assert.equal(response.budget.actual_bytes <= response.budget.max_bytes, true);
+  });
+
   it("fails closed when Project Index artifact post-processing returns after the user deadline", async () => {
     const fake = new FakeFoundationBridge({ owner: "artifact-deadline-owner", generation: 1 });
     let artifactObserved = 0;
