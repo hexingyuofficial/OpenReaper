@@ -19,6 +19,8 @@ test("installed MCP wrapper shares the start helper bridge identity by default",
     generation: "1",
     logical_session_key: `reaper-pid:${process.pid}`,
     bridge_script_path: path.join(run.installRoot, "vendor/openreaper-kernel/reaper/bridge/openreaper-live-bridge.lua"),
+    executable_recipe_root: path.join(path.dirname(run.installRoot), "data/executable-recipes"),
+    official_executable_recipe_root: path.join(run.installRoot, "session/executable-recipes.official"),
   });
 });
 
@@ -28,6 +30,8 @@ test("installed MCP wrapper preserves an explicit bounded bridge identity", asyn
     OPENREAPER_LIVE_BRIDGE_GENERATION: "7",
     OPENREAPER_PROJECT_INDEX_LOGICAL_SESSION_KEY: "alpha4-session",
     OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH: "/tmp/openreaper-explicit-bridge.lua",
+    OPENREAPER_EXECUTABLE_RECIPE_ROOT: "/tmp/openreaper-explicit-user-recipes",
+    OPENREAPER_OFFICIAL_EXECUTABLE_RECIPE_ROOT: "/tmp/openreaper-stale-official-recipes",
   });
   assert.equal(run.result.code, 0, run.result.stderr);
   assert.deepEqual(run.capture, {
@@ -35,6 +39,8 @@ test("installed MCP wrapper preserves an explicit bounded bridge identity", asyn
     generation: "7",
     logical_session_key: "alpha4-session",
     bridge_script_path: "/tmp/openreaper-explicit-bridge.lua",
+    executable_recipe_root: "/tmp/openreaper-explicit-user-recipes",
+    official_executable_recipe_root: path.join(run.installRoot, "session/executable-recipes.official"),
   });
 });
 
@@ -58,7 +64,7 @@ async function runWrapper(label, extraEnv) {
 if [[ "$1" == "--input-type=module" ]]; then
   exec ${shellQuote(process.execPath)} "$@"
 fi
-${shellQuote(process.execPath)} -e 'const fs = require("node:fs"); fs.writeFileSync(process.argv[1], JSON.stringify({ owner: process.env.OPENREAPER_LIVE_BRIDGE_OWNER, generation: process.env.OPENREAPER_LIVE_BRIDGE_GENERATION, logical_session_key: process.env.OPENREAPER_PROJECT_INDEX_LOGICAL_SESSION_KEY, bridge_script_path: process.env.OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH }))' ${shellQuote(capturePath)}
+${shellQuote(process.execPath)} -e 'const fs = require("node:fs"); fs.writeFileSync(process.argv[1], JSON.stringify({ owner: process.env.OPENREAPER_LIVE_BRIDGE_OWNER, generation: process.env.OPENREAPER_LIVE_BRIDGE_GENERATION, logical_session_key: process.env.OPENREAPER_PROJECT_INDEX_LOGICAL_SESSION_KEY, bridge_script_path: process.env.OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH, executable_recipe_root: process.env.OPENREAPER_EXECUTABLE_RECIPE_ROOT, official_executable_recipe_root: process.env.OPENREAPER_OFFICIAL_EXECUTABLE_RECIPE_ROOT }))' ${shellQuote(capturePath)}
 `, "utf8");
   await chmod(fakeNode, 0o755);
   const env = { ...process.env, PATH: `${fakeBin}:${process.env.PATH ?? ""}`, ...extraEnv };

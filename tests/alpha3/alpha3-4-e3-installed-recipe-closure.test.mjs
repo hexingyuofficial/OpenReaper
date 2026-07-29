@@ -96,12 +96,17 @@ describe("Alpha3.4-E3 installed recipe closure", () => {
     const captured = JSON.parse(await readFile(capturePath, "utf8"));
     for (const key of keys.filter((key) => ![
       "OPENREAPER_LIVE_SMOKE_RENDER_ROOT",
+      "OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH",
       "OPENREAPER_LIVE_BRIDGE_OWNER",
       "OPENREAPER_LIVE_BRIDGE_GENERATION",
       "OPENREAPER_CURRENT_PROJECT_REF",
       "OPENREAPER_EXECUTABLE_RECIPE_RISK_GRANTS_JSON",
     ].includes(key))) assert.equal(captured[key], "<unset>", key);
     assert.equal(captured.OPENREAPER_LIVE_SMOKE_RENDER_ROOT, await realpath(fixture.renderRoot));
+    assert.equal(
+      captured.OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH,
+      path.join(await realpath(fixture.currentRoot), "vendor/openreaper-kernel/reaper/bridge/openreaper-live-bridge.lua"),
+    );
     assert.equal(captured.OPENREAPER_LIVE_BRIDGE_OWNER, "openreaper-alpha");
     assert.equal(captured.OPENREAPER_LIVE_BRIDGE_GENERATION, "1");
     assert.equal(captured.OPENREAPER_CURRENT_PROJECT_REF, "project:explicit");
@@ -118,6 +123,42 @@ describe("Alpha3.4-E3 installed recipe closure", () => {
     const result = await run(fixture.wrapper, [], wrapperEnv(fixture));
     assert.equal(result.code, 2);
     assert.match(result.stderr, /executable recipe root must be an absolute non-symlink directory/);
+  });
+
+  it("rejects the filesystem root as the executable Recipe store", async () => {
+    const fixture = await makeFixture();
+    const result = await run(fixture.wrapper, [], {
+      ...wrapperEnv(fixture),
+      OPENREAPER_EXECUTABLE_RECIPE_ROOT: "/./",
+    });
+    assert.equal(result.code, 2);
+    assert.match(result.stderr, /executable recipe root must be an absolute non-symlink directory/);
+  });
+
+  it("rejects a symlinked install-private official Recipe root", async () => {
+    const fixture = await makeFixture();
+    const target = path.join(fixture.root, "outside-official");
+    const officialRoot = path.join(fixture.currentRoot, "session", "executable-recipes.official");
+    await mkdir(target, { recursive: true });
+    await symlink(target, officialRoot);
+
+    const result = await run(fixture.wrapper, [], wrapperEnv(fixture));
+    assert.equal(result.code, 2);
+    assert.match(result.stderr, /official executable recipe root must be a non-symlink directory/);
+  });
+
+  it("rejects a symlinked install-private official Recipe parent", async () => {
+    const fixture = await makeFixture();
+    const sessionRoot = path.join(fixture.currentRoot, "session");
+    const target = path.join(fixture.root, "outside-session");
+    await rm(sessionRoot, { recursive: true });
+    await mkdir(target, { recursive: true });
+    await symlink(target, sessionRoot);
+
+    const result = await run(fixture.wrapper, [], wrapperEnv(fixture));
+    assert.equal(result.code, 2);
+    assert.match(result.stderr, /official executable recipe parent must be a non-symlink directory/);
+    assert.deepEqual(await readdir(target), []);
   });
 
   it("uses the actual installed wrapper for the six-tool lifecycle and preserves exact bytes across rename-first upgrade", async () => {

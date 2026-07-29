@@ -1166,10 +1166,27 @@ describe("Alpha3.2-B2 managed render root", () => {
     assert.ok(stageRecheck > hookDialogCheck, "startup-hook wait must recheck the stage after Accessibility returns");
     assert.ok(hookBlocker > stageRecheck, "a stale dialog result must not override a stage published during the scan");
     assert.match(source, /blocked_unknown_dialog:\*\|blocked_user_decision:\*\|project_settings_seen_but_not_notes/u);
+    const transientStart = source.indexOf("startup_dialog_result_allows_transient_observation() {");
+    const transientEnd = source.indexOf("\n}\n\nstartup_dialog_result_is_probe_indeterminate()", transientStart);
+    assert.ok(
+      transientStart >= 0 && transientEnd > transientStart,
+      "transient startup-dialog classifier must remain inspectable",
+    );
     assert.doesNotMatch(
-      source.slice(source.indexOf("startup_dialog_result_allows_transient_observation()"), source.indexOf("wait_for_startup_readiness()")),
+      source.slice(transientStart, transientEnd),
       /blocked_dialog_inspection_timeout/u,
-      "an AX timeout must remain an immediate fail-closed blocker when no live stage or Bridge supersedes it",
+      "an AX timeout must never be classified as a transient decision-bearing dialog",
+    );
+    const indeterminateStart = source.indexOf("startup_dialog_result_is_probe_indeterminate() {");
+    const indeterminateEnd = source.indexOf("\n}\n\nwait_for_startup_readiness()", indeterminateStart);
+    assert.ok(
+      indeterminateStart >= 0 && indeterminateEnd > indeterminateStart,
+      "indeterminate startup-dialog classifier must remain inspectable",
+    );
+    assert.match(
+      source.slice(indeterminateStart, indeterminateEnd),
+      /blocked_dialog_classification:\*\|blocked_dialog_inspection_timeout:\*\|blocked_dialog_inspection_failed:\*/u,
+      "bounded AX probe failures must remain indeterminate until live startup truth succeeds or the startup deadline fails closed",
     );
   });
 
