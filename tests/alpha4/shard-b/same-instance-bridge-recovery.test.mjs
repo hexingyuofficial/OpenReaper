@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, copyFile, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
@@ -71,6 +71,7 @@ export async function inspectAlpha3_2B3ReaperProcess({ sessionRoot }) {
       refreshed_at_unix_s: Math.floor(Date.now() / 1000),
       sequence: 1,
     }), "utf8");
+    const pidRecordBeforeRecovery = await stat(pidFile);
 
     const startArgs = [
       "--reaper-binary", fakeReaper,
@@ -101,6 +102,9 @@ export async function inspectAlpha3_2B3ReaperProcess({ sessionRoot }) {
     assert.equal((await readFile(doctorCwdMarker, "utf8")).trim(), await realpath(packageRoot));
     await assert.rejects(readFile(launchMarker), { code: "ENOENT" });
     assert.equal((await readFile(pidFile, "utf8")).trim(), parentPid);
+    const pidRecordAfterRecovery = await stat(pidFile);
+    assert.equal(pidRecordAfterRecovery.mtimeMs, pidRecordBeforeRecovery.mtimeMs);
+    assert.equal(pidRecordAfterRecovery.ctimeMs, pidRecordBeforeRecovery.ctimeMs);
 
     await writeFile(path.join(transportRoot, "openreaper-bridge-liveness-v1.json"), JSON.stringify({
       contract: "openreaper.bridge_liveness.v1",

@@ -1884,7 +1884,9 @@ if existing_reaper_pid="$(verified_existing_reaper_pid)"; then
     exit 3
   fi
   echo "[OpenReaper] startup-mode=recover_existing"
-  echo "${existing_reaper_pid}" > "${PID_FILE}"
+  # Preserve the launch-time metadata used to bind this record to the exact
+  # REAPER process. Rewriting the same PID would make an old process look like
+  # it was just launched and invalidate the next identity check.
 else
   existing_reaper_status=$?
   if (( existing_reaper_status == 2 )); then
