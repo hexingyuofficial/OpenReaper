@@ -141,9 +141,29 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
 
       const source = readFileSync(startPath, "utf8");
       assert.doesNotMatch(source, /reaper_args\+=\("\$\{BRIDGE_SCRIPT\}"\)/u);
+      assert.match(source, /export OPENREAPER_EXPECTED_LAUNCHER_PATH="\$\{BRIDGE_LAUNCHER_SCRIPT\}"/u);
+      assert.match(source, /OPENREAPER_EXPECTED_LAUNCHER_PATH\) print -rn -- "\$\{BRIDGE_LAUNCHER_SCRIPT\}"/u);
+      assert.equal(source.match(/OPENREAPER_EXPECTED_LAUNCHER_PATH/gu)?.length >= 4, true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("lets only the expected command-line launcher enter the Bridge loop", () => {
+    const source = readFileSync(BRIDGE_LAUNCHER, "utf8");
+    const expectedIndex = source.indexOf('os.getenv("OPENREAPER_EXPECTED_LAUNCHER_PATH")');
+    const contextIndex = source.indexOf("reaper.get_action_context()", expectedIndex);
+    const mismatchIndex = source.indexOf("if current_launcher ~= expected_launcher then", contextIndex);
+    const statusIndex = source.indexOf('write_startup_status("hook_seen")');
+    const dofileIndex = source.indexOf("pcall(dofile, bridge)");
+
+    assert.equal(expectedIndex >= 0, true);
+    assert.equal(contextIndex > expectedIndex, true);
+    assert.equal(mismatchIndex > contextIndex, true);
+    assert.equal(mismatchIndex < statusIndex && statusIndex < dofileIndex, true);
+    assert.match(source, /if not reaper or type\(reaper\.get_action_context\) ~= "function" then\s+return\s+end/u);
+    assert.match(source, /if current_launcher ~= expected_launcher then\s+return\s+end/u);
+    assert.match(source, /if expected_launcher and expected_launcher ~= "" then/u);
   });
 
   it("keeps missing-media dialog automation consent-bound and exact", () => {
