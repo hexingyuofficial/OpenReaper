@@ -709,6 +709,77 @@ describe("Layer 4D.1 live bridge executor binding", () => {
     assert.equal(changedHandleClosed, true);
   });
 
+  it("reopens an atomically replaced heartbeat snapshot without accepting persistent link anomalies", async () => {
+    const now = new Date("2026-07-10T12:00:10.000Z");
+    const transport = await makeTransport();
+    const heartbeat = `${JSON.stringify({
+      contract: LIVE_BRIDGE_LIVENESS_CONTRACT,
+      active_owner: "owner-test",
+      active_generation: 3,
+      sequence: 2,
+      refreshed_at_unix_s: Math.floor(now.getTime() / 1_000),
+      interval_ms: 500,
+    })}\n`;
+    let openCount = 0;
+    let closeCount = 0;
+    const recovered = await probeLiveBridgeLiveness({
+      transportDir: transport.root,
+      expectedOwner: "owner-test",
+      expectedGeneration: 3,
+      now: () => now,
+      __openHeartbeatFileForTest: async () => {
+        openCount += 1;
+        if (openCount === 1) {
+          return {
+            stat: async () => fakeFileStat({
+              size: Buffer.byteLength(heartbeat),
+              mtimeMs: now.getTime(),
+              nlink: 0,
+            }),
+            read: async () => assert.fail("An unlinked heartbeat snapshot must be reopened before reading."),
+            close: async () => { closeCount += 1; },
+          };
+        }
+        let read = false;
+        const fileStat = fakeFileStat({
+          size: Buffer.byteLength(heartbeat),
+          mtimeMs: now.getTime(),
+        });
+        return {
+          stat: async () => fileStat,
+          read: async (buffer) => {
+            if (read) return { bytesRead: 0 };
+            read = true;
+            buffer.write(heartbeat, 0, "utf8");
+            return { bytesRead: Buffer.byteLength(heartbeat) };
+          },
+          close: async () => { closeCount += 1; },
+        };
+      },
+    });
+    assert.equal(recovered.status, LIVE_BRIDGE_LIVENESS_STATUS.READY);
+    assert.equal(openCount, 2);
+    assert.equal(closeCount, 2);
+
+    let persistentOpenCount = 0;
+    const persistent = await probeLiveBridgeLiveness({
+      transportDir: transport.root,
+      now: () => now,
+      __openHeartbeatFileForTest: async () => {
+        persistentOpenCount += 1;
+        return {
+          stat: async () => fakeFileStat({ size: 128, mtimeMs: now.getTime(), nlink: 0 }),
+          read: async () => assert.fail("A persistently unlinked heartbeat must never be read."),
+          close: async () => {},
+        };
+      },
+    });
+    assert.equal(persistent.status, LIVE_BRIDGE_LIVENESS_STATUS.HEARTBEAT_INVALID);
+    assert.equal(persistent.details.reason, "heartbeat_link_count_invalid");
+    assert.equal(persistent.details.link_count, 0);
+    assert.equal(persistentOpenCount, 5);
+  });
+
   it("uses exact max-age boundaries and rejects clearly future filesystem or heartbeat times", async () => {
     const now = new Date("2026-07-10T12:00:10.000Z");
     const transport = await makeTransport();
@@ -1077,12 +1148,12 @@ async function writeHeartbeat(root, overrides = {}) {
   return path;
 }
 
-function fakeFileStat({ size, mtimeMs }) {
+function fakeFileStat({ size, mtimeMs, nlink = 1 }) {
   return {
     dev: 1,
     ino: 1,
     size,
-    nlink: 1,
+    nlink,
     mtimeMs,
     ctimeMs: mtimeMs,
     isFile: () => true,

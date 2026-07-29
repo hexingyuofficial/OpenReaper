@@ -61,6 +61,7 @@ const HEARTBEAT_OWNER_MAX_LENGTH = 256;
 const HEARTBEAT_SEQUENCE_MAX = 999_999_999;
 const HEARTBEAT_TIME_MAX_UNIX_S = Math.floor(Number.MAX_SAFE_INTEGER / 1_000);
 const HEARTBEAT_INTERVAL_BOUNDS_MS = Object.freeze({ min: 50, max: 5_000 });
+const HEARTBEAT_REPLACEMENT_READ_ATTEMPTS = 5;
 const HEARTBEAT_FIELDS = Object.freeze([
   "active_generation",
   "active_owner",
@@ -932,6 +933,16 @@ async function isReadableFile(path) {
 }
 
 async function readHeartbeatFileSafely({ heartbeatPath, openFile }) {
+  for (let attempt = 1; attempt <= HEARTBEAT_REPLACEMENT_READ_ATTEMPTS; attempt += 1) {
+    const result = await readHeartbeatFileOnce({ heartbeatPath, openFile });
+    const replacedWhileOpen =
+      result?.reason === "heartbeat_link_count_invalid"
+      && result?.details?.link_count === 0;
+    if (!replacedWhileOpen || attempt === HEARTBEAT_REPLACEMENT_READ_ATTEMPTS) return result;
+  }
+}
+
+async function readHeartbeatFileOnce({ heartbeatPath, openFile }) {
   if (!Number.isInteger(fsConstants.O_NOFOLLOW)) {
     return {
       ok: false,
@@ -1047,7 +1058,9 @@ function validateHeartbeatFileStat(fileStat) {
     return {
       ok: false,
       reason: "heartbeat_link_count_invalid",
-      details: {},
+      details: {
+        link_count: Number.isSafeInteger(fileStat.nlink) ? fileStat.nlink : null,
+      },
     };
   }
   if (
