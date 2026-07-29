@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, it } from "node:test";
 
 import {
@@ -9,10 +12,13 @@ import {
   createAlpha345OfficialExecutableRecipeRevisions,
 } from "../../../packages/mcp-server/src/alpha3-45-official-executable-recipes-v1.mjs";
 import { createExecutableDependencyCatalog } from "../../../packages/core/src/executable-recipe-contract-v1.mjs";
+import { createExecutableRecipeRevisionStore } from "../../../packages/core/src/executable-recipe-revision-store-v1.mjs";
 import {
   createAcceptedOfficialMacroDependencyFacts,
   createCallTemplateRuntime,
 } from "../../../packages/mcp-server/src/call-template-runtime-v1.mjs";
+import { createCallRecipeRuntime } from "../../../packages/mcp-server/src/call-recipe-runtime-v1.mjs";
+import { validateMacroExecutionEnvelope } from "../../../packages/mcp-server/src/macro-runtime-contract-v1.mjs";
 import { FakeFoundationBridge } from "../../../packages/core/src/foundation-bridge-v1.mjs";
 
 const BUDGET = Object.freeze({
@@ -55,6 +61,154 @@ function rows(count) {
     item: { volume_db: -3 - index * 0.1 },
     take: { pan: -0.5 + index * 0.01 },
   }));
+}
+
+function fullControlRows(count) {
+  return Array.from({ length: count }, (_, index) => {
+    const suffix = String(index + 1).padStart(12, "0");
+    return {
+      id: `ctl${String(index + 1).padStart(3, "0")}`,
+      item_ref: `item:guid:{00000000-0000-0000-0000-${suffix}}`,
+      take_ref: `take:guid:{10000000-0000-0000-0000-${suffix}}`,
+      item: {
+        volume_db: -2 + index * 0.01,
+        length_seconds: 1.5 + index * 0.001,
+        fade_in_seconds: 0.01,
+        fade_out_seconds: 0.05,
+        snap_offset_seconds: 0.02,
+      },
+      take: {
+        volume_db: -1 + index * 0.01,
+        pan: -0.4 + index * 0.01,
+        pitch_semitones: -3 + index * 0.05,
+        playrate: 0.92 + index * 0.001,
+        preserve_pitch: true,
+      },
+    };
+  });
+}
+
+function makeNativeBatchExecutor({ failAt = null } = {}) {
+  const calls = [];
+  const executeAtomic = async (child) => {
+    calls.push(child);
+    assert.equal(child.id, "template.items.set_item_take_controls_batch");
+    const changes = child.input.batch.map((row, index) => {
+      const failed = failAt === index + 1;
+      return {
+        ...row,
+        status: child.input.dry_run ? "planned" : failed ? "failed" : "applied",
+        mutation: { status: child.input.dry_run ? "not_run" : "completed" },
+        live_readback: { status: child.input.dry_run ? "not_run" : failed ? "failed" : "passed" },
+        ...(failed ? { code: "ITEM_APPLY_NATIVE_READBACK_FAILED" } : {}),
+        fields: ["volume_db", "length_seconds", "fades", "snap_offset_seconds", "take_volume_db", "take_pan", "take_pitch_semitones", "take_playback"],
+      };
+    });
+    return execution(child.id, {
+      changes,
+      batch_timings: { preflight_ms: 3, mutation_ms: 5, readback_ms: 4, total_ms: 12 },
+      native_counters: {
+        native_mutation_count: child.input.dry_run ? 0 : changes.length,
+        readback_count: changes.length,
+      },
+    });
+  };
+  executeAtomic.supportsItemTakeControlsBatch = true;
+  return { calls, executeAtomic };
+}
+
+function batchRecipeFixture(catalog, macroFact) {
+  const descriptorHash = catalog.getMacro(macroFact.id).descriptor_hash;
+  return {
+    contract: "recipe.executable.draft.v1",
+    id: "recipe.items.batch_controls_projection_fixture",
+    title: "Batch Item controls projection fixture",
+    summary: "Proves a generic Recipe Macro stage accepts a projected 64-row native result.",
+    pack: "items",
+    risk: "destructive",
+    inputs: [],
+    outputs: [{ id: "changes", type: "json", required: true }],
+    stages: [{
+      id: "controls",
+      kind: "macro",
+      dependency: {
+        kind: "macro",
+        id: macroFact.id,
+        version: macroFact.version,
+        fallback_reason: null,
+      },
+      inputs: [],
+      outputs: ["changes"],
+      risk: "destructive",
+      checkpoint: "checkpoint_controls",
+    }],
+    bindings: [{
+      from: { scope: "stage", id: "controls", port: "changes" },
+      to: { scope: "recipe_output", id: null, port: "changes" },
+    }],
+    dependencies: [{
+      kind: "macro",
+      id: macroFact.id,
+      version: macroFact.version,
+      risk: macroFact.risk,
+      fallback_reason: null,
+      descriptor_hash: descriptorHash,
+    }],
+    required_capabilities: [],
+    risk_grants: ["read", "write", "destructive"],
+    checkpoints: [{
+      id: "checkpoint_controls",
+      after_stage: "controls",
+      evidence_id: "evidence_controls",
+      resume_identity: "resume.items.controls",
+      summary: "Native Item controls stage completed with retained evidence.",
+    }],
+    preflight: {
+      contract: "recipe.executable.preflight.v1",
+      complete_graph: true,
+      stage_count: 1,
+      dependency_count: 1,
+      requires_validation_before_save: true,
+      requires_save_before_run: true,
+      forbids_inline_execution: true,
+    },
+    portability: {
+      project_identity: "project:tab:batch-fixture",
+      bridge_owner: "owner:batch-fixture",
+      bridge_generation: "1",
+      platform: "darwin",
+    },
+  };
+}
+
+function batchRecipeRuntimeFacts(revision) {
+  return {
+    content_hash: revision.content_hash,
+    risk_grants: [...revision.draft.risk_grants],
+    project_identity: revision.draft.portability.project_identity,
+    bridge_owner: revision.draft.portability.bridge_owner,
+    bridge_generation: revision.draft.portability.bridge_generation,
+    available_capabilities: [...revision.draft.required_capabilities],
+    checkpoint_evidence: revision.draft.checkpoints.map((checkpoint) => ({
+      checkpoint_id: checkpoint.id,
+      evidence_id: checkpoint.evidence_id,
+      resume_identity: checkpoint.resume_identity,
+      recipe_id: revision.recipe_id,
+      version: revision.version,
+      revision: revision.revision,
+      content_hash: revision.content_hash,
+    })),
+    dependency_versions: revision.dependency_lock.entries.map((entry) => ({
+      kind: entry.kind,
+      id: entry.id,
+      version: entry.version,
+    })),
+    dependency_descriptors: revision.dependency_lock.entries.map((entry) => ({
+      kind: entry.kind,
+      id: entry.id,
+      descriptor_hash: entry.descriptor_hash,
+    })),
+  };
 }
 
 function objectRef(kind, ref) {
@@ -188,6 +342,145 @@ describe("Alpha4 D Item/Take batch contract seam", () => {
         assert.equal(typeof timing, "number");
         assert.equal(timing < 30_000, true);
       }
+    }
+  });
+
+  it("keeps a 64-row native success as macro.execution.v1 by projecting duplicate control truth to evidence", async () => {
+    const inputRows = fullControlRows(64);
+    const native = makeNativeBatchExecutor();
+    const response = await executeAlpha3_3B1cItemsApplyMacro({
+      request: request({ mode: "set_item_take_controls", dry_run: false, changes: inputRows }),
+      executeAtomic: native.executeAtomic,
+      projectIndexRuntime: { invalidateScopes: () => ({ ok: true }) },
+    });
+
+    assert.equal(response.contract, "macro.execution.v1");
+    assert.equal(response.ok, true, JSON.stringify(response));
+    assert.equal(validateMacroExecutionEnvelope(response).valid, true);
+    assert.equal(response.result.changes.length, 64);
+    assert.equal(response.result.changes.every((row) => row.status === "ok" && row.mutation === "done" && row.readback === "pass"), true);
+    assert.equal(response.result.changes.every((row) => row.item === undefined && row.take === undefined), true);
+    assert.equal(response.result.data.detail_projection, "verification_evidence");
+    assert.equal(response.result.data.projected_row_count, 64);
+    assert.equal(response.budget.artifact_fallback, true);
+    assert.equal(native.calls.length, 1);
+  });
+
+  it("keeps complete Item/Take request truth inline when a small native batch fits the contract budget", async () => {
+    for (const count of [1, 8]) {
+      const inputRows = fullControlRows(count);
+      const native = makeNativeBatchExecutor();
+      const response = await executeAlpha3_3B1cItemsApplyMacro({
+        request: request({ mode: "set_item_take_controls", dry_run: false, changes: inputRows }),
+        executeAtomic: native.executeAtomic,
+        projectIndexRuntime: { invalidateScopes: () => ({ ok: true }) },
+      });
+
+      assert.equal(response.ok, true, `${count}: ${JSON.stringify(response)}`);
+      assert.equal(validateMacroExecutionEnvelope(response).valid, true);
+      assert.equal(response.result.changes.length, count);
+      assert.equal(response.result.changes.every((row) => row.item !== undefined && row.take !== undefined), true);
+      assert.equal(response.result.data.detail_projection, undefined);
+      assert.equal(response.budget.artifact_fallback, undefined);
+      assert.equal(native.calls.length, 1);
+    }
+  });
+
+  it("projects a 64-row native partial failure without losing typed row or evidence truth", async () => {
+    const inputRows = fullControlRows(64);
+    const native = makeNativeBatchExecutor({ failAt: 37 });
+    const response = await executeAlpha3_3B1cItemsApplyMacro({
+      request: request({ mode: "set_item_take_controls", dry_run: false, changes: inputRows }),
+      executeAtomic: native.executeAtomic,
+      projectIndexRuntime: { invalidateScopes: () => ({ ok: true }) },
+    });
+
+    assert.equal(response.contract, "macro.execution.v1");
+    assert.equal(response.ok, false);
+    assert.equal(response.execution.status, "partial_failure");
+    assert.equal(response.error.code, "ITEM_APPLY_NATIVE_READBACK_FAILED");
+    assert.equal(response.blockers[0].code, "ITEM_APPLY_NATIVE_READBACK_FAILED");
+    assert.equal(validateMacroExecutionEnvelope(response).valid, true);
+    assert.equal(response.result.changes.length, 64);
+    assert.equal(response.result.changes[36].status, "fail");
+    assert.equal(response.result.changes[36].mutation, "done");
+    assert.equal(response.result.changes[36].readback, "fail");
+    assert.equal(response.result.changes.every((row) => row.item === undefined && row.take === undefined), true);
+    assert.equal(response.result.verification.evidence_refs.length, 1);
+    assert.equal(response.result.data.detail_projection, "verification_evidence");
+    assert.equal(response.result.data.projected_row_count, 64);
+    assert.equal(response.budget.artifact_fallback, true);
+    assert.equal(native.calls.length, 1);
+  });
+
+  it("normalizes the projected 64-row Macro envelope through a generic call_recipe stage", async () => {
+    const inputRows = fullControlRows(64);
+    const native = makeNativeBatchExecutor();
+    const macroResponse = await executeAlpha3_3B1cItemsApplyMacro({
+      request: request({ mode: "set_item_take_controls", dry_run: false, changes: inputRows }),
+      executeAtomic: native.executeAtomic,
+      projectIndexRuntime: { invalidateScopes: () => ({ ok: true }) },
+    });
+    assert.equal(macroResponse.result.changes.length, 64);
+
+    const macroFact = createAcceptedOfficialMacroDependencyFacts()
+      .find((fact) => fact.id === ALPHA3_3_B1C_ITEMS_APPLY_MACRO_ID);
+    assert.ok(macroFact);
+    const catalog = createExecutableDependencyCatalog({
+      macros: [{
+        id: macroFact.id,
+        version: macroFact.version,
+        risk: macroFact.risk,
+        descriptor_hash: "d".repeat(64),
+        capabilities: macroFact.capabilities,
+      }],
+      templates: [],
+      capabilities: [...macroFact.capabilities],
+    });
+    const root = mkdtempSync(path.join(os.tmpdir(), "openreaper-alpha4-d-batch-recipe-"));
+    try {
+      const store = createExecutableRecipeRevisionStore({ root, catalog, source: "user" });
+      const runtime = createCallRecipeRuntime({
+        store,
+        catalog,
+        dispatchers: { macro: async () => macroResponse },
+        runtimeFactsProvider: ({ revision }) => batchRecipeRuntimeFacts(revision),
+      });
+      const saved = await runtime.call_recipe({
+        operation: "save",
+        draft: batchRecipeFixture(catalog, macroFact),
+        version: "1.0.0",
+        revision_number: 1,
+        saved_at: "2026-07-29T00:00:00.000Z",
+      });
+      assert.equal(saved.ok, true, JSON.stringify(saved));
+      const ran = await runtime.call_recipe({
+        operation: "run",
+        recipe_id: saved.recipe_id,
+        version: saved.version,
+        revision: saved.revision,
+        content_hash: saved.content_hash,
+        validation_result_id: saved.validation_result_id,
+        inputs: {},
+        budget: { max_response_bytes: 65_536 },
+      });
+
+      assert.equal(ran.ok, true, JSON.stringify(ran));
+      assert.equal(ran.status, "succeeded");
+      assert.equal(ran.error, undefined);
+      assert.equal(ran.verified_outputs.length, 1);
+      assert.equal(ran.verified_outputs[0].id, "changes");
+      assert.deepEqual(ran.verified_outputs[0].value, {
+        omitted: true,
+        reason: "inline_value_exceeds_call_recipe_budget",
+      });
+      assert.equal(ran.execution_truth.native_mutation_count, 64);
+      assert.equal(ran.execution_truth.readback_count, 64);
+      assert.equal(ran.latest_checkpoint.proof.source_contract, "macro.execution.v1");
+      assert.equal(ran.latest_checkpoint.proof.evidence_refs.length, 1);
+      assert.equal(native.calls.length, 1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 

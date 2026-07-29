@@ -200,6 +200,14 @@ describe("Alpha3.3-B1c executable macro.items.apply", () => {
     const transportDir = path.join(root, "transport");
     mkdirSync(path.join(transportDir, "requests"), { recursive: true });
     mkdirSync(path.join(transportDir, "results"), { recursive: true });
+    writeFileSync(path.join(transportDir, "openreaper-bridge-liveness-v1.json"), `${JSON.stringify({
+      contract: "openreaper.bridge_liveness.v1",
+      active_owner: "owner-test",
+      active_generation: 1,
+      sequence: 1,
+      refreshed_at_unix_s: Math.floor(Date.now() / 1_000),
+      interval_ms: 500,
+    })}\n`, "utf8");
     const client = new Client({ name: "alpha33-items-cancel", version: "1.0.0" });
     const transport = new StdioClientTransport({
       command: process.execPath,

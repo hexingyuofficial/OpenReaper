@@ -2846,7 +2846,8 @@ function successEnvelope({ entry, request, startedAt, now, stages, state, active
 
 function buildSuccessEnvelope({ entry, request, startedAt, completedAt, stages, state, activeBudget, status, summary, data, compact = false }) {
   const useCompact = compact === true || state.batchMode === true;
-  return {
+  const projectedData = useCompact ? projectCompactBatchData(data) : data;
+  const envelope = {
     contract: MACRO_EXECUTION_CONTRACT,
     ok: true,
     macro: useCompact ? compactMacroIdentity(entry) : macroIdentity(entry),
@@ -2869,7 +2870,7 @@ function buildSuccessEnvelope({ entry, request, startedAt, completedAt, stages, 
           ? (activeBudget > MIN_RESPONSE_BUDGET ? uniqueStrings(state.evidenceRefs).slice(0, 1) : [])
           : uniqueStrings(state.evidenceRefs).slice(0, MACRO_CONTRACT_CEILINGS.evidence_ref_max_count),
       },
-      data: useCompact ? projectCompactBatchData(data) : data,
+      data: projectedData,
     },
     blockers: [],
     error: null,
@@ -2878,6 +2879,7 @@ function buildSuccessEnvelope({ entry, request, startedAt, completedAt, stages, 
       ? { max_bytes: activeBudget, actual_bytes: 0, truncated: false }
       : { max_bytes: activeBudget, actual_bytes: 0, truncated: false, artifact_fallback: false },
   };
+  return projectOversizedControlTruthToEvidence(envelope, state, projectedData, useCompact);
 }
 
 function failureEnvelope({ entry, request, startedAt, now, stages, state, activeBudget, status = "blocked", code, message, blockers = [], data = {}, compact = false }) {
@@ -2887,7 +2889,8 @@ function failureEnvelope({ entry, request, startedAt, now, stages, state, active
     && state.changes
       .filter((change) => change.mutation?.status === "completed" || change.status === "applied")
       .every((change) => change.live_readback?.status === "passed");
-  return finalizeEnvelope({
+  const projectedData = useCompact ? projectCompactBatchData(data) : data;
+  const envelope = {
     contract: MACRO_EXECUTION_CONTRACT,
     ok: false,
     macro: useCompact ? compactMacroIdentity(entry) : macroIdentity(entry),
@@ -2910,7 +2913,7 @@ function failureEnvelope({ entry, request, startedAt, now, stages, state, active
           ? (activeBudget > MIN_RESPONSE_BUDGET ? uniqueStrings(state.evidenceRefs).slice(0, 1) : [])
           : (status === "partial_failure" ? uniqueStrings(state.evidenceRefs) : []),
       },
-      data: useCompact ? projectCompactBatchData(data) : data,
+      data: projectedData,
     },
     blockers: (blockers.length > 0 ? blockers : [blocker(code, message)])
       .slice(0, useCompact ? 1 : MACRO_CONTRACT_CEILINGS.blocker_max_count)
@@ -2939,7 +2942,8 @@ function failureEnvelope({ entry, request, startedAt, now, stages, state, active
     budget: useCompact
       ? { max_bytes: activeBudget, actual_bytes: 0, truncated: false }
       : { max_bytes: activeBudget, actual_bytes: 0, truncated: false, artifact_fallback: false },
-  });
+  };
+  return finalizeEnvelope(projectOversizedControlTruthToEvidence(envelope, state, projectedData, useCompact));
 }
 
 function projectCompactBatchChanges(changes, { includeControlTruth = false } = {}) {
@@ -3015,6 +3019,41 @@ function projectCompactBatchData(data) {
     ...(isPlainObject(value.native_counters) ? { native_counters: clone(value.native_counters) } : {}),
     ...(Number.isInteger(value.transport_call_count) ? { transport_call_count: value.transport_call_count } : {}),
   };
+}
+
+function projectOversizedControlTruthToEvidence(envelope, state, projectedData, useCompact) {
+  if (!useCompact
+      || projectedData?.mode !== "set_item_take_controls"
+      || !macroEnvelopeExceedsPublicBudget(envelope)) {
+    return envelope;
+  }
+  const projected = structuredClone(envelope);
+  projected.result.changes = projectCompactBatchChanges(state.changes, { includeControlTruth: false });
+  projected.result.data = {
+    ...projected.result.data,
+    detail_projection: "verification_evidence",
+    projected_row_count: projected.result.changes.length,
+  };
+  projected.budget.artifact_fallback = projected.result.verification.evidence_refs.length > 0;
+  return projected;
+}
+
+function macroEnvelopeExceedsPublicBudget(envelope) {
+  const candidate = structuredClone(envelope);
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    candidate.budget.actual_bytes = Buffer.byteLength(JSON.stringify(candidate), "utf8");
+  }
+  const inlineBytes = Buffer.byteLength(JSON.stringify({
+    stages: candidate.execution?.stages,
+    changes: candidate.result?.changes,
+    data: candidate.result?.data,
+    blockers: candidate.blockers,
+    error: candidate.error,
+    recovery: candidate.recovery,
+  }), "utf8");
+  return candidate.budget.actual_bytes > candidate.budget.max_bytes
+    || candidate.budget.actual_bytes > MACRO_CONTRACT_CEILINGS.envelope_max_bytes
+    || inlineBytes > MACRO_CONTRACT_CEILINGS.inline_detail_max_bytes;
 }
 
 function compactMacroIdentity(entry) {
