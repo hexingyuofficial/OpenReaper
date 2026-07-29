@@ -260,6 +260,7 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
     assert.equal(dialogIndex < decisionIndex && decisionIndex < cleanScanIndex, true);
     assert.match(readiness, /if bridge_heartbeat_ready; then[\s\S]+verify_public_bridge_read \|\| return 1[\s\S]+dialog_result="\$\(run_startup_dialog_assist\)"/u);
     assert.match(readiness, /if startup_dialog_result_requires_manual_clearance "\$\{dialog_result\}"; then\s+sleep 0\.25\s+continue/u);
+    assert.match(readiness, /if startup_dialog_result_is_probe_indeterminate "\$\{dialog_result\}"; then\s+sleep 0\.25\s+continue/u);
     assert.doesNotMatch(source, /startup_dialog_probe_is_unavailable/u);
 
     const hookStart = source.indexOf("wait_for_startup_hook() {");
@@ -267,7 +268,28 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
     const hook = source.slice(hookStart, hookEnd);
     assert.equal(hook.indexOf("if startup_status_stage_ready; then") < hook.indexOf('dialog_result="$(run_startup_dialog_assist)"'), true);
     assert.match(hook, /if startup_dialog_result_requires_manual_clearance "\$\{dialog_result\}"; then\s+sleep 0\.25\s+continue/u);
+    assert.match(hook, /if startup_dialog_result_is_probe_indeterminate "\$\{dialog_result\}"; then\s+sleep 0\.25\s+continue/u);
     assert.match(source, /startup_dialog_result_requires_manual_clearance\(\) \{[\s\S]+if \[\[ "\$\{STARTUP_DIALOG_ASSIST\}" != "false" \]\]; then[\s\S]+blocked_user_decision:\*[\s\S]+blocked_unknown_dialog:\*/u);
+    assert.match(source, /startup_dialog_result_is_probe_indeterminate\(\) \{[\s\S]+blocked_dialog_classification:\*\|blocked_dialog_inspection_timeout:\*\|blocked_dialog_inspection_failed:\*/u);
+    const indeterminateStart = source.indexOf("startup_dialog_result_is_probe_indeterminate() {");
+    const indeterminateEnd = source.indexOf("\n}\n\nwait_for_startup_readiness()", indeterminateStart);
+    const indeterminate = source.slice(indeterminateStart, indeterminateEnd + 2);
+    assert.doesNotMatch(indeterminate, /blocked_unknown_dialog|blocked_user_decision|blocked_missing_media/u);
+    for (const result of [
+      "blocked_dialog_classification:title=Scanning VST plugins...:error=invalid index",
+      "blocked_dialog_inspection_timeout:seconds=15",
+      "blocked_dialog_inspection_failed:status=1",
+    ]) {
+      assert.equal(runDialogClassifier(indeterminate, result, "startup_dialog_result_is_probe_indeterminate"), 0, result);
+    }
+    for (const result of [
+      "blocked_unknown_dialog:title=Unexpected",
+      "blocked_user_decision:title=Project Load Warning",
+      "blocked_missing_media:choice=Ignore all missing files",
+      "unavailable",
+    ]) {
+      assert.equal(runDialogClassifier(indeterminate, result, "startup_dialog_result_is_probe_indeterminate"), 1, result);
+    }
   });
 
   it("summarizes startup readiness without opening REAPER or spawning processes", () => {
@@ -472,8 +494,8 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
   });
 });
 
-function runDialogClassifier(classifier, result) {
-  return spawnSync("zsh", ["-c", `${classifier}\nstartup_dialog_result_is_safe "$1"`, "dialog-classifier", result], {
+function runDialogClassifier(classifier, result, functionName = "startup_dialog_result_is_safe") {
+  return spawnSync("zsh", ["-c", `${classifier}\n${functionName} "$1"`, "dialog-classifier", result], {
     encoding: "utf8",
   }).status;
 }

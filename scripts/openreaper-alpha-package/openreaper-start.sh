@@ -1507,6 +1507,14 @@ wait_for_startup_hook() {
         sleep 0.25
         continue
       fi
+      # Accessibility can lose a window while REAPER is replacing transient
+      # startup UI (for example, a VST scan window). That is not permission to
+      # click or classify the window. Keep waiting for authoritative startup
+      # truth within the existing bounded startup window.
+      if startup_dialog_result_is_probe_indeterminate "${dialog_result}"; then
+        sleep 0.25
+        continue
+      fi
       # Never click an unknown or decision-bearing dialog. Require one stable
       # repeat before failing so a transient window or an explicit external
       # user dismissal cannot race the startup hook by a few milliseconds.
@@ -1813,6 +1821,15 @@ startup_dialog_result_allows_transient_observation() {
   return 1
 }
 
+startup_dialog_result_is_probe_indeterminate() {
+  case "$1" in
+    blocked_dialog_classification:*|blocked_dialog_inspection_timeout:*|blocked_dialog_inspection_failed:*)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
 wait_for_startup_readiness() {
   local max_ticks=$(( START_WAIT_SECONDS * 4 ))
   local tick dialog_result pending_dialog_blocker=""
@@ -1840,6 +1857,10 @@ wait_for_startup_readiness() {
     fi
     if ! startup_dialog_result_is_safe "${dialog_result}"; then
       if startup_dialog_result_requires_manual_clearance "${dialog_result}"; then
+        sleep 0.25
+        continue
+      fi
+      if startup_dialog_result_is_probe_indeterminate "${dialog_result}"; then
         sleep 0.25
         continue
       fi
