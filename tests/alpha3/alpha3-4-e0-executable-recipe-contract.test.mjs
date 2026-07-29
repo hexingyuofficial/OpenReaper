@@ -94,6 +94,26 @@ describe("Alpha3.4-E0 executable recipe revision contract", () => {
     );
   });
 
+  it("accepts installed project identities beyond legacy short-string limits while remaining bounded", () => {
+    const catalog = makeCatalog();
+    const projectIdentityMaxChars = 2_048;
+    const installedPathDraft = makeDraft();
+    installedPathDraft.portability.project_identity = `project:path:/Users/fixture/${"nested-install-root/".repeat(12)}fixture.RPP`;
+    assert.ok(installedPathDraft.portability.project_identity.length > 128);
+    assert.equal(validateExecutableRecipeDraft(installedPathDraft, { catalog }).ok, true);
+
+    const maxIdentityDraft = makeDraft();
+    maxIdentityDraft.portability.project_identity = "p".repeat(projectIdentityMaxChars);
+    assert.equal(validateExecutableRecipeDraft(maxIdentityDraft, { catalog }).ok, true);
+
+    const oversizedIdentityDraft = makeDraft();
+    oversizedIdentityDraft.portability.project_identity = "p".repeat(projectIdentityMaxChars + 1);
+    assert.match(
+      validateExecutableRecipeDraft(oversizedIdentityDraft, { catalog }).errors.join("\n"),
+      new RegExp(`project_identity exceeds ${projectIdentityMaxChars} characters`),
+    );
+  });
+
   it("rejects bypass fields, cycles, oversized graphs, and trust drift", () => {
     const catalog = makeCatalog();
 

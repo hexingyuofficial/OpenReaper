@@ -1799,8 +1799,13 @@ function projectReadback(templateId, readback, projectRef) {
       });
     case "template.project.create_observation_bundle": {
       const map = projectMapPayload(readback.project_map ?? readback.overview ?? {}, projectRef, readback.coverage);
-      const markerRows = mapMarkers(readback.markers_regions?.items ?? readback.markers_regions);
-      if (markerRows.length > 0) {
+      const markerSource = Array.isArray(readback.markers_regions?.items)
+        ? readback.markers_regions.items
+        : Array.isArray(readback.markers_regions)
+          ? readback.markers_regions
+          : null;
+      const markerRows = mapMarkers(markerSource);
+      if (markerRows.length > 0 || markerSource?.length === 0) {
         map.scopes.markers_regions = markerRows;
         map.coverage.markers_regions = coverageOf(readback.markers_regions ?? {}, "complete");
       }

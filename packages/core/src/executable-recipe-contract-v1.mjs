@@ -13,6 +13,8 @@ export const EXECUTABLE_RECIPE_DEPENDENCY_LOCK_CONTRACT = "recipe.executable.dep
 export const EXECUTABLE_RECIPE_TRUST_CONTRACT = "recipe.executable.trust.v1";
 export const EXECUTABLE_RECIPE_PREFLIGHT_CONTRACT = "recipe.executable.preflight.v1";
 
+const EXECUTABLE_RECIPE_PROJECT_IDENTITY_MAX_CHARS = 2_048;
+
 export const EXECUTABLE_RECIPE_DEPENDENCY_KINDS = Object.freeze([
   "macro",
   "template",
@@ -1434,7 +1436,13 @@ function validatePortability(portability, errors) {
     "draft.portability",
     errors,
   );
-  validateBoundedString(portability.project_identity, "draft.portability.project_identity", 1, 128, errors);
+  validateBoundedString(
+    portability.project_identity,
+    "draft.portability.project_identity",
+    1,
+    EXECUTABLE_RECIPE_PROJECT_IDENTITY_MAX_CHARS,
+    errors,
+  );
   validateBoundedString(portability.bridge_owner, "draft.portability.bridge_owner", 1, 128, errors);
   validateBoundedString(portability.bridge_generation, "draft.portability.bridge_generation", 1, 128, errors);
   validateBoundedString(portability.platform, "draft.portability.platform", 1, 64, errors);

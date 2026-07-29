@@ -814,6 +814,14 @@ describe("Alpha3.2-D Product Project Index runtime", () => {
           coverage: { project_map: "complete_page", markers_regions: "bounded" },
         },
       }));
+      const emptyMarkersSnapshot = runtime.adapter.snapshot();
+      assert.deepEqual(emptyMarkersSnapshot.rows.markers_regions, []);
+      assert.equal(emptyMarkersSnapshot.freshness_scopes.markers.status, "fresh");
+      assert.equal(emptyMarkersSnapshot.freshness_scopes.markers.coverage_status, "complete");
+      assert.equal(
+        emptyMarkersSnapshot.freshness_scopes.markers.source_template_id,
+        "template.project.create_observation_bundle",
+      );
       assert.equal(runtime.status().revision, "reaper-change-count:41");
 
       const matched = runtime.reconcileProjectRevision({ change_count: 41 });
