@@ -6,12 +6,44 @@ import test from "node:test";
 
 import {
   ALPHA3_45_OFFICIAL_RECIPE_IDS,
+  installedWrapperEnvironmentAlpha345,
   runAlpha345OfficialRecipesHarness,
 } from "../../scripts/smoke-alpha3-45-official-recipes.mjs";
 
 const roots = [];
 
 test.after(async () => Promise.all(roots.map((root) => rm(root, { recursive: true, force: true }))));
+
+test("installed official harness connector replaces stale package-local paths", () => {
+  const installRoot = path.join(os.tmpdir(), "alpha345-installed", "current");
+  const installedWrapper = path.join(installRoot, "bin", "openreaper-mcp");
+  const liveEnvironment = {
+    transportDir: "/tmp/alpha345-live/transport",
+    bridgeOwner: "alpha345-owner",
+    bridgeGeneration: 7,
+    projectPath: "/tmp/alpha345-live/project.RPP",
+    indexRoot: "/tmp/alpha345-live/index",
+    artifactRoot: "/tmp/alpha345-live/artifacts",
+    renderRoot: "/tmp/alpha345-live/renders",
+  };
+  const environment = installedWrapperEnvironmentAlpha345({
+    installedWrapper,
+    liveEnvironment,
+    parentEnvironment: {
+      OPENREAPER_SESSION_ROOT: "/stale/session",
+      OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH: "/stale/openreaper-live-bridge.lua",
+      OPENREAPER_MCP_PACKAGE_ROOT: "/stale/package",
+    },
+  });
+
+  assert.equal(environment.OPENREAPER_SESSION_ROOT, path.join(installRoot, "session"));
+  assert.equal(
+    environment.OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH,
+    path.join(installRoot, "vendor/openreaper-kernel/reaper/bridge/openreaper-live-bridge.lua"),
+  );
+  assert.equal(environment.OPENREAPER_MCP_PACKAGE_ROOT, installRoot);
+  assert.equal(environment.OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR, liveEnvironment.transportDir);
+});
 
 test("official live harness discovers and one-calls all four Recipes with Recipe 04 native batch Automation and 1/8/64/65 truth", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "openreaper-alpha345-official-harness-"));

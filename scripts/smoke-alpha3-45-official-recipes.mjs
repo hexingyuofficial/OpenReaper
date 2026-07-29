@@ -40,21 +40,34 @@ export async function connectInstalledWrapperAlpha345({ installedWrapper, liveEn
     command: installedWrapper,
     args: [],
     cwd: path.dirname(installedWrapper),
-    env: {
-      ...process.env,
-      OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR: liveEnvironment.transportDir,
-      OPENREAPER_LIVE_BRIDGE_OWNER: liveEnvironment.bridgeOwner,
-      OPENREAPER_LIVE_BRIDGE_GENERATION: String(liveEnvironment.bridgeGeneration),
-      OPENREAPER_CURRENT_PROJECT_PATH: liveEnvironment.projectPath,
-      OPENREAPER_PROJECT_INDEX_STATE_ROOT: liveEnvironment.indexRoot,
-      OPENREAPER_PROJECT_INDEX_LOGICAL_SESSION_KEY: liveEnvironment.logicalSessionKey ?? "alpha345-official-recipes",
-      OPENREAPER_ARTIFACT_ROOT: liveEnvironment.artifactRoot,
-      OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT: liveEnvironment.artifactRoot,
-      OPENREAPER_LIVE_SMOKE_RENDER_ROOT: liveEnvironment.renderRoot,
-    },
+    env: installedWrapperEnvironmentAlpha345({ installedWrapper, liveEnvironment }),
     stderr: "pipe",
   }));
   return client;
+}
+
+export function installedWrapperEnvironmentAlpha345({
+  installedWrapper,
+  liveEnvironment = {},
+  parentEnvironment = process.env,
+} = {}) {
+  assertAbsolute(installedWrapper, "installedWrapper");
+  const installRoot = path.resolve(path.dirname(installedWrapper), "..");
+  return {
+    ...parentEnvironment,
+    OPENREAPER_SESSION_ROOT: path.join(installRoot, "session"),
+    OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH: path.join(installRoot, "vendor/openreaper-kernel/reaper/bridge/openreaper-live-bridge.lua"),
+    OPENREAPER_MCP_PACKAGE_ROOT: installRoot,
+    OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR: liveEnvironment.transportDir,
+    OPENREAPER_LIVE_BRIDGE_OWNER: liveEnvironment.bridgeOwner,
+    OPENREAPER_LIVE_BRIDGE_GENERATION: String(liveEnvironment.bridgeGeneration),
+    OPENREAPER_CURRENT_PROJECT_PATH: liveEnvironment.projectPath,
+    OPENREAPER_PROJECT_INDEX_STATE_ROOT: liveEnvironment.indexRoot,
+    OPENREAPER_PROJECT_INDEX_LOGICAL_SESSION_KEY: liveEnvironment.logicalSessionKey ?? "alpha345-official-recipes",
+    OPENREAPER_ARTIFACT_ROOT: liveEnvironment.artifactRoot,
+    OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT: liveEnvironment.artifactRoot,
+    OPENREAPER_LIVE_SMOKE_RENDER_ROOT: liveEnvironment.renderRoot,
+  };
 }
 
 export async function runAlpha345OfficialRecipesHarness({

@@ -1015,7 +1015,7 @@ local function dispatch_template_execute(request, resume_continuation)
   end
   handler = D13_ITEMS_CORE_WRITE_HANDLERS[request.pack.capability]
   if handler then
-    return handler(request)
+    return handler(request, resume_continuation)
   end
   handler = D14_ITEMS_DELETE_HANDLERS[request.pack.capability]
   if handler then
@@ -1807,6 +1807,7 @@ local function dispatch_request(request, fallback_id, resume_continuation, runti
     or capability == "project.create_subproject"
     or capability == "project.insert_subproject_item"
     or capability == "project.render_or_update_subproject"
+  local d13_item_take_batch_capability = capability == "items.set_item_take_controls_batch"
   local phase_may_mutate = true
   if resume_continuation then
     phase_may_mutate = resume_continuation.next_phase_may_mutate == true
@@ -1814,6 +1815,11 @@ local function dispatch_request(request, fallback_id, resume_continuation, runti
   -- D30 project-switch and subproject-item first ticks are preflight/zero-write;
   -- mutation phases are entered only through an exact-project continuation.
   if project_switch_capability and not resume_continuation then
+    phase_may_mutate = false
+  end
+  -- D13 freezes and resolves its complete 1-64 row plan on the first tick.
+  -- Mutation starts only after that zero-write preflight yields a continuation.
+  if d13_item_take_batch_capability and not resume_continuation then
     phase_may_mutate = false
   end
   -- activate_project_tab selection is a pure tab-focus change. Real REAPER

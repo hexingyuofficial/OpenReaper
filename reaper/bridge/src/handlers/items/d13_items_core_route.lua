@@ -646,6 +646,24 @@ end
 
 local D13_ITEMS_SET_ITEM_TAKE_CONTROLS_BATCH_MAX_ROWS = 64
 local D13_ITEMS_SET_ITEM_TAKE_CONTROLS_BATCH_CHUNK_SIZE = 8
+local D13_ITEMS_BATCH_CONTINUATION_CONTRACT = "openreaper.bridge.internal_continuation.v1"
+
+local function d13_items_batch_now()
+  local ok, value = call_reaper("time_precise")
+  if ok and d13_items_finite_number(value) then return value end
+  return os.clock()
+end
+
+local function d13_items_batch_continue(phase, state, mutations_may_have_happened, next_phase_may_mutate)
+  state.batch_timings.continuation_yield_count = state.batch_timings.continuation_yield_count + 1
+  return {
+    contract = D13_ITEMS_BATCH_CONTINUATION_CONTRACT,
+    phase = phase,
+    state = state,
+    mutations_may_have_happened = mutations_may_have_happened == true,
+    next_phase_may_mutate = next_phase_may_mutate == true,
+  }
+end
 
 local function d13_items_batch_error(code, message, row_index, details, recoverable)
   local failure_details = details or {}
@@ -846,6 +864,42 @@ local function d13_items_batch_values_match(actual, expected)
   return d13_items_finite_number(actual) and math.abs(actual - expected) <= 0.000001
 end
 
+local function d13_items_batch_live_item_map(required_refs)
+  local ok_count, count = call_reaper("CountMediaItems", 0)
+  if not ok_count then
+    return d13_items_batch_error("COMMAND_FAILED", "D13 Item/Take batch could not scan the live project once for exact Item identities.", nil, {
+      zero_write = true,
+      project_scan_count = 0,
+    }, false)
+  end
+  local total = math.max(0, math.floor(first_number(count) or 0))
+  local found = {}
+  for index = 0, total - 1 do
+    local ok_item, item = call_reaper("GetMediaItem", 0, index)
+    if not ok_item or not item then
+      return d13_items_batch_error("COMMAND_FAILED", "D13 Item/Take batch live Item scan failed before mutation.", nil, {
+        zero_write = true,
+        project_scan_count = 1,
+        project_scan_item_count = index,
+      }, false)
+    end
+    local guid = d13_items_item_guid(item)
+    local ref = guid and ("item:guid:" .. guid) or nil
+    if ref and required_refs[ref] then
+      if found[ref] and found[ref] ~= item then
+        return d13_items_batch_error("REF_INVALID", "D13 Item/Take batch live Item identity is not unique.", nil, {
+          item_ref = ref,
+          zero_write = true,
+          project_scan_count = 1,
+          project_scan_item_count = index + 1,
+        }, false)
+      end
+      found[ref] = item
+    end
+  end
+  return found, nil, total
+end
+
 local function d13_items_batch_summary(request, prepared, result_rows, dry_run, mutation_attempted, batch_timings)
   return {
     capability = request.pack.capability,
@@ -869,197 +923,103 @@ local function d13_items_batch_summary(request, prepared, result_rows, dry_run, 
   }
 end
 
-local function d13_items_set_item_take_controls_batch(request)
-  local params = is_object(request.params) and request.params or {}
-  local batch = params.changes or params.batch
-  if params.changes ~= nil and params.batch ~= nil then
-    return d13_items_batch_error("PARAMS_INVALID", "D13 Item/Take batch accepts one changes or batch array, not both.", nil, {
-      zero_write = true,
-    })
+local function d13_items_batch_state_valid(state)
+  return is_object(state)
+    and is_json_array(state.prepared)
+    and is_json_array(state.result_rows)
+    and is_object(state.batch_timings)
+    and is_non_negative_integer(state.next_index)
+    and state.next_index >= 1
+    and d13_items_finite_number(state.started_at) ~= nil
+end
+
+local function d13_items_batch_mutate_chunk(state)
+  if not d13_items_batch_state_valid(state) then
+    return d13_items_batch_error("INTERNAL_ERROR", "D13 Item/Take batch continuation state is malformed.", nil, {
+      blocker = "malformed_internal_continuation",
+    }, false)
   end
-  if not is_json_array(batch) or #batch < 1 or #batch > D13_ITEMS_SET_ITEM_TAKE_CONTROLS_BATCH_MAX_ROWS then
-    return d13_items_batch_error("BATCH_LIMIT_EXCEEDED", "D13 Item/Take batch accepts 1-64 rows.", nil, {
-      row_count = is_json_array(batch) and #batch or 0,
-      max_rows = D13_ITEMS_SET_ITEM_TAKE_CONTROLS_BATCH_MAX_ROWS,
-      zero_write = true,
-    })
+  local prepared = state.prepared
+  local batch_timings = state.batch_timings
+  local chunk_start = state.next_index
+  if chunk_start > #prepared then
+    return d13_items_batch_error("INTERNAL_ERROR", "D13 Item/Take batch mutation continuation exceeded the frozen plan.", nil, {
+      blocker = "malformed_internal_continuation",
+    }, false)
   end
-  if params.dry_run ~= nil and params.dry_run ~= true and params.dry_run ~= false then
-    return d13_items_batch_error("PARAMS_INVALID", "D13 Item/Take batch dry_run must be boolean.", nil, { zero_write = true })
-  end
-  local ref_map, ref_failure = d13_items_batch_ref_map(request)
-  if not ref_map then return nil, ref_failure end
-  local seen_ids = {}
-  local seen_items = {}
-  local prepared = json_array({})
-  local preflight_started = os.clock()
-  for index = 1, #batch do
-    local row = batch[index]
-    if not is_object(row) then
-      return d13_items_batch_error("PARAMS_INVALID", "D13 Item/Take batch rows must be objects.", index, { zero_write = true })
-    end
-    local normalized, validation_failure = d13_items_batch_validate_fields(row, index)
-    if not normalized then return nil, validation_failure end
-    if seen_ids[normalized.id] then
-      return d13_items_batch_error("PARAMS_INVALID", "D13 Item/Take batch row ids must be unique.", index, { zero_write = true })
-    end
-    if seen_items[normalized.item_ref] then
-      return d13_items_batch_error("PARAMS_INVALID", "D13 Item/Take batch item refs must be unique.", index, { zero_write = true })
-    end
-    seen_ids[normalized.id] = true
-    seen_items[normalized.item_ref] = true
-    local supplied_item_ref = ref_map[normalized.item_ref]
-    local item_ref_object = supplied_item_ref or {
-      kind = "item",
-      ref = normalized.item_ref,
-      identity = { scheme = "guid", value = normalized.item_identity },
-    }
-    local item = d13_items_resolve_item_from_ref_object(item_ref_object)
-    if not item or d13_items_item_ref_string(item) ~= normalized.item_ref then
-      return d13_items_batch_error("ITEM_NOT_FOUND", "D13 Item/Take batch could not prove the exact Item identity.", index, {
-        item_ref = normalized.item_ref,
-        zero_write = true,
-      })
-    end
-    local take = nil
-    local take_ref_object = nil
-    if normalized.take_ref then
-      local supplied_take_ref = ref_map[normalized.take_ref]
-      take_ref_object = supplied_take_ref or {
-        kind = "take",
-        ref = normalized.take_ref,
-        identity = { scheme = "guid", value = normalized.take_identity },
-      }
-      take = d13_items_active_take(item)
-      if not take then
-        return d13_items_batch_error("TAKE_NOT_FOUND", "D13 Item/Take batch requires an active Take for Take fields.", index, {
-          item_ref = normalized.item_ref,
-          take_ref = normalized.take_ref,
-          zero_write = true,
-        })
-      end
-      if not d13_items_take_ref_string(take) or d13_items_take_ref_string(take) ~= normalized.take_ref then
-        return d13_items_batch_error("REF_INVALID", "D13 Item/Take batch Take ref does not match the exact active Take.", index, {
-          item_ref = normalized.item_ref,
-          take_ref = normalized.take_ref,
-          zero_write = true,
-        })
-      end
-    end
-    prepared[#prepared + 1] = {
-      id = normalized.id,
-      item_ref = normalized.item_ref,
-      item = item,
-      item_ref_object = {
-        kind = "item",
-        ref = normalized.item_ref,
-        identity = { scheme = "guid", value = normalized.item_identity },
-      },
-      take = take,
-      take_ref = normalized.take_ref,
-      take_ref_object = take_ref_object,
-      item_values = normalized.item,
-      take_values = normalized.take,
-    }
-  end
-  local preflight_ms = (os.clock() - preflight_started) * 1000
-  local dry_run = params.dry_run == true
-  local result_rows = json_array({})
-  local batch_timings = {
-    preflight_ms = preflight_ms,
-    mutation_ms = 0,
-    readback_ms = 0,
-    evidence_ms = 0,
-    transport_ms = 0,
-    total_ms = 0,
-    native_mutation_count = 0,
-    native_property_mutation_count = 0,
-    native_readback_count = 0,
-    rows = #prepared,
-    completed_rows = 0,
-    chunk_size = D13_ITEMS_SET_ITEM_TAKE_CONTROLS_BATCH_CHUNK_SIZE,
-    chunks = math.ceil(#prepared / D13_ITEMS_SET_ITEM_TAKE_CONTROLS_BATCH_CHUNK_SIZE),
-    runner = "d13_generic_item_take_controls_native_batch",
-  }
-  for index = 1, #prepared do
+  local chunk_end = math.min(#prepared, chunk_start + D13_ITEMS_SET_ITEM_TAKE_CONTROLS_BATCH_CHUNK_SIZE - 1)
+  local mutation_started = d13_items_batch_now()
+  for index = chunk_start, chunk_end do
     local row = prepared[index]
-    result_rows[#result_rows + 1] = {
-      id = row.id,
-      batch_index = index,
-      item_ref = row.item_ref,
-      take_ref = row.take_ref or JSON_NULL,
-      identity = { item_ref = row.item_ref, take_ref = row.take_ref or JSON_NULL },
-      status = dry_run and "preflight_passed" or "pending",
-      readback_status = dry_run and "preflight_passed" or "pending",
-      mutation = { status = dry_run and "not_run" or "pending" },
-      live_readback = { status = dry_run and "not_run" or "pending" },
-    }
-  end
-  if dry_run then
-    batch_timings.total_ms = (os.clock() - preflight_started) * 1000
-    return d13_items_batch_summary(request, prepared, result_rows, true, false, batch_timings), nil, json_array({}), json_array({}), json_array({})
-  end
-
-  local mutation_started = os.clock()
-  local mutation_failure = nil
-  for chunk_start = 1, #prepared, D13_ITEMS_SET_ITEM_TAKE_CONTROLS_BATCH_CHUNK_SIZE do
-    local chunk_end = math.min(#prepared, chunk_start + D13_ITEMS_SET_ITEM_TAKE_CONTROLS_BATCH_CHUNK_SIZE - 1)
-    for index = chunk_start, chunk_end do
-      local row = prepared[index]
-      local function set_item(field, key, value)
-        if value == nil then return true end
-        if not d13_items_batch_set_value("item", row.item, key, value) then return false end
-        batch_timings.native_property_mutation_count = batch_timings.native_property_mutation_count + 1
-        return true
-      end
-      local function set_take(field, key, value)
-        if value == nil then return true end
-        if not d13_items_batch_set_value("take", row.take, key, value) then return false end
-        batch_timings.native_property_mutation_count = batch_timings.native_property_mutation_count + 1
-        return true
-      end
-      local item_values = row.item_values
-      local take_values = row.take_values
-      local ok = set_item("volume_db", "D_VOL", item_values.volume_db and d13_items_db_to_linear(item_values.volume_db) or nil)
-        and set_item("length_seconds", "D_LENGTH", item_values.length_seconds)
-        and set_item("fade_in_seconds", "D_FADEINLEN", item_values.fade_in_seconds)
-        and set_item("fade_out_seconds", "D_FADEOUTLEN", item_values.fade_out_seconds)
-        and set_item("snap_offset_seconds", "D_SNAPOFFSET", item_values.snap_offset_seconds)
-      if ok and row.take then
-        ok = set_take("volume_db", "D_VOL", take_values.volume_db and d13_items_db_to_linear(take_values.volume_db) or nil)
-          and set_take("pan", "D_PAN", take_values.pan)
-          and set_take("pitch_semitones", "D_PITCH", take_values.pitch_semitones)
-          and set_take("playrate", "D_PLAYRATE", take_values.playrate)
-          and set_take("preserve_pitch", "B_PPITCH", take_values.preserve_pitch == nil and nil or (take_values.preserve_pitch and 1 or 0))
-      end
-      if not ok or not call_reaper("UpdateItemInProject", row.item) then
-        local _, failure = d13_items_batch_error("COMMAND_FAILED", "REAPER rejected an Item/Take batch native mutation.", index, {
-          item_ref = row.item_ref,
-          take_ref = row.take_ref or JSON_NULL,
-          mutation_attempted = batch_timings.native_property_mutation_count > 0,
-          zero_write = batch_timings.native_property_mutation_count == 0,
-        }, false)
-        mutation_failure = failure
-        break
-      end
-      batch_timings.native_mutation_count = batch_timings.native_mutation_count + 1
+    local function set_item(key, value)
+      if value == nil then return true end
+      if not d13_items_batch_set_value("item", row.item, key, value) then return false end
+      batch_timings.native_property_mutation_count = batch_timings.native_property_mutation_count + 1
+      return true
     end
-    if mutation_failure then break end
+    local function set_take(key, value)
+      if value == nil then return true end
+      if not d13_items_batch_set_value("take", row.take, key, value) then return false end
+      batch_timings.native_property_mutation_count = batch_timings.native_property_mutation_count + 1
+      return true
+    end
+    local item_values = row.item_values
+    local take_values = row.take_values
+    local preserve_pitch_value = nil
+    if take_values.preserve_pitch ~= nil then
+      preserve_pitch_value = take_values.preserve_pitch and 1 or 0
+    end
+    local ok = set_item("D_VOL", item_values.volume_db and d13_items_db_to_linear(item_values.volume_db) or nil)
+      and set_item("D_LENGTH", item_values.length_seconds)
+      and set_item("D_FADEINLEN", item_values.fade_in_seconds)
+      and set_item("D_FADEOUTLEN", item_values.fade_out_seconds)
+      and set_item("D_SNAPOFFSET", item_values.snap_offset_seconds)
+    if ok and row.take then
+      ok = set_take("D_VOL", take_values.volume_db and d13_items_db_to_linear(take_values.volume_db) or nil)
+        and set_take("D_PAN", take_values.pan)
+        and set_take("D_PITCH", take_values.pitch_semitones)
+        and set_take("D_PLAYRATE", take_values.playrate)
+        and set_take("B_PPITCH", preserve_pitch_value)
+    end
+    if not ok or not call_reaper("UpdateItemInProject", row.item) then
+      batch_timings.mutation_ms = batch_timings.mutation_ms + ((d13_items_batch_now() - mutation_started) * 1000)
+      local _, failure = d13_items_batch_error("COMMAND_FAILED", "REAPER rejected an Item/Take batch native mutation.", index, {
+        item_ref = row.item_ref,
+        take_ref = row.take_ref or JSON_NULL,
+        mutation_attempted = batch_timings.native_property_mutation_count > 0,
+        zero_write = batch_timings.native_property_mutation_count == 0,
+        batch_timings = batch_timings,
+        completed_rows = batch_timings.native_mutation_count,
+      }, false)
+      return nil, failure
+    end
+    batch_timings.native_mutation_count = batch_timings.native_mutation_count + 1
   end
-  batch_timings.mutation_ms = (os.clock() - mutation_started) * 1000
-  if mutation_failure then
-    local failure = mutation_failure[2] or mutation_failure
-    failure.details.batch_timings = batch_timings
-    failure.details.completed_rows = batch_timings.native_mutation_count
-    return nil, failure
+  batch_timings.mutation_ms = batch_timings.mutation_ms + ((d13_items_batch_now() - mutation_started) * 1000)
+  batch_timings.completed_chunks = batch_timings.completed_chunks + 1
+  state.next_index = chunk_end + 1
+  if state.next_index <= #prepared then
+    return d13_items_batch_continue("set_item_take_controls_batch.mutate_chunk", state, true, true)
   end
+  return d13_items_batch_continue("set_item_take_controls_batch.aggregate_readback", state, true, false)
+end
 
-  local readback_started = os.clock()
+local function d13_items_batch_aggregate_readback(request, state)
+  if not d13_items_batch_state_valid(state) or state.next_index ~= #state.prepared + 1 then
+    return d13_items_batch_error("INTERNAL_ERROR", "D13 Item/Take batch readback continuation state is malformed.", nil, {
+      blocker = "malformed_internal_continuation",
+    }, false)
+  end
+  local prepared = state.prepared
+  local result_rows = state.result_rows
+  local batch_timings = state.batch_timings
+  local readback_started = d13_items_batch_now()
   local readback_failure = nil
   for index = 1, #prepared do
     local row = prepared[index]
     local result = result_rows[index]
-    local item_identity = d13_items_item_ref_string(row.item)
+    local item_guid = d13_items_item_guid(row.item)
+    local item_identity = item_guid and ("item:guid:" .. item_guid) or nil
     local take_identity = row.take and d13_items_take_ref_string(row.take) or nil
     local matches = item_identity == row.item_ref and (not row.take_ref or take_identity == row.take_ref)
     local expected = row.item_values
@@ -1127,11 +1087,12 @@ local function d13_items_set_item_take_controls_batch(request)
       readback_failure = failure
     end
   end
-  batch_timings.readback_ms = (os.clock() - readback_started) * 1000
-  local evidence_started = os.clock()
+  batch_timings.readback_ms = (d13_items_batch_now() - readback_started) * 1000
+  batch_timings.aggregate_readback_count = 1
+  local evidence_started = d13_items_batch_now()
   batch_timings.completed_rows = batch_timings.native_readback_count
-  batch_timings.evidence_ms = (os.clock() - evidence_started) * 1000
-  batch_timings.total_ms = (os.clock() - preflight_started) * 1000
+  batch_timings.evidence_ms = (d13_items_batch_now() - evidence_started) * 1000
+  batch_timings.total_ms = (d13_items_batch_now() - state.started_at) * 1000
   if readback_failure then
     local failure = readback_failure[2] or readback_failure
     failure.details.batch_timings = batch_timings
@@ -1142,6 +1103,168 @@ local function d13_items_set_item_take_controls_batch(request)
   -- readback. Repeating those identities in refs[] exceeds the Bridge response
   -- budget at the supported 64-row ceiling after successful mutation.
   return d13_items_batch_summary(request, prepared, result_rows, false, true, batch_timings), nil, json_array({}), json_array({}), json_array({})
+end
+
+local function d13_items_set_item_take_controls_batch(request, resume_continuation)
+  if resume_continuation then
+    if resume_continuation.phase == "set_item_take_controls_batch.mutate_chunk" then
+      return d13_items_batch_mutate_chunk(resume_continuation.state)
+    end
+    if resume_continuation.phase == "set_item_take_controls_batch.aggregate_readback" then
+      return d13_items_batch_aggregate_readback(request, resume_continuation.state)
+    end
+    return d13_items_batch_error("INTERNAL_ERROR", "D13 Item/Take batch received an unknown continuation phase.", nil, {
+      blocker = "malformed_internal_continuation",
+      phase = resume_continuation.phase,
+    }, false)
+  end
+  local params = is_object(request.params) and request.params or {}
+  local batch = params.changes or params.batch
+  if params.changes ~= nil and params.batch ~= nil then
+    return d13_items_batch_error("PARAMS_INVALID", "D13 Item/Take batch accepts one changes or batch array, not both.", nil, {
+      zero_write = true,
+    })
+  end
+  if not is_json_array(batch) or #batch < 1 or #batch > D13_ITEMS_SET_ITEM_TAKE_CONTROLS_BATCH_MAX_ROWS then
+    return d13_items_batch_error("BATCH_LIMIT_EXCEEDED", "D13 Item/Take batch accepts 1-64 rows.", nil, {
+      row_count = is_json_array(batch) and #batch or 0,
+      max_rows = D13_ITEMS_SET_ITEM_TAKE_CONTROLS_BATCH_MAX_ROWS,
+      zero_write = true,
+    })
+  end
+  if params.dry_run ~= nil and params.dry_run ~= true and params.dry_run ~= false then
+    return d13_items_batch_error("PARAMS_INVALID", "D13 Item/Take batch dry_run must be boolean.", nil, { zero_write = true })
+  end
+  local ref_map, ref_failure = d13_items_batch_ref_map(request)
+  if not ref_map then return nil, ref_failure end
+  local seen_ids = {}
+  local seen_items = {}
+  local normalized_rows = json_array({})
+  local required_item_refs = {}
+  local preflight_started = d13_items_batch_now()
+  for index = 1, #batch do
+    local row = batch[index]
+    if not is_object(row) then
+      return d13_items_batch_error("PARAMS_INVALID", "D13 Item/Take batch rows must be objects.", index, { zero_write = true })
+    end
+    local normalized, validation_failure = d13_items_batch_validate_fields(row, index)
+    if not normalized then return nil, validation_failure end
+    if seen_ids[normalized.id] then
+      return d13_items_batch_error("PARAMS_INVALID", "D13 Item/Take batch row ids must be unique.", index, { zero_write = true })
+    end
+    if seen_items[normalized.item_ref] then
+      return d13_items_batch_error("PARAMS_INVALID", "D13 Item/Take batch item refs must be unique.", index, { zero_write = true })
+    end
+    seen_ids[normalized.id] = true
+    seen_items[normalized.item_ref] = true
+    required_item_refs[normalized.item_ref] = true
+    normalized_rows[#normalized_rows + 1] = normalized
+  end
+  local live_items, scan_failure, project_scan_item_count = d13_items_batch_live_item_map(required_item_refs)
+  if not live_items then return nil, scan_failure end
+  local prepared = json_array({})
+  for index = 1, #normalized_rows do
+    local normalized = normalized_rows[index]
+    local item = live_items[normalized.item_ref]
+    if not item then
+      return d13_items_batch_error("ITEM_NOT_FOUND", "D13 Item/Take batch could not prove the exact Item identity.", index, {
+        item_ref = normalized.item_ref,
+        zero_write = true,
+      })
+    end
+    local take = nil
+    local take_ref_object = nil
+    if normalized.take_ref then
+      local supplied_take_ref = ref_map[normalized.take_ref]
+      take_ref_object = supplied_take_ref or {
+        kind = "take",
+        ref = normalized.take_ref,
+        identity = { scheme = "guid", value = normalized.take_identity },
+      }
+      take = d13_items_active_take(item)
+      if not take then
+        return d13_items_batch_error("TAKE_NOT_FOUND", "D13 Item/Take batch requires an active Take for Take fields.", index, {
+          item_ref = normalized.item_ref,
+          take_ref = normalized.take_ref,
+          zero_write = true,
+        })
+      end
+      if not d13_items_take_ref_string(take) or d13_items_take_ref_string(take) ~= normalized.take_ref then
+        return d13_items_batch_error("REF_INVALID", "D13 Item/Take batch Take ref does not match the exact active Take.", index, {
+          item_ref = normalized.item_ref,
+          take_ref = normalized.take_ref,
+          zero_write = true,
+        })
+      end
+    end
+    prepared[#prepared + 1] = {
+      id = normalized.id,
+      item_ref = normalized.item_ref,
+      item = item,
+      item_ref_object = {
+        kind = "item",
+        ref = normalized.item_ref,
+        identity = { scheme = "guid", value = normalized.item_identity },
+      },
+      take = take,
+      take_ref = normalized.take_ref,
+      take_ref_object = take_ref_object,
+      item_values = normalized.item,
+      take_values = normalized.take,
+    }
+  end
+  local preflight_ms = (d13_items_batch_now() - preflight_started) * 1000
+  local dry_run = params.dry_run == true
+  local result_rows = json_array({})
+  local batch_timings = {
+    preflight_ms = preflight_ms,
+    mutation_ms = 0,
+    readback_ms = 0,
+    evidence_ms = 0,
+    transport_ms = JSON_NULL,
+    total_ms = 0,
+    native_mutation_count = 0,
+    native_property_mutation_count = 0,
+    native_readback_count = 0,
+    rows = #prepared,
+    completed_rows = 0,
+    completed_chunks = 0,
+    continuation_yield_count = 0,
+    aggregate_readback_count = 0,
+    project_scan_count = 1,
+    project_scan_item_count = project_scan_item_count,
+    chunk_size = D13_ITEMS_SET_ITEM_TAKE_CONTROLS_BATCH_CHUNK_SIZE,
+    chunks = math.ceil(#prepared / D13_ITEMS_SET_ITEM_TAKE_CONTROLS_BATCH_CHUNK_SIZE),
+    job_count = 1,
+    runner = "d13_generic_item_take_controls_continuation_job",
+    execution_mode = "native_chunked_continuation",
+  }
+  for index = 1, #prepared do
+    local row = prepared[index]
+    result_rows[#result_rows + 1] = {
+      id = row.id,
+      batch_index = index,
+      item_ref = row.item_ref,
+      take_ref = row.take_ref or JSON_NULL,
+      identity = { item_ref = row.item_ref, take_ref = row.take_ref or JSON_NULL },
+      status = dry_run and "preflight_passed" or "pending",
+      readback_status = dry_run and "preflight_passed" or "pending",
+      mutation = { status = dry_run and "not_run" or "pending" },
+      live_readback = { status = dry_run and "not_run" or "pending" },
+    }
+  end
+  if dry_run then
+    batch_timings.job_count = 0
+    batch_timings.total_ms = (d13_items_batch_now() - preflight_started) * 1000
+    return d13_items_batch_summary(request, prepared, result_rows, true, false, batch_timings), nil, json_array({}), json_array({}), json_array({})
+  end
+  return d13_items_batch_continue("set_item_take_controls_batch.mutate_chunk", {
+    prepared = prepared,
+    result_rows = result_rows,
+    batch_timings = batch_timings,
+    started_at = preflight_started,
+    next_index = 1,
+  }, false, true)
 end
 
 local function d13_items_set_item_volume(request)

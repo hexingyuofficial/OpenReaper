@@ -185,9 +185,13 @@ describe("D13 items core live handler expansion", () => {
     }
     assert.doesNotMatch(HANDLER_SOURCE, /VERIFICATION_FAILED/);
     const batchHandlerSource = HANDLER_SOURCE.match(
-      /local function d13_items_set_item_take_controls_batch\(request\)[\s\S]*?\nend\n\nlocal function d13_items_set_item_volume/,
+      /local D13_ITEMS_SET_ITEM_TAKE_CONTROLS_BATCH_MAX_ROWS[\s\S]*?\nlocal function d13_items_set_item_volume/,
     )?.[0];
     assert.equal(typeof batchHandlerSource, "string");
+    assert.match(
+      batchHandlerSource,
+      /local function d13_items_set_item_take_controls_batch\(request, resume_continuation\)/,
+    );
     assert.doesNotMatch(batchHandlerSource, /refs\[#refs \+ 1\]/);
     assert.doesNotMatch(HANDLER_SOURCE, /return nil,\s*d13_items_batch_error\(/);
     assert.doesNotMatch(batchHandlerSource, /(?:mutation_failure|readback_failure)\s*=\s*d13_items_batch_error\(/);
@@ -200,6 +204,14 @@ describe("D13 items core live handler expansion", () => {
     assert.match(
       batchHandlerSource,
       /return d13_items_batch_summary\(request, prepared, result_rows, false, true, batch_timings\), nil, json_array\(\{\}\), json_array\(\{\}\), json_array\(\{\}\)/,
+    );
+    assert.match(
+      ROUTE_SOURCE,
+      /handler = D13_ITEMS_CORE_WRITE_HANDLERS\[request\.pack\.capability\][\s\S]*?return handler\(request, resume_continuation\)/,
+    );
+    assert.match(
+      ROUTE_SOURCE,
+      /if d13_item_take_batch_capability and not resume_continuation then\s+phase_may_mutate = false\s+end/,
     );
     assert.match(HANDLER_SOURCE, /call_reaper\("Main_OnCommandEx", D13_ITEMS_TOGGLE_TAKE_REVERSE_ACTION_ID, 0, 0\)/);
     const withoutReviewedReverseAction = HANDLER_SOURCE.replace(
