@@ -1295,7 +1295,7 @@ describe("Alpha3.2-B2 managed render root", () => {
     await harness.assertSeededStatesRestored();
   });
 
-  it("restores every LaunchServices key after an Nth setenv failure", async () => {
+  it("restores only attempted LaunchServices keys after an Nth setenv failure", async () => {
     const harness = await makeLaunchServicesHarness("set-failure");
     await harness.seedDistinctStates();
     await writeFile(path.join(harness.controlRoot, "fail-set-at"), "4\n", "utf8");
@@ -1305,7 +1305,47 @@ describe("Alpha3.2-B2 managed render root", () => {
     await harness.assertSeededStatesRestored();
     await harness.assertLockRemoved();
     const log = await readFile(harness.logPath, "utf8");
-    for (const key of harness.keys) assert.match(log, new RegExp(`restore:(?:set|unset):${key}`));
+    const attemptedKeys = ["OPENREAPER_SESSION_ROOT", ...harness.keys.slice(0, 4)];
+    for (const key of attemptedKeys) {
+      assert.match(log, new RegExp(`restore:(?:set|unset):${key}`));
+    }
+    for (const key of harness.keys.slice(4)) {
+      assert.doesNotMatch(log, new RegExp(`restore:(?:set|unset):${key}`));
+    }
+  });
+
+  it("bounds a stalled LaunchServices environment command before launching REAPER", async () => {
+    const harness = await makeLaunchServicesHarness("bounded-launchctl-stall");
+    await harness.seedDistinctStates();
+    await writeFile(path.join(harness.controlRoot, "hold-set-at"), "1\n", "utf8");
+    const startedAt = Date.now();
+    const result = await harness.run(["--render-root", path.join(harness.root, "selected")]);
+    assert.notEqual(result.code, 0);
+    assert.equal(Date.now() - startedAt < 10_000, true);
+    assert.equal(result.launchRequested, false);
+    assert.match(result.stderr, /failed to set LaunchServices env/u);
+    await harness.assertSeededStatesRestored();
+    await harness.assertLockRemoved();
+  });
+
+  it("fails before mutation when a LaunchServices getenv snapshot query stalls", async () => {
+    const harness = await makeLaunchServicesHarness("bounded-launchctl-getenv-stall");
+    await harness.seedDistinctStates();
+    await writeFile(path.join(harness.controlRoot, "hold-getenv-at"), "1\n", "utf8");
+    const startedAt = Date.now();
+    const result = await harness.run(["--render-root", path.join(harness.root, "selected")]);
+    assert.notEqual(result.code, 0);
+    assert.equal(Date.now() - startedAt < 10_000, true);
+    assert.equal(result.launchRequested, false);
+    assert.match(result.stderr, /failed to read LaunchServices env/u);
+    assert.match(result.stderr, /launchctl status=124/u);
+    await harness.assertSeededStatesRestored();
+    await harness.assertLockRemoved();
+    const stalledPid = Number((await readFile(path.join(harness.controlRoot, "getenv-stall.pid"), "utf8")).trim());
+    assert.equal(Number.isSafeInteger(stalledPid), true);
+    await waitForDeadProcess(stalledPid, 100, 20);
+    const log = await readFile(harness.logPath, "utf8");
+    assert.doesNotMatch(log, /(?:set|restore):(set|unset):/u);
   });
 
   it("restores LaunchServices state after open failure and PID wait failure", async () => {
@@ -1666,6 +1706,7 @@ async function runFakeStartResult({ fixture, label, extraArgs, staleRoot = null 
   const fakeReleasePath = path.join(fixture.root, `${label}-release-fake-reaper`);
   const fakeExitedPath = path.join(fixture.root, `${label}-fake-reaper.exited`);
   await writeFile(fakeBinary, `#!/bin/zsh
+trap 'print -rn -- "terminated" > ${shellQuote(fakeExitedPath)}; exit 143' TERM
 print -rn -- "$$" > ${shellQuote(fakePidPath)}
 ${shellQuote(process.execPath)} -e 'const fs=require("node:fs"); fs.writeFileSync(process.argv[1], JSON.stringify(process.argv.slice(2)))' ${shellQuote(argvCapturePath)} "$@"
 print -r -- "$${RENDER_ENV}" > ${shellQuote(capturePath)}
@@ -1774,11 +1815,13 @@ async function makeLaunchServicesHarness(label, { source = null, fakePidDelayMs 
   const keys = [
     "OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR",
     "OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH",
+    "OPENREAPER_EXPECTED_LAUNCHER_PATH",
     "OPENREAPER_ARTIFACT_ROOT",
     "OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT",
     RENDER_ENV,
     "OPENREAPER_LIVE_BRIDGE_OWNER",
     "OPENREAPER_LIVE_BRIDGE_GENERATION",
+    "OPENREAPER_PROJECT_INDEX_STATE_ROOT",
   ];
   await Promise.all([
     mkdir(path.dirname(startPath), { recursive: true }),
@@ -1789,7 +1832,7 @@ async function makeLaunchServicesHarness(label, { source = null, fakePidDelayMs 
   ]);
   const startSource = withFixtureCleanDialogInspection(source ?? await readFile(START_SOURCE, "utf8"))
     .replace('LAUNCHCTL_BIN="/bin/launchctl"', `LAUNCHCTL_BIN=${shellQuote(launchctlPath)}`)
-    .replace('OPEN_BIN="/usr/bin/open"', `OPEN_BIN=${shellQuote(openPath)}`);
+    .replace('LAUNCHSERVICES_BIN="/usr/bin/osascript"', `LAUNCHSERVICES_BIN=${shellQuote(openPath)}`);
   await writeFile(startPath, startSource, "utf8");
   await cp(BRIDGE_LAUNCHER_SOURCE, path.join(installRoot, "bin", "openreaper-start-mcp-bridge.lua"));
   const doctorPath = path.join(installRoot, "bin", "openreaper-doctor");
@@ -1800,6 +1843,7 @@ async function makeLaunchServicesHarness(label, { source = null, fakePidDelayMs 
 pid_path="$OPENREAPER_B2_FAKE_PID_PATH"
 release_path="$OPENREAPER_B2_FAKE_RELEASE_PATH"
 exited_path="$OPENREAPER_B2_FAKE_EXITED_PATH"
+trap 'print -rn -- "terminated" > "$exited_path"; exit 143' TERM
 if [[ -n "\${OPENREAPER_B2_FAKE_PID_DELAY_SECONDS:-}" ]]; then
   sleep "$OPENREAPER_B2_FAKE_PID_DELAY_SECONDS"
 fi
@@ -2086,9 +2130,18 @@ log=${shellQuote(logPath)}
 cmd="$1"
 key="$2"
 case "$cmd" in
-  getenv)
-    print -r -- "getenv:$key" >> "$log"
-    if [[ -f "$state/$key.presence" && "$(cat "$state/$key.presence")" == "set" ]]; then
+	getenv)
+	  print -r -- "getenv:$key" >> "$log"
+	  count=0
+	  [[ -f "$control/getenv-count" ]] && count="$(cat "$control/getenv-count")"
+	  count=$(( count + 1 ))
+	  print -rn -- "$count" > "$control/getenv-count"
+	  if [[ -f "$control/hold-getenv-at" && "$count" == "$(cat "$control/hold-getenv-at" | tr -d '\\n')" ]]; then
+	    trap '' TERM
+	    print -rn -- "$$" > "$control/getenv-stall.pid"
+	    while true; do :; done
+	  fi
+	  if [[ -f "$state/$key.presence" && "$(cat "$state/$key.presence")" == "set" ]]; then
       cat "$state/$key.value"
       exit 0
     fi
@@ -2123,6 +2176,12 @@ case "$cmd" in
     fi
     ;;
   unsetenv)
+    if [[ -f "$control/fail-restore-key" && "$key" == "$(cat "$control/fail-restore-key" | tr -d '\\n')" && -f "$control/restore-values.json" ]]; then
+      if node -e 'const fs=require("fs");const j=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));process.exit(j[process.argv[2]]?.present?1:0)' "$control/restore-values.json" "$key"; then
+        print -r -- "restore-fail:$key" >> "$log"
+        exit 1
+      fi
+    fi
     phase="set"
     [[ -f "$control/restore-values.json" ]] && node -e 'const fs=require("fs");const j=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));process.exit(j[process.argv[2]]?.present?1:0)' "$control/restore-values.json" "$key" && phase="restore"
     print -r -- "\${phase}:unset:\${key}" >> "$log"
@@ -2138,14 +2197,18 @@ function openFixtureSource({ stateRoot, controlRoot, keys }) {
   return `#!/bin/zsh
 set -eu
 [[ -f ${shellQuote(path.join(controlRoot, "fail-open"))} ]] && exit 1
-app="$2"
-shift 3
+app="$4"
+pid_handoff="$5"
+shift 5
 ${exports}
 [[ -f ${shellQuote(path.join(controlRoot, "skip-pid"))} ]] && exit 0
 if [[ -n "\${OPENREAPER_B2_FAKE_LAUNCH_REQUEST_PATH:-}" ]]; then
   print -rn -- "requested" > "$OPENREAPER_B2_FAKE_LAUNCH_REQUEST_PATH"
 fi
 nohup "$app/Contents/MacOS/REAPER" "$@" >/dev/null 2>&1 &
+launched_pid="$!"
+print -r -- "$launched_pid" > "$pid_handoff"
+print -r -- "$launched_pid"
 `;
 }
 

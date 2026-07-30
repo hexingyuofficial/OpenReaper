@@ -2494,7 +2494,7 @@ async function smokePackagedOpenReaperStartHelper() {
     'USE_LAUNCHSERVICES=true',
     "REAPER_APP",
     "/usr/bin/mdfind",
-    '"${OPEN_BIN}" -na "${REAPER_APP}" --args "${reaper_args[@]}"',
+    "$.NSWorkspaceLaunchNewInstance",
     "LAUNCHSERVICES_ENV_KEYS",
     "snapshot_launchservices_env",
     "LAUNCHSERVICES_CLEANUP_REQUIRED",
@@ -2512,7 +2512,7 @@ async function smokePackagedOpenReaperStartHelper() {
     'export OPENREAPER_LIVE_SMOKE_RENDER_ROOT="${RENDER_ROOT}"',
     'render-root=${RENDER_ROOT}',
     "managed-render-root.path",
-    "wait_for_new_reaper_pid",
+    "read_launchservices_pid_handoff",
     "launch-method=macos_launchservices",
     "reaper-pid=",
     "reaper-pid-file=",
@@ -2990,7 +2990,7 @@ async function smokeFakeLaunchServicesRenderPropagation({ source, fixtureRoot, s
     transformedStart,
     withPackageFixtureCleanDialogInspection(source)
       .replace('LAUNCHCTL_BIN="/bin/launchctl"', `LAUNCHCTL_BIN=${shellQuote(launchctlPath)}`)
-      .replace('OPEN_BIN="/usr/bin/open"', `OPEN_BIN=${shellQuote(openPath)}`),
+      .replace('LAUNCHSERVICES_BIN="/usr/bin/osascript"', `LAUNCHSERVICES_BIN=${shellQuote(openPath)}`),
     "utf8",
   );
   await cp(path.join(packageRoot, "bin", "openreaper-start-mcp-bridge.lua"), path.join(installRoot, "bin", "openreaper-start-mcp-bridge.lua"));
@@ -3017,11 +3017,15 @@ esac
   const openExports = keys.map((key) => `if [[ -f ${shellQuote(path.join(stateRoot, `${key}.presence`))} && "$(cat ${shellQuote(path.join(stateRoot, `${key}.presence`))})" == "set" ]]; then export ${key}="$(cat ${shellQuote(path.join(stateRoot, `${key}.value`))})"; else unset ${key}; fi`).join("\n");
   await writeFile(openPath, `#!/bin/zsh
 set -eu
-app="$2"
-shift 3
+app="$4"
+handoff="$5"
+shift 5
 ${openExports}
 print -rn -- "requested" > ${shellQuote(fakeLaunchRequestPath)}
 nohup "$app/Contents/MacOS/REAPER" "$@" >/dev/null 2>&1 &
+pid="$!"
+print -r -- "$pid"
+print -r -- "$pid" > "$handoff"
 `, "utf8");
   await writeFile(fakeBinary, `#!/bin/zsh
 print -rn -- "$$" > ${shellQuote(fakePidPath)}

@@ -26,7 +26,7 @@ export const ALPHA3_2B3_WAIT_BRIDGE_SECONDS = Object.freeze({
 export const ALPHA3_2B3_READ_PROBE_TIMEOUT_MS = Object.freeze({
   default: 3_000,
   min: 250,
-  max: 10_000,
+  max: 15_000,
 });
 
 const OWNER_MAX_BYTES = 256;

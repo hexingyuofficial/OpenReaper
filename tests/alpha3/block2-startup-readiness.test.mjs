@@ -19,6 +19,10 @@ import {
   ALPHA3_D1_STARTUP_HEALTH_CONTRACT,
 } from "../../packages/mcp-server/src/alpha3-d1-startup-health-v1.mjs";
 import {
+  ALPHA3_2B3_READ_PROBE_TIMEOUT_MS,
+  alpha3_2B3ReadProbeTimeoutMs,
+} from "../../packages/mcp-server/src/alpha3-2b3-runtime-doctor-readiness-v1.mjs";
+import {
   createCallTemplateRuntime,
 } from "../../packages/mcp-server/src/call-template-runtime-v1.mjs";
 import {
@@ -196,7 +200,7 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
     assert.match(source, /if windowSubrole is not "AXWindow" and windowSubrole is not "AXStandardWindow" and windowSubrole is not "" then\s+return "blocked_unknown_dialog:title="/u);
     assert.match(source, /STARTUP_DIALOG_TIMEOUT_SECONDS="\$\{OPENREAPER_STARTUP_DIALOG_TIMEOUT_SECONDS:-15\}"/u);
     assert.match(source, /perl -e 'my \$seconds = shift @ARGV; alarm \$seconds; exec @ARGV or die/u);
-    assert.match(source, /"\$\{STARTUP_DIALOG_TIMEOUT_SECONDS\}"[\s\\]+\/usr\/bin\/osascript - "\$\{STARTUP_DIALOG_ASSIST\}" "\$\{IGNORE_MISSING_MEDIA\}" "\$\{reaper_pid\}"/u);
+    assert.match(source, /"\$\{dialog_timeout_seconds\}"[\s\\]+\/usr\/bin\/osascript - "\$\{STARTUP_DIALOG_ASSIST\}" "\$\{IGNORE_MISSING_MEDIA\}" "\$\{reaper_pid\}"/u);
     assert.match(source, /blocked_dialog_inspection_timeout:seconds=/u);
     assert.match(source, /blocked_dialog_inspection_failed:status=/u);
     const directLaunchStart = source.indexOf('nohup "${REAPER_BIN}"');
@@ -219,6 +223,58 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
     assert.match(source, /if not allowSafeActions then return "blocked_manual_dialog:title=Project Settings"/u);
     assert.match(source, /blocked_dialog_classification:title=/u);
     assert.doesNotMatch(source, /echo "disabled"/u);
+  });
+
+  it("gives the startup public read probe a bounded slow-path window", () => {
+    const source = readFileSync(START_HELPER, "utf8");
+
+    assert.equal(ALPHA3_2B3_READ_PROBE_TIMEOUT_MS.default, 3_000);
+    assert.equal(ALPHA3_2B3_READ_PROBE_TIMEOUT_MS.max, 15_000);
+    assert.equal(alpha3_2B3ReadProbeTimeoutMs({
+      OPENREAPER_DOCTOR_READ_PROBE_TIMEOUT_MS: "15000",
+    }), 15_000);
+    assert.equal(alpha3_2B3ReadProbeTimeoutMs({
+      OPENREAPER_DOCTOR_READ_PROBE_TIMEOUT_MS: "99999",
+    }), 15_000);
+    assert.match(source, /STARTUP_BUDGET_MS="\$\{OPENREAPER_STARTUP_BUDGET_MS:-28500\}"/u);
+    assert.match(source, /STARTUP_BUDGET_MAX_MS=28500/u);
+    assert.match(source, /OPENREAPER_STARTUP_SUPERVISOR_ID/u);
+    assert.match(source, /startup-budget-stage=supervisor_deadline/u);
+    assert.match(source, /kill "TERM", -\$child/u);
+    assert.match(source, /kill "KILL", -\$child/u);
+    assert.match(source, /terminate_process_group\(\$child, \$cleanup_ms\) if \$exit_code != 0/u);
+    assert.match(source, /STARTUP_CLEANUP_RESERVE_MS=6000/u);
+    assert.match(source, /typeset -F 3 SECONDS=0/u);
+    assert.match(source, /OPENREAPER_DOCTOR_SMOKE_TIMEOUT_MS="\$\{doctor_smoke_timeout_ms\}"/u);
+    assert.match(source, /OPENREAPER_DOCTOR_READ_PROBE_TIMEOUT_MS="\$\{doctor_read_timeout_ms\}"/u);
+    assert.match(source, /blocker-code=STARTUP_BUDGET_EXHAUSTED/u);
+    assert.match(source, /local doctor_pid="\$!"/u);
+    assert.match(source, /while kill -0 "\$\{doctor_pid\}"/u);
+    assert.match(source, /wait "\$\{doctor_pid\}" \|\| doctor_status=\$\?/u);
+    assert.match(source, /STARTUP_PROCESS_QUERY_TIMEOUT_MS=750/u);
+    assert.match(source, /STARTUP_LAUNCHCTL_TIMEOUT_MS=2000/u);
+    assert.match(source, /STARTUP_LAUNCHCTL_CLEANUP_TIMEOUT_MS=300/u);
+    assert.match(source, /STARTUP_LAUNCHSERVICES_TIMEOUT_MS=3000/u);
+    assert.match(source, /startup_run_bounded_external/u);
+    assert.match(source, /capture_startup_reaper_identity \\\n+        "\$\{STARTUP_LAUNCHED_REAPER_PID\}" 1/u);
+    assert.doesNotMatch(source, /STARTUP_LAUNCHED_REAPER_PID=""\n\s+echo "\[OpenReaper\] (?:LaunchServices|direct) REAPER identity/u);
+    assert.match(source, /startup_budget_require_window "startup_hook"/u);
+    assert.match(source, /startup_budget_require_window "bridge_readiness"/u);
+    assert.match(source, /cleanup_failed_startup_reaper/u);
+    assert.match(source, /STARTUP_LAUNCH_ACCEPTED=true/u);
+    assert.match(source, /blocker-code=STARTUP_REAPER_CLEANUP_FAILED/u);
+    assert.match(source, /startup_process_identity_fingerprint/u);
+    assert.match(source, /STARTUP_LAUNCHED_REAPER_IDENTITY/u);
+    assert.match(source, /NSWorkspaceLaunchNewInstance/u);
+    assert.match(source, /launched\.processIdentifier/u);
+    assert.match(source, /writeToFileAtomically/u);
+    assert.match(source, /fileHandleWithStandardOutput\.writeData\(pidData\)/u);
+    assert.match(source, /read_launchservices_pid_handoff/u);
+    assert.match(source, /LAUNCHSERVICES_MUTATED_KEYS\+=\("\$\{key\}"\)/u);
+    assert.match(source, /for key in "\$\{LAUNCHSERVICES_MUTATED_KEYS\[@\]\}"/u);
+    assert.match(source, /blocker-code=STARTUP_LAUNCHSERVICES_TIMEOUT/u);
+    assert.doesNotMatch(source, /candidate_pid=.*tail -1/u);
+    assert.doesNotMatch(source, /OPENREAPER_DOCTOR_READ_PROBE_TIMEOUT_MS=3000/u);
   });
 
   it("does not expose the retired conditional-hook or manual bridge-script startup guidance", () => {

@@ -1,6 +1,104 @@
 #!/bin/zsh
 set -euo pipefail
 
+# Supervise the whole helper, including pre-smoke Doctor work and external
+# commands. The inner helper keeps a cleanup reserve; this outer process-group
+# deadline is the final guard against any command that stops making progress.
+if [[ "${OPENREAPER_STARTUP_SUPERVISOR_ID:-}" != "${PPID}:$$" ]]; then
+  unset OPENREAPER_STARTUP_SUPERVISOR_ID 2>/dev/null || true
+  supervisor_budget_ms="${OPENREAPER_STARTUP_BUDGET_MS:-28500}"
+  if [[ ! "${supervisor_budget_ms}" =~ '^[1-9][0-9]*$' ]] \
+      || (( supervisor_budget_ms < 4000 || supervisor_budget_ms > 28500 )); then
+    supervisor_budget_ms=28500
+  fi
+  supervisor_status=0
+  /usr/bin/perl -MPOSIX=:sys_wait_h -MTime::HiRes=time,sleep -e '
+    use strict;
+    use warnings;
+    my ($budget_ms, $cleanup_ms, $script, @args) = @ARGV;
+    my $execution_deadline = time() + (($budget_ms - $cleanup_ms) / 1000);
+    my $supervisor_pid = $$;
+    my $child = fork();
+    die "fork failed: $!" unless defined $child;
+    if ($child == 0) {
+      POSIX::setpgid(0, 0) == 0 or die "setpgid failed: $!";
+      $ENV{OPENREAPER_STARTUP_SUPERVISOR_ID} = "$supervisor_pid:$$";
+      exec {$script} $script, @args or die "exec failed: $!";
+    }
+
+    my $forward_signal = "";
+    $SIG{HUP} = sub { $forward_signal = "HUP" };
+    $SIG{INT} = sub { $forward_signal = "INT" };
+    $SIG{TERM} = sub { $forward_signal = "TERM" };
+
+    sub exit_from_wait_status {
+      my ($status) = @_;
+      return POSIX::WEXITSTATUS($status) if POSIX::WIFEXITED($status);
+      return 128 + POSIX::WTERMSIG($status) if POSIX::WIFSIGNALED($status);
+      return 1;
+    }
+
+    sub terminate_process_group {
+      my ($pgid, $cleanup_ms) = @_;
+      return if kill(0, -$pgid) == 0;
+      kill "TERM", -$pgid;
+      my $deadline = time() + ($cleanup_ms / 1000);
+      while (time() < $deadline) {
+        return if kill(0, -$pgid) == 0;
+        sleep(0.02);
+      }
+      kill "KILL", -$pgid if kill(0, -$pgid) != 0;
+    }
+
+    while (1) {
+      my $waited = waitpid($child, WNOHANG);
+      if ($waited == $child) {
+        my $exit_code = exit_from_wait_status($?);
+        terminate_process_group($child, $cleanup_ms) if $exit_code != 0;
+        exit $exit_code;
+      }
+      if ($forward_signal ne "") {
+        kill $forward_signal, -$child;
+        my $signal_deadline = time() + ($cleanup_ms / 1000);
+        while (time() < $signal_deadline) {
+          my $signal_waited = waitpid($child, WNOHANG);
+          last if $signal_waited == $child;
+          sleep(0.02);
+        }
+        kill "KILL", -$child if kill(0, -$child) != 0;
+        waitpid($child, WNOHANG);
+        my %codes = (HUP => 129, INT => 130, TERM => 143);
+        exit $codes{$forward_signal};
+      }
+      last if time() >= $execution_deadline;
+      sleep(0.02);
+    }
+
+    print STDERR "[OpenReaper] startup-status=blocked_startup_budget_exhausted\n";
+    print STDERR "[OpenReaper] blocker-code=STARTUP_BUDGET_EXHAUSTED\n";
+    print STDERR "[OpenReaper] startup-budget-stage=supervisor_deadline;budget_ms=$budget_ms;cleanup_reserve_ms=$cleanup_ms\n";
+    kill "TERM", -$child;
+    my $hard_deadline = time() + ($cleanup_ms / 1000);
+    my $child_reaped = 0;
+    while (time() < $hard_deadline) {
+      if (!$child_reaped) {
+        my $waited = waitpid($child, WNOHANG);
+        $child_reaped = 1 if $waited == $child;
+      }
+      last if kill(0, -$child) == 0;
+      sleep(0.02);
+    }
+    if (kill(0, -$child) != 0) {
+      kill "KILL", -$child;
+    }
+    waitpid($child, WNOHANG) unless $child_reaped;
+    exit 124;
+  ' "${supervisor_budget_ms}" 6000 "$0" "$@" || supervisor_status=$?
+  exit "${supervisor_status}"
+fi
+unset OPENREAPER_STARTUP_SUPERVISOR_ID
+typeset -F 3 SECONDS=0
+
 SCRIPT_DIR="${0:A:h}"
 INSTALL_ROOT="${SCRIPT_DIR:h}"
 BRIDGE_SCRIPT="${INSTALL_ROOT}/vendor/openreaper-kernel/reaper/bridge/openreaper-live-bridge.lua"
@@ -19,6 +117,12 @@ PROJECT_INDEX_STATE_ROOT=""
 BRIDGE_OWNER=""
 BRIDGE_GENERATION=""
 START_WAIT_SECONDS="${OPENREAPER_START_WAIT_SECONDS:-20}"
+STARTUP_BUDGET_MS="${OPENREAPER_STARTUP_BUDGET_MS:-28500}"
+STARTUP_BUDGET_MAX_MS=28500
+STARTUP_CLEANUP_RESERVE_MS=6000
+STARTUP_DOCTOR_SMOKE_MAX_MS=22000
+STARTUP_DOCTOR_READ_MAX_MS=15000
+STARTUP_DOCTOR_OVERHEAD_MS=1000
 STARTUP_DIALOG_TIMEOUT_SECONDS="${OPENREAPER_STARTUP_DIALOG_TIMEOUT_SECONDS:-15}"
 STARTUP_DIALOG_ASSIST=true
 IGNORE_MISSING_MEDIA=false
@@ -27,7 +131,11 @@ STARTUP_DIALOG_CONSENT_EXPLICIT=false
 RECOVER_EXISTING=false
 STARTUP_DIALOG_POLICY_FILE="${INSTALL_ROOT:h}/data/startup-dialog-consent"
 LAUNCHCTL_BIN="/bin/launchctl"
-OPEN_BIN="/usr/bin/open"
+LAUNCHSERVICES_BIN="/usr/bin/osascript"
+STARTUP_PROCESS_QUERY_TIMEOUT_MS=750
+STARTUP_LAUNCHCTL_TIMEOUT_MS=2000
+STARTUP_LAUNCHCTL_CLEANUP_TIMEOUT_MS=300
+STARTUP_LAUNCHSERVICES_TIMEOUT_MS=3000
 LAUNCHSERVICES_LOCK_PATH="${INSTALL_ROOT}/session/.openreaper-launchservices-env.lock"
 LAUNCHSERVICES_LOCK_OWNED=false
 LAUNCHSERVICES_LOCK_TOKEN=""
@@ -37,6 +145,13 @@ LAUNCHSERVICES_RECOVERY_RETAINED=false
 LAUNCHSERVICES_LOCK_TOKEN_WRITTEN=false
 LAUNCHSERVICES_LOCK_METADATA_WRITTEN=false
 LAUNCHSERVICES_SNAPSHOT_CREATED=false
+LAUNCHSERVICES_PID_HANDOFF=""
+LAUNCHSERVICES_MUTATED_KEYS=()
+STARTUP_LAUNCH_ATTEMPTED=false
+STARTUP_LAUNCH_ACCEPTED=false
+STARTUP_LAUNCHED_REAPER_PID=""
+STARTUP_LAUNCHED_REAPER_IDENTITY=""
+STARTUP_REAPER_BEFORE_PIDS=""
 LAUNCHSERVICES_ENV_KEYS=(
   OPENREAPER_SESSION_ROOT
   OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR
@@ -289,6 +404,15 @@ done
 
 if [[ ! "${STARTUP_DIALOG_TIMEOUT_SECONDS}" =~ '^[1-9][0-9]*$' ]] || (( STARTUP_DIALOG_TIMEOUT_SECONDS > 120 )); then
   echo "[OpenReaper] OPENREAPER_STARTUP_DIALOG_TIMEOUT_SECONDS must be an integer from 1 to 120" >&2
+  exit 2
+fi
+if [[ ! "${START_WAIT_SECONDS}" =~ '^[1-9][0-9]*$' ]] || (( START_WAIT_SECONDS > 120 )); then
+  echo "[OpenReaper] OPENREAPER_START_WAIT_SECONDS must be an integer from 1 to 120" >&2
+  exit 2
+fi
+if [[ ! "${STARTUP_BUDGET_MS}" =~ '^[1-9][0-9]*$' ]] \
+    || (( STARTUP_BUDGET_MS < 4000 || STARTUP_BUDGET_MS > STARTUP_BUDGET_MAX_MS )); then
+  echo "[OpenReaper] OPENREAPER_STARTUP_BUDGET_MS must be an integer from 4000 to ${STARTUP_BUDGET_MAX_MS}" >&2
   exit 2
 fi
 
@@ -879,7 +1003,7 @@ mkdir -p "${TRANSPORT_DIR}/requests" "${TRANSPORT_DIR}/results" "${ARTIFACT_ROOT
 mkdir -p "${SESSION_ROOT}" "${LOG_DIR}"
 
 USE_LAUNCHSERVICES=false
-if [[ "${DIRECT_BINARY}" != "true" && "$(uname -s)" == "Darwin" && -n "${REAPER_APP}" && -d "${REAPER_APP}" && -x "${OPEN_BIN}" && -x "${LAUNCHCTL_BIN}" ]]; then
+if [[ "${DIRECT_BINARY}" != "true" && "$(uname -s)" == "Darwin" && -n "${REAPER_APP}" && -d "${REAPER_APP}" && -x "${LAUNCHSERVICES_BIN}" && -x "${LAUNCHCTL_BIN}" ]]; then
   USE_LAUNCHSERVICES=true
 fi
 
@@ -914,6 +1038,67 @@ echo "[OpenReaper] bridge-status=starting_automatically"
 echo "[OpenReaper] startup-dialog-consent=${STARTUP_DIALOG_CONSENT};policy=${STARTUP_DIALOG_POLICY_FILE}"
 echo "[OpenReaper] startup-dialog-assist=exact_safe_allowlist;missing_media_consent=${IGNORE_MISSING_MEDIA}"
 echo "[OpenReaper] startup-dialog-timeout-seconds=${STARTUP_DIALOG_TIMEOUT_SECONDS}"
+echo "[OpenReaper] startup-budget-ms=${STARTUP_BUDGET_MS}"
+
+startup_remaining_budget_ms() {
+  local -i remaining_ms
+  remaining_ms=$(( STARTUP_BUDGET_MS - SECONDS * 1000 ))
+  if (( remaining_ms < 0 )); then
+    remaining_ms=0
+  fi
+  print -r -- "${remaining_ms}"
+}
+
+startup_budget_require_window() {
+  local stage="$1"
+  local -i required_ms="$2"
+  local -i remaining_ms
+  remaining_ms="$(startup_remaining_budget_ms)"
+  if (( remaining_ms >= required_ms )); then
+    return 0
+  fi
+  echo "[OpenReaper] startup-status=blocked_startup_budget_exhausted" >&2
+  echo "[OpenReaper] blocker-code=STARTUP_BUDGET_EXHAUSTED" >&2
+  echo "[OpenReaper] startup-budget-stage=${stage};budget_ms=${STARTUP_BUDGET_MS};remaining_ms=${remaining_ms};required_ms=${required_ms}" >&2
+  return 1
+}
+
+startup_run_bounded_external() {
+  local -i timeout_ms="$1"
+  shift
+  /usr/bin/perl -MPOSIX=:sys_wait_h -MTime::HiRes=time,sleep -e '
+    use strict;
+    use warnings;
+    my ($timeout_ms, @command) = @ARGV;
+    exit 126 unless @command;
+    my $child = fork();
+    die "fork failed: $!" unless defined $child;
+    if ($child == 0) {
+      exec {$command[0]} @command or exit 126;
+    }
+    my $deadline = time() + ($timeout_ms / 1000);
+    while (time() < $deadline) {
+      my $waited = waitpid($child, WNOHANG);
+      if ($waited == $child) {
+        exit POSIX::WEXITSTATUS($?) if POSIX::WIFEXITED($?);
+        exit 128 + POSIX::WTERMSIG($?) if POSIX::WIFSIGNALED($?);
+        exit 1;
+      }
+      exit 1 if $waited == -1;
+      sleep(0.01);
+    }
+    kill "TERM", $child;
+    my $term_deadline = time() + 0.05;
+    while (time() < $term_deadline) {
+      my $waited = waitpid($child, WNOHANG);
+      exit 124 if $waited == $child || $waited == -1;
+      sleep(0.01);
+    }
+    kill "KILL", $child;
+    waitpid($child, 0);
+    exit 124;
+  ' "${timeout_ms}" "$@"
+}
 
 launch_reaper() {
   local -a reaper_args
@@ -927,9 +1112,10 @@ launch_reaper() {
   reaper_args+=("${BRIDGE_LAUNCHER_SCRIPT}")
 
   local reaper_pid
+  local before_pids="${SESSION_ROOT}/reaper-before.pids"
+  reaper_pids > "${before_pids}"
+  STARTUP_REAPER_BEFORE_PIDS="${before_pids}"
   if [[ "${USE_LAUNCHSERVICES}" == "true" ]]; then
-    local before_pids="${SESSION_ROOT}/reaper-before.pids"
-    reaper_pids > "${before_pids}"
     if ! set_launchservices_env; then
       echo "[OpenReaper] LaunchServices environment setup failed; restoration will be attempted." >&2
       exit 1
@@ -938,12 +1124,69 @@ launch_reaper() {
       echo "[OpenReaper] startup status preparation failed; restoration will be attempted." >&2
       exit 1
     fi
-    if ! "${OPEN_BIN}" -na "${REAPER_APP}" --args "${reaper_args[@]}" >> "${START_LOG}" 2>&1; then
-      echo "[OpenReaper] LaunchServices failed to start REAPER. See log: ${START_LOG}" >&2
+    if ! (umask 077; : > "${LAUNCHSERVICES_PID_HANDOFF}") \
+        || ! chmod 600 "${LAUNCHSERVICES_PID_HANDOFF}"; then
+      echo "[OpenReaper] LaunchServices pid handoff setup failed before launch." >&2
       exit 1
     fi
-    if ! reaper_pid="$(wait_for_new_reaper_pid "${before_pids}")"; then
-      echo "[OpenReaper] LaunchServices did not expose a new REAPER pid in time. See log: ${START_LOG}" >&2
+    STARTUP_LAUNCH_ATTEMPTED=true
+    local launch_status=0
+    if startup_run_bounded_external "${STARTUP_LAUNCHSERVICES_TIMEOUT_MS}" \
+        "${LAUNCHSERVICES_BIN}" -l JavaScript - "${REAPER_APP}" \
+        "${LAUNCHSERVICES_PID_HANDOFF}" "${reaper_args[@]}" <<'JXA' > "${LAUNCHSERVICES_PID_HANDOFF}" 2>> "${START_LOG}"
+function run(argv) {
+  ObjC.import('AppKit');
+  ObjC.import('Foundation');
+  const workspace = $.NSWorkspace.sharedWorkspace;
+  const appUrl = $.NSURL.fileURLWithPath($(argv[0]));
+  const configuration = $.NSMutableDictionary.alloc.init;
+  configuration.setObjectForKey($(argv.slice(2)), $.NSWorkspaceLaunchConfigurationArguments);
+  const launchError = Ref();
+  const launched = workspace.launchApplicationAtURLOptionsConfigurationError(
+    appUrl,
+    $.NSWorkspaceLaunchNewInstance,
+    configuration,
+    launchError,
+  );
+  if (!launched) {
+    const detail = launchError[0] ? ObjC.unwrap(launchError[0].localizedDescription) : 'unknown LaunchServices error';
+    throw new Error(detail);
+  }
+  const pid = String(launched.processIdentifier);
+  const pidData = $(pid + '\n').dataUsingEncoding($.NSUTF8StringEncoding);
+  $.NSFileHandle.fileHandleWithStandardOutput.writeData(pidData);
+  if (!pidData || !pidData.writeToFileAtomically($(argv[1]), true)) {
+    throw new Error('could not publish the launched REAPER pid handoff');
+  }
+  return pid;
+}
+JXA
+    then
+      launch_status=0
+    else
+      launch_status=$?
+    fi
+    if reaper_pid="$(read_launchservices_pid_handoff)"; then
+      STARTUP_LAUNCHED_REAPER_PID="${reaper_pid}"
+      STARTUP_LAUNCHED_REAPER_IDENTITY="$(capture_startup_reaper_identity "${reaper_pid}")" || true
+    fi
+    if (( launch_status != 0 )); then
+      if (( launch_status == 124 )); then
+        echo "[OpenReaper] LaunchServices timed out after ${STARTUP_LAUNCHSERVICES_TIMEOUT_MS} ms. See log: ${START_LOG}" >&2
+        echo "[OpenReaper] blocker-code=STARTUP_LAUNCHSERVICES_TIMEOUT" >&2
+      else
+        echo "[OpenReaper] LaunchServices failed to start REAPER. See log: ${START_LOG}" >&2
+      fi
+      exit "${launch_status}"
+    fi
+    if [[ -z "${reaper_pid}" ]]; then
+      echo "[OpenReaper] LaunchServices did not publish a valid REAPER pid handoff; refusing unsafe ownership assumptions." >&2
+      echo "[OpenReaper] blocker-code=STARTUP_REAPER_IDENTITY_UNVERIFIED" >&2
+      exit 1
+    fi
+    if [[ -z "${STARTUP_LAUNCHED_REAPER_IDENTITY}" ]]; then
+      echo "[OpenReaper] LaunchServices REAPER identity could not be verified; refusing unsafe ownership assumptions." >&2
+      echo "[OpenReaper] blocker-code=STARTUP_REAPER_IDENTITY_UNVERIFIED" >&2
       exit 1
     fi
     echo "${reaper_pid}" > "${PID_FILE}"
@@ -960,8 +1203,15 @@ launch_reaper() {
       echo "[OpenReaper] startup status preparation failed for direct launch." >&2
       exit 1
     fi
+    STARTUP_LAUNCH_ATTEMPTED=true
     nohup "${REAPER_BIN}" "${reaper_args[@]}" >> "${START_LOG}" 2>&1 &
     reaper_pid="$!"
+    STARTUP_LAUNCHED_REAPER_PID="${reaper_pid}"
+    if ! STARTUP_LAUNCHED_REAPER_IDENTITY="$(capture_startup_reaper_identity "${reaper_pid}")"; then
+      echo "[OpenReaper] direct REAPER identity could not be verified; refusing unsafe ownership assumptions." >&2
+      echo "[OpenReaper] blocker-code=STARTUP_REAPER_IDENTITY_UNVERIFIED" >&2
+      exit 1
+    fi
     disown "${reaper_pid}" 2>/dev/null || true
     echo "${reaper_pid}" > "${PID_FILE}"
     if ! wait_for_startup_hook "${reaper_pid}"; then
@@ -975,7 +1225,107 @@ launch_reaper() {
 }
 
 reaper_pids() {
-  pgrep -f "${REAPER_BIN}" 2>/dev/null | sort -n || true
+  local escaped_reaper_bin
+  escaped_reaper_bin="$(print -rn -- "${REAPER_BIN}" | command sed 's/[][(){}.^$*+?|\\]/\\&/g')"
+  startup_run_bounded_external "${STARTUP_PROCESS_QUERY_TIMEOUT_MS}" \
+    /usr/bin/pgrep -f "(^|[[:space:]])${escaped_reaper_bin}([[:space:]]|$)" 2>/dev/null | sort -n || true
+}
+
+startup_launcher_argument_pids() {
+  local escaped_launcher
+  escaped_launcher="$(print -rn -- "${BRIDGE_LAUNCHER_SCRIPT}" | command sed 's/[][(){}.^$*+?|\\]/\\&/g')"
+  startup_run_bounded_external "${STARTUP_PROCESS_QUERY_TIMEOUT_MS}" \
+    /usr/bin/pgrep -f "(^|[[:space:]])${escaped_launcher}([[:space:]]|$)" 2>/dev/null | sort -n || true
+}
+
+startup_launch_candidate_pids() {
+  local candidate_pid
+  while IFS= read -r candidate_pid; do
+    if [[ -n "${candidate_pid}" ]]; then
+      print -r -- "${candidate_pid}"
+    fi
+  done < <(comm -12 \
+    <(reaper_pids) \
+    <(startup_launcher_argument_pids))
+}
+
+startup_expected_executable_paths() {
+  local reaper_real_path="${REAPER_BIN:A}"
+  print -r -- "${reaper_real_path}"
+  local shebang interpreter interpreter_name interpreter_path
+  IFS= read -r shebang < "${REAPER_BIN}" || return 0
+  if [[ "${shebang}" != '#!'* ]]; then
+    return 0
+  fi
+  interpreter="${shebang#\#!}"
+  interpreter="${interpreter#${interpreter%%[![:space:]]*}}"
+  interpreter="${interpreter%%[[:space:]]*}"
+  if [[ "${interpreter}" == "/usr/bin/env" ]]; then
+    interpreter_name="${shebang#*env}"
+    interpreter_name="${interpreter_name#${interpreter_name%%[![:space:]]*}}"
+    interpreter_name="${interpreter_name%%[[:space:]]*}"
+    interpreter_path="$(command -v -- "${interpreter_name}" 2>/dev/null || true)"
+  else
+    interpreter_path="${interpreter}"
+  fi
+  if [[ -n "${interpreter_path}" && -x "${interpreter_path}" ]]; then
+    print -r -- "${interpreter_path:A}"
+  fi
+}
+
+startup_process_executable_path() {
+  local candidate_pid="$1"
+  local lsof_identity line executable_path
+  lsof_identity="$(startup_run_bounded_external "${STARTUP_PROCESS_QUERY_TIMEOUT_MS}" \
+    /usr/sbin/lsof -a -p "${candidate_pid}" -d txt -Fn 2>/dev/null)" || return 1
+  for line in "${(@f)lsof_identity}"; do
+    if [[ "${line}" == n* ]]; then
+      executable_path="${line#n}"
+      [[ -n "${executable_path}" && -e "${executable_path}" ]] || return 1
+      print -r -- "${executable_path:A}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+startup_process_identity_fingerprint() {
+  local candidate_pid="$1"
+  local process_identity executable_path identity_digest
+  if ! process_identity="$(LC_ALL=C startup_run_bounded_external "${STARTUP_PROCESS_QUERY_TIMEOUT_MS}" \
+      /bin/ps -ww -p "${candidate_pid}" -o lstart= -o command= 2>/dev/null)" \
+      || [[ -z "${process_identity//[[:space:]]/}" ]]; then
+    return 1
+  fi
+  executable_path="$(startup_process_executable_path "${candidate_pid}")" || return 1
+  startup_expected_executable_paths | command grep -Fxq -- "${executable_path}" || return 1
+  identity_digest="$(print -rn -- "${candidate_pid}"$'\n'"${process_identity}"$'\n'"${executable_path}" \
+    | /usr/bin/shasum -a 256)"
+  identity_digest="${identity_digest%%[[:space:]]*}"
+  [[ "${identity_digest}" =~ '^[0-9a-f]{64}$' ]] || return 1
+  print -r -- "${identity_digest}"
+}
+
+capture_startup_reaper_identity() {
+  local candidate_pid="$1"
+  local -i max_attempts="${2:-20}"
+  local attempt identity
+  for (( attempt = 1; attempt <= max_attempts; attempt++ )); do
+    if startup_launch_candidate_pids | command grep -Fxq -- "${candidate_pid}" \
+        && identity="$(startup_process_identity_fingerprint "${candidate_pid}")"; then
+      print -r -- "${identity}"
+      return 0
+    fi
+    sleep 0.05
+  done
+  if ! reaper_pids | command grep -Fxq -- "${candidate_pid}"; then
+    echo "[OpenReaper] startup-identity-stage=reaper_command_not_matched" >&2
+  elif ! startup_launcher_argument_pids | command grep -Fxq -- "${candidate_pid}"; then
+    echo "[OpenReaper] startup-identity-stage=launcher_argument_not_matched" >&2
+  else
+    echo "[OpenReaper] startup-identity-stage=executable_or_fingerprint_not_matched" >&2
+  fi
+  return 1
 }
 
 launchservices_env_value() {
@@ -1092,6 +1442,42 @@ reset_launchservices_lock_state() {
   LAUNCHSERVICES_LOCK_TOKEN_WRITTEN=false
   LAUNCHSERVICES_LOCK_METADATA_WRITTEN=false
   LAUNCHSERVICES_SNAPSHOT_CREATED=false
+  LAUNCHSERVICES_PID_HANDOFF=""
+  LAUNCHSERVICES_MUTATED_KEYS=()
+}
+
+cleanup_launchservices_pid_handoff() {
+  if [[ -z "${LAUNCHSERVICES_PID_HANDOFF}" \
+      || ( ! -e "${LAUNCHSERVICES_PID_HANDOFF}" && ! -L "${LAUNCHSERVICES_PID_HANDOFF}" ) ]]; then
+    return 0
+  fi
+  if [[ ! -f "${LAUNCHSERVICES_PID_HANDOFF}" || -L "${LAUNCHSERVICES_PID_HANDOFF}" ]]; then
+    echo "[OpenReaper] LaunchServices pid handoff is unsafe; lock retained: ${LAUNCHSERVICES_LOCK_PATH}" >&2
+    return 1
+  fi
+  rm -f -- "${LAUNCHSERVICES_PID_HANDOFF}"
+}
+
+read_launchservices_pid_handoff() {
+  if ! launchservices_lock_owner_matches \
+      || [[ -z "${LAUNCHSERVICES_PID_HANDOFF}" \
+      || ! -f "${LAUNCHSERVICES_PID_HANDOFF}" || -L "${LAUNCHSERVICES_PID_HANDOFF}" ]]; then
+    return 1
+  fi
+  local handoff_size
+  handoff_size="$(wc -c < "${LAUNCHSERVICES_PID_HANDOFF}" 2>/dev/null)" || return 1
+  handoff_size="${handoff_size//[[:space:]]/}"
+  if [[ "${handoff_size}" != <-> ]] || (( handoff_size < 2 || handoff_size > 32 )); then
+    return 1
+  fi
+  chmod 600 "${LAUNCHSERVICES_PID_HANDOFF}" || return 1
+  local launched_pid
+  launched_pid="$(<"${LAUNCHSERVICES_PID_HANDOFF}")"
+  launched_pid="${launched_pid//[[:space:]]/}"
+  if [[ "${launched_pid}" != <-> || "${launched_pid}" == "0" ]]; then
+    return 1
+  fi
+  print -r -- "${launched_pid}"
 }
 
 release_owned_launchservices_lock() {
@@ -1104,6 +1490,9 @@ release_owned_launchservices_lock() {
     return 1
   fi
   LAUNCHSERVICES_SNAPSHOT_CREATED=false
+  if ! cleanup_launchservices_pid_handoff; then
+    return 1
+  fi
   if ! launchservices_lock_owner_matches; then
     echo "[OpenReaper] LaunchServices lock ownership changed during cleanup; lock retained: ${LAUNCHSERVICES_LOCK_PATH}" >&2
     return 1
@@ -1207,6 +1596,7 @@ acquire_launchservices_lock() {
   fi
   LAUNCHSERVICES_LOCK_OWNED=true
   LAUNCHSERVICES_SNAPSHOT_DIR="${LAUNCHSERVICES_LOCK_PATH}/snapshot"
+  LAUNCHSERVICES_PID_HANDOFF="${LAUNCHSERVICES_LOCK_PATH}/launched-reaper.pid"
   LAUNCHSERVICES_LOCK_TOKEN="$$-$(date -u +%Y%m%dT%H%M%SZ)-${RANDOM}${RANDOM}"
   if (( ${#LAUNCHSERVICES_LOCK_TOKEN} > 192 )); then
     fail_launchservices_lock_setup "LaunchServices owner token exceeded its bounded size before environment mutation."
@@ -1255,11 +1645,18 @@ acquire_launchservices_lock() {
 snapshot_launchservices_env() {
   local key
   local previous
+  local -i getenv_status
   for key in "${LAUNCHSERVICES_ENV_KEYS[@]}"; do
-    if previous="$("${LAUNCHCTL_BIN}" getenv "${key}" 2>/dev/null)"; then
+    if previous="$(startup_run_bounded_external "${STARTUP_LAUNCHCTL_TIMEOUT_MS}" \
+        "${LAUNCHCTL_BIN}" getenv "${key}" 2>/dev/null)"; then
       print -rn -- "set" > "${LAUNCHSERVICES_SNAPSHOT_DIR}/${key}.presence" || return 1
       print -rn -- "${previous}" > "${LAUNCHSERVICES_SNAPSHOT_DIR}/${key}.value" || return 1
     else
+      getenv_status=$?
+      if (( getenv_status != 1 )); then
+        echo "[OpenReaper] failed to read LaunchServices env ${key}; launchctl status=${getenv_status}" >&2
+        return 1
+      fi
       print -rn -- "unset" > "${LAUNCHSERVICES_SNAPSHOT_DIR}/${key}.presence" || return 1
       : > "${LAUNCHSERVICES_SNAPSHOT_DIR}/${key}.value" || return 1
     fi
@@ -1283,13 +1680,18 @@ set_launchservices_env() {
   local key
   local desired
   for key in "${LAUNCHSERVICES_ENV_KEYS[@]}"; do
+    startup_budget_require_window "launchservices_env_mutation" \
+      $(( STARTUP_CLEANUP_RESERVE_MS + STARTUP_LAUNCHCTL_TIMEOUT_MS + 250 )) || return 1
+    LAUNCHSERVICES_MUTATED_KEYS+=("${key}")
     if desired="$(launchservices_env_value "${key}")"; then
-      if ! "${LAUNCHCTL_BIN}" setenv "${key}" "${desired}"; then
+      if ! startup_run_bounded_external "${STARTUP_LAUNCHCTL_TIMEOUT_MS}" \
+          "${LAUNCHCTL_BIN}" setenv "${key}" "${desired}"; then
         echo "[OpenReaper] failed to set LaunchServices env ${key}" >&2
         return 1
       fi
     else
-      if ! "${LAUNCHCTL_BIN}" unsetenv "${key}"; then
+      if ! startup_run_bounded_external "${STARTUP_LAUNCHCTL_TIMEOUT_MS}" \
+          "${LAUNCHCTL_BIN}" unsetenv "${key}"; then
         echo "[OpenReaper] failed to clear stale LaunchServices env ${key}" >&2
         return 1
       fi
@@ -1305,7 +1707,9 @@ restore_launchservices_env() {
   local key
   local presence
   local previous
-  for key in "${LAUNCHSERVICES_ENV_KEYS[@]}"; do
+  # Restore only keys this launch attempted to mutate. The cleanup-only bound
+  # keeps all 15 possible restores inside the 6 s reserve.
+  for key in "${LAUNCHSERVICES_MUTATED_KEYS[@]}"; do
     local presence_path="${LAUNCHSERVICES_SNAPSHOT_DIR}/${key}.presence"
     local value_path="${LAUNCHSERVICES_SNAPSHOT_DIR}/${key}.value"
     if [[ ! -f "${presence_path}" || -L "${presence_path}" || ! -f "${value_path}" || -L "${value_path}" ]]; then
@@ -1316,12 +1720,14 @@ restore_launchservices_env() {
     presence="$(<"${presence_path}")"
     previous="$(<"${value_path}")"
     if [[ "${presence}" == "set" ]]; then
-      if ! "${LAUNCHCTL_BIN}" setenv "${key}" "${previous}"; then
+      if ! startup_run_bounded_external "${STARTUP_LAUNCHCTL_CLEANUP_TIMEOUT_MS}" \
+          "${LAUNCHCTL_BIN}" setenv "${key}" "${previous}"; then
         echo "[OpenReaper] failed to restore LaunchServices env ${key}" >&2
         failed=1
       fi
     elif [[ "${presence}" == "unset" ]]; then
-      if ! "${LAUNCHCTL_BIN}" unsetenv "${key}"; then
+      if ! startup_run_bounded_external "${STARTUP_LAUNCHCTL_CLEANUP_TIMEOUT_MS}" \
+          "${LAUNCHCTL_BIN}" unsetenv "${key}"; then
         echo "[OpenReaper] failed to unset LaunchServices env ${key}" >&2
         failed=1
       fi
@@ -1349,9 +1755,91 @@ restore_launchservices_env() {
   return 0
 }
 
+startup_reaper_pid_matches_owned_launch() {
+  local candidate_pid="$1"
+  if [[ "${candidate_pid}" != <-> || "${candidate_pid}" == "0" ]]; then
+    return 1
+  fi
+  if [[ -z "${STARTUP_LAUNCHED_REAPER_PID}" || "${candidate_pid}" != "${STARTUP_LAUNCHED_REAPER_PID}" \
+      || -z "${STARTUP_LAUNCHED_REAPER_IDENTITY}" ]]; then
+    return 1
+  fi
+  if [[ -n "${STARTUP_REAPER_BEFORE_PIDS}" && -f "${STARTUP_REAPER_BEFORE_PIDS}" ]] \
+      && command grep -Fxq -- "${candidate_pid}" "${STARTUP_REAPER_BEFORE_PIDS}"; then
+    return 1
+  fi
+  startup_launch_candidate_pids | command grep -Fxq -- "${candidate_pid}" || return 1
+  local current_identity
+  current_identity="$(startup_process_identity_fingerprint "${candidate_pid}")" || return 1
+  [[ "${current_identity}" == "${STARTUP_LAUNCHED_REAPER_IDENTITY}" ]]
+}
+
+discover_owned_startup_reaper_pid() {
+  if [[ -n "${STARTUP_LAUNCHED_REAPER_PID}" ]] \
+      && startup_reaper_pid_matches_owned_launch "${STARTUP_LAUNCHED_REAPER_PID}"; then
+    print -r -- "${STARTUP_LAUNCHED_REAPER_PID}"
+    return 0
+  fi
+  return 1
+}
+
+cleanup_failed_startup_reaper() {
+  if [[ "${STARTUP_LAUNCH_ATTEMPTED}" != "true" || "${STARTUP_LAUNCH_ACCEPTED}" == "true" ]]; then
+    return 0
+  fi
+  if [[ -n "${STARTUP_LAUNCHED_REAPER_PID}" && -z "${STARTUP_LAUNCHED_REAPER_IDENTITY}" ]] \
+      && kill -0 "${STARTUP_LAUNCHED_REAPER_PID}" 2>/dev/null; then
+    if ! STARTUP_LAUNCHED_REAPER_IDENTITY="$(capture_startup_reaper_identity \
+        "${STARTUP_LAUNCHED_REAPER_PID}" 1)"; then
+      echo "[OpenReaper] startup-cleanup=skipped_unverified;reaper_pid=${STARTUP_LAUNCHED_REAPER_PID}" >&2
+      echo "[OpenReaper] blocker-code=STARTUP_REAPER_IDENTITY_UNVERIFIED" >&2
+      return 1
+    fi
+  fi
+  local reaper_pid
+  if ! reaper_pid="$(discover_owned_startup_reaper_pid)"; then
+    return 0
+  fi
+  if [[ "${reaper_pid}" != <-> || "${reaper_pid}" == "0" ]]; then
+    return 0
+  fi
+  kill -TERM "${reaper_pid}" 2>/dev/null || true
+  local attempt
+  for attempt in {1..10}; do
+    if ! kill -0 "${reaper_pid}" 2>/dev/null; then
+      break
+    fi
+    sleep 0.05
+  done
+  if kill -0 "${reaper_pid}" 2>/dev/null; then
+    if startup_reaper_pid_matches_owned_launch "${reaper_pid}"; then
+      kill -KILL "${reaper_pid}" 2>/dev/null || true
+    fi
+  fi
+  for attempt in {1..10}; do
+    if ! kill -0 "${reaper_pid}" 2>/dev/null; then
+      break
+    fi
+    sleep 0.05
+  done
+  if kill -0 "${reaper_pid}" 2>/dev/null; then
+    echo "[OpenReaper] startup-cleanup=failed;reaper_pid=${reaper_pid}" >&2
+    echo "[OpenReaper] blocker-code=STARTUP_REAPER_CLEANUP_FAILED" >&2
+    return 1
+  fi
+  if [[ -f "${PID_FILE}" && ! -L "${PID_FILE}" && "$(<"${PID_FILE}")" == "${reaper_pid}" ]]; then
+    rm -f -- "${PID_FILE}" || true
+  fi
+  echo "[OpenReaper] startup-cleanup=reaper_terminated;reaper_pid=${reaper_pid}" >&2
+  return 0
+}
+
 launchservices_cleanup_on_exit() {
   local original_status=$?
   trap - EXIT
+  if (( original_status != 0 )); then
+    cleanup_failed_startup_reaper || true
+  fi
   if [[ "${LAUNCHSERVICES_RECOVERY_RETAINED}" == "true" ]]; then
     if (( original_status == 0 )); then
       original_status=1
@@ -1370,24 +1858,6 @@ launchservices_cleanup_on_exit() {
     fi
   fi
   exit "${original_status}"
-}
-
-wait_for_new_reaper_pid() {
-  local before_pids="$1"
-  local current_pids="${SESSION_ROOT}/reaper-current.pids"
-  local max_ticks=$(( START_WAIT_SECONDS * 4 ))
-  local tick
-  for (( tick = 1; tick <= max_ticks; tick++ )); do
-    reaper_pids > "${current_pids}"
-    local new_pid
-    new_pid="$(comm -13 "${before_pids}" "${current_pids}" | tail -1 || true)"
-    if [[ -n "${new_pid}" ]]; then
-      echo "${new_pid}"
-      return 0
-    fi
-    sleep 0.25
-  done
-  return 1
 }
 
 assert_reaper_process_alive() {
@@ -1486,6 +1956,7 @@ wait_for_startup_hook() {
   local max_ticks=$(( START_WAIT_SECONDS * 4 ))
   local tick dialog_result pending_dialog_blocker=""
   for (( tick = 1; tick <= max_ticks; tick++ )); do
+    startup_budget_require_window "startup_hook" $(( STARTUP_CLEANUP_RESERVE_MS + 250 )) || return 1
     if ! kill -0 "${reaper_pid}" 2>/dev/null; then
       echo "[OpenReaper] REAPER exited before its startup hook published a stage. pid=${reaper_pid}" >&2
       return 1
@@ -1496,6 +1967,7 @@ wait_for_startup_hook() {
     if startup_status_stage_ready; then
       return 0
     fi
+    startup_budget_require_window "startup_hook_dialog_inspection" $(( STARTUP_CLEANUP_RESERVE_MS + 1000 )) || return 1
     # A project-load dialog can prevent REAPER from reaching the package launcher.
     # Reuse the exact safe classifier while LaunchServices still carries the
     # session environment; unknown and decision-bearing dialogs stay blocked.
@@ -1545,11 +2017,26 @@ wait_for_startup_hook() {
 verify_public_bridge_read() {
   local doctor="${INSTALL_ROOT}/bin/openreaper-doctor"
   local doctor_log="${START_LOG%.log}-doctor.log"
+  local -i remaining_ms doctor_smoke_timeout_ms doctor_read_timeout_ms
   if [[ ! -x "${doctor}" ]]; then
     echo "[OpenReaper] installed Doctor is missing or not executable: ${doctor}" >&2
     return 1
   fi
-  if (
+  remaining_ms="$(startup_remaining_budget_ms)"
+  doctor_smoke_timeout_ms=$(( remaining_ms - STARTUP_CLEANUP_RESERVE_MS ))
+  if (( doctor_smoke_timeout_ms > STARTUP_DOCTOR_SMOKE_MAX_MS )); then
+    doctor_smoke_timeout_ms=${STARTUP_DOCTOR_SMOKE_MAX_MS}
+  fi
+  doctor_read_timeout_ms=$(( doctor_smoke_timeout_ms - STARTUP_DOCTOR_OVERHEAD_MS ))
+  if (( doctor_read_timeout_ms > STARTUP_DOCTOR_READ_MAX_MS )); then
+    doctor_read_timeout_ms=${STARTUP_DOCTOR_READ_MAX_MS}
+  fi
+  if (( doctor_smoke_timeout_ms < 1000 || doctor_read_timeout_ms < 250 )); then
+    startup_budget_require_window "public_bridge_read" \
+      $(( STARTUP_CLEANUP_RESERVE_MS + STARTUP_DOCTOR_OVERHEAD_MS + 250 )) || true
+    return 1
+  fi
+  (
     cd "${INSTALL_ROOT}" || exit 1
     OPENREAPER_SESSION_ROOT="${SESSION_ROOT}" \
         OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR="${TRANSPORT_DIR}" \
@@ -1559,10 +2046,17 @@ verify_public_bridge_read() {
         OPENREAPER_LIVE_SMOKE_RENDER_ROOT="${RENDER_ROOT}" \
         OPENREAPER_LIVE_BRIDGE_OWNER="${BRIDGE_OWNER}" \
         OPENREAPER_LIVE_BRIDGE_GENERATION="${BRIDGE_GENERATION}" \
-        OPENREAPER_DOCTOR_SMOKE_TIMEOUT_MS=10000 \
-        OPENREAPER_DOCTOR_READ_PROBE_TIMEOUT_MS=3000 \
+        OPENREAPER_DOCTOR_SMOKE_TIMEOUT_MS="${doctor_smoke_timeout_ms}" \
+        OPENREAPER_DOCTOR_READ_PROBE_TIMEOUT_MS="${doctor_read_timeout_ms}" \
         "${doctor}" --wait-bridge=2
-  ) > "${doctor_log}" 2>&1; then
+  ) > "${doctor_log}" 2>&1 &
+  local doctor_pid="$!"
+  local doctor_status=0
+  while kill -0 "${doctor_pid}" 2>/dev/null; do
+    sleep 0.05
+  done
+  wait "${doctor_pid}" || doctor_status=$?
+  if (( doctor_status == 0 )); then
     echo "[OpenReaper] bridge-read-probe=passed"
     echo "[OpenReaper] doctor-log=${doctor_log}"
     return 0
@@ -1605,9 +2099,19 @@ run_startup_dialog_assist() {
     return 0
   fi
   local reaper_pid assist_result="" assist_status=0
+  local -i remaining_ms dialog_timeout_seconds
   reaper_pid="$(cat "${PID_FILE}")"
+  remaining_ms="$(startup_remaining_budget_ms)"
+  dialog_timeout_seconds=$(( (remaining_ms - STARTUP_CLEANUP_RESERVE_MS) / 1000 ))
+  if (( dialog_timeout_seconds > STARTUP_DIALOG_TIMEOUT_SECONDS )); then
+    dialog_timeout_seconds=${STARTUP_DIALOG_TIMEOUT_SECONDS}
+  fi
+  if (( dialog_timeout_seconds < 1 )); then
+    printf '%s\n' "blocked_startup_budget_exhausted:stage=dialog_inspection"
+    return 0
+  fi
   if assist_result="$(/usr/bin/perl -e 'my $seconds = shift @ARGV; alarm $seconds; exec @ARGV or die "exec failed: $!"' \
-      "${STARTUP_DIALOG_TIMEOUT_SECONDS}" \
+      "${dialog_timeout_seconds}" \
       /usr/bin/osascript - "${STARTUP_DIALOG_ASSIST}" "${IGNORE_MISSING_MEDIA}" "${reaper_pid}" <<'APPLESCRIPT' 2>> "${START_LOG}"
 on exactUiElementCount(theWindow, targetName, targetRole)
   tell application "System Events"
@@ -1775,7 +2279,7 @@ APPLESCRIPT
   else
     assist_status=$?
     if (( assist_status == 142 )); then
-      assist_result="blocked_dialog_inspection_timeout:seconds=${STARTUP_DIALOG_TIMEOUT_SECONDS}"
+      assist_result="blocked_dialog_inspection_timeout:seconds=${dialog_timeout_seconds}"
     elif (( assist_status != 0 )); then
       assist_result="blocked_dialog_inspection_failed:status=${assist_status}"
     else
@@ -1783,7 +2287,7 @@ APPLESCRIPT
     fi
   fi
   if (( assist_status == 142 )); then
-    echo "blocked_dialog_inspection_timeout:seconds=${STARTUP_DIALOG_TIMEOUT_SECONDS}" >&2
+    echo "blocked_dialog_inspection_timeout:seconds=${dialog_timeout_seconds}" >&2
   elif (( assist_status != 0 )); then
     echo "blocked_dialog_inspection_failed:status=${assist_status}" >&2
   fi
@@ -1842,6 +2346,7 @@ wait_for_startup_readiness() {
     return 1
   fi
   for (( tick = 1; tick <= max_ticks; tick++ )); do
+    startup_budget_require_window "bridge_readiness" $(( STARTUP_CLEANUP_RESERVE_MS + 250 )) || return 1
     assert_reaper_process_alive || return 1
     # A matching heartbeat plus the public read probe is sufficient startup
     # truth. Accessibility is only consulted while the Bridge is not ready.
@@ -1850,6 +2355,7 @@ wait_for_startup_readiness() {
       echo "[OpenReaper] bridge-heartbeat=ready owner=${BRIDGE_OWNER} generation=${BRIDGE_GENERATION}"
       return 0
     fi
+    startup_budget_require_window "bridge_readiness_dialog_inspection" $(( STARTUP_CLEANUP_RESERVE_MS + 1000 )) || return 1
     dialog_result="$(run_startup_dialog_assist)"
     record_dialog_result "${dialog_result}"
     # Accessibility can finish after the Bridge became healthy. Re-read live
@@ -1920,7 +2426,12 @@ else
   fi
   launch_reaper
 fi
-wait_for_startup_readiness
+startup_readiness_status=0
+wait_for_startup_readiness || startup_readiness_status=$?
+if (( startup_readiness_status != 0 )); then
+  exit "${startup_readiness_status}"
+fi
+STARTUP_LAUNCH_ACCEPTED=true
 
 echo "[OpenReaper] startup-status=ready"
 echo "[OpenReaper] bridge-status=ready"
