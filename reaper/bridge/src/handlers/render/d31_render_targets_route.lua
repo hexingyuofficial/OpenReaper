@@ -172,6 +172,178 @@ local function d31_probe_output(path_value, extension)
   return false
 end
 
+local function d31_u16(bytes, offset)
+  local low, high = bytes:byte(offset, offset + 1)
+  if not low or not high then return nil end
+  return low + (high * 256)
+end
+
+local function d31_u32(bytes, offset)
+  local a, b, c, d = bytes:byte(offset, offset + 3)
+  if not a or not b or not c or not d then return nil end
+  return a + (b * 256) + (c * 65536) + (d * 16777216)
+end
+
+local function d31_linear_db(value)
+  if type(value) ~= "number" or value <= 0 then return -150 end
+  return 20 * math.log(value) / math.log(10)
+end
+
+local function d31_pcm_sample(bytes, offset, bits)
+  local b1, b2, b3, b4 = bytes:byte(offset, offset + 3)
+  if not b1 then return nil end
+  if bits == 8 then return (b1 - 128) / 128 end
+  if bits == 16 then
+    if not b2 then return nil end
+    local value = b1 + (b2 * 256)
+    if value >= 32768 then value = value - 65536 end
+    return value / 32768
+  end
+  if bits == 24 then
+    if not b2 or not b3 then return nil end
+    local value = b1 + (b2 * 256) + (b3 * 65536)
+    if value >= 8388608 then value = value - 16777216 end
+    return value / 8388608
+  end
+  if bits == 32 then
+    if not b2 or not b3 or not b4 then return nil end
+    local value = b1 + (b2 * 256) + (b3 * 65536) + (b4 * 16777216)
+    if value >= 2147483648 then value = value - 4294967296 end
+    return value / 2147483648
+  end
+  return nil
+end
+
+-- D31 needs exact RMS, which the stock PCM peak API does not expose. For the
+-- lossless WAV path, read the rendered PCM bytes in bounded blocks so the
+-- result cannot infer audible content from file size alone.
+local function d31_measure_wav_pcm(path_value)
+  local handle = io.open(path_value, "rb")
+  if not handle then return nil, { code = "MEASUREMENT_UNAVAILABLE", message = "Could not open the rendered WAV for PCM measurement." } end
+  local header = handle:read(12) or ""
+  if #header < 12 or header:sub(1, 4) ~= "RIFF" or header:sub(9, 12) ~= "WAVE" then
+    handle:close()
+    return nil, { code = "MEASUREMENT_UNAVAILABLE", message = "Rendered output is not a RIFF/WAVE file." }
+  end
+
+  local fmt_bytes = nil
+  local data_position = nil
+  local data_size = nil
+  while true do
+    local chunk_header = handle:read(8) or ""
+    if #chunk_header == 0 then break end
+    if #chunk_header < 8 then
+      handle:close()
+      return nil, { code = "MEASUREMENT_UNAVAILABLE", message = "Rendered WAV contains a truncated chunk header." }
+    end
+    local chunk_id = chunk_header:sub(1, 4)
+    local chunk_size = d31_u32(chunk_header, 5)
+    if not chunk_size then
+      handle:close()
+      return nil, { code = "MEASUREMENT_UNAVAILABLE", message = "Rendered WAV contains an invalid chunk size." }
+    end
+    local chunk_position = handle:seek()
+    if not chunk_position then
+      handle:close()
+      return nil, { code = "MEASUREMENT_UNAVAILABLE", message = "Could not seek while parsing rendered WAV chunks." }
+    end
+    if chunk_id == "fmt " and chunk_size >= 16 and not fmt_bytes then
+      fmt_bytes = handle:read(math.min(chunk_size, 64)) or ""
+    elseif chunk_id == "data" and not data_position then
+      data_position = chunk_position
+      data_size = chunk_size
+    end
+    local next_position = chunk_position + chunk_size + (chunk_size % 2)
+    if not handle:seek("set", next_position) then
+      handle:close()
+      return nil, { code = "MEASUREMENT_UNAVAILABLE", message = "Could not seek to the next rendered WAV chunk." }
+    end
+  end
+
+  local format_code = fmt_bytes and d31_u16(fmt_bytes, 1) or nil
+  local channel_count = fmt_bytes and d31_u16(fmt_bytes, 3) or nil
+  local sample_rate_hz = fmt_bytes and d31_u32(fmt_bytes, 5) or nil
+  local bits = fmt_bytes and d31_u16(fmt_bytes, 15) or nil
+  if format_code ~= 1 or not channel_count or channel_count < 1 or channel_count > 64 or not sample_rate_hz or sample_rate_hz < 1 or not bits or not ({ [8] = true, [16] = true, [24] = true, [32] = true })[bits] or not data_position or not data_size then
+    handle:close()
+    return nil, { code = "MEASUREMENT_UNAVAILABLE", message = "Rendered WAV is not a supported integer PCM stream." }
+  end
+  local bytes_per_sample = bits / 8
+  local frame_bytes = channel_count * bytes_per_sample
+  if frame_bytes < 1 or data_size < frame_bytes or data_size % frame_bytes ~= 0 then
+    handle:close()
+    return nil, { code = "MEASUREMENT_UNAVAILABLE", message = "Rendered WAV data does not contain complete PCM frames." }
+  end
+
+  local frame_count = math.floor(data_size / frame_bytes)
+  local sample_count = frame_count * channel_count
+  local remaining_frames = frame_count
+  local frame_offset = 0
+  local peak_linear = 0
+  local sum_squares = 0
+  if not handle:seek("set", data_position) then
+    handle:close()
+    return nil, { code = "MEASUREMENT_UNAVAILABLE", message = "Could not seek to rendered WAV PCM data." }
+  end
+  while remaining_frames > 0 do
+    local block_frames = math.min(8192, remaining_frames)
+    local block = handle:read(block_frames * frame_bytes) or ""
+    if #block ~= block_frames * frame_bytes then
+      handle:close()
+      return nil, { code = "MEASUREMENT_UNAVAILABLE", message = "Rendered WAV PCM data ended before the declared frame count." }
+    end
+    for frame = 0, block_frames - 1 do
+      for channel = 0, channel_count - 1 do
+        local sample_offset = (frame * frame_bytes) + (channel * bytes_per_sample) + 1
+        local sample = d31_pcm_sample(block, sample_offset, bits)
+        if sample == nil then
+          handle:close()
+          return nil, { code = "MEASUREMENT_UNAVAILABLE", message = "Rendered WAV PCM sample decoding failed." }
+        end
+        local absolute = math.abs(sample)
+        if absolute > peak_linear then peak_linear = absolute end
+        sum_squares = sum_squares + (sample * sample)
+      end
+    end
+    frame_offset = frame_offset + block_frames
+    remaining_frames = remaining_frames - block_frames
+  end
+  handle:close()
+
+  local rms_linear = math.sqrt(sum_squares / sample_count)
+  local all_zero = peak_linear == 0
+  return {
+    measurement_status = "measured",
+    measurement_scope = "rendered_file_pcm",
+    measurement_format = "wav_pcm",
+    sample_rate_hz = sample_rate_hz,
+    channel_count = channel_count,
+    frame_count = frame_count,
+    sample_count = sample_count,
+    peak_linear = peak_linear,
+    peak_dbfs = d31_linear_db(peak_linear),
+    rms_linear = rms_linear,
+    rms_dbfs = d31_linear_db(rms_linear),
+    silence_classification = all_zero and "all_zero" or "non_silent",
+    is_silent = all_zero,
+  }
+end
+
+local function d31_measure_output(path_value, extension)
+  if extension == "wav" then return d31_measure_wav_pcm(path_value) end
+  return {
+    measurement_status = "unavailable",
+    measurement_scope = "rendered_file",
+    measurement_format = extension,
+    peak_linear = JSON_NULL,
+    peak_dbfs = JSON_NULL,
+    rms_linear = JSON_NULL,
+    rms_dbfs = JSON_NULL,
+    silence_classification = "unavailable",
+    is_silent = JSON_NULL,
+  }
+end
+
 local function d31_get_number(project, key)
   local ok, value = call_reaper("GetSetProjectInfo", project, key, 0, false)
   return ok and type(value) == "number" and value or nil
@@ -593,6 +765,8 @@ local function d31_render_targets(request)
       local size = d31_size(output.absolute_path)
       local header_ok, actual_format, actual_bitrate = d31_probe_output(output.absolute_path, output.extension)
       if size <= 0 or not header_ok or actual_format ~= request.params.format or (format.mp3_bitrate_kbps and actual_bitrate ~= format.mp3_bitrate_kbps) then return { failure = { code = "VERIFY_FAILED", message = "Rendered output is absent, empty, or has the wrong container, MPEG layer, or bitrate.", details = { output_basename = output.output_basename, requested_format = request.params.format, actual_format = actual_format, requested_bitrate_kbps = format.mp3_bitrate_kbps, actual_bitrate_kbps = actual_bitrate, extension = output.extension, file_size_bytes = size, target_index = index - 1 }, recoverable = false } } end
+      local measurement, measurement_error = d31_measure_output(output.absolute_path, output.extension)
+      if not measurement then return { failure = { code = "VERIFY_FAILED", message = "Rendered output could not be measured without inferring audible content from file size.", details = { output_basename = output.output_basename, measurement_error = measurement_error and measurement_error.message or "unknown_measurement_failure", target_index = index - 1 }, recoverable = false } } end
       local project_copy_path = output.absolute_path .. ".RPP"
       local project_copy_retained = file_exists(project_copy_path)
       result_outputs[#result_outputs + 1] = {
@@ -605,6 +779,19 @@ local function d31_render_targets(request)
         actual_format = actual_format,
         requested_bitrate_kbps = format.mp3_bitrate_kbps or JSON_NULL,
         actual_bitrate_kbps = actual_bitrate or JSON_NULL,
+        measurement_status = measurement.measurement_status,
+        measurement_scope = measurement.measurement_scope,
+        measurement_format = measurement.measurement_format,
+        sample_rate_hz = measurement.sample_rate_hz or JSON_NULL,
+        measured_channel_count = measurement.channel_count or JSON_NULL,
+        frame_count = measurement.frame_count or JSON_NULL,
+        sample_count = measurement.sample_count or JSON_NULL,
+        measured_peak_linear = measurement.peak_linear,
+        measured_peak_dbfs = measurement.peak_dbfs,
+        measured_rms_linear = measurement.rms_linear,
+        measured_rms_dbfs = measurement.rms_dbfs,
+        silence_classification = measurement.silence_classification,
+        is_silent = measurement.is_silent,
         target_identity = target.ref or target.label,
         generated_project_copy_retained = project_copy_retained,
         generated_project_copy_path = project_copy_retained and project_copy_path or nil,

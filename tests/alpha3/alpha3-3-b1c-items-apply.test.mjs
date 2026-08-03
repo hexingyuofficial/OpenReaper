@@ -25,7 +25,10 @@ import {
   CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS,
   createCallTemplateRuntime,
 } from "../../packages/mcp-server/src/call-template-runtime-v1.mjs";
-import { validateMacroExecutionEnvelope } from "../../packages/mcp-server/src/macro-runtime-contract-v1.mjs";
+import {
+  MACRO_CONTRACT_CEILINGS,
+  validateMacroExecutionEnvelope,
+} from "../../packages/mcp-server/src/macro-runtime-contract-v1.mjs";
 
 const NOW = "2026-07-13T16:00:00.000Z";
 const STDIO_SERVER = path.resolve("packages/mcp-server/src/openreaper-mcp-stdio.mjs");
@@ -592,39 +595,110 @@ describe("Alpha3.3-B1c executable macro.items.apply", () => {
 
     assert.equal(result.ok, true, JSON.stringify(result));
     assert.equal(bridge.items.size, 3);
-    assert.deepEqual(bridge.calls.map((call) => call.id), [
-      "template.items.resolve_item_ref",
-      "template.items.read_item_summary",
-      "template.analysis.detect_item_silence",
-      "template.items.split_item_by_silence",
-      "template.items.read_item_summary",
-      "template.items.read_item_summary",
-      "template.items.read_item_summary",
-      "template.items.list_items_on_track",
-    ]);
+    assert.deepEqual(bridge.calls.map((call) => call.id), ["template.items.split_item_by_silence"]);
     assert.equal(result.result.changes.length, 1);
-    assert.equal(result.result.changes[0].status, "applied");
-    assert.deepEqual(result.result.changes[0].mutation, {
-      status: "completed",
-      template_id: "template.items.split_item_by_silence",
-    });
-    assert.deepEqual(result.result.changes[0].live_readback, {
-      status: "passed",
-      source: "split_atom_plus_kept_items_plus_track_count",
-      observed_value: {
-        kept: 3,
-        deleted: 2,
-        removed_seconds: 0.5,
-        remaining_seconds: 1.5,
-        track_item_count: 3,
-      },
-    });
-    assert.deepEqual(result.result.changes[0].index_maintenance, {
-      status: "completed",
-      scopes: ["items", "tracks", "takes"],
-    });
-    assert.deepEqual(invalidations, [["items", "tracks", "takes"]]);
+    assert.equal(result.result.changes[0].status, "ok");
+    assert.equal(result.result.changes[0].mutation, "done");
+    assert.equal(result.result.changes[0].readback, "pass");
+    assert.equal(result.result.changes[0].index, "done");
+    assert.equal(result.result.data.aggregate_readback[0].item_count_after, 3);
+    assert.equal(result.result.data.aggregate_readback[0].delete_count, 2);
+    assert.equal(result.result.data.aggregate_readback[0].source_media_deleted, false);
+    assert.deepEqual(invalidations, [["items", "takes"]]);
     assert.deepEqual(validateMacroExecutionEnvelope(result), { valid: true, errors: [] });
+  });
+
+  it("keeps 64-target audio batch envelopes within the public detail budget", async () => {
+    const items = Array.from({ length: 64 }, (_, index) => item(
+      itemRef(`{00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}}`),
+      index * 2,
+      2,
+      { silence_segment_count: 1, silence_seconds: 0.25 },
+    )).map((entry) => ({ ...entry, track_ref: "track:guid:{00000000-0000-4000-8000-000000000001}" }));
+    for (const mode of ["remove_silence", "normalize_level"]) {
+      const bridge = new FakeFoundationBridge(items);
+      const result = await executeAlpha3_3B1cItemsApplyMacro({
+        request: request({
+          mode,
+          target_refs: items.map((entry) => entry.item_ref.ref),
+          ...(mode === "normalize_level" ? { normalization_metric: "peak", normalization_target: -6 } : {}),
+          dry_run: false,
+        }),
+        executeAtomic: bridge.executeAtomic,
+        now: () => new Date(NOW),
+      });
+
+      assert.equal(result.ok, true, JSON.stringify(result));
+      assert.equal(result.result.data.aggregate_readback.length, 64);
+      if (mode === "remove_silence") {
+        assert.equal(result.result.data.aggregate_readback[0].kept_item_count, 2);
+      } else {
+        assert.equal(result.result.data.normalization_metric, "peak");
+      }
+      assert.equal("kept_item_refs" in result.result.data.aggregate_readback[0], false);
+      assert.equal(
+        Buffer.byteLength(JSON.stringify({
+          stages: result.execution.stages,
+          changes: result.result.changes,
+          data: result.result.data,
+          blockers: result.blockers,
+          error: result.error,
+          recovery: result.recovery,
+        }), "utf8") <= MACRO_CONTRACT_CEILINGS.inline_detail_max_bytes,
+        true,
+        `${mode} inline detail exceeded the shared ceiling`,
+      );
+      assert.equal(result.budget.actual_bytes <= result.budget.max_bytes, true);
+      assert.deepEqual(validateMacroExecutionEnvelope(result), { valid: true, errors: [] });
+    }
+  });
+
+  it("projects stale bridge zero-write truth for audio batches", async () => {
+    const calls = [];
+    const result = await executeAlpha3_3B1cItemsApplyMacro({
+      request: request({
+        mode: "remove_silence",
+        target: "exact",
+        target_refs: [ITEM_A.ref],
+        dry_run: false,
+      }),
+      executeAtomic: async (input) => {
+        calls.push(input);
+        const stale = failure("template.items.split_item_by_silence", "ITEM_NOT_FOUND", "The exact Item ref is stale.");
+        stale.error.details = { zero_write: true };
+        return stale;
+      },
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, false, JSON.stringify(result));
+    assert.equal(result.result.data.zero_write, true);
+    assert.equal(result.error.code, "ITEM_NOT_FOUND");
+    assert.equal(calls.length, 1);
+  });
+
+  it("returns invalid exact audio refs as typed zero-write before dispatch", async () => {
+    let dispatches = 0;
+    const result = await executeAlpha3_3B1cItemsApplyMacro({
+      request: request({
+        mode: "normalize_level",
+        target: "exact",
+        target_refs: ["item:index:1"],
+        normalization_metric: "peak",
+        normalization_target: -6,
+        dry_run: false,
+      }),
+      executeAtomic: async () => {
+        dispatches += 1;
+        throw new Error("invalid exact ref must not dispatch");
+      },
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, false, JSON.stringify(result));
+    assert.equal(result.result.data.zero_write, true);
+    assert.equal(result.error.code, "ITEM_APPLY_EXACT_TARGET_REQUIRED");
+    assert.equal(dispatches, 0);
   });
 
   it("blocks incomplete or all-silent analysis before split-by-silence mutation", async () => {
@@ -648,16 +722,12 @@ describe("Alpha3.3-B1c executable macro.items.apply", () => {
         now: () => new Date(NOW),
       });
 
-      assert.equal(result.ok, false);
-      assert.equal(result.execution.status, "blocked");
+      assert.equal(result.ok, false, JSON.stringify(result));
+      assert.equal(result.execution.status, "failed");
       assert.equal(result.error.code, testCase.code);
       assert.equal(result.result.changes.length, 0);
-      assert.equal(bridge.calls.some((call) => isWrite(call.id)), false);
-      assert.deepEqual(bridge.calls.map((call) => call.id), [
-        "template.items.resolve_item_ref",
-        "template.items.read_item_summary",
-        "template.analysis.detect_item_silence",
-      ]);
+      assert.equal(bridge.calls.some((call) => isWrite(call.id) && call.input.batch !== true), false);
+      assert.deepEqual(bridge.calls.map((call) => call.id), ["template.items.split_item_by_silence"]);
     }
   });
 
@@ -1138,6 +1208,68 @@ class FakeFoundationBridge {
     if (id === "template.tracks.resolve_track_ref") {
       const resolved = trackRef(input.track_ref.slice("track:guid:".length));
       return execution(id, { track_ref: resolved.ref }, [resolved]);
+    }
+    if (id === "template.items.split_item_by_silence" && input.batch === true) {
+      if (this.options.analysisCoverageIncomplete) return failure(id, "ITEM_APPLY_ANALYSIS_COVERAGE_INCOMPLETE", "Fake batch analysis coverage is incomplete.");
+      if (this.options.allSilent) return failure(id, "ITEM_APPLY_ALL_SILENT_BLOCKED", "Fake batch retained an all-silent Item without mutation.");
+      const targetRefs = (Array.isArray(refs) ? refs : []).filter((ref) => ref?.kind === "item");
+      const aggregateReadback = [];
+      const outputRefs = [];
+      for (const targetRef of targetRefs) {
+        const entry = this.items.get(targetRef.ref);
+        if (!entry) return failure(id, "ITEM_NOT_FOUND", "Fake Item ref was not found.");
+        const silenceCount = entry.silence_segment_count ?? 0;
+        const removedSeconds = entry.silence_seconds ?? 0;
+        const remainingSeconds = entry.length_seconds - removedSeconds;
+        const keptCount = silenceCount + 1;
+        const keptLength = remainingSeconds / keptCount;
+        const itemCountBefore = [...this.items.values()].filter((candidate) => candidate.track_ref === entry.track_ref).length;
+        const keptRefs = [entry.item_ref.ref];
+        const deletedRefs = [];
+        this.splitSerial += 1;
+        entry.length_seconds = keptLength;
+        for (let index = 1; index < keptCount; index += 1) {
+          const keptRef = itemRef(`{SPLIT-${this.splitSerial}-KEPT-${index + 1}}`);
+          const kept = structuredClone(entry);
+          kept.item_ref = keptRef;
+          kept.position_seconds = entry.position_seconds + (keptLength * index);
+          this.items.set(keptRef.ref, kept);
+          keptRefs.push(keptRef.ref);
+        }
+        for (let index = 0; index < silenceCount; index += 1) {
+          deletedRefs.push(`item:guid:{SPLIT-${this.splitSerial}-DELETED-${index + 1}}`);
+        }
+        aggregateReadback.push({
+          item_ref: entry.item_ref.ref,
+          owner_track_ref: entry.track_ref,
+          status: "applied",
+          mutation: { status: "completed" },
+          live_readback: { status: "passed" },
+          kept_item_refs: keptRefs,
+          deleted_item_refs: deletedRefs,
+          silence_segment_count: silenceCount,
+          split_count: silenceCount * 2,
+          delete_count: silenceCount,
+          item_count_before: itemCountBefore,
+          item_count_after: itemCountBefore + keptCount - 1,
+          removed_duration_seconds: removedSeconds,
+          remaining_duration_seconds: remainingSeconds,
+          source_media_deleted: false,
+          changed: silenceCount > 0,
+        });
+        outputRefs.push(...keptRefs.map(exactItemObject));
+      }
+      return execution(id, {
+        target_count: aggregateReadback.length,
+        returned_target_count: aggregateReadback.length,
+        aggregate_readback: aggregateReadback,
+        plan_hash: "fake-s3-plan-hash",
+        batch_timings: { target_resolution_ms: 0, preflight_ms: 1, mutation_ms: 1, readback_ms: 1, total_ms: 3 },
+        native_counters: { native_mutation_count: aggregateReadback.length, native_readback_count: aggregateReadback.length, aggregate_readback_count: aggregateReadback.length, continuation_yield_count: 0 },
+        transport_call_count: 1,
+        undo_opened: true,
+        undo_closed: true,
+      }, outputRefs);
     }
     if (id === "template.items.list_items_on_track") {
       const trackReference = refs.track_ref;

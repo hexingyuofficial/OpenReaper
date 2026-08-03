@@ -88,6 +88,7 @@ export const WAVE2A_MEDIA_TEMPLATES = deepFreeze([
       take_ref: { type: "string" },
       file_ref: { type: "string" },
       source_type: { type: "string" },
+      take_name: { type: "string" },
       filename: { type: "string" },
       length_seconds: { type: "number" },
       channel_count: { type: "integer" },

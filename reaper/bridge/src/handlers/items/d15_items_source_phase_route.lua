@@ -292,11 +292,6 @@ local function d15_items_create_source(path_value)
   return source
 end
 
-local function d15_items_source_filename(source)
-  local ok, filename = call_reaper("GetMediaSourceFileName", source, "")
-  return ok and first_string(filename) or ""
-end
-
 local function d15_items_choose_new_source_file(request)
   local item, failure = d15_items_item_for_write(request)
   if not item then
@@ -337,13 +332,20 @@ local function d15_items_choose_new_source_file(request)
   if not source then
     return d15_items_error(code, message, { path = bounded_string(path_value, 240) })
   end
-  local ok_old_source, old_source = call_reaper("GetMediaItemTake_Source", take)
-  local ok_set_call, source_accepted = call_reaper("SetMediaItemTake_Source", take, source)
-  if not ok_set_call or source_accepted ~= true then
-    call_reaper("PCM_Source_Destroy", source)
-    return d15_items_error("COMMAND_FAILED", "REAPER rejected take source relink.", {
-      blocker = "source_relink_rejected",
-    }, false)
+  local attachment, attachment_failure = READ_B_MEDIA.attach_take_source(take, source, {
+    item = item,
+    update_item = false,
+    refresh_arrange = false,
+  })
+  if not attachment then
+    local details = attachment_failure and attachment_failure.details or {}
+    if details.source_attached ~= true and details.source_ownership_unknown ~= true then
+      call_reaper("PCM_Source_Destroy", source)
+    end
+    if details.blocker == "native_source_attach_failed" then
+      details.blocker = "source_relink_rejected"
+    end
+    return nil, attachment_failure
   end
   if preserve_timing then
     local ok_offset_call, offset_accepted = call_reaper("SetMediaItemTakeInfo_Value", take, "D_STARTOFFS", old_start_offset)
@@ -354,21 +356,10 @@ local function d15_items_choose_new_source_file(request)
       }, false)
     end
   end
-  if ok_old_source and old_source and old_source ~= source then
-    call_reaper("PCM_Source_Destroy", old_source)
-  end
-  local ok_update = call_reaper("UpdateItemInProject", item)
-  if not ok_update then
+  local refreshed, refresh_reason = READ_B_MEDIA.refresh_item(item, true)
+  if not refreshed then
     return d15_items_error("COMMAND_FAILED", "REAPER rejected item update after source relink.", {
-      blocker = "item_update_failed",
-    }, false)
-  end
-  local ok_readback_source, readback_source = call_reaper("GetMediaItemTake_Source", take)
-  local filename = ok_readback_source and readback_source and d15_items_source_filename(readback_source) or ""
-  if filename ~= path_value then
-    return d15_items_error("VERIFICATION_FAILED", "Take source readback did not match the requested file ref.", {
-      requested_path = bounded_string(path_value, 240),
-      actual_path = bounded_string(filename, 240),
+      blocker = refresh_reason or "item_update_failed",
     }, false)
   end
   if preserve_timing then
@@ -385,12 +376,15 @@ local function d15_items_choose_new_source_file(request)
       }, false)
     end
   end
-  local file_ref = d15_items_file_object_ref(filename)
+  local file_ref = d15_items_file_object_ref(attachment.path)
   if not file_ref then
     return d15_items_error("VERIFICATION_FAILED", "Take source readback did not provide a canonical file identity.", {}, false)
   end
   return d15_items_summary(request, item, {
     file_ref = file_ref.ref,
     preserve_timing = preserve_timing,
+    source_type = attachment.source_type,
+    source_length_seconds = attachment.source_length_seconds,
+    take_name = attachment.take_name,
   }, d15_items_refs(item_object_ref, file_ref))
 end

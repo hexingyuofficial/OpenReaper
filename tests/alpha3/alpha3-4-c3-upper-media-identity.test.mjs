@@ -457,7 +457,7 @@ describe("Alpha3.4-C3B upper media canonical identity and budget", () => {
           track_policy: "explicit_per_asset",
           dry_run: false,
         }),
-        budget: { max_response_bytes: 7_000, max_items: 50, max_inline_value_bytes: 4_096 },
+        budget: { max_response_bytes: 10_000, max_items: 50, max_inline_value_bytes: 4_096 },
       },
       executeAtomic: fixture.execute,
       projectIndexRuntime: fakeIndex(),
@@ -486,7 +486,7 @@ describe("Alpha3.4-C3B upper media canonical identity and budget", () => {
           assets: [{ id: "relink-mismatch", path: sourcePath, take_ref: TAKE_A }],
           dry_run: false,
         }),
-        budget: { max_response_bytes: 7_000, max_items: 50, max_inline_value_bytes: 4_096 },
+        budget: { max_response_bytes: 10_000, max_items: 50, max_inline_value_bytes: 4_096 },
       },
       executeAtomic: relinkFixture.execute,
       projectIndexRuntime: fakeIndex(),
@@ -823,6 +823,7 @@ function mediaFixture(seed = {}, options = {}) {
   const files = { ...(seed.files ?? {}) };
   const tracks = structuredClone(seed.tracks ?? {});
   const takes = { ...(seed.takes ?? {}) };
+  const takeNames = {};
   const items = [];
   const calls = [];
   let itemSerial = 0;
@@ -855,6 +856,22 @@ function mediaFixture(seed = {}, options = {}) {
         if (!Object.hasOwn(tracks, ref)) return fail(call.id, "TRACK_NOT_FOUND");
         return ok(call.id, { track_ref: ref }, [objectRef("track", ref)]);
       }
+      if (call.id === "template.items.list_items_on_track") {
+        const trackRef = call.refs.track_ref.ref;
+        if (!Object.hasOwn(tracks, trackRef)) return fail(call.id, "TRACK_NOT_FOUND");
+        const rows = tracks[trackRef].map((row, index) => ({
+          item_ref: row.item_ref ?? row.ref ?? `item:fixture:{${trackRef}:${index + 1}}`,
+          track_ref: trackRef,
+          position_seconds: row.position_seconds,
+          length_seconds: row.length_seconds,
+        }));
+        return ok(call.id, {
+          track_ref: trackRef,
+          items: rows,
+          item_count: rows.length,
+          truncated: false,
+        }, [objectRef("track", trackRef), ...rows.map((row) => objectRef("item", row.item_ref))]);
+      }
       if (["template.media.import_file_to_track", "template.media.import_file_section_to_track"].includes(call.id)) {
         const trackRef = call.refs.track_ref.ref;
         const pathValue = call.refs.source_file_ref.identity.value;
@@ -864,18 +881,21 @@ function mediaFixture(seed = {}, options = {}) {
           : fullLength;
         const itemRef = `item:guid:{MEDIA-ITEM-${++itemSerial}}`;
         const takeRef = `take:guid:{MEDIA-TAKE-${itemSerial}}`;
+        const takeName = fixtureTakeName(pathValue);
         const row = {
           item_ref: itemRef,
           take_ref: takeRef,
           track_ref: trackRef,
           position_seconds: call.input.position_seconds,
           length_seconds: length,
+          take_name: takeName,
           file_ref: `${FILE_REF_PREFIX}${pathValue}`,
           path: pathValue,
         };
         items.push(row);
         tracks[trackRef].push(row);
         takes[takeRef] = row.file_ref;
+        takeNames[takeRef] = takeName;
         return ok(call.id, {
           imported_item_refs: [itemRef],
           item_count: 1,
@@ -907,6 +927,7 @@ function mediaFixture(seed = {}, options = {}) {
           take_ref: ref,
           file_ref: fileRefValue,
           filename: pathValue,
+          take_name: takeNames[ref] ?? fixtureTakeName(pathValue),
           source_type: "audio",
         }, [objectRef("take", ref), fileRef(pathValue)]);
       }
@@ -941,6 +962,10 @@ function objectRef(kind, ref) {
 }
 function fileRef(pathValue) {
   return { kind: "file", ref: `${FILE_REF_PREFIX}${pathValue}`, identity: { scheme: "path", value: pathValue } };
+}
+function fixtureTakeName(pathValue) {
+  const windowsPath = /^[A-Za-z]:[\\/]/.test(pathValue) || pathValue.startsWith("\\\\");
+  return pathValue.split(windowsPath ? /[\\/]/ : "/").pop();
 }
 function fakeIndex() {
   return {

@@ -211,8 +211,8 @@ export function planAlpha3D1StartupWrapper(input = {}) {
       one_command_helper: ALPHA3_D1_STARTUP_WRAPPER_DISCOVERY_SUMMARY.tool_surface.local_one_command_helper,
       one_command_evidence: {
         status: status === "blocked" ? "blocked" : "accepted_local_macos_with_dialog_caveat",
-        requires_conditional_reaper_startup_hook: false,
-        uses_trusted_package_command_line_reascript: true,
+        requires_conditional_reaper_startup_hook: true,
+        uses_trusted_package_command_line_reascript: false,
         user_may_need_to_dismiss_startup_dialog: true,
       },
       live_evidence_root: liveEvidenceRoot,

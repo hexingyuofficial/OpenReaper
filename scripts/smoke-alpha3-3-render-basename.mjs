@@ -19,6 +19,7 @@ const ARTIFACT_ROOT = options.artifact_root ?? path.join(ROOT, "artifacts");
 const INDEX_ROOT = path.join(ROOT, "project-index-state");
 const OUTPUT_BASENAME = "Alpha33_User_Named_Mix";
 const PUBLIC_BUDGET = { max_response_bytes: 65_536, max_items: 50, max_inline_value_bytes: 2_048 };
+let independentMeasurement = null;
 
 await Promise.all([
   mkdir(path.dirname(COPY_PROJECT), { recursive: true }),
@@ -58,6 +59,13 @@ try {
   assert(outputs[0].absolute_path === path.join(RENDER_ROOT, `${OUTPUT_BASENAME}.wav`), "Live render output path does not use the requested managed basename");
   const bytes = await readFile(outputs[0].absolute_path);
   assert(bytes.length > 44 && bytes.subarray(0, 4).toString("ascii") === "RIFF" && bytes.subarray(8, 12).toString("ascii") === "WAVE", "Rendered file is not a non-empty WAV");
+  const measured = outputs[0];
+  assert(measured.measurement_status === "measured", "D31 did not return measured WAV truth");
+  assert(Number.isFinite(measured.measured_peak_linear) && Number.isFinite(measured.measured_rms_linear), "D31 did not return finite peak/RMS truth");
+  assert(measured.silence_classification === "non_silent" && measured.is_silent === false, "D31 misclassified the real-audio render as silence");
+  independentMeasurement = measureWav(bytes);
+  assert(Math.abs(measured.measured_peak_linear - independentMeasurement.peak_linear) < 1e-9, "D31 peak truth disagrees with independent WAV measurement");
+  assert(Math.abs(measured.measured_rms_linear - independentMeasurement.rms_linear) < 1e-9, "D31 RMS truth disagrees with independent WAV measurement");
   assert(calls.render.result.verification?.status === "passed", "Render verification did not pass");
   assert(calls.render.result.data.restoration?.render_settings === true, "Render settings restoration was not proven");
   assert(calls.render.result.data.restoration?.track_selection === true, "Track selection restoration was not proven");
@@ -72,6 +80,7 @@ const after = {
   source_sha256: await sha256(options.source_project),
   copy_sha256: await sha256(COPY_PROJECT).catch(() => null),
   rendered_output: await outputEvidence(path.join(RENDER_ROOT, `${OUTPUT_BASENAME}.wav`)),
+  independent_measurement: independentMeasurement,
 };
 const report = {
   contract: "alpha3.3.render_basename.live_evidence.v1",
@@ -149,6 +158,48 @@ async function outputEvidence(file) {
     const info = await stat(file);
     return { absolute_path: file, output_basename: path.basename(file, path.extname(file)), size: info.size, sha256: createHash("sha256").update(bytes).digest("hex"), header: bytes.subarray(0, 12).toString("hex") };
   } catch { return null; }
+}
+
+function measureWav(bytes) {
+  assert(bytes.subarray(0, 4).toString("ascii") === "RIFF" && bytes.subarray(8, 12).toString("ascii") === "WAVE", "Independent WAV measurement requires RIFF/WAVE");
+  let fmtOffset = -1;
+  let dataOffset = -1;
+  let dataSize = 0;
+  for (let offset = 12; offset + 8 <= bytes.length;) {
+    const id = bytes.subarray(offset, offset + 4).toString("ascii");
+    const size = bytes.readUInt32LE(offset + 4);
+    const body = offset + 8;
+    if (id === "fmt " && size >= 16 && fmtOffset < 0) fmtOffset = body;
+    if (id === "data" && dataOffset < 0) { dataOffset = body; dataSize = size; }
+    offset = body + size + (size % 2);
+  }
+  assert(fmtOffset >= 0 && dataOffset >= 0, "Independent WAV measurement could not find fmt/data chunks");
+  const format = bytes.readUInt16LE(fmtOffset);
+  const channels = bytes.readUInt16LE(fmtOffset + 2);
+  const sampleRate = bytes.readUInt32LE(fmtOffset + 4);
+  const bits = bytes.readUInt16LE(fmtOffset + 14);
+  assert(format === 1 && channels > 0 && [8, 16, 24, 32].includes(bits), "Independent WAV measurement only supports integer PCM");
+  const bytesPerSample = bits / 8;
+  const frameBytes = channels * bytesPerSample;
+  assert(dataSize % frameBytes === 0, "Independent WAV measurement found partial PCM frame");
+  const frameCount = dataSize / frameBytes;
+  const sampleCount = frameCount * channels;
+  let peak = 0;
+  let sumSquares = 0;
+  for (let frame = 0; frame < frameCount; frame++) {
+    for (let channel = 0; channel < channels; channel++) {
+      const offset = dataOffset + frame * frameBytes + channel * bytesPerSample;
+      let sample;
+      if (bits === 8) sample = (bytes[offset] - 128) / 128;
+      else if (bits === 16) sample = bytes.readInt16LE(offset) / 32768;
+      else if (bits === 24) sample = bytes.readIntLE(offset, 3) / 8388608;
+      else sample = bytes.readInt32LE(offset) / 2147483648;
+      peak = Math.max(peak, Math.abs(sample));
+      sumSquares += sample * sample;
+    }
+  }
+  const rms = Math.sqrt(sumSquares / sampleCount);
+  return { sample_rate_hz: sampleRate, channel_count: channels, frame_count: frameCount, sample_count: sampleCount, peak_linear: peak, rms_linear: rms, is_silent: peak === 0, silence_classification: peak === 0 ? "all_zero" : "non_silent" };
 }
 
 function parseArgs(argv) {

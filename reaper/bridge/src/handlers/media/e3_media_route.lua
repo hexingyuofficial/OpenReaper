@@ -406,18 +406,18 @@ local function e3_media_set_item_source(track, path_value, position, start_perce
       file_ref = READ_B_MEDIA.file_ref_for_path(path_value),
     })
   end
-  local length, is_quarter_notes = READ_B_MEDIA.source_length(source)
-  if is_quarter_notes or length <= 0 then
+  local identity, identity_failure = READ_B_MEDIA.source_identity(source)
+  if not identity then
     call_reaper("PCM_Source_Destroy", source)
-    return nil, e3_media_handler_error("SOURCE_LENGTH_UNREADABLE", "E3 media source length could not be measured.", {
+    return nil, e3_media_handler_error("SOURCE_LENGTH_UNREADABLE", "E3 media source identity could not be read back completely.", {
       path = READ_B_MEDIA.display_path(path_value, 240),
       file_ref = READ_B_MEDIA.file_ref_for_path(path_value),
-      source_type = e3_media_kind_for_path(path_value),
+      blocker = identity_failure and identity_failure.blocker or "source_readback_incomplete",
     })
   end
 
   local start_offset = 0
-  local item_length = length
+  local item_length = identity.source_length_seconds
   if type(start_percent) == "number" or type(end_percent) == "number" then
     local start_value = e3_media_finite_number(start_percent, 0)
     local end_value = e3_media_finite_number(end_percent, 1)
@@ -428,8 +428,8 @@ local function e3_media_set_item_source(track, path_value, position, start_perce
         end_percent = end_percent,
       })
     end
-    start_offset = length * start_value
-    item_length = length * (end_value - start_value)
+    start_offset = identity.source_length_seconds * start_value
+    item_length = identity.source_length_seconds * (end_value - start_value)
   end
 
   local ok_item, item = call_reaper("AddMediaItemToTrack", track)
@@ -444,12 +444,33 @@ local function e3_media_set_item_source(track, path_value, position, start_perce
     call_reaper("PCM_Source_Destroy", source)
     return nil, e3_media_handler_error("COMMAND_FAILED", "E3 media import could not create a take.", {}, false)
   end
-  call_reaper("SetMediaItemTake_Source", take, source)
-  if start_offset > 0 then
-    call_reaper("SetMediaItemTakeInfo_Value", take, "D_STARTOFFS", start_offset)
+  local attachment, attachment_failure = READ_B_MEDIA.attach_take_source(take, source, {
+    item = item,
+    update_item = false,
+    refresh_arrange = false,
+  })
+  if not attachment then
+    local details = attachment_failure and attachment_failure.details or {}
+    if details.source_attached ~= true and details.source_ownership_unknown ~= true then
+      call_reaper("PCM_Source_Destroy", source)
+    end
+    return nil, attachment_failure
   end
-  call_reaper("UpdateItemInProject", item)
-  return item, nil
+  if start_offset > 0 then
+    local ok_start, start_accepted = call_reaper("SetMediaItemTakeInfo_Value", take, "D_STARTOFFS", start_offset)
+    if not ok_start or (start_accepted ~= nil and start_accepted ~= true) then
+      return nil, e3_media_handler_error("COMMAND_FAILED", "E3 media import could not set the requested source section offset.", {
+        blocker = "native_start_offset_set_failed",
+      }, false)
+    end
+  end
+  local refreshed, refresh_reason = READ_B_MEDIA.refresh_item(item, false)
+  if not refreshed then
+    return nil, e3_media_handler_error("COMMAND_FAILED", "E3 media import could not refresh the attached Item.", {
+      blocker = refresh_reason or "item_refresh_failed",
+    }, false)
+  end
+  return item, nil, attachment
 end
 
 local E3_MEDIA_BATCH_MAX_ROWS = 64
@@ -566,9 +587,11 @@ local function e3_media_batch_prepare(request)
     if not source then
       return nil, e3_media_batch_error(source_code or "FILE_NOT_FOUND", source_message or "E3 media batch source could not be decoded.", index, { file_ref = file_object_ref.ref, zero_write = true })
     end
-    local source_length, length_is_quarter_notes = READ_B_MEDIA.source_length(source)
-    local source_type = READ_B_MEDIA.source_type(source)
-    call_reaper("PCM_Source_Destroy", source)
+      local identity = READ_B_MEDIA.source_identity(source)
+      local source_length = identity and identity.source_length_seconds or 0
+      local length_is_quarter_notes = identity and identity.length_is_quarter_notes or false
+      local source_type = identity and identity.source_type or ""
+      call_reaper("PCM_Source_Destroy", source)
     if length_is_quarter_notes or not e3_media_batch_finite(source_length) or source_length <= 0 then
       return nil, e3_media_batch_error("SOURCE_LENGTH_UNREADABLE", "E3 media batch source length must be finite and positive.", index, {
         file_ref = file_object_ref.ref,
@@ -674,7 +697,7 @@ local function e3_media_batch_take_object_ref(take)
   }
 end
 
-local function e3_media_batch_row_readback(row, item, take, preserve_selection)
+local function e3_media_batch_row_readback(row, item, take, preserve_selection, take_name)
   local item_ref = e3_media_item_object_ref(item)
   local take_ref = e3_media_batch_take_object_ref(take)
   if not item_ref or not take_ref then
@@ -716,6 +739,7 @@ local function e3_media_batch_row_readback(row, item, take, preserve_selection)
     length_seconds = item_length,
     source_length_seconds = source_length,
     source_type = source_type,
+    take_name = take_name,
     selection_restored = preserve_selection,
     source_section = row.start_percent ~= nil and { start_percent = row.start_percent, end_percent = row.end_percent } or nil,
   }, item_ref, take_ref
@@ -778,13 +802,17 @@ local function import_files_batch(request, preflight_only)
         call_reaper("PCM_Source_Destroy", source)
         return fail_batch(e3_media_handler_error("COMMAND_FAILED", "E3 media batch could not configure a media item and take.", { blocker = "native_item_setup_failed" }, false), index)
       end
-      local ok_source_set, source_set_accepted = call_reaper("SetMediaItemTake_Source", take, source)
-      local ok_assigned_source, assigned_source = call_reaper("GetMediaItemTake_Source", take)
-      local source_attached = ok_assigned_source and assigned_source == source
-      local setter_accepted = source_set_accepted == nil or source_set_accepted == true
-      if not ok_source_set or not setter_accepted or not source_attached then
-        if not source_attached then call_reaper("PCM_Source_Destroy", source) end
-        return fail_batch(e3_media_handler_error("COMMAND_FAILED", "E3 media batch could not attach the decoded source.", { blocker = "native_source_attach_failed" }, false), index)
+      local attachment, attachment_failure = READ_B_MEDIA.attach_take_source(take, source, {
+        item = item,
+        update_item = false,
+        refresh_arrange = false,
+      })
+      if not attachment then
+        local details = attachment_failure and attachment_failure.details or {}
+        if details.source_attached ~= true and details.source_ownership_unknown ~= true then
+          call_reaper("PCM_Source_Destroy", source)
+        end
+        return fail_batch(attachment_failure, index)
       end
       if start_offset > 0 then
         local ok_start, start_accepted = call_reaper("SetMediaItemTakeInfo_Value", take, "D_STARTOFFS", start_offset)
@@ -792,11 +820,14 @@ local function import_files_batch(request, preflight_only)
           return fail_batch(e3_media_handler_error("COMMAND_FAILED", "E3 media batch could not set the requested source section offset.", { blocker = "native_start_offset_set_failed" }, false), index)
         end
       end
-      call_reaper("UpdateItemInProject", item)
+      local refreshed, refresh_reason = READ_B_MEDIA.refresh_item(item, false)
+      if not refreshed then
+        return fail_batch(e3_media_handler_error("COMMAND_FAILED", "E3 media batch could not refresh the attached Item.", { blocker = refresh_reason or "item_refresh_failed" }, false), index)
+      end
       mutation_ms = mutation_ms + ((os.clock() - mutation_phase) * 1000)
       last_item = item
       local readback_phase = os.clock()
-      local result, item_ref, take_ref = e3_media_batch_row_readback(row, item, take, preserve_selection)
+      local result, item_ref, take_ref = e3_media_batch_row_readback(row, item, take, preserve_selection, attachment.take_name)
       readback_ms = readback_ms + ((os.clock() - readback_phase) * 1000)
       if not result then
         return fail_batch(item_ref, index)
@@ -808,6 +839,7 @@ local function import_files_batch(request, preflight_only)
         source_file_ref = row.file_ref,
         source_type = result.source_type,
         source_length_seconds = result.source_length_seconds,
+        take_name = attachment.take_name,
       }
       refs[#refs + 1] = item_ref
       refs[#refs + 1] = take_ref
@@ -868,7 +900,7 @@ local function e3_media_import_to_track(request, section)
   local file_object_ref = READ_B_MEDIA.file_object_ref(path)
   local preserve_selection = request.params.preserve_selection == true
   local previous_selection = preserve_selection and e3_media_selected_items() or nil
-  local item, failure = e3_media_set_item_source(
+  local item, failure, attachment = e3_media_set_item_source(
     track,
     path,
     request.params.position_seconds,
@@ -901,6 +933,9 @@ local function e3_media_import_to_track(request, section)
     track_ref = track_ref,
     position_seconds = e3_media_finite_number(request.params.position_seconds, 0),
     selection_restored = preserve_selection,
+    take_name = attachment and attachment.take_name or nil,
+    source_type = attachment and attachment.source_type or nil,
+    source_length_seconds = attachment and attachment.source_length_seconds or nil,
   }
   if section then
     readback.start_percent = e3_media_finite_number(request.params.start_percent, 0)
@@ -953,7 +988,8 @@ local function relink_take_source(request)
   if request.params.verify_source_type == true then
     local ok_old_source, old_source = call_reaper("GetMediaItemTake_Source", take)
     local old_type = ok_old_source and old_source and READ_B_MEDIA.source_type(old_source) or ""
-    local new_type = READ_B_MEDIA.source_type(source)
+    local new_identity = READ_B_MEDIA.source_identity(source)
+    local new_type = new_identity and new_identity.source_type or ""
     if old_type ~= "" and new_type ~= "" and old_type ~= new_type then
       call_reaper("PCM_Source_Destroy", source)
       return e3_media_handler_error("SOURCE_TYPE_MISMATCH", "E3 media relink source type does not match the current take source.", {
@@ -962,15 +998,25 @@ local function relink_take_source(request)
       })
     end
   end
-  call_reaper("SetMediaItemTake_Source", take, source)
   local item = e3_media_take_item(take)
-  if item then
-    call_reaper("UpdateItemInProject", item)
+  local attachment, attachment_failure = READ_B_MEDIA.attach_take_source(take, source, {
+    item = item,
+    update_item = true,
+    refresh_arrange = true,
+  })
+  if not attachment then
+    local details = attachment_failure and attachment_failure.details or {}
+    if details.source_attached ~= true and details.source_ownership_unknown ~= true then
+      call_reaper("PCM_Source_Destroy", source)
+    end
+    return nil, attachment_failure
   end
   return e3_media_summary(request, {
     take_ref = take_ref,
-    source_file_ref = file_object_ref.ref,
-    source_type = e3_media_kind_for_path(path),
+    source_file_ref = attachment.file_ref or file_object_ref.ref,
+    source_type = attachment.source_type,
+    source_length_seconds = attachment.source_length_seconds,
+    take_name = attachment.take_name,
     relinked = true,
   }), nil, nil, nil, e3_media_refs({
     kind = "take",

@@ -94,12 +94,24 @@ ${assertions}
 `;
 }
 
+function resolveSaveAsLua(requestExpression) {
+  return `
+local summary, failure = save_project_as(${requestExpression})
+local continuation_count = 0
+while failure == nil and summary ~= nil and summary.contract == "openreaper.bridge.internal_continuation.v1" do
+  continuation_count = continuation_count + 1
+  assert(continuation_count < 12)
+  summary, failure = save_project_as(${requestExpression}, summary)
+end
+`;
+}
+
 function saveAsBody({ setup = "", assertions }) {
   return `
 local target = "/target/Saved.RPP"
 install_fake({ states = { { path = "/source/Current.RPP", dirty = 1 }, { path = target, dirty = 0 } }, save_as_behavior = "nil" })
 ${setup}
-local summary, failure = save_project_as(make_request("project.save_project_as", { target_path = target, overwrite = true }))
+${resolveSaveAsLua('make_request("project.save_project_as", { target_path = target, overwrite = true })')}
 ${assertions}
 `;
 }
@@ -138,7 +150,7 @@ assert(calls.save_current == 0)
       runLua(`
 local target = "/target/Saved.RPP"
 ${setup}
-local summary, failure = save_project_as(make_request("project.save_project_as", { target_path = target, overwrite = true }))
+${resolveSaveAsLua('make_request("project.save_project_as", { target_path = target, overwrite = true })')}
 assert(summary == nil)
 assert(failure.code == "INTERNAL_ERROR")
 assert(calls.save_as == 0)
@@ -185,14 +197,27 @@ assert(summary == nil); assert(failure.code == "VERIFY_FAILED"); assert(failure.
     runLua(`
 local target = "/target/Saved.RPP"
 install_fake({ states = { { path = "/source/A.RPP", dirty = 1 }, { path = "/target/Other.RPP", dirty = 0 } } })
-local summary, failure = save_project_as(make_request("project.save_project_as", { target_path = target, overwrite = true }))
+${resolveSaveAsLua('make_request("project.save_project_as", { target_path = target, overwrite = true })')}
 assert(summary == nil); assert(failure.code == "VERIFY_FAILED"); assert(failure.details.blocker == "project_path_target_mismatch"); assert(calls.save_as == 1)
 `);
     runLua(`
 local target = "/target/Saved.RPP"
 install_fake({ states = { { path = "/source/A.RPP", dirty = 1 }, { path = target, dirty = 1 } } })
-local summary, failure = save_project_as(make_request("project.save_project_as", { target_path = target, overwrite = true }))
-assert(summary == nil); assert(failure.code == "VERIFY_FAILED"); assert(failure.details.blocker == "project_dirty_after_save_as"); assert(calls.save_as == 1)
+${resolveSaveAsLua('make_request("project.save_project_as", { target_path = target, overwrite = true })')}
+    assert(summary == nil); assert(failure.code == "VERIFY_FAILED"); assert(failure.details.blocker == "project_dirty_after_save_as"); assert(calls.save_as == 1)
+  `);
+  });
+
+  it("stabilizes a dirty Save-As readback with one stock current-project save", () => {
+    runLua(`
+local target = "/target/Saved.RPP"
+install_fake({ states = { { path = "/source/A.RPP", dirty = 1 }, { path = target, dirty = 0 }, { path = target, dirty = 1 }, { path = target, dirty = 1 }, { path = target, dirty = 0 } } })
+${resolveSaveAsLua('make_request("project.save_project_as", { target_path = target, overwrite = true })')}
+assert(failure == nil)
+assert(summary.path_matches_target == true)
+assert(summary.after_raw_dirty_state == 0)
+assert(calls.save_as == 1)
+assert(calls.save_current == 1)
 `);
   });
 
@@ -223,7 +248,7 @@ assert(failure == nil); assert(summary.path_unchanged == true); assert(calls.sav
 local target = "/" .. string.rep("b", 2043) .. ".RPP"
 assert(#target == 2048)
 install_fake({ states = { { path = "/source/A.RPP", dirty = 1 }, { path = target, dirty = 0 } } })
-local summary, failure = save_project_as(make_request("project.save_project_as", { target_path = target, overwrite = true }))
+${resolveSaveAsLua('make_request("project.save_project_as", { target_path = target, overwrite = true })')}
 assert(failure == nil); assert(summary.path_matches_target == true); assert(calls.save_as == 1)
 `);
   });

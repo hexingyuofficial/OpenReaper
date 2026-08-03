@@ -437,10 +437,11 @@ export async function executeAlpha3_3MediaPlaceAssetsMacro({ request = {}, execu
           && row.track_ref === target.track_ref
           && close(row.position_seconds, operation.position_seconds)
           && close(row.length_seconds, operation.import_length_seconds)
+          && typeof row.take_name === "string"
           && itemObject
           && takeObject;
         change.live_readback = passed
-          ? { status: "passed", source: "typed_native_batch_readback", item_ref: itemRef, take_ref: takeRef, track_ref: row.track_ref, position_seconds: row.position_seconds, length_seconds: row.length_seconds, source_file_ref: row.source_file_ref, source_type: row.source_type }
+          ? { status: "passed", source: "typed_native_batch_readback", item_ref: itemRef, take_ref: takeRef, take_name: row.take_name, track_ref: row.track_ref, position_seconds: row.position_seconds, length_seconds: row.length_seconds, source_file_ref: row.source_file_ref, source_type: row.source_type }
           : { status: "failed", source: "typed_native_batch_readback", blocker_code: "MEDIA_LIVE_READBACK_MISMATCH" };
         if (!passed) {
           for (const laterChange of changes.slice(index + 1)) {
@@ -494,9 +495,9 @@ export async function executeAlpha3_3MediaPlaceAssetsMacro({ request = {}, execu
         ensureChangeReadOk(sourceRead, READ_TAKE_SOURCE_ID, change);
         const source = readback(sourceRead.execution);
         const identityOk = exactSourceIdentity(source, sourceRead.execution, operation);
-        const passed = item.item_ref === operation.item_ref && item.track_ref === target.track_ref && close(item.position_seconds, operation.position_seconds) && close(item.length_seconds, operation.import_length_seconds) && source.take_ref === takeRef && identityOk;
+        const passed = item.item_ref === operation.item_ref && item.track_ref === target.track_ref && close(item.position_seconds, operation.position_seconds) && close(item.length_seconds, operation.import_length_seconds) && source.take_ref === takeRef && typeof source.take_name === "string" && identityOk;
         change.live_readback = passed
-          ? { status: "passed", source: "independent_item_and_take_source_readback", item_ref: item.item_ref, take_ref: takeRef, track_ref: item.track_ref, position_seconds: item.position_seconds, length_seconds: item.length_seconds, source_file_ref: source.file_ref }
+          ? { status: "passed", source: "independent_item_and_take_source_readback", item_ref: item.item_ref, take_ref: takeRef, take_name: source.take_name, track_ref: item.track_ref, position_seconds: item.position_seconds, length_seconds: item.length_seconds, source_file_ref: source.file_ref }
           : { status: "failed", source: "independent_item_and_take_source_readback", blocker_code: "MEDIA_LIVE_READBACK_MISMATCH" };
         if (!passed) throw coded("MEDIA_LIVE_READBACK_MISMATCH", `${operation.id} independent Item/source readback did not match the planned import.`);
         state.canonicalRefs.push(operation.item_ref, takeRef);
@@ -517,9 +518,9 @@ export async function executeAlpha3_3MediaPlaceAssetsMacro({ request = {}, execu
         ensureChangeReadOk(sourceRead, READ_TAKE_SOURCE_ID, change);
         const source = readback(sourceRead.execution);
         const identityOk = exactSourceIdentity(source, sourceRead.execution, operation);
-        const passed = source.take_ref === operation.take_ref && identityOk;
+        const passed = source.take_ref === operation.take_ref && typeof source.take_name === "string" && identityOk;
         change.live_readback = passed
-          ? { status: "passed", source: "independent_take_source_readback", take_ref: source.take_ref, source_file_ref: source.file_ref }
+          ? { status: "passed", source: "independent_take_source_readback", take_ref: source.take_ref, take_name: source.take_name, source_file_ref: source.file_ref }
           : { status: "failed", source: "independent_take_source_readback", blocker_code: "MEDIA_LIVE_READBACK_MISMATCH" };
         if (!passed) throw coded("MEDIA_LIVE_READBACK_MISMATCH", `${operation.id} independent Take source readback did not match the exact replacement.`);
         change.status = "applied";
@@ -782,6 +783,7 @@ async function prepareOperations({ request, input, executeAtomic, state }) {
 
   assignTrackPlans(input, operations);
   assignPositions(input, operations, appendEnds);
+  await preflightTrackOverlaps({ request, input, operations, executeAtomic, state });
   for (const operation of operations) {
     operation.import_template_id = IMPORT_BATCH_ID;
     operation.import_input = operation.start_percent === null
@@ -789,6 +791,73 @@ async function prepareOperations({ request, input, executeAtomic, state }) {
       : { position_seconds: operation.position_seconds, start_percent: operation.start_percent, end_percent: operation.end_percent, preserve_selection: operation.preserve_selection };
   }
   return operations;
+}
+
+async function preflightTrackOverlaps({ request, input, operations, executeAtomic, state }) {
+  if (input.placement.mode !== "explicit") return;
+
+  const existingTrackRefs = uniqueStrings(operations.map((operation) => operation.target_track_ref));
+  const existingRowsByTrack = new Map();
+  for (const trackRef of existingTrackRefs) {
+    const trackObject = state.trackObjects.get(trackRef);
+    if (!trackObject) throw coded("MEDIA_TRACK_OVERLAP_TARGET_REQUIRED", `Explicit placement could not resolve target Track ${trackRef} before overlap preflight.`);
+    const listed = await child({ request, executeAtomic, state, id: LIST_TRACK_ITEMS_ID, input: { limit: MAX_TRACK_ITEMS, include_take_summary: false }, refs: { track_ref: trackObject } });
+    ensureReadOk(listed, LIST_TRACK_ITEMS_ID);
+    const facts = readback(listed.execution);
+    const items = Array.isArray(facts.items) ? facts.items : [];
+    if (facts.track_ref !== trackRef || facts.truncated === true || facts.item_count !== items.length || facts.item_count > MAX_TRACK_ITEMS) {
+      throw coded("MEDIA_TRACK_ITEM_COVERAGE_INCOMPLETE", `${trackRef} Item inventory is incomplete; explicit overlap preflight requires one complete <=${MAX_TRACK_ITEMS}-row page.`);
+    }
+    existingRowsByTrack.set(trackRef, items);
+  }
+
+  const intervalsByTrack = new Map();
+  const addInterval = (trackKey, interval) => {
+    if (!trackKey) return;
+    const rows = intervalsByTrack.get(trackKey) ?? [];
+    rows.push(interval);
+    intervalsByTrack.set(trackKey, rows);
+  };
+
+  for (const [trackRef, items] of existingRowsByTrack) {
+    for (const [index, item] of items.entries()) {
+      if (!finiteNonNegative(item.position_seconds) || !finitePositive(item.length_seconds)) {
+        throw coded("MEDIA_TRACK_ITEM_COVERAGE_INCOMPLETE", `${trackRef} Item row ${index + 1} lacks finite position/length facts required for overlap preflight.`);
+      }
+      addInterval(trackRef, {
+        source: "existing_item",
+        ref: item.item_ref ?? item.ref ?? `existing:${trackRef}:${index + 1}`,
+        start_seconds: item.position_seconds,
+        end_seconds: item.position_seconds + item.length_seconds,
+      });
+    }
+  }
+  for (const operation of operations) {
+    const trackKey = operation.target_track_ref ?? operation.target_track_key;
+    if (!finiteNonNegative(operation.position_seconds) || !finitePositive(operation.import_length_seconds)) {
+      throw coded("MEDIA_LAYOUT_INVALID", `${operation.id} lacks finite position/length facts required for overlap preflight.`);
+    }
+    addInterval(trackKey, {
+      source: "planned_asset",
+      ref: operation.id,
+      start_seconds: operation.position_seconds,
+      end_seconds: operation.position_seconds + operation.import_length_seconds,
+    });
+  }
+
+  for (const [trackKey, intervals] of intervalsByTrack) {
+    for (let leftIndex = 0; leftIndex < intervals.length; leftIndex += 1) {
+      for (let rightIndex = leftIndex + 1; rightIndex < intervals.length; rightIndex += 1) {
+        const left = intervals[leftIndex];
+        const right = intervals[rightIndex];
+        if (left.end_seconds <= right.start_seconds + EPSILON || right.end_seconds <= left.start_seconds + EPSILON) continue;
+        throw coded(
+          "MEDIA_TRACK_OVERLAP",
+          `Explicit placement would overlap ${left.ref} and ${right.ref} on Track ${trackKey}; choose non-overlapping positions or an explicit separate-Track layout.`,
+        );
+      }
+    }
+  }
 }
 
 function assignTrackPlans(input, operations) {

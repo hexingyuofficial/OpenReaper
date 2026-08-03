@@ -8,6 +8,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+const STARTUP_BEGIN = "-- >>> OpenReaper alpha MCP startup hook >>>";
+const STARTUP_END = "-- <<< OpenReaper alpha MCP startup hook <<<";
 const LEGACY_STARTUP_HOOKS = Object.freeze([
   Object.freeze({
     relativePath: "__startup.eel",
@@ -22,11 +24,6 @@ const LEGACY_STARTUP_HOOKS = Object.freeze([
   Object.freeze({
     relativePath: "__startup.lua",
     blocks: Object.freeze([
-      Object.freeze({
-        begin: "-- >>> OpenReaper alpha MCP startup hook >>>",
-        end: "-- <<< OpenReaper alpha MCP startup hook <<<",
-        label: "prior OpenReaper alpha startup hook",
-      }),
       Object.freeze({
         begin: "-- >>> OpenReaper Alpha3 MCP startup hook >>>",
         end: "-- <<< OpenReaper Alpha3 MCP startup hook <<<",
@@ -49,11 +46,27 @@ const MANAGED_RENDER_ROOT_PATH_MAX_BYTES = 3072;
 const PACKAGE_PROVENANCE_MANIFEST = "provenance.json";
 const SWS_MISC_SECTION = "[Misc]";
 const SWS_GLOBAL_STARTUP_KEY = "GlobalStartupAction";
-const REAPER_RESOURCE_ROOT = path.join(os.homedir(), "Library", "Application Support", "REAPER");
 const BRIDGE_ACTION_TITLE = "OpenReaper: Start MCP bridge";
 const BRIDGE_ACTION_RELATIVE_SCRIPT = "OpenReaper/openreaper-start-mcp-bridge.lua";
 const BRIDGE_ACTION_COMMAND_ID = `RS${createHash("sha1").update("openreaper.alpha.start_mcp_bridge.v1").digest("hex")}`;
 const BRIDGE_LAUNCHER_NAME = "openreaper-start-mcp-bridge.lua";
+const S3_ACTIONS = Object.freeze([
+  // These packaged Actions use stock GetUserInputs/ShowMessageBox and
+  // GetExtState/SetExtState, and expose the shared plan_hash to the user.
+  // Their shared route is template.items.split_item_by_silence.
+  Object.freeze({
+    title: "OpenReaper: Remove Silence...",
+    relativeScript: "OpenReaper/remove-silence.lua",
+    commandId: `RS${createHash("sha1").update("openreaper.s3.remove_silence.v1").digest("hex")}`,
+  }),
+  Object.freeze({
+    title: "OpenReaper: Repeat Remove Silence with Last Settings",
+    relativeScript: "OpenReaper/repeat-remove-silence.lua",
+    commandId: `RS${createHash("sha1").update("openreaper.s3.repeat_remove_silence.v1").digest("hex")}`,
+  }),
+]);
+const S3_ACTION_SUPPORT_RELATIVE_SCRIPT = "OpenReaper/remove-silence-shared.lua";
+let s3ActionsAvailable = false;
 
 const packageRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 let options;
@@ -69,6 +82,7 @@ if (options.help === true) {
 }
 const home = os.homedir();
 const installRoot = path.resolve(options.install_root ?? path.join(home, ".openreaper", "current"));
+const reaperResourceRoot = path.resolve(options.reaper_resource_root ?? defaultReaperResourceRoot(home));
 const dryRun = options.dry_run === true;
 const skipClientConfig = options.skip_client_config === true;
 const skipStartupHook = options.skip_startup_hook === true;
@@ -97,7 +111,8 @@ const renderRootSelection = selectInstallerRenderRoot({
 });
 const renderRoot = renderRootSelection.path;
 const bridgeScript = path.join(installRoot, "vendor", "openreaper-kernel", "reaper", "bridge", "openreaper-live-bridge.lua");
-const bridgeActionScript = path.join(REAPER_RESOURCE_ROOT, "Scripts", ...BRIDGE_ACTION_RELATIVE_SCRIPT.split("/"));
+const bridgeActionScript = path.join(reaperResourceRoot, "Scripts", ...BRIDGE_ACTION_RELATIVE_SCRIPT.split("/"));
+const conditionalStartupHookPath = path.join(reaperResourceRoot, "Scripts", "__startup.lua");
 const bridgeActionCommand = `_${BRIDGE_ACTION_COMMAND_ID}`;
 
 const report = {
@@ -119,12 +134,23 @@ const report = {
     command_id: bridgeActionCommand,
     script: bridgeActionScript,
   },
-  startup_hook: {
-    path: bridgeLauncherScript,
-    mode: "trusted_package_command_line_reascript",
+  reaper_resource_root: reaperResourceRoot,
+  s3_actions: S3_ACTIONS.map((action) => ({
+    title: action.title,
+    command_id: `_${action.commandId}`,
+    script: path.join(reaperResourceRoot, "Scripts", ...action.relativeScript.split("/")),
     installed: false,
-    package_local: true,
-    always_enabled: true,
+  })),
+  startup_hook: {
+    path: conditionalStartupHookPath,
+    mode: "conditional_openreaper_environment",
+    installed: false,
+    package_local: false,
+    always_enabled: false,
+    fallback_path: bridgeLauncherScript,
+    fallback_mode: "trusted_package_manual_action_reascript",
+    fallback_installed: false,
+    backup_path: null,
     legacy_cleanup_paths: [],
     legacy_backup_paths: [],
     migrated_legacy_lua_path: null,
@@ -168,8 +194,8 @@ const report = {
   warnings: [],
 };
 
-if (process.platform !== "darwin") {
-  report.warnings.push("This alpha installer is macOS-first. Other platforms need a manual REAPER resource path and client config check.");
+if (process.platform !== "darwin" && process.platform !== "win32") {
+  report.warnings.push("This installer has macOS and Windows REAPER resource defaults; other platforms require --reaper-resource-root and manual client/runtime verification.");
 }
 
 await runInstall();
@@ -227,7 +253,7 @@ async function runInstall() {
         await chmod(doctorCommand, 0o755);
         await requireRegularNonSymlinkFile(bridgeLauncherScript, "installed Bridge launcher");
         await chmod(bridgeLauncherScript, 0o444);
-        report.startup_hook.installed = true;
+        report.startup_hook.fallback_installed = true;
         report.changed.push(`secured trusted package-local Bridge launcher at ${bridgeLauncherScript}`);
         await mkdir(path.join(transportDir, "requests"), { recursive: true });
         await mkdir(path.join(transportDir, "results"), { recursive: true });
@@ -253,11 +279,13 @@ async function runInstall() {
     }
 
     if (!skipStartupHook) {
+      await installS3Actions();
       await installBridgeAction();
+      await installConditionalStartupHook();
       await cleanupLegacyStartupHooks();
       await inspectOptionalStartupCompatibility();
     } else {
-      report.skipped.push("manual REAPER bridge Action installation and legacy startup-hook cleanup skipped because --skip-startup-hook was set; the trusted package launcher remains enabled");
+      report.skipped.push("conditional REAPER startup hook, manual bridge Action installation, and legacy startup-hook cleanup skipped because --skip-startup-hook was set; the trusted package launcher remains available in the package");
     }
 
     if (!skipClientConfig) {
@@ -393,7 +421,7 @@ async function inspectPreviousDefaultRenderRoot() {
 }
 
 async function inspectOptionalStartupCompatibility() {
-  const swsPath = path.join(REAPER_RESOURCE_ROOT, "S&M.ini");
+  const swsPath = path.join(reaperResourceRoot, "S&M.ini");
   const swsConfig = await readTextIfExists(swsPath);
   if (!swsConfig.trim()) {
     report.skipped.push("SWS/S&M was not found; OpenReaper bridge startup does not require SWS.");
@@ -430,20 +458,85 @@ async function installBridgeAction() {
   if (await readFile(bridgeActionScript, "utf8") !== script) {
     throw new Error(`Installed REAPER bridge Action does not match the trusted package launcher: ${bridgeActionScript}`);
   }
-  await upsertBridgeActionInReaperKb();
+  await upsertBridgeActionInReaperKb([
+    bridgeActionRegistryLine(),
+    ...(s3ActionsAvailable ? s3ActionRegistryLines() : []),
+  ]);
 }
 
-async function upsertBridgeActionInReaperKb() {
-  const kbPath = path.join(REAPER_RESOURCE_ROOT, "reaper-kb.ini");
+async function installS3Actions() {
+  const sourceRoot = path.join(packageRoot, "vendor", "openreaper-kernel", "reaper", "actions");
+  const actions = [
+    ...S3_ACTIONS.map((action) => ({
+      ...action,
+      sourcePath: path.join(sourceRoot, action.relativeScript),
+      targetPath: path.join(reaperResourceRoot, "Scripts", ...action.relativeScript.split("/")),
+    })),
+    {
+      title: "OpenReaper S3 shared Remove Silence core",
+      relativeScript: S3_ACTION_SUPPORT_RELATIVE_SCRIPT,
+      sourcePath: path.join(sourceRoot, S3_ACTION_SUPPORT_RELATIVE_SCRIPT),
+      targetPath: path.join(reaperResourceRoot, "Scripts", ...S3_ACTION_SUPPORT_RELATIVE_SCRIPT.split("/")),
+    },
+  ];
+  const sourceStatuses = await Promise.all(actions.map((action) => safeLstat(action.sourcePath)));
+  if (sourceStatuses.some((status) => !status)) {
+    report.skipped.push("S3 Remove Silence Actions were not registered because this package does not contain the complete Action source set");
+    report.warnings.push("S3 Action source set is incomplete; no S3 files or registry lines were installed");
+    return;
+  }
+  const targetStatuses = await Promise.all(actions.map((action) => safeLstat(action.targetPath)));
+  for (let index = 0; index < actions.length; index += 1) {
+    const action = actions[index];
+    const sourceStatus = sourceStatuses[index];
+    if (sourceStatus.isSymbolicLink() || !sourceStatus.isFile()) {
+      throw new Error(`${action.title} package source must be a regular non-symlink file: ${action.sourcePath}`);
+    }
+    const existingStatus = targetStatuses[index];
+    if (existingStatus && (existingStatus.isSymbolicLink() || !existingStatus.isFile())) {
+      throw new Error(`REAPER Action path must be a regular non-symlink file: ${action.targetPath}`);
+    }
+  }
+  s3ActionsAvailable = true;
+  for (let index = 0; index < actions.length; index += 1) {
+    const action = actions[index];
+    const existingStatus = targetStatuses[index];
+    if (dryRun) {
+      report.skipped.push(`dry run: would install ${action.title} at ${action.targetPath}`);
+      continue;
+    }
+    await mkdir(path.dirname(action.targetPath), { recursive: true });
+    const source = await readFile(action.sourcePath);
+    const existing = existingStatus ? await readFile(action.targetPath) : null;
+    if (!existing || !source.equals(existing)) {
+      await copyFile(action.sourcePath, action.targetPath);
+      report.changed.push(`installed REAPER Action support file ${action.title} at ${action.targetPath}`);
+    }
+    await chmod(action.targetPath, 0o444);
+    const installed = await readFile(action.targetPath);
+    if (!source.equals(installed)) {
+      throw new Error(`Installed REAPER Action does not match its package source: ${action.targetPath}`);
+    }
+    const reportEntry = report.s3_actions.find((entry) => entry.script === action.targetPath);
+    if (reportEntry) reportEntry.installed = true;
+  }
+}
+
+async function upsertBridgeActionInReaperKb(actionLines) {
+  const kbPath = path.join(reaperResourceRoot, "reaper-kb.ini");
+  const existingStatus = await safeLstat(kbPath);
+  if (existingStatus && (existingStatus.isSymbolicLink() || !existingStatus.isFile())) {
+    throw new Error(`REAPER Action registry must be a regular non-symlink file: ${kbPath}`);
+  }
   const existing = await readTextIfExists(kbPath);
-  const actionLine = bridgeActionRegistryLine();
-  const withoutOldOpenReaperAction = removeLinesPreservingBytes(existing, (line) => line !== actionLine);
+  const ownedLines = new Set(actionLines);
+  const withoutOldOpenReaperAction = removeLinesPreservingBytes(existing, (line) => !ownedLines.has(line));
   const separator = withoutOldOpenReaperAction === "" || /(?:\r\n|\n|\r)$/u.test(withoutOldOpenReaperAction) ? "" : "\n";
-  const next = `${withoutOldOpenReaperAction}${separator}${actionLine}\n`;
+  const next = `${withoutOldOpenReaperAction}${separator}${actionLines.join("\n")}\n`;
   if (next !== existing) {
-    await mkdir(path.dirname(kbPath), { recursive: true });
+    await mkdir(reaperResourceRoot, { recursive: true });
     await writeFile(kbPath, next, "utf8");
-    report.changed.push(`registered REAPER action ${BRIDGE_ACTION_TITLE} (${bridgeActionCommand}) at ${kbPath}`);
+    report.changed.push(`registered ${actionLines.length} OpenReaper REAPER Actions at ${kbPath}`);
   }
 }
 
@@ -451,8 +544,86 @@ function bridgeActionRegistryLine() {
   return `SCR 4 0 ${BRIDGE_ACTION_COMMAND_ID} "Custom: ${BRIDGE_ACTION_TITLE}" "${BRIDGE_ACTION_RELATIVE_SCRIPT}"`;
 }
 
+function s3ActionRegistryLines() {
+  return S3_ACTIONS.map((action) =>
+    `SCR 4 0 ${action.commandId} "Custom: ${action.title}" "${action.relativeScript}"`,
+  );
+}
+
+async function installConditionalStartupHook() {
+  const hookStatus = await safeLstat(conditionalStartupHookPath);
+  if (hookStatus && !hookStatus.isFile()) {
+    throw new Error(`REAPER startup hook must be a regular file, not ${describeFileType(hookStatus)}: ${conditionalStartupHookPath}`);
+  }
+  const existing = hookStatus ? await readFile(conditionalStartupHookPath, "utf8") : "";
+  let withoutManagedBlocks = existing;
+  withoutManagedBlocks = removeMarkedBlock(withoutManagedBlocks, STARTUP_BEGIN, STARTUP_END);
+  for (const block of LEGACY_STARTUP_HOOKS.find((hook) => hook.relativePath === "__startup.lua")?.blocks ?? []) {
+    withoutManagedBlocks = removeMarkedBlock(withoutManagedBlocks, block.begin, block.end);
+  }
+  const nextText = upsertMarkedBlock(withoutManagedBlocks, STARTUP_BEGIN, STARTUP_END, conditionalStartupHookSource());
+  report.startup_hook.installed = true;
+  if (nextText === existing) {
+    report.skipped.push(`conditional OpenReaper startup hook already current at ${conditionalStartupHookPath}`);
+    return;
+  }
+  if (dryRun) {
+    report.skipped.push(`dry run: would install conditional OpenReaper startup hook at ${conditionalStartupHookPath}`);
+    return;
+  }
+  await mkdir(path.dirname(conditionalStartupHookPath), { recursive: true });
+  if (hookStatus) {
+    const backupPath = await backupStartupHook(conditionalStartupHookPath);
+    report.startup_hook.backup_path = backupPath;
+    report.changed.push(`backed up existing REAPER startup hook at ${backupPath}`);
+  }
+  await writeFile(conditionalStartupHookPath, nextText, { encoding: "utf8", mode: 0o644 });
+  report.changed.push(`installed conditional OpenReaper startup hook at ${conditionalStartupHookPath}`);
+}
+
+function conditionalStartupHookSource() {
+  return `${STARTUP_BEGIN}
+-- Inert for ordinary REAPER launches; active only for an OpenReaper-managed session.
+do
+  local bridge_script = os.getenv("OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH")
+  local transport_dir = os.getenv("OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR")
+  local function write_startup_status(stage)
+    if not transport_dir or transport_dir == "" then
+      return
+    end
+    local status_path = transport_dir .. "/openreaper-startup-status-v1.json"
+    local temp_path = status_path .. ".tmp"
+    local file = io.open(temp_path, "w")
+    if not file then return end
+    file:write("{\\"contract\\":\\"openreaper.startup_status.v1\\",\\"stage\\":\\"" .. stage .. "\\"}\n")
+    file:close()
+    os.remove(status_path)
+    os.rename(temp_path, status_path)
+  end
+  write_startup_status("hook_seen")
+  if not bridge_script or bridge_script == "" or not transport_dir or transport_dir == "" then
+    write_startup_status("environment_missing")
+  else
+    local ok = pcall(dofile, bridge_script)
+    if ok then
+      write_startup_status("bridge_dofile_succeeded")
+    else
+      write_startup_status("bridge_dofile_failed")
+    end
+  end
+end
+${STARTUP_END}`;
+}
+
+function upsertMarkedBlock(existing, begin, end, block) {
+  const withoutExistingBlock = removeMarkedBlock(existing, begin, end);
+  // Keep user-owned bytes unchanged; the single separator is consumed by
+  // removeMarkedBlock so repeated installs stay byte-stable.
+  return `${block}\n${withoutExistingBlock}`;
+}
+
 async function cleanupLegacyStartupHooks() {
-  const scriptsRoot = path.join(REAPER_RESOURCE_ROOT, "Scripts");
+  const scriptsRoot = path.join(reaperResourceRoot, "Scripts");
   for (const hook of LEGACY_STARTUP_HOOKS) {
     const hookPath = path.join(scriptsRoot, hook.relativePath);
     const hookStatus = await safeLstat(hookPath);
@@ -697,8 +868,9 @@ clicks; it only checks read-only and waits for the user to clear blockers.
 License/evaluation, recovery, plugin/FX, version, ambiguous, decision-bearing,
 and unknown windows always fail closed.
 
-openreaper-start passes a fixed trusted package-local ReaScript to REAPER after
-the project and all extra arguments.
+openreaper-start passes the project and extra arguments to REAPER, and the
+installed conditional Scripts/__startup.lua hook starts the Bridge only when
+the OpenReaper launch environment is present.
 openreaper-start reports ready only after the matching heartbeat and public read probe both pass.
 Only if openreaper-start reports the manual recovery fallback, open REAPER's
 Actions list, run "${BRIDGE_ACTION_TITLE}", then rerun Doctor and reconnect the
@@ -1166,7 +1338,7 @@ async function readTextIfExists(filePath) {
 
 function parseArgs(args) {
   const parsed = {};
-  const requiredValueOptions = new Set(["install-root", "render-root"]);
+  const requiredValueOptions = new Set(["install-root", "render-root", "reaper-resource-root"]);
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
     if (!arg.startsWith("--")) continue;
@@ -1206,6 +1378,16 @@ function parseArgValue(value) {
   return value;
 }
 
+function defaultReaperResourceRoot(homeDirectory) {
+  if (process.platform === "win32") {
+    const appData = process.env.APPDATA && path.isAbsolute(process.env.APPDATA)
+      ? process.env.APPDATA
+      : path.join(homeDirectory, "AppData", "Roaming");
+    return path.join(appData, "REAPER");
+  }
+  return path.join(homeDirectory, "Library", "Application Support", "REAPER");
+}
+
 function printInstallHelp() {
   process.stdout.write(`OpenReaper alpha installer
 
@@ -1216,6 +1398,10 @@ Usage:
 Options:
   --install-root <path>       Install destination (default: ~/.openreaper/current)
   --render-root <path>        Managed render output destination
+  --reaper-resource-root <path>
+                              REAPER resource directory; defaults to
+                              ~/Library/Application Support/REAPER on macOS and
+                              %APPDATA%/REAPER on Windows
   --dry-run                   Validate without installing
   --skip-client-config        Do not update supported MCP client configs
   --skip-startup-hook         Skip manual Action install and legacy hook cleanup;

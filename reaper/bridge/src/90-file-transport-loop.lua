@@ -4,6 +4,10 @@ local pending_result_writes = {}
 local active_continuation_runner = nil
 local BRIDGE_INTERNAL_CONTINUATION_CONTRACT = "openreaper.bridge.internal_continuation.v1"
 
+local function is_non_negative_integer(value)
+  return type(value) == "number" and value >= 0 and value == math.floor(value)
+end
+
 local function claim_path_for(filename)
   return path_join(CLAIMS_DIR, filename)
 end
@@ -60,6 +64,23 @@ local function snapshot_startup_orphan_claims()
     end
     if filename:match("%.json$") then
       startup_orphan_claims[filename] = true
+    end
+    index = index + 1
+  end
+end
+
+local function snapshot_startup_completed_results()
+  local index = 0
+  while true do
+    local filename = reaper.EnumerateFiles(RESULTS_DIR, index)
+    if not filename then
+      break
+    end
+    if filename:match("%.json$") then
+      -- Result filenames use the same request id as their durable request
+      -- files. Keep request files intact, but avoid reopening them after a
+      -- bridge restart.
+      completed_request_files[filename] = true
     end
     index = index + 1
   end
@@ -183,6 +204,25 @@ local function process_request_file(filename)
     parsed_result_path = path_join(RESULTS_DIR, parsed_id .. ".json")
     if file_exists(parsed_result_path) then
       return true
+    end
+    -- A request left unclaimed by an earlier launch must never reach the
+    -- handler table in a newer generation. Publish typed zero-write truth
+    -- without creating a durable claim; claimed work remains governed by the
+    -- orphan/unknown-outcome recovery path below.
+    if is_object(request.bridge)
+        and is_non_negative_integer(request.bridge.expected_generation)
+        and request.bridge.expected_generation ~= ACTIVE_GENERATION then
+      local result_json = bridge_error_envelope(request, "BRIDGE_GENERATION_MISMATCH", "Bridge generation changed before request claim.", {
+        recoverable = false,
+        details = {
+          reason = "stale_unclaimed_request",
+          expected_generation = request.bridge.expected_generation,
+          actual_generation = ACTIVE_GENERATION,
+          zero_write = true,
+          next_action = "Reconnect the current OpenReaper session before retrying this request.",
+        },
+      })
+      return write_terminal_result(filename, parsed_result_path, result_json, parsed_id)
     end
     if file_exists(claim_path) then
       log("request claim already exists for " .. tostring(parsed_id))
@@ -339,6 +379,7 @@ else
     return
   end
   snapshot_startup_orphan_claims()
+  snapshot_startup_completed_results()
   local heartbeat_ok, heartbeat_error = write_bridge_heartbeat()
   if not heartbeat_ok then
     log("startup heartbeat failed: " .. tostring(heartbeat_error))

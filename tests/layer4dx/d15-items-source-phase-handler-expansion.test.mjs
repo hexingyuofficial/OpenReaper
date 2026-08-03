@@ -114,21 +114,21 @@ describe("D15 items source/phase live handler expansion", () => {
       "D_FADEOUTLEN_AUTO",
       "D_VOL",
       "PCM_Source_CreateFromFile",
-      "SetMediaItemTake_Source",
-      "GetMediaItemTake_Source",
-      "GetMediaSourceFileName",
-      "PCM_Source_Destroy",
       "VERIFICATION_FAILED",
     ]) {
       assert.match(HANDLER_SOURCE, new RegExp(escapeRegExp(symbol)), symbol);
     }
+    assert.match(MEDIA_HELPER_SOURCE, /SetMediaItemTake_Source/);
+    assert.match(MEDIA_HELPER_SOURCE, /GetMediaItemTake_Source/);
+    assert.match(MEDIA_HELPER_SOURCE, /GetMediaSourceFileName/);
+    assert.match(MEDIA_HELPER_SOURCE, /PCM_Source_Destroy/);
     assert.doesNotMatch(HANDLER_SOURCE, /\b(?:Main_OnCommand|Main_OnCommandEx|MIDIEditor_OnCommand|ExecProcess|CF_ShellExecute|os\.execute|io\.popen|loadstring|dofile|require\s*\()\b/);
     assert.doesNotMatch(BRIDGE_SOURCE, /\["run_action:/);
     assert.doesNotMatch(BRIDGE_SOURCE, /LIVE_SMOKE_MATRIX|list_recipes|recipes\/|call_recipe/);
   });
 
   it("uses the frozen canonical media identity and complete-envelope preflight before Undo", () => {
-    assert.match(HANDLER_SOURCE, /d15_items_file_object_ref\(filename\)/);
+    assert.match(HANDLER_SOURCE, /d15_items_file_object_ref\(attachment\.path\)/);
     assert.match(HANDLER_SOURCE, /return READ_B_MEDIA\.file_object_ref\(path_value\)/);
     assert.doesNotMatch(HANDLER_SOURCE, /item:unknown/);
     assert.doesNotMatch(HANDLER_SOURCE, /bounded_string\(path_value, 220\)/);
@@ -145,7 +145,7 @@ describe("D15 items source/phase live handler expansion", () => {
   });
 
   it("executes the D15 product handler in Fengari with complete Unicode identity and truthful fallback", () => {
-    const longPath = "/tmp/OpenReaper 中文 空格/" + "分段素材 " .repeat(45) + "final.wav";
+    const longPath = "/tmp/OpenReaper 中文 空格/" + "分段素材 空格/".repeat(45) + "final.wav";
     assert.ok(Buffer.byteLength(longPath) > 240);
     runD15Lua(`
 local path = ${JSON.stringify(longPath)}
@@ -156,7 +156,7 @@ items = { item }
 active_take = take
 local req = request_for(path)
 local summary, failure, _, _, refs = d15_items_choose_new_source_file(req)
-assert(failure == nil, "failure " .. (failure and failure.message or "ok"))
+assert(failure == nil, "failure " .. (failure and failure.message or "ok") .. " blocker=" .. tostring(failure and failure.details and failure.details.blocker) .. " requested=" .. tostring(failure and failure.details and failure.details.requested_take_name) .. " actual=" .. tostring(failure and failure.details and failure.details.actual_take_name))
 assert(summary.file_ref == "file:path:" .. path, "file")
 assert(refs[2].ref == "file:path:" .. path and refs[2].identity.value == path, "refs")
 assert(calls.create == 1 and calls.set_source == 1 and calls.update == 1, "counts " .. calls.create .. ":" .. calls.set_source .. ":" .. calls.update)
@@ -346,8 +346,19 @@ function call_reaper(name, ...)
   if name == "GetMediaItemTake_Source" then return true, a[1].source end
   if name == "SetMediaItemTake_Source" then calls.set_source=calls.set_source+1; a[1].source=a[2]; return true, true end
   if name == "GetMediaSourceFileName" then return true, a[1].path end
+  if name == "GetMediaSourceType" then return true, "WAVE" end
+  if name == "GetMediaSourceLength" then return true, 1, false end
+  if name == "GetSetMediaItemTakeInfo_String" then
+    local take_ref, key, value, set_new = a[1], a[2], a[3], a[4]
+    if key == "P_NAME" then
+      if set_new then take_ref.name = value; return true, true end
+      return true, true, take_ref.name or "source.wav"
+    end
+    return true, true, take_ref.guid
+  end
   if name == "GetMediaItemTakeInfo_Value" or name == "GetMediaItemInfo_Value" then return true, 0 end
   if name == "UpdateItemInProject" then calls.update=calls.update+1; return true end
+  if name == "UpdateArrange" then return true end
   if name == "SetMediaItemTakeInfo_Value" or name == "SetMediaItemInfo_Value" then return true, true end
   if name == "PCM_Source_Destroy" then return true end
   return false
@@ -450,10 +461,20 @@ function call_reaper(n,...)
    a[1].source=a[2]; source_was_set=true; return true,true
  elseif n=="GetMediaItemTake_Source" then return true,a[1].source
  elseif n=="GetMediaSourceFileName" then return true,a[1].path
+ elseif n=="GetMediaSourceType" then return true,"WAVE"
+ elseif n=="GetMediaSourceLength" then return true,1,false
+ elseif n=="GetSetMediaItemTakeInfo_String" then
+   local take_ref, key, value, set_new = a[1], a[2], a[3], a[4]
+   if key=="P_NAME" then
+     if set_new then take_ref.name=value; return true,true end
+     return true,true,take_ref.name or "source.wav"
+   end
+   return true,true,take_ref.guid
  elseif n=="SetMediaItemTakeInfo_Value" then calls.set_take_info=(calls.set_take_info or 0)+1; return true,not fail_timing_set
  elseif n=="SetMediaItemInfo_Value" then calls.set_item_info=(calls.set_item_info or 0)+1; return true,not fail_timing_set
  elseif n=="PCM_Source_Destroy" then calls.destroy=(calls.destroy or 0)+1; return true
  elseif n=="UpdateItemInProject" then calls.update=(calls.update or 0)+1; return not fail_update
+ elseif n=="UpdateArrange" then return true
  elseif n=="GetMediaItemTakeInfo_Value" or n=="GetMediaItemInfo_Value" then
    if fail_timing_read and not source_was_set then return false end
    if timing_readback_mismatch and source_was_set then return true,999 end
@@ -489,9 +510,10 @@ function assert_zero_write(label)
 end
 function assert_success_writes(label)
   assert(undo_begin_attempts==1 and undo_begins==1 and undo_ends==1,label..":undo")
-  for _, key in ipairs({"create","set_source","set_take_info","set_item_info","destroy","update"}) do
+  for _, key in ipairs({"create","set_source","set_take_info","set_item_info","update"}) do
     assert(calls[key]==1,label..":"..key..":"..tostring(calls[key]))
   end
+  assert((calls.destroy or 0)==0,label..":destroy:"..tostring(calls.destroy))
 end
 function assert_success(terminal,label,path,item_ref)
   assert(type(terminal)=="string" and terminal:find('"ok":true',1,true),label..":"..tostring(terminal))
@@ -509,7 +531,7 @@ function assert_error(terminal,label,code,blocker,zero_write)
 end
 function minimum_success_budget(request,path)
   local item_ref="item:guid:"..item.guid
-  local summary={item_ref=item_ref,file_ref="file:path:"..path,preserve_timing=true,capability=request.pack.capability,pack=request.pack.id,risk=request.pack.risk,readback_status="passed",undo_evidence="required",artifacts_allowed=false,truncated=false}
+  local summary={item_ref=item_ref,file_ref="file:path:"..path,preserve_timing=true,source_type=string.rep("W",80),source_length_seconds=string.rep("9",309),take_name=string.rep("W",160),capability=request.pack.capability,pack=request.pack.id,risk=request.pack.risk,readback_status="passed",undo_evidence="required",artifacts_allowed=false,truncated=false}
   local refs=json_array({{kind="item",ref=item_ref,identity={scheme="guid",value=item.guid}},{kind="file",ref="file:path:"..path,identity={scheme="path",value=path}}})
   for limit=1,65536 do
     request.budget.max_response_bytes=limit

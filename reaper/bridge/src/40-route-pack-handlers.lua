@@ -1051,7 +1051,7 @@ local function dispatch_template_execute(request, resume_continuation)
   end
   handler = ALPHA3_2C3BC_PROJECT_FILE_SAVE_HANDLERS[request.pack.capability]
   if handler then
-    return handler(request)
+    return handler(request, resume_continuation)
   end
   return handler_error("OPERATION_NOT_FOUND", "template.execute supports only approved live-smoke capabilities.", {
       capability = bounded_string(request.pack.capability, 120),
@@ -1979,6 +1979,11 @@ local function dispatch_request(request, fallback_id, resume_continuation, runti
       item_ref = item_ref,
       file_ref = file_ref,
       preserve_timing = request.params and request.params.preserve_timing == true,
+      -- D15 returns native source truth after mutation; preflight with bounded
+      -- field prototypes so an undersized response cannot mutate first.
+      source_type = string.rep("W", 80),
+      source_length_seconds = string.rep("9", 309),
+      take_name = string.rep("W", 160),
       capability = capability,
       pack = request.pack.id,
       risk = request.pack.risk,

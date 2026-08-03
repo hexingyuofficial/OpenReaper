@@ -4238,6 +4238,18 @@ local PROJECT_FILE_SAVE_AS_OPTIONS = 8
 local PROJECT_FILE_SAVE_SUCCESS_ENVELOPE_FIXED_MAX_BYTES = 16384
 local PROJECT_FILE_SAVE_JSON_ESCAPE_FACTOR = 6
 local PROJECT_FILE_SAVE_JSON_FIELD_OVERHEAD_BYTES = 96
+local PROJECT_FILE_SAVE_CONTINUATION_CONTRACT = "openreaper.bridge.internal_continuation.v1"
+local PROJECT_FILE_SAVE_MAX_STABILIZATION_ATTEMPTS = 3
+
+local function project_file_save_continue(phase, state, next_phase_may_mutate)
+  return {
+    contract = PROJECT_FILE_SAVE_CONTINUATION_CONTRACT,
+    phase = phase,
+    state = state or {},
+    mutations_may_have_happened = true,
+    next_phase_may_mutate = next_phase_may_mutate == true,
+  }
+end
 
 local function project_file_save_error(code, message, details, recoverable)
   return nil, {
@@ -4508,12 +4520,102 @@ local function project_file_save_as_structural_target(request)
   return target, request.params.overwrite
 end
 
-local function save_project_as(request)
+local function save_project_as(request, resume_continuation)
   if not is_json_array(request.refs) or #request.refs ~= 0 then
     return project_file_save_error("REF_INVALID", "save_project_as accepts only the canonical current project and no caller-supplied refs.", {
       expected = "empty_refs_for_project_current",
     })
   end
+
+  if resume_continuation then
+    if type(resume_continuation) ~= "table"
+        or resume_continuation.contract ~= PROJECT_FILE_SAVE_CONTINUATION_CONTRACT
+        or type(resume_continuation.phase) ~= "string"
+        or type(resume_continuation.state) ~= "table" then
+      return project_file_save_error("INTERNAL_ERROR", "save_project_as received malformed continuation state.", {
+        blocker = "malformed_internal_continuation",
+      }, false)
+    end
+    local state = resume_continuation.state
+    local target = state.target_path
+    local overwrite = state.overwrite
+    local phase = resume_continuation.phase
+    local after, after_error = project_file_save_current_project_state()
+    if not after then
+      return nil, after_error
+    end
+    if after.path ~= target then
+      return project_file_save_error("VERIFY_FAILED", "save_project_as continuation changed the exact project path unexpectedly.", {
+        blocker = "project_path_target_mismatch_after_stabilization",
+        expected_path = bounded_string(target, PROJECT_FILE_SAVE_PATH_MAX_BYTES),
+        after_path = bounded_string(after.path, PROJECT_FILE_SAVE_PATH_MAX_BYTES),
+        overwrite = overwrite,
+        phase = phase,
+      }, false)
+    end
+    local attempts = tonumber(state.stabilization_attempts) or 0
+    if phase == "save_as.wait_after_save" then
+      if after.dirty or after.raw_dirty_state ~= 0 then
+        return project_file_save_continue("save_as.stabilize", state, true)
+      end
+      return project_file_save_continue("save_as.verify_stable", state, false)
+    end
+    if phase == "save_as.stabilize" then
+      if not (after.dirty or after.raw_dirty_state ~= 0) then
+        return project_file_save_continue("save_as.verify_stable", state, false)
+      end
+      if attempts >= PROJECT_FILE_SAVE_MAX_STABILIZATION_ATTEMPTS then
+        return project_file_save_error("VERIFY_FAILED", "save_project_as stabilization exceeded its bounded retry count.", {
+          blocker = "project_dirty_after_save_as",
+          expected_path = bounded_string(target, PROJECT_FILE_SAVE_PATH_MAX_BYTES),
+          after_dirty = after.dirty,
+          after_raw_dirty_state = after.raw_dirty_state,
+          overwrite = overwrite,
+          stabilization_attempts = attempts,
+        }, false)
+      end
+      local stabilized, stabilize_error = project_file_save_call_void_api("Main_SaveProject", after.project, false)
+      if not stabilized then
+        return nil, stabilize_error
+      end
+      state.stabilization_attempts = attempts + 1
+      return project_file_save_continue("save_as.verify_stable", state, false)
+    end
+    if phase == "save_as.verify_stable" then
+      if after.dirty or after.raw_dirty_state ~= 0 then
+        if attempts >= PROJECT_FILE_SAVE_MAX_STABILIZATION_ATTEMPTS then
+          return project_file_save_error("VERIFY_FAILED", "save_project_as did not read back a clean raw-zero dirty state after bounded stabilization.", {
+            blocker = "project_dirty_after_save_as",
+            expected_path = bounded_string(target, PROJECT_FILE_SAVE_PATH_MAX_BYTES),
+            after_dirty = after.dirty,
+            after_raw_dirty_state = after.raw_dirty_state,
+            overwrite = overwrite,
+            stabilization_attempts = attempts,
+          }, false)
+        end
+        return project_file_save_continue("save_as.stabilize", state, true)
+      end
+      return project_file_save_summary(request, {
+        project_ref = "project:current",
+        before_path = state.before_path,
+        after_path = after.path,
+        before_dirty = state.before_dirty,
+        before_raw_dirty_state = state.before_raw_dirty_state,
+        after_dirty = after.dirty,
+        after_raw_dirty_state = after.raw_dirty_state,
+        target_path = target,
+        overwrite = overwrite,
+        path_matches_target = true,
+        stabilization_attempts = attempts,
+        summary = "Saved the current project as the exact validated .RPP target under explicit overwrite=true race authorization; delayed native state was stabilized and current-project identity remains canonical with dirty state clean/raw 0.",
+      }), nil, nil, nil, project_file_save_refs()
+    end
+    return project_file_save_error("INTERNAL_ERROR", "save_project_as received an unknown continuation phase.", {
+      blocker = "malformed_internal_continuation",
+      phase = phase,
+    }, false)
+  end
+
   local target, overwrite_or_error = project_file_save_as_structural_target(request)
   if not target then
     return nil, overwrite_or_error
@@ -4544,28 +4646,14 @@ local function save_project_as(request)
       overwrite = overwrite,
     }, false)
   end
-  if after.dirty or after.raw_dirty_state ~= 0 then
-    return project_file_save_error("VERIFY_FAILED", "save_project_as did not read back a clean raw-zero dirty state.", {
-      blocker = "project_dirty_after_save_as",
-      expected_path = bounded_string(target, PROJECT_FILE_SAVE_PATH_MAX_BYTES),
-      after_dirty = after.dirty,
-      after_raw_dirty_state = after.raw_dirty_state,
-      overwrite = overwrite,
-    }, false)
-  end
-  return project_file_save_summary(request, {
-    project_ref = "project:current",
+  return project_file_save_continue("save_as.wait_after_save", {
+    target_path = target,
     before_path = before.path,
-    after_path = after.path,
     before_dirty = before.dirty,
     before_raw_dirty_state = before.raw_dirty_state,
-    after_dirty = after.dirty,
-    after_raw_dirty_state = after.raw_dirty_state,
-    target_path = target,
     overwrite = overwrite,
-    path_matches_target = true,
-    summary = "Saved the current project as the exact validated .RPP target under explicit overwrite=true race authorization; current-project identity remains canonical and dirty state is clean/raw 0.",
-  }), nil, nil, nil, project_file_save_refs()
+    stabilization_attempts = 0,
+  }, false)
 end
 return {
   exports = { save_current_project = save_current_project, save_project_as = save_project_as },
@@ -9426,11 +9514,6 @@ local function d15_items_create_source(path_value)
   return source
 end
 
-local function d15_items_source_filename(source)
-  local ok, filename = call_reaper("GetMediaSourceFileName", source, "")
-  return ok and first_string(filename) or ""
-end
-
 local function d15_items_choose_new_source_file(request)
   local item, failure = d15_items_item_for_write(request)
   if not item then
@@ -9471,13 +9554,20 @@ local function d15_items_choose_new_source_file(request)
   if not source then
     return d15_items_error(code, message, { path = bounded_string(path_value, 240) })
   end
-  local ok_old_source, old_source = call_reaper("GetMediaItemTake_Source", take)
-  local ok_set_call, source_accepted = call_reaper("SetMediaItemTake_Source", take, source)
-  if not ok_set_call or source_accepted ~= true then
-    call_reaper("PCM_Source_Destroy", source)
-    return d15_items_error("COMMAND_FAILED", "REAPER rejected take source relink.", {
-      blocker = "source_relink_rejected",
-    }, false)
+  local attachment, attachment_failure = READ_B_MEDIA.attach_take_source(take, source, {
+    item = item,
+    update_item = false,
+    refresh_arrange = false,
+  })
+  if not attachment then
+    local details = attachment_failure and attachment_failure.details or {}
+    if details.source_attached ~= true and details.source_ownership_unknown ~= true then
+      call_reaper("PCM_Source_Destroy", source)
+    end
+    if details.blocker == "native_source_attach_failed" then
+      details.blocker = "source_relink_rejected"
+    end
+    return nil, attachment_failure
   end
   if preserve_timing then
     local ok_offset_call, offset_accepted = call_reaper("SetMediaItemTakeInfo_Value", take, "D_STARTOFFS", old_start_offset)
@@ -9488,21 +9578,10 @@ local function d15_items_choose_new_source_file(request)
       }, false)
     end
   end
-  if ok_old_source and old_source and old_source ~= source then
-    call_reaper("PCM_Source_Destroy", old_source)
-  end
-  local ok_update = call_reaper("UpdateItemInProject", item)
-  if not ok_update then
+  local refreshed, refresh_reason = READ_B_MEDIA.refresh_item(item, true)
+  if not refreshed then
     return d15_items_error("COMMAND_FAILED", "REAPER rejected item update after source relink.", {
-      blocker = "item_update_failed",
-    }, false)
-  end
-  local ok_readback_source, readback_source = call_reaper("GetMediaItemTake_Source", take)
-  local filename = ok_readback_source and readback_source and d15_items_source_filename(readback_source) or ""
-  if filename ~= path_value then
-    return d15_items_error("VERIFICATION_FAILED", "Take source readback did not match the requested file ref.", {
-      requested_path = bounded_string(path_value, 240),
-      actual_path = bounded_string(filename, 240),
+      blocker = refresh_reason or "item_update_failed",
     }, false)
   end
   if preserve_timing then
@@ -9519,13 +9598,16 @@ local function d15_items_choose_new_source_file(request)
       }, false)
     end
   end
-  local file_ref = d15_items_file_object_ref(filename)
+  local file_ref = d15_items_file_object_ref(attachment.path)
   if not file_ref then
     return d15_items_error("VERIFICATION_FAILED", "Take source readback did not provide a canonical file identity.", {}, false)
   end
   return d15_items_summary(request, item, {
     file_ref = file_ref.ref,
     preserve_timing = preserve_timing,
+    source_type = attachment.source_type,
+    source_length_seconds = attachment.source_length_seconds,
+    take_name = attachment.take_name,
   }, d15_items_refs(item_object_ref, file_ref))
 end
 return {
@@ -10614,6 +10696,7 @@ local D27_PARAM_REASON_CODES = {
   EMPTY_RANGE = true,
   AUDIO_SOURCE_UNSUPPORTED = true,
   AUDIO_CHANNELS_UNSUPPORTED = true,
+  MIDI_UNSUPPORTED = true,
 }
 
 local function d27_analysis_error(code, message, details, recoverable)
@@ -10770,6 +10853,12 @@ local function d27_analysis_context(request)
   if not ok_source or not source then
     return nil, d27_analysis_error("SOURCE_NOT_FOUND", "The active take has no readable media source.", {})
   end
+  local ok_midi, is_midi = call_reaper("TakeIsMIDI", take)
+  if ok_midi and is_midi == true then
+    return nil, d27_analysis_error("MIDI_UNSUPPORTED", "Audio analysis and batch processing do not support MIDI Items.", {
+      typed_truth = "MIDI_UNSUPPORTED",
+    }, false)
+  end
 
   local item_summary = read_item_summary({
     refs = request.refs,
@@ -10837,25 +10926,44 @@ local function d27_analysis_context(request)
   sample_rate = ok_rate and d27_analysis_number(first_number(sample_rate)) or nil
   local ok_channels, channels = call_reaper("GetMediaSourceNumChannels", source)
   channels = ok_channels and d27_analysis_number(first_number(channels)) or nil
+  local ok_type, source_type_value = call_reaper("GetMediaSourceType", source, "")
+  local source_type = ok_type and type(source_type_value) == "string" and source_type_value ~= ""
+    and source_type_value or "unknown"
+  local ok_filename, source_filename_value = call_reaper("GetMediaSourceFileName", source, "")
+  local source_filename = ok_filename and type(source_filename_value) == "string" and source_filename_value or ""
+  local ok_source_length, source_length_value, length_is_qn = call_reaper("GetMediaSourceLength", source)
+  local source_length = ok_source_length and d27_analysis_number(first_number(source_length_value)) or nil
+  if source_length ~= nil and source_length < 0 then source_length = nil end
+  local source_diagnostics = {
+    item_ref = item_summary.item_ref,
+    take_ref = item_summary.active_take_ref,
+    source_type = source_type,
+    source_filename = source_filename,
+    source_length = source_length,
+    source_length_is_qn = length_is_qn == true,
+    sample_rate = sample_rate or 0,
+    channels = channels or 0,
+    api_status = {
+      GetMediaSourceSampleRate = ok_rate == true,
+      GetMediaSourceNumChannels = ok_channels == true,
+      GetMediaSourceType = ok_type == true,
+      GetMediaSourceFileName = ok_filename == true,
+      GetMediaSourceLength = ok_source_length == true,
+    },
+  }
   if sample_rate == nil or sample_rate <= 0 or sample_rate ~= math.floor(sample_rate) then
     return nil, d27_analysis_error("AUDIO_SOURCE_UNSUPPORTED", "Item audio analysis requires an audio source with a native sample rate.", {
-      sample_rate = sample_rate or 0,
+      api = "GetMediaSourceSampleRate",
+      source = source_diagnostics,
     }, false)
   end
   if channels == nil or channels < 1 or channels ~= math.floor(channels) or channels > D27_MAX_CHANNELS then
     return nil, d27_analysis_error("AUDIO_CHANNELS_UNSUPPORTED", "Item audio analysis requires a bounded native source channel count.", {
-      channels = channels or 0,
+      api = "GetMediaSourceNumChannels",
+      source = source_diagnostics,
       maximum = D27_MAX_CHANNELS,
     }, false)
   end
-
-  local ok_type, source_type = call_reaper("GetMediaSourceType", source, "")
-  if not ok_type or type(source_type) ~= "string" or source_type == "" then
-    source_type = "unknown"
-  end
-  local ok_source_length, source_length, length_is_qn = call_reaper("GetMediaSourceLength", source)
-  source_length = ok_source_length and d27_analysis_number(first_number(source_length)) or nil
-  if source_length ~= nil and source_length < 0 then source_length = nil end
 
   return {
     request = request,
@@ -11789,7 +11897,399 @@ local function d27_split_matches_silence(midpoint, segments, tolerance)
   return false
 end
 
+-- The public Template keeps its accepted export name, while batch requests use
+-- this shared REAPER-side core.  Target resolution and the complete plan stay
+-- here so MCP never has to round-trip one Item or one silence fragment at a time.
+local alpha33_silence_batch
+
+local function d27_batch_checksum(source)
+  local checksum = 0
+  for index = 1, #source do
+    checksum = (checksum * 131 + source:byte(index)) % 2147483647
+  end
+  return tostring(checksum)
+end
+
+local function d27_batch_number(params, field, default_value, minimum, maximum)
+  local value = params[field]
+  if value == nil then value = default_value end
+  value = d27_analysis_number(value)
+  if value == nil or (minimum ~= nil and value < minimum) or (maximum ~= nil and value > maximum) then
+    return nil, d27_analysis_error("PARAMS_INVALID", "Audio batch parameter is outside the supported range.", {
+      field = field,
+      minimum = minimum,
+      maximum = maximum,
+      zero_write = true,
+    })
+  end
+  return value, nil
+end
+
+local function d27_batch_fail(code, message, details)
+  details = type(details) == "table" and details or {}
+  details.zero_write = true
+  return nil, d27_analysis_error(code, message, details)
+end
+
+local function d27_batch_preflight_failure(failure)
+  if type(failure) == "table" then
+    failure.details = type(failure.details) == "table" and failure.details or {}
+    failure.details.zero_write = true
+  end
+  return nil, failure
+end
+
+local function d27_batch_ref_object(ref)
+  if not is_string(ref) then return nil end
+  local guid = ref:match("^item:guid:(.+)$")
+  if not guid or guid == "" then return nil end
+  return d27_split_object_ref("item", ref)
+end
+
+local function d27_batch_targets(request, params)
+  local target = params.target
+  local tokens = is_json_array(params.target_refs) and params.target_refs or nil
+  local refs = json_array({})
+  if tokens and #tokens > 64 then
+    return d27_batch_fail("BATCH_LIMIT_EXCEEDED", "Audio batch accepts at most 64 exact Item targets; zero_write=true.", {
+      target_count = #tokens,
+      maximum = 64,
+    })
+  end
+  if target == nil then target = tokens and #tokens > 0 and "exact" or "selected" end
+  if target ~= "selected" and target ~= "exact" then
+    return d27_batch_fail("PARAMS_INVALID", "Audio batch target must be selected or exact.")
+  end
+  if target == "exact" then
+    if not tokens then
+      tokens = json_array({})
+      if is_json_array(request.refs) then
+        for index = 1, #request.refs do
+          local ref = request.refs[index]
+          if is_object(ref) and ref.kind == "item" and is_string(ref.ref) then
+            tokens[#tokens + 1] = ref.ref
+          end
+        end
+      end
+    end
+    if #tokens < 1 or #tokens > 64 then
+      return d27_batch_fail("BATCH_LIMIT_EXCEEDED", "Exact audio batch requires 1-64 Item targets; zero_write=true.", {
+        target_count = #tokens,
+        maximum = 64,
+      })
+    end
+    local seen = {}
+    for index = 1, #tokens do
+      local token = tokens[index]
+      local object_ref = d27_batch_ref_object(token)
+      if not object_ref then
+        return d27_batch_fail("REF_INVALID", "Exact audio batch accepts only item:guid refs; zero_write=true.", {
+          target_order = index,
+          ref = tostring(token),
+        })
+      end
+      if seen[token] then
+        return d27_batch_fail("REF_INVALID", "Exact audio batch rejects duplicate Item GUID refs; zero_write=true.", {
+          target_order = index,
+          ref = token,
+        })
+      end
+      seen[token] = true
+      local guid = token:match("^item:guid:(.+)$")
+      local item = d27_analysis_find_item_by_guid(guid)
+      if not item then
+        return d27_batch_fail("ITEM_NOT_FOUND", "Exact audio batch could not resolve an Item GUID; zero_write=true.", {
+          target_order = index,
+          item_ref = token,
+        })
+      end
+      refs[#refs + 1] = { item = item, item_ref = token, guid = guid, target_order = index }
+    end
+  else
+    local ok_count, raw_count = call_reaper("CountSelectedMediaItems", 0)
+    local count = ok_count and math.floor(first_number(raw_count) or -1) or -1
+    if count < 0 or count > 64 then
+      return d27_batch_fail("BATCH_LIMIT_EXCEEDED", "Selected audio batch requires 1-64 selected Items; zero_write=true.", {
+        target_count = count,
+        maximum = 64,
+      })
+    end
+    if count < 1 then
+      return d27_batch_fail("ITEM_NOT_FOUND", "Selected audio batch requires at least one selected Item; zero_write=true.", {
+        target_count = 0,
+      })
+    end
+    local seen = {}
+    for index = 0, count - 1 do
+      local ok_item, item = call_reaper("GetSelectedMediaItem", 0, index)
+      local item_ref, guid = item and d27_split_item_ref(item) or nil, nil
+      if item then item_ref, guid = d27_split_item_ref(item) end
+      if not ok_item or not item or not item_ref then
+        return d27_batch_fail("ITEM_NOT_FOUND", "Selected audio batch could not prove an exact selected Item GUID; zero_write=true.", {
+          target_order = index + 1,
+        })
+      end
+      if seen[item_ref] then
+        return d27_batch_fail("REF_INVALID", "Selected audio batch resolved duplicate Item GUIDs; zero_write=true.", {
+          target_order = index + 1,
+          item_ref = item_ref,
+        })
+      end
+      seen[item_ref] = true
+      refs[#refs + 1] = { item = item, item_ref = item_ref, guid = guid, target_order = index + 1 }
+    end
+  end
+  return refs, nil
+end
+
+local function d27_batch_scope_matches(scope, segment, item_length, tolerance)
+  local leading = segment.start_seconds <= tolerance
+  local trailing = segment.end_seconds >= item_length - tolerance
+  if scope == "all" then return true end
+  if scope == "leading" then return leading end
+  if scope == "trailing" then return trailing end
+  if scope == "edges" then return leading or trailing end
+  return not leading and not trailing
+end
+
+local function d27_batch_ranges(scan, context, params)
+  local scope = params.silence_scope or "all"
+  local keep_before_ms, keep_before_failure = d27_batch_number(params, "keep_before_ms", 20, 0, 5000)
+  if not keep_before_ms then return nil, keep_before_failure end
+  local keep_after_ms, keep_after_failure = d27_batch_number(params, "keep_after_ms", 20, 0, 5000)
+  if not keep_after_ms then return nil, keep_after_failure end
+  local min_kept_ms, min_kept_failure = d27_batch_number(params, "min_kept_audio_ms", 80, 0, 60000)
+  if not min_kept_ms then return nil, min_kept_failure end
+  local tolerance = math.max(0.000001, 1 / context.sample_rate)
+  local ranges = {}
+  local all_silent = false
+  local covered = 0
+  for index = 1, #scan.silence_segments do
+    local segment = scan.silence_segments[index]
+    covered = covered + math.max(0, segment.end_seconds - segment.start_seconds)
+  end
+  if covered >= context.item_length - tolerance then
+    all_silent = true
+  end
+  if not all_silent then
+    for index = 1, #scan.silence_segments do
+      local segment = scan.silence_segments[index]
+      if d27_batch_scope_matches(scope, segment, context.item_length, tolerance) then
+        local start_seconds = math.max(0, segment.start_seconds + (keep_before_ms / 1000))
+        local end_seconds = math.min(context.item_length, segment.end_seconds - (keep_after_ms / 1000))
+        if end_seconds > start_seconds + tolerance then
+          ranges[#ranges + 1] = {
+            start_seconds = start_seconds,
+            end_seconds = end_seconds,
+            source_start_seconds = segment.start_seconds,
+            source_end_seconds = segment.end_seconds,
+          }
+        end
+      end
+    end
+  end
+  table.sort(ranges, function(left, right) return left.start_seconds < right.start_seconds end)
+  local filtered = {}
+  local cursor = 0
+  for index = 1, #ranges do
+    local range = ranges[index]
+    local previous_audio = range.start_seconds - cursor
+    local next_audio = context.item_length - range.end_seconds
+    if previous_audio <= tolerance or previous_audio >= (min_kept_ms / 1000) - tolerance then
+      if next_audio <= tolerance or next_audio >= (min_kept_ms / 1000) - tolerance then
+        filtered[#filtered + 1] = range
+        cursor = range.end_seconds
+      end
+    end
+  end
+  return filtered, nil, all_silent
+end
+
+local function d27_batch_checksum_plan(rows, params, operation)
+  local parts = {
+    operation,
+    params.target or "selected",
+    params.silence_scope or "all",
+    tostring(params.silence_threshold_dbfs or -60),
+    tostring(params.min_silence_ms or 250),
+    tostring(params.keep_before_ms or 20),
+    tostring(params.keep_after_ms or 20),
+    tostring(params.min_kept_audio_ms or 80),
+    tostring(params.fade_ms or 5),
+    tostring(params.normalization_metric or ""),
+    tostring(params.normalization_target or ""),
+  }
+  for index = 1, #rows do
+    local row = rows[index]
+    parts[#parts + 1] = table.concat({ row.item_ref, row.context.item_position, row.context.item_length }, ":")
+    for _, segment in ipairs(row.scan and row.scan.silence_segments or {}) do
+      parts[#parts + 1] = table.concat({ segment.start_seconds, segment.end_seconds }, ",")
+    end
+    for _, range in ipairs(row.ranges or {}) do
+      parts[#parts + 1] = table.concat({ range.start_seconds, range.end_seconds }, ",")
+    end
+    if row.normalization then parts[#parts + 1] = tostring(row.normalization.adjustment) end
+  end
+  return "alpha33_silence_batch:" .. d27_batch_checksum(table.concat(parts, "|"))
+end
+
+local function d27_batch_owner_track(context)
+  local ok_track, track = call_reaper("GetMediaItemTrack", context.item)
+  if not ok_track or not track then ok_track, track = call_reaper("GetMediaItem_Track", context.item) end
+  if not ok_track or not track then return nil end
+  local ref = d27_split_track_ref(track)
+  if not ref then return nil end
+  return track, ref
+end
+
+local function d27_batch_fragments(context, boundaries)
+  local fragments = {{ item = context.item, start_seconds = 0, end_seconds = context.item_length, guid = context.item_ref:match("^item:guid:(.+)$"), item_ref = context.item_ref }}
+  local tolerance = math.max(0.000001, 1 / context.sample_rate)
+  for _, boundary in ipairs(boundaries) do
+    local split_index = nil
+    for index = 1, #fragments do
+      if boundary > fragments[index].start_seconds + tolerance and boundary < fragments[index].end_seconds - tolerance then
+        split_index = index
+        break
+      end
+    end
+    if not split_index then return nil, d27_analysis_error("VERIFY_FAILED", "A planned silence boundary no longer mapped to a live Item fragment.", { boundary_seconds = boundary }) end
+    local left = fragments[split_index]
+    local ok_split, right_item = call_reaper("SplitMediaItem", left.item, context.item_position + boundary)
+    if not ok_split or not right_item then return nil, d27_analysis_error("COMMAND_FAILED", "REAPER rejected a planned native Item split.", { boundary_seconds = boundary }) end
+    local right_ref, right_guid = d27_split_item_ref(right_item)
+    if not right_ref or right_guid == left.guid then return nil, d27_analysis_error("VERIFY_FAILED", "Native Item split did not return a unique GUID.", { boundary_seconds = boundary }) end
+    local right = { item = right_item, start_seconds = boundary, end_seconds = left.end_seconds, guid = right_guid, item_ref = right_ref }
+    left.end_seconds = boundary
+    table.insert(fragments, split_index + 1, right)
+  end
+  return fragments, nil
+end
+
+local function d27_batch_is_removed(midpoint, ranges, tolerance)
+  for _, range in ipairs(ranges) do
+    if midpoint >= range.start_seconds - tolerance and midpoint <= range.end_seconds + tolerance then return true end
+  end
+  return false
+end
+
+local function d27_batch_apply_silence(row, params, counters)
+  if #row.ranges == 0 then
+    return {
+      status = row.all_silent and "ALL_SILENT_RETAINED" or "UNCHANGED",
+      code = row.all_silent and "ALL_SILENT_RETAINED" or nil,
+      item_ref = row.item_ref,
+      owner_track_ref = row.owner_track_ref,
+      changed = false,
+      source_media_deleted = false,
+      removed_duration_seconds = 0,
+      remaining_duration_seconds = row.context.item_length,
+      silence_segment_count = #row.scan.silence_segments,
+    }, nil
+  end
+  local boundaries = {}
+  local seen = {}
+  for _, range in ipairs(row.ranges) do
+    for _, boundary in ipairs({ range.start_seconds, range.end_seconds }) do
+      if boundary > 0 and boundary < row.context.item_length then
+        local key = string.format("%.9f", boundary)
+        if not seen[key] then seen[key] = true; boundaries[#boundaries + 1] = boundary end
+      end
+    end
+  end
+  table.sort(boundaries)
+  local fragments, fragment_failure = d27_batch_fragments(row.context, boundaries)
+  if not fragments then return nil, fragment_failure end
+  local kept, deleted = {}, {}
+  local tolerance = math.max(0.000001, 1 / row.context.sample_rate)
+  for _, fragment in ipairs(fragments) do
+    if d27_batch_is_removed((fragment.start_seconds + fragment.end_seconds) / 2, row.ranges, tolerance) then deleted[#deleted + 1] = fragment else kept[#kept + 1] = fragment end
+  end
+  if #kept == 0 then return nil, d27_analysis_error("ALL_SILENT_RETAINED", "The complete Item is silent; the source Item was retained and no mutation was applied.", { item_ref = row.item_ref, zero_write = true }) end
+  local fade_seconds = (params.fade_ms or 5) / 1000
+  for _, fragment in ipairs(deleted) do
+    local ok_track, track = call_reaper("GetMediaItemTrack", fragment.item)
+    if not ok_track or not track then ok_track, track = call_reaper("GetMediaItem_Track", fragment.item) end
+    if not ok_track or track ~= row.owner_track then return nil, d27_analysis_error("VERIFY_FAILED", "A silence fragment changed Track before deletion.", { item_ref = fragment.item_ref }) end
+    local ok_delete, deleted_ok = call_reaper("DeleteTrackMediaItem", row.owner_track, fragment.item)
+    if not ok_delete or deleted_ok ~= true then return nil, d27_analysis_error("COMMAND_FAILED", "REAPER rejected a planned silence fragment deletion.", { item_ref = fragment.item_ref }) end
+    counters.native_mutation_count = counters.native_mutation_count + 1
+  end
+  for _, fragment in ipairs(kept) do
+    if fade_seconds > 0 then
+      call_reaper("SetMediaItemInfo_Value", fragment.item, "D_FADEINLEN", math.min(fade_seconds, math.max(0, fragment.end_seconds - fragment.start_seconds) / 2))
+      call_reaper("SetMediaItemInfo_Value", fragment.item, "D_FADEOUTLEN", math.min(fade_seconds, math.max(0, fragment.end_seconds - fragment.start_seconds) / 2))
+    end
+  end
+  call_reaper("UpdateArrange")
+  local remaining = 0
+  local kept_refs = json_array({})
+  for _, fragment in ipairs(kept) do
+    local live = d27_analysis_find_item_by_guid(fragment.guid)
+    local live_position = live and d27_split_number(live, "D_POSITION") or nil
+    local live_length = live and d27_split_number(live, "D_LENGTH") or nil
+    if not live or live_position == nil or live_length == nil then return nil, d27_analysis_error("VERIFY_FAILED", "A kept Item failed aggregate readback.", { item_ref = fragment.item_ref }) end
+    remaining = remaining + live_length
+    kept_refs[#kept_refs + 1] = fragment.item_ref
+    counters.native_readback_count = counters.native_readback_count + 1
+  end
+  local deleted_refs = json_array({})
+  local removed = 0
+  for _, fragment in ipairs(deleted) do
+    if d27_analysis_find_item_by_guid(fragment.guid) then return nil, d27_analysis_error("VERIFY_FAILED", "A deleted silence Item remained in the project.", { item_ref = fragment.item_ref }) end
+    deleted_refs[#deleted_refs + 1] = fragment.item_ref
+    removed = removed + fragment.end_seconds - fragment.start_seconds
+    counters.native_readback_count = counters.native_readback_count + 1
+  end
+  return {
+    status = "APPLIED",
+    item_ref = row.item_ref,
+    owner_track_ref = row.owner_track_ref,
+    changed = true,
+    source_media_deleted = false,
+    kept_item_refs = kept_refs,
+    deleted_item_refs = deleted_refs,
+    silence_segment_count = #row.scan.silence_segments,
+    split_count = #fragments - 1,
+    delete_count = #deleted,
+    removed_duration_seconds = removed,
+    remaining_duration_seconds = remaining,
+  }, nil
+end
+
+local function d27_batch_apply_normalization(row, params, counters)
+  local take = row.context.take
+  local current_ok, current_volume = call_reaper("GetMediaItemTakeInfo_Value", take, "D_VOL")
+  current_volume = current_ok and d27_analysis_number(first_number(current_volume)) or nil
+  if current_volume == nil then return nil, d27_analysis_error("VERIFY_FAILED", "Native Take volume could not be read before normalization.", { item_ref = row.item_ref }) end
+  local new_volume = current_volume * row.normalization.adjustment
+  if new_volume ~= new_volume or new_volume == math.huge or new_volume == -math.huge or new_volume < 0 then return nil, d27_analysis_error("ANALYSIS_RESULT_INVALID", "Native normalization returned an invalid Take volume.", { item_ref = row.item_ref }) end
+  local set_ok = call_reaper("SetMediaItemTakeInfo_Value", take, "D_VOL", new_volume)
+  if set_ok ~= true then return nil, d27_analysis_error("COMMAND_FAILED", "REAPER rejected native source/Take normalization.", { item_ref = row.item_ref }) end
+  counters.native_mutation_count = counters.native_mutation_count + 1
+  local read_ok, read_volume = call_reaper("GetMediaItemTakeInfo_Value", take, "D_VOL")
+  read_volume = read_ok and d27_analysis_number(first_number(read_volume)) or nil
+  if read_volume == nil or math.abs(read_volume - new_volume) > 0.000001 then return nil, d27_analysis_error("VERIFY_FAILED", "Native Take normalization failed volume readback.", { item_ref = row.item_ref, expected_volume = new_volume, observed_volume = read_volume or -1 }) end
+  counters.native_readback_count = counters.native_readback_count + 1
+  return {
+    status = "APPLIED",
+    item_ref = row.item_ref,
+    owner_track_ref = row.owner_track_ref,
+    changed = true,
+    source_media_deleted = false,
+    measurement_scope = "source_item_take_pre_fx",
+    normalization_metric = params.normalization_metric,
+    normalization_target = params.normalization_target,
+    adjustment = row.normalization.adjustment,
+    take_volume_before = current_volume,
+    take_volume_after = read_volume,
+  }, nil
+end
+
 local function alpha33_split_item_by_silence(request)
+  if is_object(request.params) and request.params.batch == true then
+    return alpha33_silence_batch(request)
+  end
   local source_item_ref, requested_guid = d27_split_exact_item_ref(request)
   if not source_item_ref then
     return nil, d27_analysis_error("REF_INVALID", "Split by silence requires one exact item:guid ref; selection and index aliases are rejected.", {})
@@ -12068,6 +12568,234 @@ local function alpha33_split_item_by_silence(request)
     source_media_deleted = false,
     analysis_coverage = scan.coverage,
   }, nil, json_array({}), json_array({}), output_refs
+end
+
+alpha33_silence_batch = function(request)
+  local started = os.clock()
+  local params = is_object(request.params) and request.params or {}
+  local operation = params.operation or "remove_silence"
+  if operation ~= "remove_silence" and operation ~= "normalize_level" then
+    return d27_batch_fail("PARAMS_INVALID", "Audio batch operation must be remove_silence or normalize_level.")
+  end
+  local silence_threshold_dbfs, threshold_failure = d27_batch_number(params, "silence_threshold_dbfs", -60, -150, 0)
+  if not silence_threshold_dbfs then return nil, threshold_failure end
+  local min_silence_ms, min_silence_failure = d27_batch_number(params, "min_silence_ms", 250, 1, 60000)
+  if not min_silence_ms then return nil, min_silence_failure end
+  local scope = params.silence_scope or "all"
+  if operation == "remove_silence" and not ({ all = true, leading = true, trailing = true, edges = true, internal = true })[scope] then
+    return d27_batch_fail("PARAMS_INVALID", "silence_scope must be all, leading, trailing, edges, or internal.")
+  end
+  local metric_codes = { lufs_i = 0, rms_i = 1, peak = 2, true_peak = 3, lufs_m_max = 4, lufs_s_max = 5 }
+  local normalization_metric = params.normalization_metric
+  local normalization_target = params.normalization_target
+  if operation == "normalize_level" then
+    if not metric_codes[normalization_metric] then
+      return d27_batch_fail("PARAMS_INVALID", "normalization_metric must be one of lufs_i, rms_i, peak, true_peak, lufs_m_max, or lufs_s_max.")
+    end
+    normalization_target = d27_analysis_number(normalization_target)
+    if normalization_target == nil or normalization_target > 0 or normalization_target < -150 then
+      return d27_batch_fail("PARAMS_INVALID", "normalization_target must be a finite value from -150 to 0 dB/LUFS.")
+    end
+  end
+  local targets, target_failure = d27_batch_targets(request, params)
+  if not targets then return nil, target_failure end
+
+  local preflight_started = os.clock()
+  local rows = {}
+  for index = 1, #targets do
+    local target = targets[index]
+    local owner_track, owner_track_ref = d27_batch_owner_track({ item = target.item })
+    if not owner_track then
+      return d27_batch_fail("TRACK_NOT_FOUND", "Audio batch could not prove the exact owner Track before mutation.", { item_ref = target.item_ref })
+    end
+    local analysis_request = {
+      refs = json_array({ d27_split_object_ref("item", target.item_ref) }),
+      params = {
+        silence_threshold_dbfs = silence_threshold_dbfs,
+        min_silence_ms = min_silence_ms,
+        max_analysis_seconds = D27_MAX_ANALYSIS_SECONDS,
+        max_segments = 512,
+      },
+      -- Batch preflight must prove every silence row. The public max_items
+      -- budget is a response boundary, not an internal analysis ceiling.
+      budget = nil,
+    }
+    local context, context_failure = d27_analysis_context(analysis_request)
+    if not context then
+      return d27_batch_preflight_failure(context_failure)
+    end
+    if context.item_ref ~= target.item_ref or d27_analysis_item_guid(context.item) ~= target.guid then
+      return d27_batch_fail("REF_INVALID", "Audio batch Item identity changed during preflight.", { item_ref = target.item_ref })
+    end
+    local source_type = string.upper(context.source_type or "")
+    if source_type:find("MIDI", 1, true) then
+      return d27_batch_fail("UNSUPPORTED_TARGET", "MIDI Items are unsupported by audio batch processing; zero_write=true.", {
+        item_ref = target.item_ref,
+        typed_truth = "MIDI_UNSUPPORTED",
+      })
+    end
+    local source_range, source_range_failure = d27_analysis_source_bounds(context, 0, context.item_length)
+    if not source_range then
+      return d27_batch_preflight_failure(source_range_failure)
+    end
+    local row = {
+      item = target.item,
+      item_ref = target.item_ref,
+      guid = target.guid,
+      target_order = index,
+      context = context,
+      owner_track = owner_track,
+      owner_track_ref = owner_track_ref,
+      source_range = source_range,
+    }
+    if operation == "remove_silence" then
+      context.params.silence_threshold_dbfs = silence_threshold_dbfs
+      context.params.min_silence_ms = min_silence_ms
+      local range, range_failure = d27_analysis_limited_range(context, D27_MAX_ANALYSIS_SECONDS)
+      if not range then return d27_batch_preflight_failure(range_failure) end
+      local scan, scan_failure = d27_analysis_sample_scan(context, range, { detect_silence = true })
+      if not scan then return d27_batch_preflight_failure(scan_failure) end
+      if scan.truncated or not scan.coverage or scan.coverage.range_complete ~= true
+        or scan.coverage.channel_coverage_complete ~= true or scan.coverage.result_rows_complete ~= true
+        or scan.total_silence_segments ~= #scan.silence_segments then
+        return d27_batch_fail("ANALYSIS_COVERAGE_INCOMPLETE", "Audio batch requires complete range, channel, and silence-row coverage before mutation.", {
+          item_ref = target.item_ref,
+          truncation_reason = scan.coverage and scan.coverage.truncation_reason or "unknown",
+        })
+      end
+      local ranges, ranges_failure, all_silent = d27_batch_ranges(scan, context, params)
+      if not ranges then return d27_batch_preflight_failure(ranges_failure) end
+      row.scan = scan
+      row.ranges = ranges
+      row.all_silent = all_silent
+    else
+      local ok_adjustment, adjustment = call_reaper(
+        "CalculateNormalization",
+        context.source,
+        metric_codes[normalization_metric],
+        normalization_target,
+        source_range.start_seconds,
+        source_range.end_seconds
+      )
+      adjustment = ok_adjustment and d27_analysis_number(first_number(adjustment)) or nil
+      if adjustment == nil or adjustment <= 0 or adjustment == math.huge then
+        return d27_batch_fail("NATIVE_NORMALIZATION_UNAVAILABLE", "REAPER CalculateNormalization did not return a valid native adjustment; zero_write=true.", {
+          item_ref = target.item_ref,
+          metric = normalization_metric,
+          metric_code = metric_codes[normalization_metric],
+        })
+      end
+      row.normalization = { adjustment = adjustment, metric_code = metric_codes[normalization_metric] }
+      row.ranges = {}
+      row.scan = { silence_segments = json_array({}) }
+    end
+    rows[#rows + 1] = row
+  end
+  local preflight_ms = (os.clock() - preflight_started) * 1000
+  local plan_hash = d27_batch_checksum_plan(rows, {
+    target = params.target or (#rows > 0 and "selected" or "exact"),
+    silence_scope = scope,
+    silence_threshold_dbfs = silence_threshold_dbfs,
+    min_silence_ms = min_silence_ms,
+    keep_before_ms = params.keep_before_ms or 20,
+    keep_after_ms = params.keep_after_ms or 20,
+    min_kept_audio_ms = params.min_kept_audio_ms or 80,
+    fade_ms = params.fade_ms or 5,
+    normalization_metric = normalization_metric,
+    normalization_target = normalization_target,
+  }, operation)
+  local counters = {
+    native_mutation_count = 0,
+    native_readback_count = 0,
+    aggregate_readback_count = 0,
+    continuation_yield_count = 0,
+    target_resolution_count = #rows,
+  }
+  local mutation_started = os.clock()
+  local aggregate_readback = json_array({})
+  local dry_run = params.dry_run == true
+  if not dry_run then
+    for index = 1, #rows do
+      local result, result_failure
+      if operation == "remove_silence" then
+        result, result_failure = d27_batch_apply_silence(rows[index], params, counters)
+      else
+        result, result_failure = d27_batch_apply_normalization(rows[index], params, counters)
+      end
+      if not result then
+        local details = result_failure and result_failure.details or {}
+        details.plan_hash = plan_hash
+        details.native_counters = counters
+        details.zero_write = counters.native_mutation_count == 0
+        return nil, result_failure
+      end
+      if #rows > 8 and operation == "remove_silence" then
+        -- The native verifier already proved every kept/deleted GUID before
+        -- returning. Keep the public batch envelope bounded while retaining
+        -- one aggregate truth row and its conservation counters per target.
+        local kept_count = type(result.kept_item_refs) == "table" and #result.kept_item_refs or 0
+        local deleted_count = type(result.deleted_item_refs) == "table" and #result.deleted_item_refs or 0
+        result.kept_item_count = kept_count
+        result.deleted_item_count = deleted_count
+        result.kept_item_refs = nil
+        result.deleted_item_refs = nil
+      end
+      result.target_order = index
+      result.plan_hash = plan_hash
+      aggregate_readback[#aggregate_readback + 1] = result
+    end
+  else
+    for index = 1, #rows do
+      aggregate_readback[#aggregate_readback + 1] = {
+        target_order = index,
+        item_ref = rows[index].item_ref,
+        owner_track_ref = rows[index].owner_track_ref,
+        status = rows[index].all_silent and "ALL_SILENT_RETAINED" or "PLANNED",
+        changed = false,
+        source_media_deleted = false,
+        planned_silence_range_count = #rows[index].ranges,
+        normalization_metric = normalization_metric,
+        measurement_scope = operation == "normalize_level" and "source_item_take_pre_fx" or nil,
+      }
+    end
+  end
+  local mutation_ms = (os.clock() - mutation_started) * 1000
+  counters.aggregate_readback_count = #aggregate_readback
+  local total_ms = (os.clock() - started) * 1000
+  return {
+    capability = request.pack and request.pack.capability or "items.split_item_by_silence",
+    pack = request.pack and request.pack.id or "items",
+    risk = request.pack and request.pack.risk or "destructive",
+    readback_status = "passed",
+    operation = operation,
+    target_scope = params.target or (#targets > 0 and (is_json_array(params.target_refs) and #params.target_refs > 0 and "exact" or "selected") or "selected"),
+    target_count = #targets,
+    returned_target_count = #aggregate_readback,
+    plan_hash = plan_hash,
+    aggregate_readback = aggregate_readback,
+    measurement_scope = operation == "normalize_level" and "source_item_take_pre_fx" or "source_item_take_pre_fx",
+    source_media_deleted = false,
+    zero_write = false,
+    batch_timings = {
+      target_resolution_ms = 0,
+      preflight_ms = preflight_ms,
+      mutation_ms = mutation_ms,
+      readback_ms = 0,
+      total_ms = total_ms,
+    },
+    timings = {
+      target_resolution_ms = 0,
+      preflight_ms = preflight_ms,
+      mutation_ms = mutation_ms,
+      final_readback_ms = 0,
+      total_ms = total_ms,
+    },
+    native_counters = counters,
+    transport_call_count = 1,
+    undo_opened = request.__openreaper_undo_opened == true,
+    undo_closed = request.__openreaper_undo_closed ~= false,
+    undo = { mode = "required", one_invocation = true, undo_opened = request.__openreaper_undo_opened == true, undo_closed = request.__openreaper_undo_closed ~= false },
+  }, nil, json_array({}), json_array({}), json_array({})
 end
 return {
   exports = { measure_item_rms = measure_item_rms, measure_item_peaks = measure_item_peaks, detect_item_silence = detect_item_silence, detect_item_transients = detect_item_transients, alpha33_split_item_by_silence = alpha33_split_item_by_silence },
@@ -18986,6 +19714,178 @@ local function d31_probe_output(path_value, extension)
   return false
 end
 
+local function d31_u16(bytes, offset)
+  local low, high = bytes:byte(offset, offset + 1)
+  if not low or not high then return nil end
+  return low + (high * 256)
+end
+
+local function d31_u32(bytes, offset)
+  local a, b, c, d = bytes:byte(offset, offset + 3)
+  if not a or not b or not c or not d then return nil end
+  return a + (b * 256) + (c * 65536) + (d * 16777216)
+end
+
+local function d31_linear_db(value)
+  if type(value) ~= "number" or value <= 0 then return -150 end
+  return 20 * math.log(value) / math.log(10)
+end
+
+local function d31_pcm_sample(bytes, offset, bits)
+  local b1, b2, b3, b4 = bytes:byte(offset, offset + 3)
+  if not b1 then return nil end
+  if bits == 8 then return (b1 - 128) / 128 end
+  if bits == 16 then
+    if not b2 then return nil end
+    local value = b1 + (b2 * 256)
+    if value >= 32768 then value = value - 65536 end
+    return value / 32768
+  end
+  if bits == 24 then
+    if not b2 or not b3 then return nil end
+    local value = b1 + (b2 * 256) + (b3 * 65536)
+    if value >= 8388608 then value = value - 16777216 end
+    return value / 8388608
+  end
+  if bits == 32 then
+    if not b2 or not b3 or not b4 then return nil end
+    local value = b1 + (b2 * 256) + (b3 * 65536) + (b4 * 16777216)
+    if value >= 2147483648 then value = value - 4294967296 end
+    return value / 2147483648
+  end
+  return nil
+end
+
+-- D31 needs exact RMS, which the stock PCM peak API does not expose. For the
+-- lossless WAV path, read the rendered PCM bytes in bounded blocks so the
+-- result cannot infer audible content from file size alone.
+local function d31_measure_wav_pcm(path_value)
+  local handle = io.open(path_value, "rb")
+  if not handle then return nil, { code = "MEASUREMENT_UNAVAILABLE", message = "Could not open the rendered WAV for PCM measurement." } end
+  local header = handle:read(12) or ""
+  if #header < 12 or header:sub(1, 4) ~= "RIFF" or header:sub(9, 12) ~= "WAVE" then
+    handle:close()
+    return nil, { code = "MEASUREMENT_UNAVAILABLE", message = "Rendered output is not a RIFF/WAVE file." }
+  end
+
+  local fmt_bytes = nil
+  local data_position = nil
+  local data_size = nil
+  while true do
+    local chunk_header = handle:read(8) or ""
+    if #chunk_header == 0 then break end
+    if #chunk_header < 8 then
+      handle:close()
+      return nil, { code = "MEASUREMENT_UNAVAILABLE", message = "Rendered WAV contains a truncated chunk header." }
+    end
+    local chunk_id = chunk_header:sub(1, 4)
+    local chunk_size = d31_u32(chunk_header, 5)
+    if not chunk_size then
+      handle:close()
+      return nil, { code = "MEASUREMENT_UNAVAILABLE", message = "Rendered WAV contains an invalid chunk size." }
+    end
+    local chunk_position = handle:seek()
+    if not chunk_position then
+      handle:close()
+      return nil, { code = "MEASUREMENT_UNAVAILABLE", message = "Could not seek while parsing rendered WAV chunks." }
+    end
+    if chunk_id == "fmt " and chunk_size >= 16 and not fmt_bytes then
+      fmt_bytes = handle:read(math.min(chunk_size, 64)) or ""
+    elseif chunk_id == "data" and not data_position then
+      data_position = chunk_position
+      data_size = chunk_size
+    end
+    local next_position = chunk_position + chunk_size + (chunk_size % 2)
+    if not handle:seek("set", next_position) then
+      handle:close()
+      return nil, { code = "MEASUREMENT_UNAVAILABLE", message = "Could not seek to the next rendered WAV chunk." }
+    end
+  end
+
+  local format_code = fmt_bytes and d31_u16(fmt_bytes, 1) or nil
+  local channel_count = fmt_bytes and d31_u16(fmt_bytes, 3) or nil
+  local sample_rate_hz = fmt_bytes and d31_u32(fmt_bytes, 5) or nil
+  local bits = fmt_bytes and d31_u16(fmt_bytes, 15) or nil
+  if format_code ~= 1 or not channel_count or channel_count < 1 or channel_count > 64 or not sample_rate_hz or sample_rate_hz < 1 or not bits or not ({ [8] = true, [16] = true, [24] = true, [32] = true })[bits] or not data_position or not data_size then
+    handle:close()
+    return nil, { code = "MEASUREMENT_UNAVAILABLE", message = "Rendered WAV is not a supported integer PCM stream." }
+  end
+  local bytes_per_sample = bits / 8
+  local frame_bytes = channel_count * bytes_per_sample
+  if frame_bytes < 1 or data_size < frame_bytes or data_size % frame_bytes ~= 0 then
+    handle:close()
+    return nil, { code = "MEASUREMENT_UNAVAILABLE", message = "Rendered WAV data does not contain complete PCM frames." }
+  end
+
+  local frame_count = math.floor(data_size / frame_bytes)
+  local sample_count = frame_count * channel_count
+  local remaining_frames = frame_count
+  local frame_offset = 0
+  local peak_linear = 0
+  local sum_squares = 0
+  if not handle:seek("set", data_position) then
+    handle:close()
+    return nil, { code = "MEASUREMENT_UNAVAILABLE", message = "Could not seek to rendered WAV PCM data." }
+  end
+  while remaining_frames > 0 do
+    local block_frames = math.min(8192, remaining_frames)
+    local block = handle:read(block_frames * frame_bytes) or ""
+    if #block ~= block_frames * frame_bytes then
+      handle:close()
+      return nil, { code = "MEASUREMENT_UNAVAILABLE", message = "Rendered WAV PCM data ended before the declared frame count." }
+    end
+    for frame = 0, block_frames - 1 do
+      for channel = 0, channel_count - 1 do
+        local sample_offset = (frame * frame_bytes) + (channel * bytes_per_sample) + 1
+        local sample = d31_pcm_sample(block, sample_offset, bits)
+        if sample == nil then
+          handle:close()
+          return nil, { code = "MEASUREMENT_UNAVAILABLE", message = "Rendered WAV PCM sample decoding failed." }
+        end
+        local absolute = math.abs(sample)
+        if absolute > peak_linear then peak_linear = absolute end
+        sum_squares = sum_squares + (sample * sample)
+      end
+    end
+    frame_offset = frame_offset + block_frames
+    remaining_frames = remaining_frames - block_frames
+  end
+  handle:close()
+
+  local rms_linear = math.sqrt(sum_squares / sample_count)
+  local all_zero = peak_linear == 0
+  return {
+    measurement_status = "measured",
+    measurement_scope = "rendered_file_pcm",
+    measurement_format = "wav_pcm",
+    sample_rate_hz = sample_rate_hz,
+    channel_count = channel_count,
+    frame_count = frame_count,
+    sample_count = sample_count,
+    peak_linear = peak_linear,
+    peak_dbfs = d31_linear_db(peak_linear),
+    rms_linear = rms_linear,
+    rms_dbfs = d31_linear_db(rms_linear),
+    silence_classification = all_zero and "all_zero" or "non_silent",
+    is_silent = all_zero,
+  }
+end
+
+local function d31_measure_output(path_value, extension)
+  if extension == "wav" then return d31_measure_wav_pcm(path_value) end
+  return {
+    measurement_status = "unavailable",
+    measurement_scope = "rendered_file",
+    measurement_format = extension,
+    peak_linear = JSON_NULL,
+    peak_dbfs = JSON_NULL,
+    rms_linear = JSON_NULL,
+    rms_dbfs = JSON_NULL,
+    silence_classification = "unavailable",
+    is_silent = JSON_NULL,
+  }
+end
+
 local function d31_get_number(project, key)
   local ok, value = call_reaper("GetSetProjectInfo", project, key, 0, false)
   return ok and type(value) == "number" and value or nil
@@ -19407,6 +20307,8 @@ local function d31_render_targets(request)
       local size = d31_size(output.absolute_path)
       local header_ok, actual_format, actual_bitrate = d31_probe_output(output.absolute_path, output.extension)
       if size <= 0 or not header_ok or actual_format ~= request.params.format or (format.mp3_bitrate_kbps and actual_bitrate ~= format.mp3_bitrate_kbps) then return { failure = { code = "VERIFY_FAILED", message = "Rendered output is absent, empty, or has the wrong container, MPEG layer, or bitrate.", details = { output_basename = output.output_basename, requested_format = request.params.format, actual_format = actual_format, requested_bitrate_kbps = format.mp3_bitrate_kbps, actual_bitrate_kbps = actual_bitrate, extension = output.extension, file_size_bytes = size, target_index = index - 1 }, recoverable = false } } end
+      local measurement, measurement_error = d31_measure_output(output.absolute_path, output.extension)
+      if not measurement then return { failure = { code = "VERIFY_FAILED", message = "Rendered output could not be measured without inferring audible content from file size.", details = { output_basename = output.output_basename, measurement_error = measurement_error and measurement_error.message or "unknown_measurement_failure", target_index = index - 1 }, recoverable = false } } end
       local project_copy_path = output.absolute_path .. ".RPP"
       local project_copy_retained = file_exists(project_copy_path)
       result_outputs[#result_outputs + 1] = {
@@ -19419,6 +20321,19 @@ local function d31_render_targets(request)
         actual_format = actual_format,
         requested_bitrate_kbps = format.mp3_bitrate_kbps or JSON_NULL,
         actual_bitrate_kbps = actual_bitrate or JSON_NULL,
+        measurement_status = measurement.measurement_status,
+        measurement_scope = measurement.measurement_scope,
+        measurement_format = measurement.measurement_format,
+        sample_rate_hz = measurement.sample_rate_hz or JSON_NULL,
+        measured_channel_count = measurement.channel_count or JSON_NULL,
+        frame_count = measurement.frame_count or JSON_NULL,
+        sample_count = measurement.sample_count or JSON_NULL,
+        measured_peak_linear = measurement.peak_linear,
+        measured_peak_dbfs = measurement.peak_dbfs,
+        measured_rms_linear = measurement.rms_linear,
+        measured_rms_dbfs = measurement.rms_dbfs,
+        silence_classification = measurement.silence_classification,
+        is_silent = measurement.is_silent,
         target_identity = target.ref or target.label,
         generated_project_copy_retained = project_copy_retained,
         generated_project_copy_path = project_copy_retained and project_copy_path or nil,
@@ -23253,6 +24168,8 @@ local MEDIA_SUCCESS_ENVELOPE_SHELL_MAX_BYTES = 1200
 local MEDIA_MUTATION_PATH_OCCURRENCES = 3
 local MEDIA_READ_SUCCESS_ENVELOPE_FIXED_MAX_BYTES = 8192
 local MEDIA_MUTATION_SUMMARY_FIXED_MAX_BYTES = 2048
+local MEDIA_TAKE_NAME_MAX_BYTES = 160
+local MEDIA_SOURCE_LENGTH_MAX_DIGITS = 309
 
 function READ_B_MEDIA.handler_error(code, message, details, recoverable)
   return nil, {
@@ -23607,6 +24524,153 @@ function READ_B_MEDIA.source_filename_raw(source)
   return ok and first_string(filename) or ""
 end
 
+function READ_B_MEDIA.basename_for_path(path_value)
+  local path = READ_B_MEDIA.canonical_path(path_value)
+  if not path then
+    return nil
+  end
+  local windows_path = path:match("^%a:[/\\]") or path:match("^\\\\") or path:match("^//")
+  local last_separator = 0
+  for index = 1, #path do
+    local byte = string.byte(path, index)
+    if byte == 47 or (windows_path and byte == 92) then
+      last_separator = index
+    end
+  end
+  local basename = path:sub(last_separator + 1)
+  if basename == "" or basename == "." or basename == ".." then
+    return nil
+  end
+  return basename
+end
+
+function READ_B_MEDIA.source_identity(source, options)
+  options = options or {}
+  if not source then
+    return nil, {
+      blocker = "source_pointer_missing",
+    }
+  end
+  local ok_filename, filename = call_reaper("GetMediaSourceFileName", source, "")
+  local raw_filename = ok_filename and first_string(filename) or nil
+  local path = raw_filename and READ_B_MEDIA.canonical_path(raw_filename) or nil
+  local ok_type, source_type_value = call_reaper("GetMediaSourceType", source, "")
+  local source_type = ok_type and first_string(source_type_value) or nil
+  local ok_length, source_length, length_is_quarter_notes = call_reaper("GetMediaSourceLength", source)
+  local length = ok_length and first_number(source_length) or nil
+  local valid_length = type(length) == "number" and length == length
+    and length ~= math.huge and length ~= -math.huge
+    and (length > 0 or (options.allow_zero_length == true and length == 0))
+    and length_is_quarter_notes ~= true
+  local basename = path and READ_B_MEDIA.basename_for_path(path) or nil
+  if not path or not source_type or source_type == "" or not valid_length or not basename then
+    return nil, {
+      blocker = "source_readback_incomplete",
+      filename_call_ok = ok_filename == true,
+      source_type_call_ok = ok_type == true,
+      source_length_call_ok = ok_length == true,
+      path = READ_B_MEDIA.display_path(raw_filename, MEDIA_DISPLAY_PATH_MAX_BYTES),
+      source_type = source_type or "",
+      source_length = length or JSON_NULL,
+      length_is_quarter_notes = length_is_quarter_notes == true,
+    }
+  end
+  return {
+    source = source,
+    path = path,
+    file_ref = READ_B_MEDIA.file_ref_for_path(path),
+    source_type = source_type,
+    source_length_seconds = length,
+    length_is_quarter_notes = false,
+    take_name = basename,
+  }
+end
+
+function READ_B_MEDIA.refresh_item(item, refresh_arrange)
+  if not item then
+    return false, "item_missing"
+  end
+  local ok_update = call_reaper("UpdateItemInProject", item)
+  if not ok_update then
+    return false, "item_update_failed"
+  end
+  if refresh_arrange ~= false then
+    local ok_arrange = call_reaper("UpdateArrange")
+    if not ok_arrange then
+      return false, "arrange_refresh_failed"
+    end
+  end
+  return true
+end
+
+function READ_B_MEDIA.attach_take_source(take, source, options)
+  options = options or {}
+  if not take or not source then
+    return READ_B_MEDIA.handler_error("COMMAND_FAILED", "Media source attachment requires both a Take and a source pointer.", {
+      blocker = "source_attach_arguments_missing",
+      source_attached = false,
+      source_ownership_unknown = false,
+    }, false)
+  end
+  local ok_set, setter_result = call_reaper("SetMediaItemTake_Source", take, source)
+  local ok_read, assigned_source = call_reaper("GetMediaItemTake_Source", take)
+  local source_attached = ok_read and assigned_source == source
+  local source_ownership_unknown = not ok_read
+  local setter_accepted = setter_result == nil or setter_result == true
+  local details = {
+    source_attached = source_attached,
+    source_ownership_unknown = source_ownership_unknown,
+  }
+  if not ok_set or not setter_accepted or not source_attached then
+    details.blocker = "native_source_attach_failed"
+    return READ_B_MEDIA.handler_error("COMMAND_FAILED", "REAPER did not prove the requested source was attached to the Take.", details, false)
+  end
+
+  local identity, identity_failure = READ_B_MEDIA.source_identity(assigned_source, {
+    allow_zero_length = options.allow_zero_length == true,
+  })
+  if not identity then
+    details.blocker = identity_failure and identity_failure.blocker or "source_readback_incomplete"
+    details.source_readback = identity_failure or JSON_NULL
+    return READ_B_MEDIA.handler_error("VERIFY_FAILED", "Attached media source identity could not be read back completely.", details, false)
+  end
+
+  local take_name = options.take_name or identity.take_name
+  if type(take_name) ~= "string" or take_name == "" or take_name:find("\0", 1, true)
+      or #take_name > MEDIA_TAKE_NAME_MAX_BYTES then
+    details.blocker = "take_name_invalid"
+    details.take_name = type(take_name) == "string" and READ_B_MEDIA.display_path(take_name, MEDIA_TAKE_NAME_MAX_BYTES) or JSON_NULL
+    return READ_B_MEDIA.handler_error("VERIFY_FAILED", "Media source basename could not be used as a bounded Take name.", details, false)
+  end
+  local ok_name_set, name_set_result = call_reaper("GetSetMediaItemTakeInfo_String", take, "P_NAME", take_name, true)
+  local name_set_accepted = name_set_result == nil or name_set_result == true
+  local ok_name_read, _, actual_name = call_reaper("GetSetMediaItemTakeInfo_String", take, "P_NAME", "", false)
+  actual_name = first_string(actual_name)
+  if not ok_name_set or not name_set_accepted or not ok_name_read or actual_name ~= take_name then
+    details.blocker = "take_name_readback_failed"
+    details.requested_take_name = take_name
+    details.actual_take_name = actual_name or JSON_NULL
+    return READ_B_MEDIA.handler_error("VERIFY_FAILED", "Media Take name write/readback did not match the source basename.", details, false)
+  end
+  identity.take_name = actual_name
+
+  if options.update_item ~= false then
+    local item = options.item
+    if not item then
+      local ok_item, resolved_item = call_reaper("GetMediaItemTake_Item", take)
+      item = ok_item and resolved_item or nil
+    end
+    local refreshed, refresh_reason = READ_B_MEDIA.refresh_item(item, options.refresh_arrange)
+    if not refreshed then
+      details.blocker = refresh_reason or "item_refresh_failed"
+      return READ_B_MEDIA.handler_error("COMMAND_FAILED", "Attached media Take could not be refreshed in the project.", details, false)
+    end
+  end
+  identity.take = take
+  identity.source_attached = true
+  return identity
+end
+
 function READ_B_MEDIA.metadata_keys_for_source(source, include_metadata_keys)
   local keys = json_array({})
   if include_metadata_keys ~= true then
@@ -23746,6 +24810,11 @@ function READ_B_MEDIA.mutation_success_summary_prototype(request, path_value, op
     undo_evidence = "required",
     artifacts_allowed = false,
     truncated = false,
+    -- These fields are returned by native source attach/readback. Keep the
+    -- budget prototype wider than any finite JSON number and bounded Take name.
+    source_type = string.rep("W", 80),
+    source_length_seconds = string.rep("9", MEDIA_SOURCE_LENGTH_MAX_DIGITS),
+    take_name = string.rep("W", MEDIA_TAKE_NAME_MAX_BYTES),
   }
   if capability == "media.relink_take_source" then
     summary.take_ref = "take:guid:" .. max_guid
@@ -24363,10 +25432,12 @@ local function read_take_source(request)
     filename = path
   end
   local length, _ = READ_B_MEDIA.source_length(source)
+  local ok_take_name, _, take_name = call_reaper("GetSetMediaItemTakeInfo_String", take, "P_NAME", "", false)
   local summary = {
     take_ref = READ_B_MEDIA.take_ref_string(take),
     file_ref = file_ref or JSON_NULL,
     source_type = READ_B_MEDIA.source_type(source),
+    take_name = ok_take_name and type(take_name) == "string" and take_name or JSON_NULL,
     filename = filename,
     length_seconds = length,
     channel_count = READ_B_MEDIA.source_channels(source),
@@ -24945,18 +26016,18 @@ local function e3_media_set_item_source(track, path_value, position, start_perce
       file_ref = READ_B_MEDIA.file_ref_for_path(path_value),
     })
   end
-  local length, is_quarter_notes = READ_B_MEDIA.source_length(source)
-  if is_quarter_notes or length <= 0 then
+  local identity, identity_failure = READ_B_MEDIA.source_identity(source)
+  if not identity then
     call_reaper("PCM_Source_Destroy", source)
-    return nil, e3_media_handler_error("SOURCE_LENGTH_UNREADABLE", "E3 media source length could not be measured.", {
+    return nil, e3_media_handler_error("SOURCE_LENGTH_UNREADABLE", "E3 media source identity could not be read back completely.", {
       path = READ_B_MEDIA.display_path(path_value, 240),
       file_ref = READ_B_MEDIA.file_ref_for_path(path_value),
-      source_type = e3_media_kind_for_path(path_value),
+      blocker = identity_failure and identity_failure.blocker or "source_readback_incomplete",
     })
   end
 
   local start_offset = 0
-  local item_length = length
+  local item_length = identity.source_length_seconds
   if type(start_percent) == "number" or type(end_percent) == "number" then
     local start_value = e3_media_finite_number(start_percent, 0)
     local end_value = e3_media_finite_number(end_percent, 1)
@@ -24967,8 +26038,8 @@ local function e3_media_set_item_source(track, path_value, position, start_perce
         end_percent = end_percent,
       })
     end
-    start_offset = length * start_value
-    item_length = length * (end_value - start_value)
+    start_offset = identity.source_length_seconds * start_value
+    item_length = identity.source_length_seconds * (end_value - start_value)
   end
 
   local ok_item, item = call_reaper("AddMediaItemToTrack", track)
@@ -24983,12 +26054,33 @@ local function e3_media_set_item_source(track, path_value, position, start_perce
     call_reaper("PCM_Source_Destroy", source)
     return nil, e3_media_handler_error("COMMAND_FAILED", "E3 media import could not create a take.", {}, false)
   end
-  call_reaper("SetMediaItemTake_Source", take, source)
-  if start_offset > 0 then
-    call_reaper("SetMediaItemTakeInfo_Value", take, "D_STARTOFFS", start_offset)
+  local attachment, attachment_failure = READ_B_MEDIA.attach_take_source(take, source, {
+    item = item,
+    update_item = false,
+    refresh_arrange = false,
+  })
+  if not attachment then
+    local details = attachment_failure and attachment_failure.details or {}
+    if details.source_attached ~= true and details.source_ownership_unknown ~= true then
+      call_reaper("PCM_Source_Destroy", source)
+    end
+    return nil, attachment_failure
   end
-  call_reaper("UpdateItemInProject", item)
-  return item, nil
+  if start_offset > 0 then
+    local ok_start, start_accepted = call_reaper("SetMediaItemTakeInfo_Value", take, "D_STARTOFFS", start_offset)
+    if not ok_start or (start_accepted ~= nil and start_accepted ~= true) then
+      return nil, e3_media_handler_error("COMMAND_FAILED", "E3 media import could not set the requested source section offset.", {
+        blocker = "native_start_offset_set_failed",
+      }, false)
+    end
+  end
+  local refreshed, refresh_reason = READ_B_MEDIA.refresh_item(item, false)
+  if not refreshed then
+    return nil, e3_media_handler_error("COMMAND_FAILED", "E3 media import could not refresh the attached Item.", {
+      blocker = refresh_reason or "item_refresh_failed",
+    }, false)
+  end
+  return item, nil, attachment
 end
 
 local E3_MEDIA_BATCH_MAX_ROWS = 64
@@ -25105,9 +26197,11 @@ local function e3_media_batch_prepare(request)
     if not source then
       return nil, e3_media_batch_error(source_code or "FILE_NOT_FOUND", source_message or "E3 media batch source could not be decoded.", index, { file_ref = file_object_ref.ref, zero_write = true })
     end
-    local source_length, length_is_quarter_notes = READ_B_MEDIA.source_length(source)
-    local source_type = READ_B_MEDIA.source_type(source)
-    call_reaper("PCM_Source_Destroy", source)
+      local identity = READ_B_MEDIA.source_identity(source)
+      local source_length = identity and identity.source_length_seconds or 0
+      local length_is_quarter_notes = identity and identity.length_is_quarter_notes or false
+      local source_type = identity and identity.source_type or ""
+      call_reaper("PCM_Source_Destroy", source)
     if length_is_quarter_notes or not e3_media_batch_finite(source_length) or source_length <= 0 then
       return nil, e3_media_batch_error("SOURCE_LENGTH_UNREADABLE", "E3 media batch source length must be finite and positive.", index, {
         file_ref = file_object_ref.ref,
@@ -25213,7 +26307,7 @@ local function e3_media_batch_take_object_ref(take)
   }
 end
 
-local function e3_media_batch_row_readback(row, item, take, preserve_selection)
+local function e3_media_batch_row_readback(row, item, take, preserve_selection, take_name)
   local item_ref = e3_media_item_object_ref(item)
   local take_ref = e3_media_batch_take_object_ref(take)
   if not item_ref or not take_ref then
@@ -25255,6 +26349,7 @@ local function e3_media_batch_row_readback(row, item, take, preserve_selection)
     length_seconds = item_length,
     source_length_seconds = source_length,
     source_type = source_type,
+    take_name = take_name,
     selection_restored = preserve_selection,
     source_section = row.start_percent ~= nil and { start_percent = row.start_percent, end_percent = row.end_percent } or nil,
   }, item_ref, take_ref
@@ -25317,13 +26412,17 @@ local function import_files_batch(request, preflight_only)
         call_reaper("PCM_Source_Destroy", source)
         return fail_batch(e3_media_handler_error("COMMAND_FAILED", "E3 media batch could not configure a media item and take.", { blocker = "native_item_setup_failed" }, false), index)
       end
-      local ok_source_set, source_set_accepted = call_reaper("SetMediaItemTake_Source", take, source)
-      local ok_assigned_source, assigned_source = call_reaper("GetMediaItemTake_Source", take)
-      local source_attached = ok_assigned_source and assigned_source == source
-      local setter_accepted = source_set_accepted == nil or source_set_accepted == true
-      if not ok_source_set or not setter_accepted or not source_attached then
-        if not source_attached then call_reaper("PCM_Source_Destroy", source) end
-        return fail_batch(e3_media_handler_error("COMMAND_FAILED", "E3 media batch could not attach the decoded source.", { blocker = "native_source_attach_failed" }, false), index)
+      local attachment, attachment_failure = READ_B_MEDIA.attach_take_source(take, source, {
+        item = item,
+        update_item = false,
+        refresh_arrange = false,
+      })
+      if not attachment then
+        local details = attachment_failure and attachment_failure.details or {}
+        if details.source_attached ~= true and details.source_ownership_unknown ~= true then
+          call_reaper("PCM_Source_Destroy", source)
+        end
+        return fail_batch(attachment_failure, index)
       end
       if start_offset > 0 then
         local ok_start, start_accepted = call_reaper("SetMediaItemTakeInfo_Value", take, "D_STARTOFFS", start_offset)
@@ -25331,11 +26430,14 @@ local function import_files_batch(request, preflight_only)
           return fail_batch(e3_media_handler_error("COMMAND_FAILED", "E3 media batch could not set the requested source section offset.", { blocker = "native_start_offset_set_failed" }, false), index)
         end
       end
-      call_reaper("UpdateItemInProject", item)
+      local refreshed, refresh_reason = READ_B_MEDIA.refresh_item(item, false)
+      if not refreshed then
+        return fail_batch(e3_media_handler_error("COMMAND_FAILED", "E3 media batch could not refresh the attached Item.", { blocker = refresh_reason or "item_refresh_failed" }, false), index)
+      end
       mutation_ms = mutation_ms + ((os.clock() - mutation_phase) * 1000)
       last_item = item
       local readback_phase = os.clock()
-      local result, item_ref, take_ref = e3_media_batch_row_readback(row, item, take, preserve_selection)
+      local result, item_ref, take_ref = e3_media_batch_row_readback(row, item, take, preserve_selection, attachment.take_name)
       readback_ms = readback_ms + ((os.clock() - readback_phase) * 1000)
       if not result then
         return fail_batch(item_ref, index)
@@ -25347,6 +26449,7 @@ local function import_files_batch(request, preflight_only)
         source_file_ref = row.file_ref,
         source_type = result.source_type,
         source_length_seconds = result.source_length_seconds,
+        take_name = attachment.take_name,
       }
       refs[#refs + 1] = item_ref
       refs[#refs + 1] = take_ref
@@ -25407,7 +26510,7 @@ local function e3_media_import_to_track(request, section)
   local file_object_ref = READ_B_MEDIA.file_object_ref(path)
   local preserve_selection = request.params.preserve_selection == true
   local previous_selection = preserve_selection and e3_media_selected_items() or nil
-  local item, failure = e3_media_set_item_source(
+  local item, failure, attachment = e3_media_set_item_source(
     track,
     path,
     request.params.position_seconds,
@@ -25440,6 +26543,9 @@ local function e3_media_import_to_track(request, section)
     track_ref = track_ref,
     position_seconds = e3_media_finite_number(request.params.position_seconds, 0),
     selection_restored = preserve_selection,
+    take_name = attachment and attachment.take_name or nil,
+    source_type = attachment and attachment.source_type or nil,
+    source_length_seconds = attachment and attachment.source_length_seconds or nil,
   }
   if section then
     readback.start_percent = e3_media_finite_number(request.params.start_percent, 0)
@@ -25492,7 +26598,8 @@ local function relink_take_source(request)
   if request.params.verify_source_type == true then
     local ok_old_source, old_source = call_reaper("GetMediaItemTake_Source", take)
     local old_type = ok_old_source and old_source and READ_B_MEDIA.source_type(old_source) or ""
-    local new_type = READ_B_MEDIA.source_type(source)
+    local new_identity = READ_B_MEDIA.source_identity(source)
+    local new_type = new_identity and new_identity.source_type or ""
     if old_type ~= "" and new_type ~= "" and old_type ~= new_type then
       call_reaper("PCM_Source_Destroy", source)
       return e3_media_handler_error("SOURCE_TYPE_MISMATCH", "E3 media relink source type does not match the current take source.", {
@@ -25501,15 +26608,25 @@ local function relink_take_source(request)
       })
     end
   end
-  call_reaper("SetMediaItemTake_Source", take, source)
   local item = e3_media_take_item(take)
-  if item then
-    call_reaper("UpdateItemInProject", item)
+  local attachment, attachment_failure = READ_B_MEDIA.attach_take_source(take, source, {
+    item = item,
+    update_item = true,
+    refresh_arrange = true,
+  })
+  if not attachment then
+    local details = attachment_failure and attachment_failure.details or {}
+    if details.source_attached ~= true and details.source_ownership_unknown ~= true then
+      call_reaper("PCM_Source_Destroy", source)
+    end
+    return nil, attachment_failure
   end
   return e3_media_summary(request, {
     take_ref = take_ref,
-    source_file_ref = file_object_ref.ref,
-    source_type = e3_media_kind_for_path(path),
+    source_file_ref = attachment.file_ref or file_object_ref.ref,
+    source_type = attachment.source_type,
+    source_length_seconds = attachment.source_length_seconds,
+    take_name = attachment.take_name,
     relinked = true,
   }), nil, nil, nil, e3_media_refs({
     kind = "take",
@@ -26262,19 +27379,21 @@ local function e4_item_clone_active_take_footprint(footprint, target_item, sourc
     local _, failure = e4_item_handler_error("COMMAND_FAILED", "E4 copy_item_to_track could not create a target take.", {}, false)
     return nil, false, destroy_unowned_source(created_source, failure)
   end
-  local ok_source_set, source_set_accepted = call_reaper("SetMediaItemTake_Source", target_take, created_source)
-  local ok_assigned_source, assigned_source = call_reaper("GetMediaItemTake_Source", target_take)
-  local source_attached = ok_assigned_source and assigned_source == created_source
-  local source_may_be_attached = source_set_accepted == true or source_attached or not ok_assigned_source
-  local setter_accepted = source_set_accepted == nil or source_set_accepted == true
-  if not ok_source_set or not setter_accepted or not source_attached then
-    local _, failure = e4_item_handler_error("COMMAND_FAILED", "E4 copy_item_to_track could not verify the assigned target take source.", { blocker = "target_source_set_failed" }, false)
-    if source_may_be_attached then
+  local attachment, attachment_failure = READ_B_MEDIA.attach_take_source(target_take, created_source, {
+    item = target_item,
+    allow_zero_length = true,
+    update_item = false,
+    refresh_arrange = false,
+  })
+  if not attachment then
+    local details = attachment_failure and attachment_failure.details or {}
+    if details.source_attached == true or details.source_ownership_unknown == true then
       if source_entry then source_entry.attached = true end
-      return nil, true, failure
+      return nil, true, attachment_failure
     end
-    return nil, true, destroy_unowned_source(created_source, failure)
+    return nil, true, destroy_unowned_source(created_source, attachment_failure)
   end
+  if source_entry then source_entry.attached = true end
   local function set_take_value(key, value)
     local ok, accepted = call_reaper("SetMediaItemTakeInfo_Value", target_take, key, value)
     return ok and accepted == true
@@ -26352,9 +27471,10 @@ local function copy_item_to_track_prepared(request, source_snapshot, target_trac
     record_native_phase()
     return fail_after_mutation(failure)
   end
-  local ok_update = call_reaper("UpdateItemInProject", new_item)
-  if not ok_update then
+  local refreshed, refresh_reason = READ_B_MEDIA.refresh_item(new_item, true)
+  if not refreshed then
     local _, failure = e4_item_handler_error("COMMAND_FAILED", "E4 copy_item_to_track could not update the target item.", { blocker = "target_item_update_failed" }, false)
+    failure.details.blocker = refresh_reason or failure.details.blocker
     record_native_phase()
     return fail_after_mutation(failure)
   end
@@ -36776,7 +37896,7 @@ local function dispatch_template_execute(request, resume_continuation)
   end
   handler = ALPHA3_2C3BC_PROJECT_FILE_SAVE_HANDLERS[request.pack.capability]
   if handler then
-    return handler(request)
+    return handler(request, resume_continuation)
   end
   return handler_error("OPERATION_NOT_FOUND", "template.execute supports only approved live-smoke capabilities.", {
       capability = bounded_string(request.pack.capability, 120),
@@ -37704,6 +38824,11 @@ local function dispatch_request(request, fallback_id, resume_continuation, runti
       item_ref = item_ref,
       file_ref = file_ref,
       preserve_timing = request.params and request.params.preserve_timing == true,
+      -- D15 returns native source truth after mutation; preflight with bounded
+      -- field prototypes so an undersized response cannot mutate first.
+      source_type = string.rep("W", 80),
+      source_length_seconds = string.rep("9", 309),
+      take_name = string.rep("W", 160),
       capability = capability,
       pack = request.pack.id,
       risk = request.pack.risk,
@@ -37848,6 +38973,10 @@ local pending_result_writes = {}
 local active_continuation_runner = nil
 local BRIDGE_INTERNAL_CONTINUATION_CONTRACT = "openreaper.bridge.internal_continuation.v1"
 
+local function is_non_negative_integer(value)
+  return type(value) == "number" and value >= 0 and value == math.floor(value)
+end
+
 local function claim_path_for(filename)
   return path_join(CLAIMS_DIR, filename)
 end
@@ -37904,6 +39033,23 @@ local function snapshot_startup_orphan_claims()
     end
     if filename:match("%.json$") then
       startup_orphan_claims[filename] = true
+    end
+    index = index + 1
+  end
+end
+
+local function snapshot_startup_completed_results()
+  local index = 0
+  while true do
+    local filename = reaper.EnumerateFiles(RESULTS_DIR, index)
+    if not filename then
+      break
+    end
+    if filename:match("%.json$") then
+      -- Result filenames use the same request id as their durable request
+      -- files. Keep request files intact, but avoid reopening them after a
+      -- bridge restart.
+      completed_request_files[filename] = true
     end
     index = index + 1
   end
@@ -38027,6 +39173,25 @@ local function process_request_file(filename)
     parsed_result_path = path_join(RESULTS_DIR, parsed_id .. ".json")
     if file_exists(parsed_result_path) then
       return true
+    end
+    -- A request left unclaimed by an earlier launch must never reach the
+    -- handler table in a newer generation. Publish typed zero-write truth
+    -- without creating a durable claim; claimed work remains governed by the
+    -- orphan/unknown-outcome recovery path below.
+    if is_object(request.bridge)
+        and is_non_negative_integer(request.bridge.expected_generation)
+        and request.bridge.expected_generation ~= ACTIVE_GENERATION then
+      local result_json = bridge_error_envelope(request, "BRIDGE_GENERATION_MISMATCH", "Bridge generation changed before request claim.", {
+        recoverable = false,
+        details = {
+          reason = "stale_unclaimed_request",
+          expected_generation = request.bridge.expected_generation,
+          actual_generation = ACTIVE_GENERATION,
+          zero_write = true,
+          next_action = "Reconnect the current OpenReaper session before retrying this request.",
+        },
+      })
+      return write_terminal_result(filename, parsed_result_path, result_json, parsed_id)
     end
     if file_exists(claim_path) then
       log("request claim already exists for " .. tostring(parsed_id))
@@ -38183,6 +39348,7 @@ else
     return
   end
   snapshot_startup_orphan_claims()
+  snapshot_startup_completed_results()
   local heartbeat_ok, heartbeat_error = write_bridge_heartbeat()
   if not heartbeat_ok then
     log("startup heartbeat failed: " .. tostring(heartbeat_error))

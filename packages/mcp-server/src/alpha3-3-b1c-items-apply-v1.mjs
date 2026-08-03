@@ -23,6 +23,7 @@ export const ALPHA3_3_B1C_ITEMS_APPLY_MODES = deepFreeze([
   "set_take_playback",
   "set_snap_offset",
   "remove_silence",
+  "normalize_level",
   "align_onsets",
   "set_item_take_controls",
   "create_variations",
@@ -122,6 +123,8 @@ const LIST_TRACK_ITEMS_ID = "template.items.list_items_on_track";
 const COPY_ITEM_TO_TRACK_ID = "template.items.copy_item_to_track";
 const SET_TAKE_START_IN_SOURCE_ID = "template.items.set_take_start_in_source";
 const MAX_TARGETS = 8;
+const AUDIO_BATCH_MAX_TARGETS = 64;
+const AUDIO_BATCH_RELEASE_GATE_MS = 30000;
 const DEFAULT_TARGET_LIMIT = 4;
 const POSITION_TOLERANCE = 0.000001;
 const MIN_RESPONSE_BUDGET = 2_048;
@@ -144,6 +147,13 @@ const INPUT_FIELDS = new Set([
   "snap_offset_seconds",
   "silence_threshold_dbfs",
   "min_silence_ms",
+  "silence_scope",
+  "keep_before_ms",
+  "keep_after_ms",
+  "min_kept_audio_ms",
+  "fade_ms",
+  "normalization_metric",
+  "normalization_target",
   "transient_delta_linear",
   "min_transient_gap_ms",
 ]);
@@ -163,7 +173,7 @@ const REGISTRY_ENTRY = deepFreeze({
   contract: MACRO_PROGRAM_REGISTRY_CONTRACT,
   macro_id: ALPHA3_3_B1C_ITEMS_APPLY_MACRO_ID,
   program_id: "openreaper.macro.items.apply",
-  program_version: "1.5.0",
+  program_version: "1.6.0",
   implementation_status: "executable",
   risk: "destructive",
   input_schema: {
@@ -171,8 +181,8 @@ const REGISTRY_ENTRY = deepFreeze({
     additionalProperties: false,
     properties: {
       mode: { type: "string", enum: ALPHA3_3_B1C_ITEMS_APPLY_MODES },
-      target: { type: "string", enum: ["selected"] },
-      target_refs: { type: "array", maxItems: MAX_TARGETS, items: { type: "string" } },
+      target: { type: "string", enum: ["selected", "exact"] },
+      target_refs: { type: "array", maxItems: AUDIO_BATCH_MAX_TARGETS, items: { type: "string" } },
       changes: {
         type: "array",
         minItems: 1,
@@ -227,7 +237,7 @@ const REGISTRY_ENTRY = deepFreeze({
           required: ["id", "source_item_ref", "target_track_ref", "position_seconds"],
         },
       },
-      limit: { type: "integer", minimum: 1, maximum: MAX_TARGETS },
+      limit: { type: "integer", minimum: 1, maximum: AUDIO_BATCH_MAX_TARGETS },
       dry_run: { type: "boolean" },
       anchor_seconds: { type: "number", minimum: 0 },
       gap_seconds: { type: "number", minimum: 0 },
@@ -276,8 +286,15 @@ const REGISTRY_ENTRY = deepFreeze({
       playrate: { type: "number", exclusiveMinimum: 0, maximum: 16 },
       preserve_pitch: { type: "boolean" },
       snap_offset_seconds: { type: "number", minimum: 0 },
-      silence_threshold_dbfs: { type: "number", minimum: -150, maximum: 0 },
-      min_silence_ms: { type: "number", minimum: 0, maximum: 60000 },
+      silence_threshold_dbfs: { type: "number", minimum: -150, maximum: 0, default: -60 },
+      min_silence_ms: { type: "number", minimum: 1, maximum: 60000, default: 250 },
+      silence_scope: { type: "string", enum: ["all", "leading", "trailing", "edges", "internal"], default: "all" },
+      keep_before_ms: { type: "number", minimum: 0, maximum: 5000, default: 20 },
+      keep_after_ms: { type: "number", minimum: 0, maximum: 5000, default: 20 },
+      min_kept_audio_ms: { type: "number", minimum: 0, maximum: 60000, default: 80 },
+      fade_ms: { type: "number", minimum: 0, maximum: 1000, default: 5 },
+      normalization_metric: { type: "string", enum: ["lufs_i", "rms_i", "peak", "true_peak", "lufs_m_max", "lufs_s_max"] },
+      normalization_target: { type: "number", maximum: 0 },
       transient_delta_linear: { type: "number", exclusiveMinimum: 0, maximum: 1024 },
       min_transient_gap_ms: { type: "number", minimum: 0, maximum: 60000 },
     },
@@ -359,7 +376,8 @@ export function createAlpha3_3B1cItemsApplyDiscoveryItems({ liveRunnableNow = fa
       { name: "stack_on_existing_tracks", input: { mode: "stack_on_existing_tracks", track_assignments: [{ item_ref: "item:guid:{ITEM-GUID}", target_track_ref: "track:guid:{TRACK-GUID}" }], dry_run: false } },
       { name: "fade_exact_items", input: { mode: "apply_fades", target_refs: ["item:guid:{ITEM-GUID}"], fade_in_seconds: 0.02, fade_out_seconds: 0.08, dry_run: false } },
       { name: "set_take_playback", input: { mode: "set_take_playback", target_refs: ["item:guid:{ITEM-GUID}"], playrate: 1.25, preserve_pitch: true, dry_run: false } },
-      { name: "remove_silence", input: { mode: "remove_silence", target_refs: ["item:guid:{ITEM-GUID}"], silence_threshold_dbfs: -60, min_silence_ms: 50, dry_run: false } },
+      { name: "remove_silence", input: { mode: "remove_silence", target_refs: ["item:guid:{ITEM-GUID}"], silence_threshold_dbfs: -60, min_silence_ms: 250, silence_scope: "all", dry_run: false } },
+      { name: "normalize_level", input: { mode: "normalize_level", target: "exact", target_refs: ["item:guid:{ITEM-GUID}"], normalization_metric: "lufs_i", normalization_target: -18, dry_run: false } },
       { name: "align_audio_onsets", input: { mode: "align_onsets", target_refs: ["item:guid:{ITEM-A}", "item:guid:{ITEM-B}"], dry_run: false } },
       {
         name: "batch_item_take_controls",
@@ -516,6 +534,7 @@ export async function executeAlpha3_3B1cItemsApplyMacro({
   request = {},
   executeAtomic,
   projectIndexRuntime,
+  artifactWriter = null,
   now = () => new Date(),
   monoNow = () => performance.now(),
 } = {}) {
@@ -530,6 +549,7 @@ export async function executeAlpha3_3B1cItemsApplyMacro({
       request,
       executeAtomic,
       projectIndexRuntime,
+      artifactWriter,
       now,
       monoNow,
       startedAt,
@@ -554,6 +574,27 @@ export async function executeAlpha3_3B1cItemsApplyMacro({
   }
   const normalized = normalizeInput(request.input);
   if (!normalized.ok) {
+    if (normalized.zero_write === true && isAudioBatchMode(request.input?.mode)) {
+      state.batchMode = true;
+      state.targetScope = request.input.target === "exact" || (Array.isArray(request.input.target_refs) && request.input.target_refs.length > 0)
+        ? "exact"
+        : "selected";
+      state.totalTargetCount = 0;
+      state.returnedTargetCount = 0;
+      return failureEnvelope({
+        entry,
+        request,
+        startedAt,
+        now,
+        stages,
+        state,
+        activeBudget,
+        code: normalized.code,
+        message: normalized.message,
+        blockers: normalized.blockers,
+        data: audioBatchData(request.input, state, { zero_write: true }),
+      });
+    }
     return failureEnvelope({ entry, request, startedAt, now, stages, state, activeBudget, code: normalized.code, message: normalized.message, blockers: normalized.blockers });
   }
 
@@ -570,6 +611,22 @@ export async function executeAlpha3_3B1cItemsApplyMacro({
   }
   if (typeof executeAtomic !== "function") {
     return failureEnvelope({ entry, request, startedAt, now, stages, state, activeBudget, code: "ITEM_APPLY_LIVE_EXECUTOR_REQUIRED", message: "macro.items.apply requires the managed OpenReaper live executor." });
+  }
+
+  if (["remove_silence", "normalize_level"].includes(normalized.input.mode)) {
+    return executeAudioBatchMacro({
+      entry,
+      request,
+      executeAtomic,
+      projectIndexRuntime,
+      now,
+      monoNow,
+      startedAt,
+      stages,
+      state,
+      activeBudget,
+      input: normalized.input,
+    });
   }
 
   const targets = await resolveTargets({ request, input: normalized.input, executeAtomic, state });
@@ -853,10 +910,11 @@ async function resolveTargets({ request, input, executeAtomic, state }) {
   const directRefs = collectItemObjectRefs(request.refs);
   const tokens = input.target_refs;
   const exactTargetCount = directRefs.length + tokens.length;
+  const maxTargets = maxTargetsForMode(input.mode);
   const effectiveLimit = request.input?.limit === undefined && exactTargetCount > 0
-    ? Math.min(MAX_TARGETS, exactTargetCount)
+    ? Math.min(maxTargets, exactTargetCount)
     : input.limit;
-  if (exactTargetCount > effectiveLimit || exactTargetCount > MAX_TARGETS) {
+  if (exactTargetCount > effectiveLimit || exactTargetCount > maxTargets) {
     return failed("ITEM_APPLY_TARGET_LIMIT_EXCEEDED", `Exact Item targets exceed the bounded write limit of ${effectiveLimit}.`);
   }
 
@@ -1272,7 +1330,7 @@ async function executePropertyPlan({ plan, request, executeAtomic, state }) {
   return null;
 }
 
-async function executeRemoveSilencePlan({ plan, request, executeAtomic, state }) {
+async function executeLegacyRemoveSilencePlan({ plan, request, executeAtomic, state }) {
   for (const operation of plan.operations) {
     const change = pendingChange(operation);
     state.changes.push(change);
@@ -1372,6 +1430,332 @@ async function executeRemoveSilencePlan({ plan, request, executeAtomic, state })
     };
   }
   return null;
+}
+
+async function executeAudioBatchMacro({
+  entry,
+  request,
+  executeAtomic,
+  projectIndexRuntime,
+  artifactWriter,
+  now,
+  monoNow = () => performance.now(),
+  startedAt,
+  stages,
+  state,
+  activeBudget,
+  input,
+}) {
+  const t0 = monoTick(monoNow);
+  const dryRun = input.dry_run === true;
+  state.batchMode = true;
+  state.calls = emptyCalls();
+  state.timings = emptyTimings();
+  state.targetScope = input.target === "exact" || input.target_refs.length > 0 ? "exact" : "selected";
+
+  // Keep the 65-target contract visible at the batch boundary as well as in
+  // input normalization: no selected-target resolution or REAPER dispatch may
+  // begin for either remove_silence or normalize_level.
+  if (input.target_refs.length > AUDIO_BATCH_MAX_TARGETS) {
+    state.timings.total_ms = monoElapsed(t0, monoNow);
+    return failureEnvelope({
+      entry, request, startedAt, now, stages, state, activeBudget,
+      code: "ITEM_APPLY_TARGET_LIMIT_EXCEEDED",
+      message: `${input.mode} accepts at most 64 targets; 65 is zero_write=true.`,
+      blockers: [blocker("ITEM_APPLY_TARGET_LIMIT_EXCEEDED", `${input.mode} accepts at most 64 targets; 65 is zero_write=true.`)],
+      data: audioBatchData(input, state, { zero_write: true }),
+    });
+  }
+
+  let batchResult;
+  try {
+    batchResult = await executeRemoveSilencePlan({ request, input, executeAtomic, state });
+  } catch (error) {
+    state.timings.total_ms = monoElapsed(t0, monoNow);
+    return failureEnvelope({
+      entry, request, startedAt, now, stages, state, activeBudget,
+      code: "ITEM_APPLY_ATOMIC_FAILED",
+      message: error?.message ?? "Audio batch dispatch failed.",
+      blockers: [blocker("ITEM_APPLY_ATOMIC_FAILED", error?.message ?? "Audio batch dispatch failed.")],
+      data: audioBatchData(input, state, { zero_write: true }),
+    });
+  }
+  const execution = batchResult.execution;
+  collectExecutionEvidence(state, execution);
+  const summary = executionSummary(execution);
+  const rows = Array.isArray(summary.aggregate_readback)
+    ? summary.aggregate_readback
+    : Array.isArray(summary.rows) ? summary.rows : [];
+  const publicReadback = compactAudioBatchReadback(rows, input.mode);
+  state.totalTargetCount = integerOr(summary.target_count, rows.length);
+  state.returnedTargetCount = rows.length;
+  state.targetsTruncated = summary.targets_truncated === true;
+  state.operations = rows.map((row, index) => ({
+    operation_id: `${input.mode}-${index + 1}`,
+    template_id: SPLIT_BY_SILENCE_ID,
+    kind: input.mode === "remove_silence" ? "remove_silence" : "normalize_level",
+    item_ref: exactGuidObjectRef("item", row.item_ref ?? `item:guid:unresolved-${index + 1}`),
+    requested_value: row,
+  }));
+  state.changes = rows.map((row, index) => audioBatchChange(row, index, dryRun));
+  state.canonicalRefs = uniqueObjectRefs([
+    ...executionObjectRefs(execution),
+    ...rows.flatMap((row) => [row.item_ref, row.owner_track_ref, row.new_take_ref]),
+  ].map((ref) => {
+    if (isPlainObject(ref)) return ref;
+    if (typeof ref !== "string") return null;
+    const kind = ref.split(":", 1)[0];
+    return ["item", "take", "track"].includes(kind) ? exactGuidObjectRef(kind, ref) : null;
+  }).filter(Boolean));
+  const batchTimings = plainObject(summary.batch_timings ?? summary.timings);
+  const nativeCounters = plainObject(summary.native_counters ?? summary.counters);
+  state.nativeBatch = {
+    batch_timings: batchTimings,
+    native_counters: nativeCounters,
+    aggregate_readback: publicReadback,
+    plan_hash: stringOrNull(summary.plan_hash),
+    undo_opened: summary.undo_opened === true,
+    undo_closed: summary.undo_closed === true,
+    transport_call_count: 1,
+  };
+  state.timings = {
+    target_resolution_ms: finiteOrZero(batchTimings.target_resolution_ms ?? batchTimings.resolve_ms),
+    preflight_ms: finiteOrZero(batchTimings.preflight_ms),
+    mutation_ms: finiteOrZero(batchTimings.mutation_ms),
+    final_readback_ms: finiteOrZero(batchTimings.readback_ms ?? batchTimings.final_readback_ms),
+    index_maintenance_ms: 0,
+    total_ms: finiteOrZero(batchTimings.total_ms) || monoElapsed(t0, monoNow),
+  };
+
+  if (typeof artifactWriter === "function") {
+    try {
+      state.audioBatchEvidence = await artifactWriter({
+        request,
+        input,
+        execution,
+        summary,
+        rows,
+        publicReadback,
+        failure: batchResult.failure,
+      });
+      if (typeof state.audioBatchEvidence?.ref === "string") {
+        state.evidenceRefs.push(state.audioBatchEvidence.ref);
+      }
+    } catch (error) {
+      state.audioBatchEvidence = {
+        write_failed: true,
+        error: error?.message ?? "Audio batch evidence artifact could not be written.",
+      };
+    }
+    if (state.audioBatchEvidence?.write_failed === true) {
+      return failureEnvelope({
+        entry,
+        request,
+        startedAt,
+        now,
+        stages,
+        state,
+        activeBudget,
+        status: execution?.ok === true ? "partial_failure" : "failed",
+        code: "ITEM_APPLY_AUDIO_EVIDENCE_WRITE_FAILED",
+        message: state.audioBatchEvidence.error,
+        blockers: [blocker("ITEM_APPLY_AUDIO_EVIDENCE_WRITE_FAILED", state.audioBatchEvidence.error, false)],
+        data: audioBatchData(input, state, { zero_write: false }),
+      });
+    }
+  }
+
+  if (execution?.ok !== true || batchResult.failure) {
+    const failure = batchResult.failure ?? atomicFailure(execution, SPLIT_BY_SILENCE_ID);
+    state.timings.total_ms = finiteOrZero(batchTimings.total_ms) || monoElapsed(t0, monoNow);
+    return failureEnvelope({
+      entry, request, startedAt, now, stages, state, activeBudget,
+      status: rows.some((row) => row.mutation?.status === "completed") ? "partial_failure" : "failed",
+      code: failure.code,
+      message: failure.message,
+      blockers: failure.blockers,
+      data: audioBatchData(input, state, {
+        zero_write: summary.zero_write === true
+          || batchResult.zero_write === true
+          || execution?.error?.details?.zero_write === true
+          || execution?.result?.data?.zero_write === true,
+      }),
+    });
+  }
+
+  const indexResult = maintainBatchProjectIndex(projectIndexRuntime, state, now);
+  state.timings.index_maintenance_ms = 0;
+  state.timings.total_ms = finiteOrZero(batchTimings.total_ms) || monoElapsed(t0, monoNow);
+  applyBatchIndexMaintenance(state.changes, indexResult);
+  if (indexResult.ok === false) {
+    return failureEnvelope({
+      entry, request, startedAt, now, stages, state, activeBudget,
+      status: "partial_failure",
+      code: indexResult.code,
+      message: indexResult.message,
+      blockers: indexResult.blockers,
+      data: audioBatchData(input, state),
+    });
+  }
+  pushStage(stages, "items-apply-targets", "live_ref_resolve", "completed", `Resolved ${state.returnedTargetCount} exact audio target(s) inside the REAPER batch core.`, state.evidenceRefs);
+  pushStage(stages, "items-apply-preflight", "template_execute", "completed", "Compiled the complete audio batch plan before mutation.", state.evidenceRefs);
+  pushStage(stages, "items-apply-mutate", "template_execute", dryRun ? "skipped" : "completed", dryRun ? "dry_run=true; REAPER reported no mutation." : "REAPER applied one invocation-level native audio batch.", state.evidenceRefs);
+  pushStage(stages, "items-apply-verify", "verify", "completed", "Returned aggregate live readback, plan hash, timing, and native counters.", state.evidenceRefs);
+  pushStage(stages, "items-apply-index", "index_update", indexResult.status === "skipped" ? "skipped" : "completed", indexResult.message, []);
+  pushStage(stages, "items-apply-result", "result_project", "completed", "Projected shared audio batch truth.", state.evidenceRefs);
+  return successEnvelope({
+    entry, request, startedAt, now, stages, state, activeBudget,
+    status: dryRun ? "dry_run_completed" : "completed",
+    summary: `${input.mode} completed in one native batch with plan hash ${summary.plan_hash ?? "unavailable"}.`,
+    data: audioBatchData(input, state),
+    compact: activeBudget <= MIN_RESPONSE_BUDGET,
+  });
+}
+
+async function executeRemoveSilencePlan({ request, input = request.input, executeAtomic, state }) {
+  const refs = uniqueObjectRefs([
+    ...collectItemObjectRefs(request.refs),
+    ...input.target_refs.map((token) => {
+      const canonical = canonicalTokenRef(token);
+      return canonical ? exactGuidObjectRef("item", canonical) : null;
+    }).filter(Boolean),
+  ]);
+  const childInput = compactObject({
+    batch: true,
+    operation: input.mode,
+    target: input.target,
+    target_refs: input.target_refs,
+    dry_run: input.dry_run,
+    silence_scope: input.silence_scope,
+    silence_threshold_dbfs: input.silence_threshold_dbfs,
+    min_silence_ms: input.min_silence_ms,
+    keep_before_ms: input.keep_before_ms,
+    keep_after_ms: input.keep_after_ms,
+    min_kept_audio_ms: input.min_kept_audio_ms,
+    fade_ms: input.fade_ms,
+    normalization_metric: input.normalization_metric,
+    normalization_target: input.normalization_target,
+  });
+  let execution;
+  try {
+    execution = await runAtomicCounted(executeAtomic, request, state, "mutation", {
+      id: SPLIT_BY_SILENCE_ID,
+      input: childInput,
+      refs,
+    });
+  } catch (error) {
+    return {
+      execution: null,
+      failure: executionError(error, SPLIT_BY_SILENCE_ID, "mutation"),
+      zero_write: true,
+    };
+  }
+  // The single REAPER child owns target resolution, complete preflight, mutation,
+  // aggregate readback, plan_hash, and the one invocation-level Undo boundary.
+  return { execution, failure: execution?.ok === true ? null : atomicFailure(execution, SPLIT_BY_SILENCE_ID) };
+}
+
+function audioBatchChange(row, index, dryRun) {
+  const mutationStatus = dryRun ? "not_run" : row.mutation?.status ?? (row.status === "applied" ? "completed" : "failed");
+  const readbackStatus = dryRun ? "not_run" : row.live_readback?.status ?? row.readback_status ?? "passed";
+  return compactObject({
+    id: row.id ?? `audio-${index + 1}`,
+    status: dryRun ? "planned" : row.status ?? (mutationStatus === "completed" && readbackStatus === "passed" ? "applied" : "failed"),
+    mutation: { status: mutationStatus },
+    live_readback: { status: readbackStatus },
+    index_maintenance: { status: dryRun ? "skipped" : "pending", scopes: [] },
+    code: row.code,
+    item_ref: row.item_ref,
+    owner_track_ref: row.owner_track_ref,
+    plan_hash: row.plan_hash,
+    readback: row.aggregate_readback ?? row.readback,
+    ...row,
+  });
+}
+
+function audioBatchData(input, state, extra = {}) {
+  const artifactRefs = uniqueStrings(
+    state.evidenceRefs.filter((ref) => ref.startsWith("artifact:")),
+  ).slice(0, 2);
+  const inlineReadback = state.audioBatchEvidence?.inline_readback !== false;
+  return {
+    mode: input.mode,
+    target_scope: state.targetScope,
+    target_count: state.totalTargetCount,
+    returned_target_count: state.returnedTargetCount,
+    zero_write: extra.zero_write === true,
+    source_media_deleted: false,
+    ...(input.mode === "remove_silence" ? {
+      silence_threshold_dbfs: input.silence_threshold_dbfs,
+      min_silence_ms: input.min_silence_ms,
+      silence_scope: input.silence_scope,
+      keep_before_ms: input.keep_before_ms,
+      keep_after_ms: input.keep_after_ms,
+      min_kept_audio_ms: input.min_kept_audio_ms,
+      fade_ms: input.fade_ms,
+    } : {
+      normalization_metric: input.normalization_metric,
+      normalization_target: input.normalization_target,
+    }),
+    measurement_scope: input.mode === "normalize_level" ? "source_item_take_pre_fx" : "source_active_take_pre_track_fx",
+    plan_hash: state.nativeBatch?.plan_hash ?? null,
+    ...(inlineReadback
+      ? { aggregate_readback: state.nativeBatch?.aggregate_readback ?? [] }
+      : { aggregate_readback_count: state.nativeBatch?.aggregate_readback?.length ?? 0 }),
+    ...(artifactRefs.length > 0 ? { artifact_refs: artifactRefs } : {}),
+    timings: state.timings,
+    batch_timings: state.nativeBatch?.batch_timings ?? {},
+    native_counters: state.nativeBatch?.native_counters ?? {},
+    transport_call_count: state.nativeBatch?.transport_call_count ?? 1,
+    undo: {
+      mode: "required",
+      one_invocation: true,
+      one_undo: true,
+      undo_opened: state.nativeBatch?.undo_opened === true,
+      undo_closed: state.nativeBatch?.undo_closed === true,
+    },
+    undo_opened: state.nativeBatch?.undo_opened === true,
+    undo_closed: state.nativeBatch?.undo_closed === true,
+    total_ms: state.timings.total_ms,
+    release_gate_ms: AUDIO_BATCH_RELEASE_GATE_MS,
+  };
+}
+
+function compactAudioBatchReadback(rows, mode) {
+  const values = Array.isArray(rows) ? rows : [];
+  return values.map((row) => {
+    const keptRefs = Array.isArray(row.kept_item_refs) ? row.kept_item_refs : [];
+    const deletedRefs = Array.isArray(row.deleted_item_refs) ? row.deleted_item_refs : [];
+    // Small batches remain fully inspectable. Larger batches keep one scalar
+    // readback row per target; the transport result/evidence root retains the
+    // complete GUID arrays returned by the REAPER-side verifier.
+    if (values.length <= 8 && keptRefs.length + deletedRefs.length <= 32) return row;
+    if (mode === "normalize_level") {
+      return compactObject({
+        target_order: row.target_order,
+        item_ref: row.item_ref,
+        owner_track_ref: row.owner_track_ref,
+        status: row.status,
+        changed: row.changed,
+        source_media_deleted: row.source_media_deleted,
+        adjustment: row.adjustment,
+        take_volume_before: row.take_volume_before,
+        take_volume_after: row.take_volume_after,
+      });
+    }
+    return compactObject({
+      target_order: row.target_order,
+      item_ref: row.item_ref,
+      owner_track_ref: row.owner_track_ref,
+      status: row.status,
+      changed: row.changed,
+      source_media_deleted: row.source_media_deleted,
+      silence_segment_count: row.silence_segment_count,
+      delete_count: row.delete_count,
+      kept_item_count: keptRefs.length,
+      deleted_item_count: deletedRefs.length,
+    });
+  });
 }
 
 async function executeArrangementPlan({ plan, request, executeAtomic, state }) {
@@ -2564,14 +2948,18 @@ function normalizeInput(input) {
     return failed("ITEM_APPLY_REQUEST_INVALID", "set_item_take_controls must be handled by the dedicated batch path.");
   }
   const target = input.target ?? "selected";
-  if (target !== "selected") return failed("ITEM_APPLY_TARGET_SELECTOR_UNSUPPORTED", "target must be selected when exact target_refs are not supplied.");
+  if (!["selected", "exact"].includes(target)) return failed("ITEM_APPLY_TARGET_SELECTOR_UNSUPPORTED", "target must be selected or exact.");
   const targetRefs = input.target_refs ?? [];
   if (!Array.isArray(targetRefs) || targetRefs.some((ref) => !isExactItemToken(ref))) {
-    return failed("ITEM_APPLY_EXACT_TARGET_REQUIRED", "target_refs must contain only non-empty exact item:guid or guid Item refs.");
+    const result = failed("ITEM_APPLY_EXACT_TARGET_REQUIRED", "target_refs must contain only non-empty exact item:guid or guid Item refs.");
+    return isAudioBatchMode(mode) ? { ...result, zero_write: true } : result;
   }
-  if (targetRefs.length > MAX_TARGETS) return failed("ITEM_APPLY_TARGET_LIMIT_EXCEEDED", `target_refs exceeds the maximum of ${MAX_TARGETS}.`);
-  const limit = input.limit ?? DEFAULT_TARGET_LIMIT;
-  if (!Number.isInteger(limit) || limit < 1 || limit > MAX_TARGETS) return failed("ITEM_APPLY_REQUEST_INVALID", `limit must be an integer from 1 to ${MAX_TARGETS}.`);
+  const maxTargets = maxTargetsForMode(mode);
+  // Audio batches must reach executeAudioBatchMacro so its explicit 65-target
+  // guard emits typed zero-write truth without resolving or dispatching refs.
+  if (targetRefs.length > maxTargets && !isAudioBatchMode(mode)) return failed("ITEM_APPLY_TARGET_LIMIT_EXCEEDED", `target_refs exceeds the maximum of ${maxTargets}; zero_write=true and no REAPER analysis or mutation was started.`);
+  const limit = input.limit ?? (isAudioBatchMode(mode) ? AUDIO_BATCH_MAX_TARGETS : DEFAULT_TARGET_LIMIT);
+  if (!Number.isInteger(limit) || limit < 1 || limit > maxTargets) return failed("ITEM_APPLY_REQUEST_INVALID", `limit must be an integer from 1 to ${maxTargets}.`);
   const dryRun = input.dry_run !== false;
   if (typeof input.dry_run !== "undefined" && typeof input.dry_run !== "boolean") return failed("ITEM_APPLY_REQUEST_INVALID", "dry_run must be boolean.");
   const anchor = optionalNonNegativeNumber(input.anchor_seconds, "anchor_seconds");
@@ -2590,6 +2978,13 @@ function normalizeInput(input) {
   let snapOffsetSeconds = null;
   let silenceThresholdDbfs = null;
   let minSilenceMs = null;
+  let silenceScope = null;
+  let keepBeforeMs = null;
+  let keepAfterMs = null;
+  let minKeptAudioMs = null;
+  let fadeMs = null;
+  let normalizationMetric = null;
+  let normalizationTarget = null;
   let transientDeltaLinear = null;
   let minTransientGapMs = null;
   if (mode !== "stack_on_existing_tracks" && input.track_assignments !== undefined) {
@@ -2640,12 +3035,30 @@ function normalizeInput(input) {
     if (!Number.isFinite(input.snap_offset_seconds) || input.snap_offset_seconds < 0) return failed("ITEM_APPLY_SNAP_OFFSET_INVALID", "set_snap_offset snap_offset_seconds must be a non-negative finite number.");
     snapOffsetSeconds = input.snap_offset_seconds;
   } else if (mode === "remove_silence") {
-    const unsupported = Object.keys(input).filter((field) => !["mode", "target", "target_refs", "limit", "dry_run", "silence_threshold_dbfs", "min_silence_ms"].includes(field));
+    const unsupported = Object.keys(input).filter((field) => !["mode", "target", "target_refs", "limit", "dry_run", "silence_threshold_dbfs", "min_silence_ms", "silence_scope", "keep_before_ms", "keep_after_ms", "min_kept_audio_ms", "fade_ms"].includes(field));
     if (unsupported.length > 0) return failed("ITEM_APPLY_REQUEST_INVALID", `remove_silence does not accept field(s): ${unsupported.join(", ")}.`);
+    if (target !== "selected" && target !== "exact") return failed("ITEM_APPLY_TARGET_SELECTOR_UNSUPPORTED", "remove_silence target must be selected or exact.");
     silenceThresholdDbfs = input.silence_threshold_dbfs ?? -60;
-    minSilenceMs = input.min_silence_ms ?? 50;
+    minSilenceMs = input.min_silence_ms ?? 250;
+    silenceScope = input.silence_scope ?? "all";
+    keepBeforeMs = input.keep_before_ms ?? 20;
+    keepAfterMs = input.keep_after_ms ?? 20;
+    minKeptAudioMs = input.min_kept_audio_ms ?? 80;
+    fadeMs = input.fade_ms ?? 5;
     if (!Number.isFinite(silenceThresholdDbfs) || silenceThresholdDbfs < -150 || silenceThresholdDbfs > 0) return failed("ITEM_APPLY_SILENCE_THRESHOLD_INVALID", "silence_threshold_dbfs must be a finite number from -150 to 0.");
-    if (!Number.isFinite(minSilenceMs) || minSilenceMs < 0 || minSilenceMs > 60000) return failed("ITEM_APPLY_MIN_SILENCE_INVALID", "min_silence_ms must be a finite number from 0 to 60000.");
+    if (!Number.isFinite(minSilenceMs) || minSilenceMs < 1 || minSilenceMs > 60000) return failed("ITEM_APPLY_MIN_SILENCE_INVALID", "min_silence_ms must be a finite number from 1 to 60000.");
+    if (!["all", "leading", "trailing", "edges", "internal"].includes(silenceScope)) return failed("ITEM_APPLY_SILENCE_SCOPE_INVALID", "silence_scope must be all, leading, trailing, edges, or internal.");
+    for (const [field, value, minimum, maximum] of [["keep_before_ms", keepBeforeMs, 0, 5000], ["keep_after_ms", keepAfterMs, 0, 5000], ["min_kept_audio_ms", minKeptAudioMs, 0, 60000], ["fade_ms", fadeMs, 0, 1000]]) {
+      if (!Number.isFinite(value) || value < minimum || value > maximum) return failed("ITEM_APPLY_SILENCE_PARAMETER_INVALID", `${field} must be a finite number from ${minimum} to ${maximum}.`);
+    }
+  } else if (mode === "normalize_level") {
+    const unsupported = Object.keys(input).filter((field) => !["mode", "target", "target_refs", "limit", "dry_run", "normalization_metric", "normalization_target"].includes(field));
+    if (unsupported.length > 0) return failed("ITEM_APPLY_REQUEST_INVALID", `normalize_level does not accept field(s): ${unsupported.join(", ")}.`);
+    if (target !== "selected" && target !== "exact") return failed("ITEM_APPLY_TARGET_SELECTOR_UNSUPPORTED", "normalize_level target must be selected or exact.");
+    normalizationMetric = input.normalization_metric;
+    normalizationTarget = input.normalization_target;
+    if (!["lufs_i", "rms_i", "peak", "true_peak", "lufs_m_max", "lufs_s_max"].includes(normalizationMetric)) return failed("ITEM_APPLY_NORMALIZATION_METRIC_INVALID", "normalization_metric must be one of lufs_i, rms_i, peak, true_peak, lufs_m_max, or lufs_s_max.");
+    if (!Number.isFinite(normalizationTarget) || normalizationTarget > 0) return failed("ITEM_APPLY_NORMALIZATION_TARGET_INVALID", "normalization_target must be a finite dB/LUFS target at or below 0.");
   } else if (mode === "align_onsets") {
     const unsupported = Object.keys(input).filter((field) => !["mode", "target", "target_refs", "limit", "dry_run", "anchor_seconds", "transient_delta_linear", "min_transient_gap_ms"].includes(field));
     if (unsupported.length > 0) return failed("ITEM_APPLY_REQUEST_INVALID", `align_onsets does not accept field(s): ${unsupported.join(", ")}.`);
@@ -2680,6 +3093,13 @@ function normalizeInput(input) {
       snap_offset_seconds: snapOffsetSeconds,
       silence_threshold_dbfs: silenceThresholdDbfs,
       min_silence_ms: minSilenceMs,
+      silence_scope: silenceScope,
+      keep_before_ms: keepBeforeMs,
+      keep_after_ms: keepAfterMs,
+      min_kept_audio_ms: minKeptAudioMs,
+      fade_ms: fadeMs,
+      normalization_metric: normalizationMetric,
+      normalization_target: normalizationTarget,
       transient_delta_linear: transientDeltaLinear,
       min_transient_gap_ms: minTransientGapMs,
     },
@@ -2704,6 +3124,14 @@ function normalizeActiveTakeAssignments(value) {
     assignments.push({ item_ref: row.item_ref, take_ref: row.take_ref });
   }
   return { ok: true, value: assignments };
+}
+
+function isAudioBatchMode(mode) {
+  return mode === "remove_silence" || mode === "normalize_level";
+}
+
+function maxTargetsForMode(mode) {
+  return isAudioBatchMode(mode) ? AUDIO_BATCH_MAX_TARGETS : MAX_TARGETS;
 }
 
 function normalizeTrackAssignments(value) {
@@ -2862,7 +3290,10 @@ function buildSuccessEnvelope({ entry, request, startedAt, completedAt, stages, 
       summary: useCompact ? String(summary ?? "").slice(0, 48) : summary,
       canonical_refs: useCompact ? [] : uniqueStrings(state.canonicalRefs).slice(0, MACRO_CONTRACT_CEILINGS.canonical_ref_max_count),
       changes: useCompact
-        ? projectCompactBatchChanges(state.changes, { includeControlTruth: activeBudget > MIN_RESPONSE_BUDGET })
+        ? projectCompactBatchChanges(state.changes, {
+            includeControlTruth: activeBudget > MIN_RESPONSE_BUDGET && !isAudioBatchMode(projectedData?.mode),
+            audioBatchSummary: isAudioBatchMode(projectedData?.mode) && projectedData?.returned_target_count > 8,
+          })
         : clone(state.changes).slice(0, MACRO_CONTRACT_CEILINGS.change_max_count),
       verification: {
         status: "passed",
@@ -2905,7 +3336,10 @@ function failureEnvelope({ entry, request, startedAt, now, stages, state, active
       summary: useCompact ? String(message ?? "").slice(0, 48) : message,
       canonical_refs: useCompact ? [] : uniqueStrings(state.canonicalRefs).slice(0, MACRO_CONTRACT_CEILINGS.canonical_ref_max_count),
       changes: useCompact
-        ? projectCompactBatchChanges(state.changes, { includeControlTruth: activeBudget > MIN_RESPONSE_BUDGET })
+        ? projectCompactBatchChanges(state.changes, {
+            includeControlTruth: activeBudget > MIN_RESPONSE_BUDGET && !isAudioBatchMode(projectedData?.mode),
+            audioBatchSummary: isAudioBatchMode(projectedData?.mode) && projectedData?.returned_target_count > 8,
+          })
         : clone(state.changes).slice(0, MACRO_CONTRACT_CEILINGS.change_max_count),
       verification: {
         status: verified ? "passed" : status === "partial_failure" ? "failed" : "not_required",
@@ -2946,8 +3380,14 @@ function failureEnvelope({ entry, request, startedAt, now, stages, state, active
   return finalizeEnvelope(projectOversizedControlTruthToEvidence(envelope, state, projectedData, useCompact));
 }
 
-function projectCompactBatchChanges(changes, { includeControlTruth = false } = {}) {
+function projectCompactBatchChanges(changes, { includeControlTruth = false, audioBatchSummary = false } = {}) {
   return (Array.isArray(changes) ? changes : []).slice(0, ALPHA3_3_B1C_ITEMS_BATCH_MAX_ROWS).map((change) => {
+    if (audioBatchSummary) {
+      return compactObject({
+        id: change.id,
+        status: compactStatusToken(change.status),
+      });
+    }
     const mutation = typeof change.mutation === "string" ? change.mutation : (change.mutation?.status ?? "not_run");
     const readback = typeof change.live_readback === "string"
       ? change.live_readback
@@ -3006,6 +3446,31 @@ function projectCompactBatchData(data) {
   return {
     mode: typeof value.mode === "string" ? value.mode : "set_item_take_controls",
     ...(value.zero_write === true ? { zero_write: true } : {}),
+    ...(typeof value.target_scope === "string" ? { target_scope: value.target_scope } : {}),
+    ...(Number.isInteger(value.target_count) ? { target_count: value.target_count } : {}),
+    ...(Number.isInteger(value.returned_target_count) ? { returned_target_count: value.returned_target_count } : {}),
+    ...(Number.isFinite(value.silence_threshold_dbfs) ? { silence_threshold_dbfs: value.silence_threshold_dbfs } : {}),
+    ...(Number.isFinite(value.min_silence_ms) ? { min_silence_ms: value.min_silence_ms } : {}),
+    ...(typeof value.silence_scope === "string" ? { silence_scope: value.silence_scope } : {}),
+    ...(Number.isFinite(value.keep_before_ms) ? { keep_before_ms: value.keep_before_ms } : {}),
+    ...(Number.isFinite(value.keep_after_ms) ? { keep_after_ms: value.keep_after_ms } : {}),
+    ...(Number.isFinite(value.min_kept_audio_ms) ? { min_kept_audio_ms: value.min_kept_audio_ms } : {}),
+    ...(Number.isFinite(value.fade_ms) ? { fade_ms: value.fade_ms } : {}),
+    ...(typeof value.normalization_metric === "string" ? { normalization_metric: value.normalization_metric } : {}),
+    ...(Number.isFinite(value.normalization_target) ? { normalization_target: value.normalization_target } : {}),
+    ...(typeof value.measurement_scope === "string" ? { measurement_scope: value.measurement_scope } : {}),
+    ...(typeof value.plan_hash === "string" ? { plan_hash: value.plan_hash } : {}),
+    ...(Array.isArray(value.aggregate_readback) ? { aggregate_readback: value.aggregate_readback } : {}),
+    ...(Number.isInteger(value.aggregate_readback_count)
+      ? { aggregate_readback_count: value.aggregate_readback_count }
+      : {}),
+    ...(Array.isArray(value.artifact_refs)
+      ? { artifact_refs: uniqueStrings(value.artifact_refs).slice(0, 2) }
+      : {}),
+    ...(isPlainObject(value.undo) ? { undo: clone(value.undo) } : {}),
+    ...(typeof value.undo_opened === "boolean" ? { undo_opened: value.undo_opened } : {}),
+    ...(typeof value.undo_closed === "boolean" ? { undo_closed: value.undo_closed } : {}),
+    ...(Number.isFinite(value.total_ms) ? { total_ms: value.total_ms } : {}),
     timings: {
       target_resolution_ms: Math.round(Number(value.timings?.target_resolution_ms) || 0),
       preflight_ms: Math.round(Number(value.timings?.preflight_ms) || 0),
@@ -3192,6 +3657,7 @@ function createState() {
     changes: [],
     canonicalRefs: [],
     evidenceRefs: [],
+    audioBatchEvidence: null,
     sqlite: null,
     batchMode: false,
     calls: emptyCalls(),

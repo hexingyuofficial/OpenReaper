@@ -176,6 +176,12 @@ describe("Alpha3.2 D31 render-targets bridge route", () => {
     assert.match(HANDLER, /header:sub\(1, 4\) == "RIFF"/);
     assert.match(HANDLER, /layer_bits == 1/);
     assert.match(HANDLER, /actual_bitrate ~= format\.mp3_bitrate_kbps/);
+    assert.match(HANDLER, /d31_measure_wav_pcm/);
+    assert.match(HANDLER, /d31_pcm_sample/);
+    assert.match(HANDLER, /measured_peak_linear/);
+    assert.match(HANDLER, /measured_rms_linear/);
+    assert.match(HANDLER, /silence_classification = all_zero and "all_zero" or "non_silent"/);
+    assert.match(HANDLER, /measurement_status = "unavailable"/);
     assert.match(HANDLER, /d31_get_string\(project, "RENDER_FORMAT"\) ~= format\.config/);
     assert.match(HANDLER, /requested_format = request\.params\.format/);
     assert.match(HANDLER, /target_identity = target\.ref or target\.label/);

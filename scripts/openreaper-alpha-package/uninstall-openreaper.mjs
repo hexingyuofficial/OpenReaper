@@ -8,7 +8,7 @@ import path from "node:path";
 
 const STARTUP_HOOKS = Object.freeze([
   Object.freeze({
-    path: "__startup.eel",
+    path: "Scripts/__startup.eel",
     blocks: Object.freeze([
       Object.freeze({
         begin: "// >>> OpenReaper alpha MCP startup hook >>>",
@@ -17,7 +17,7 @@ const STARTUP_HOOKS = Object.freeze([
     ]),
   }),
   Object.freeze({
-    path: "__startup.lua",
+    path: "Scripts/__startup.lua",
     blocks: Object.freeze([
       Object.freeze({
         begin: "-- >>> OpenReaper alpha MCP startup hook >>>",
@@ -37,6 +37,22 @@ const STARTUP_HOOKS = Object.freeze([
 const BRIDGE_ACTION_TITLE = "OpenReaper: Start MCP bridge";
 const BRIDGE_ACTION_RELATIVE_SCRIPT = "OpenReaper/openreaper-start-mcp-bridge.lua";
 const BRIDGE_ACTION_COMMAND_ID = `RS${createHash("sha1").update("openreaper.alpha.start_mcp_bridge.v1").digest("hex")}`;
+const S3_ACTIONS = Object.freeze([
+  // The installed Action pair uses stock GetUserInputs/ShowMessageBox and
+  // GetExtState/SetExtState, with the shared plan_hash route retained here:
+  // template.items.split_item_by_silence.
+  Object.freeze({
+    title: "OpenReaper: Remove Silence...",
+    relativeScript: "OpenReaper/remove-silence.lua",
+    commandId: `RS${createHash("sha1").update("openreaper.s3.remove_silence.v1").digest("hex")}`,
+  }),
+  Object.freeze({
+    title: "OpenReaper: Repeat Remove Silence with Last Settings",
+    relativeScript: "OpenReaper/repeat-remove-silence.lua",
+    commandId: `RS${createHash("sha1").update("openreaper.s3.repeat_remove_silence.v1").digest("hex")}`,
+  }),
+]);
+const S3_ACTION_SUPPORT_RELATIVE_SCRIPT = "OpenReaper/remove-silence-shared.lua";
 const MANAGED_RENDER_ROOT_RECORD_MAX_BYTES = 4096;
 const MANAGED_RENDER_ROOT_PATH_MAX_BYTES = 3072;
 
@@ -53,6 +69,7 @@ if (options.help === true) {
 }
 const home = os.homedir();
 const installRoot = path.resolve(options.install_root ?? path.join(home, ".openreaper", "current"));
+const reaperResourceRoot = path.resolve(options.reaper_resource_root ?? defaultReaperResourceRoot(home));
 const defaultRenderRoot = path.join(installRoot, "session", "renders");
 const managedRenderRootRecord = path.join(installRoot, "session", "managed-render-root.path");
 const executableRecipeRoot = path.join(path.dirname(installRoot), "data", "executable-recipes");
@@ -64,6 +81,13 @@ const executableRecipeRootResult = await inspectExecutableRecipeRoot();
 const report = {
   product: "OpenReaper alpha",
   install_root: installRoot,
+  reaper_resource_root: reaperResourceRoot,
+  s3_actions: S3_ACTIONS.map((action) => ({
+    title: action.title,
+    command_id: `_${action.commandId}`,
+    script: path.join(reaperResourceRoot, "Scripts", ...action.relativeScript.split("/")),
+    removed: false,
+  })),
   render_root: {
     record_status: managedRenderRootRecordResult.status,
     record_invalid_reason: managedRenderRootRecordResult.reason ?? null,
@@ -315,16 +339,16 @@ function parseArgs(args) {
     if (equals !== -1) {
       const rawKey = raw.slice(0, equals);
       const rawValue = raw.slice(equals + 1);
-      if (rawKey === "install-root" && rawValue === "") {
-        throw new Error("--install-root requires a non-empty value.");
+      if (["install-root", "reaper-resource-root"].includes(rawKey) && rawValue === "") {
+        throw new Error(`--${rawKey} requires a non-empty value.`);
       }
       parsed[rawKey.replaceAll("-", "_")] = rawValue;
       continue;
     }
     const key = raw.replaceAll("-", "_");
     const next = args[index + 1];
-    if (raw === "install-root" && (!next || next.startsWith("--"))) {
-      throw new Error("--install-root requires a non-empty value.");
+    if (["install-root", "reaper-resource-root"].includes(raw) && (!next || next.startsWith("--"))) {
+      throw new Error(`--${raw} requires a non-empty value.`);
     }
     if (next && !next.startsWith("--")) {
       parsed[key] = next;
@@ -336,6 +360,16 @@ function parseArgs(args) {
   return parsed;
 }
 
+function defaultReaperResourceRoot(homeDirectory) {
+  if (process.platform === "win32") {
+    const appData = process.env.APPDATA && path.isAbsolute(process.env.APPDATA)
+      ? process.env.APPDATA
+      : path.join(homeDirectory, "AppData", "Roaming");
+    return path.join(appData, "REAPER");
+  }
+  return path.join(homeDirectory, "Library", "Application Support", "REAPER");
+}
+
 function printUninstallHelp() {
   process.stdout.write(`OpenReaper alpha uninstaller
 
@@ -345,6 +379,10 @@ Usage:
 
 Options:
   --install-root <path>       Install destination (default: ~/.openreaper/current)
+  --reaper-resource-root <path>
+                              REAPER resource directory; defaults to
+                              ~/Library/Application Support/REAPER on macOS and
+                              %APPDATA%/REAPER on Windows
   --skip-client-config        Do not update supported MCP client configs
   --skip-startup-hook         Keep the manual Action and legacy startup blocks
   --help                      Show this help without uninstalling
@@ -353,9 +391,9 @@ Options:
 
 async function removeStartupIntegration() {
   await removeBridgeAction();
-  const scriptsRoot = path.join(home, "Library", "Application Support", "REAPER", "Scripts");
+  await removeS3Actions();
   for (const hook of STARTUP_HOOKS) {
-    const hookPath = path.join(scriptsRoot, hook.path);
+    const hookPath = path.join(reaperResourceRoot, hook.path);
     const status = await safeLstat(hookPath);
     if (!status) continue;
     if (!status.isFile()) {
@@ -373,8 +411,7 @@ async function removeStartupIntegration() {
 }
 
 async function removeBridgeAction() {
-  const resourceRoot = path.join(home, "Library", "Application Support", "REAPER");
-  const actionPath = path.join(resourceRoot, "Scripts", ...BRIDGE_ACTION_RELATIVE_SCRIPT.split("/"));
+  const actionPath = path.join(reaperResourceRoot, "Scripts", ...BRIDGE_ACTION_RELATIVE_SCRIPT.split("/"));
   const actionStatus = await safeLstat(actionPath);
   if (actionStatus) {
     if (actionStatus.isSymbolicLink() || !actionStatus.isFile()) {
@@ -385,7 +422,7 @@ async function removeBridgeAction() {
     }
   }
 
-  const kbPath = path.join(resourceRoot, "reaper-kb.ini");
+  const kbPath = path.join(reaperResourceRoot, "reaper-kb.ini");
   const kbStatus = await safeLstat(kbPath);
   if (!kbStatus) return;
   if (kbStatus.isSymbolicLink() || !kbStatus.isFile()) {
@@ -393,16 +430,42 @@ async function removeBridgeAction() {
     return;
   }
   const existing = await readFile(kbPath, "utf8");
-  const actionLine = bridgeActionRegistryLine();
-  const next = removeLinesPreservingBytes(existing, (line) => line !== actionLine);
+  const ownedLines = new Set([bridgeActionRegistryLine(), ...s3ActionRegistryLines()]);
+  const next = removeLinesPreservingBytes(existing, (line) => !ownedLines.has(line));
   if (next !== existing) {
     await writeFile(kbPath, next, "utf8");
-    report.changed.push(`removed REAPER bridge Action registration from ${kbPath}`);
+    report.changed.push(`removed OpenReaper Action registrations from ${kbPath}`);
+  }
+}
+
+async function removeS3Actions() {
+  const entries = [
+    ...S3_ACTIONS,
+    { title: "OpenReaper S3 shared Remove Silence core", relativeScript: S3_ACTION_SUPPORT_RELATIVE_SCRIPT },
+  ];
+  for (const action of entries) {
+    const actionPath = path.join(reaperResourceRoot, "Scripts", ...action.relativeScript.split("/"));
+    const status = await safeLstat(actionPath);
+    if (!status) continue;
+    if (status.isSymbolicLink() || !status.isFile()) {
+      report.warnings.push(`REAPER Action path is not a regular non-symlink file and was preserved: ${actionPath}`);
+      continue;
+    }
+    await rm(actionPath, { force: true });
+    const reportEntry = report.s3_actions.find((entry) => entry.script === actionPath);
+    if (reportEntry) reportEntry.removed = true;
+    report.changed.push(`removed ${action.title} from ${actionPath}`);
   }
 }
 
 function bridgeActionRegistryLine() {
   return `SCR 4 0 ${BRIDGE_ACTION_COMMAND_ID} "Custom: ${BRIDGE_ACTION_TITLE}" "${BRIDGE_ACTION_RELATIVE_SCRIPT}"`;
+}
+
+function s3ActionRegistryLines() {
+  return S3_ACTIONS.map((action) =>
+    `SCR 4 0 ${action.commandId} "Custom: ${action.title}" "${action.relativeScript}"`,
+  );
 }
 
 async function removeCodexSection() {

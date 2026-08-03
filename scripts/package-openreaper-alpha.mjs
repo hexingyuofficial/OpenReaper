@@ -2489,7 +2489,6 @@ async function smokePackagedOpenReaperStartHelper() {
     'reaper_args=("-newinst" "-nosplash")',
     'reaper_args+=("${PROJECT_PATH}")',
     'reaper_args+=("${ARGS[@]}")',
-    'reaper_args+=("${BRIDGE_LAUNCHER_SCRIPT}")',
     'BRIDGE_LAUNCHER_SCRIPT="${INSTALL_ROOT}/bin/openreaper-start-mcp-bridge.lua"',
     'USE_LAUNCHSERVICES=true',
     "REAPER_APP",
@@ -2554,11 +2553,8 @@ async function smokePackagedOpenReaperStartHelper() {
   if (source.includes('exec "${REAPER_BIN}"')) {
     throw new Error("openreaper-start must not exec into REAPER; agent shell lifetime must not own the REAPER process.");
   }
-  const projectArgIndex = source.indexOf('reaper_args+=("${PROJECT_PATH}")');
-  const extraArgsIndex = source.indexOf('reaper_args+=("${ARGS[@]}")');
-  const trustedLauncherIndex = source.indexOf('reaper_args+=("${BRIDGE_LAUNCHER_SCRIPT}")');
-  if (!(projectArgIndex >= 0 && projectArgIndex < extraArgsIndex && extraArgsIndex < trustedLauncherIndex)) {
-    throw new Error(`openreaper-start must append project and extra arguments before its trusted package launcher: ${JSON.stringify({ projectArgIndex, extraArgsIndex, trustedLauncherIndex })}`);
+  if (source.includes('reaper_args+=("${BRIDGE_LAUNCHER_SCRIPT}")')) {
+    throw new Error("openreaper-start must rely on the conditional REAPER startup hook, not a command-line ReaScript argument.");
   }
   if (!bridgeLauncherSource.includes('write_startup_status("hook_seen")') || !bridgeLauncherSource.includes("pcall(dofile, bridge)")) {
     throw new Error("trusted package Bridge launcher must publish startup state and load the environment-selected Bridge through pcall.");
@@ -2582,6 +2578,12 @@ async function smokePackagedOpenReaperStartHelper() {
   const doctorSource = await readFile(path.join(packageRoot, "bin", "openreaper-doctor"), "utf8");
   const readmeSource = await readFile(path.join(packageRoot, "README.txt"), "utf8");
   const userGuideSource = await readFile(path.join(packageRoot, "docs", "USER_GUIDE.md"), "utf8");
+  if (!installerSource.includes("installConditionalStartupHook")
+    || !installerSource.includes("conditionalStartupHookSource")
+    || !installerSource.includes('Scripts/__startup.lua')
+    || !installerSource.includes("fallback_mode: \"trusted_package_manual_action_reascript\"")) {
+    throw new Error("packaged installer must install the conditional REAPER startup hook and retain the manual Action fallback.");
+  }
   for (const [label, text] of [
     ["installer", installerSource],
     ["doctor", doctorSource],
@@ -3383,7 +3385,7 @@ args = ["/tmp/other.js"]
     removes_legacy_mcp_config: true,
     removes_legacy_openreaper_alias_to_streetlight_kernel: true,
     removes_legacy_startup_hooks: true,
-    installs_conditional_startup_hook: false,
+    installs_conditional_startup_hook: true,
     installs_trusted_package_launcher: true,
     installs_reaper_bridge_action: true,
     bridge_action_name: "OpenReaper: Start MCP bridge",

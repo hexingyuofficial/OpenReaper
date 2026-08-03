@@ -13,6 +13,8 @@ local MEDIA_SUCCESS_ENVELOPE_SHELL_MAX_BYTES = 1200
 local MEDIA_MUTATION_PATH_OCCURRENCES = 3
 local MEDIA_READ_SUCCESS_ENVELOPE_FIXED_MAX_BYTES = 8192
 local MEDIA_MUTATION_SUMMARY_FIXED_MAX_BYTES = 2048
+local MEDIA_TAKE_NAME_MAX_BYTES = 160
+local MEDIA_SOURCE_LENGTH_MAX_DIGITS = 309
 
 function READ_B_MEDIA.handler_error(code, message, details, recoverable)
   return nil, {
@@ -367,6 +369,153 @@ function READ_B_MEDIA.source_filename_raw(source)
   return ok and first_string(filename) or ""
 end
 
+function READ_B_MEDIA.basename_for_path(path_value)
+  local path = READ_B_MEDIA.canonical_path(path_value)
+  if not path then
+    return nil
+  end
+  local windows_path = path:match("^%a:[/\\]") or path:match("^\\\\") or path:match("^//")
+  local last_separator = 0
+  for index = 1, #path do
+    local byte = string.byte(path, index)
+    if byte == 47 or (windows_path and byte == 92) then
+      last_separator = index
+    end
+  end
+  local basename = path:sub(last_separator + 1)
+  if basename == "" or basename == "." or basename == ".." then
+    return nil
+  end
+  return basename
+end
+
+function READ_B_MEDIA.source_identity(source, options)
+  options = options or {}
+  if not source then
+    return nil, {
+      blocker = "source_pointer_missing",
+    }
+  end
+  local ok_filename, filename = call_reaper("GetMediaSourceFileName", source, "")
+  local raw_filename = ok_filename and first_string(filename) or nil
+  local path = raw_filename and READ_B_MEDIA.canonical_path(raw_filename) or nil
+  local ok_type, source_type_value = call_reaper("GetMediaSourceType", source, "")
+  local source_type = ok_type and first_string(source_type_value) or nil
+  local ok_length, source_length, length_is_quarter_notes = call_reaper("GetMediaSourceLength", source)
+  local length = ok_length and first_number(source_length) or nil
+  local valid_length = type(length) == "number" and length == length
+    and length ~= math.huge and length ~= -math.huge
+    and (length > 0 or (options.allow_zero_length == true and length == 0))
+    and length_is_quarter_notes ~= true
+  local basename = path and READ_B_MEDIA.basename_for_path(path) or nil
+  if not path or not source_type or source_type == "" or not valid_length or not basename then
+    return nil, {
+      blocker = "source_readback_incomplete",
+      filename_call_ok = ok_filename == true,
+      source_type_call_ok = ok_type == true,
+      source_length_call_ok = ok_length == true,
+      path = READ_B_MEDIA.display_path(raw_filename, MEDIA_DISPLAY_PATH_MAX_BYTES),
+      source_type = source_type or "",
+      source_length = length or JSON_NULL,
+      length_is_quarter_notes = length_is_quarter_notes == true,
+    }
+  end
+  return {
+    source = source,
+    path = path,
+    file_ref = READ_B_MEDIA.file_ref_for_path(path),
+    source_type = source_type,
+    source_length_seconds = length,
+    length_is_quarter_notes = false,
+    take_name = basename,
+  }
+end
+
+function READ_B_MEDIA.refresh_item(item, refresh_arrange)
+  if not item then
+    return false, "item_missing"
+  end
+  local ok_update = call_reaper("UpdateItemInProject", item)
+  if not ok_update then
+    return false, "item_update_failed"
+  end
+  if refresh_arrange ~= false then
+    local ok_arrange = call_reaper("UpdateArrange")
+    if not ok_arrange then
+      return false, "arrange_refresh_failed"
+    end
+  end
+  return true
+end
+
+function READ_B_MEDIA.attach_take_source(take, source, options)
+  options = options or {}
+  if not take or not source then
+    return READ_B_MEDIA.handler_error("COMMAND_FAILED", "Media source attachment requires both a Take and a source pointer.", {
+      blocker = "source_attach_arguments_missing",
+      source_attached = false,
+      source_ownership_unknown = false,
+    }, false)
+  end
+  local ok_set, setter_result = call_reaper("SetMediaItemTake_Source", take, source)
+  local ok_read, assigned_source = call_reaper("GetMediaItemTake_Source", take)
+  local source_attached = ok_read and assigned_source == source
+  local source_ownership_unknown = not ok_read
+  local setter_accepted = setter_result == nil or setter_result == true
+  local details = {
+    source_attached = source_attached,
+    source_ownership_unknown = source_ownership_unknown,
+  }
+  if not ok_set or not setter_accepted or not source_attached then
+    details.blocker = "native_source_attach_failed"
+    return READ_B_MEDIA.handler_error("COMMAND_FAILED", "REAPER did not prove the requested source was attached to the Take.", details, false)
+  end
+
+  local identity, identity_failure = READ_B_MEDIA.source_identity(assigned_source, {
+    allow_zero_length = options.allow_zero_length == true,
+  })
+  if not identity then
+    details.blocker = identity_failure and identity_failure.blocker or "source_readback_incomplete"
+    details.source_readback = identity_failure or JSON_NULL
+    return READ_B_MEDIA.handler_error("VERIFY_FAILED", "Attached media source identity could not be read back completely.", details, false)
+  end
+
+  local take_name = options.take_name or identity.take_name
+  if type(take_name) ~= "string" or take_name == "" or take_name:find("\0", 1, true)
+      or #take_name > MEDIA_TAKE_NAME_MAX_BYTES then
+    details.blocker = "take_name_invalid"
+    details.take_name = type(take_name) == "string" and READ_B_MEDIA.display_path(take_name, MEDIA_TAKE_NAME_MAX_BYTES) or JSON_NULL
+    return READ_B_MEDIA.handler_error("VERIFY_FAILED", "Media source basename could not be used as a bounded Take name.", details, false)
+  end
+  local ok_name_set, name_set_result = call_reaper("GetSetMediaItemTakeInfo_String", take, "P_NAME", take_name, true)
+  local name_set_accepted = name_set_result == nil or name_set_result == true
+  local ok_name_read, _, actual_name = call_reaper("GetSetMediaItemTakeInfo_String", take, "P_NAME", "", false)
+  actual_name = first_string(actual_name)
+  if not ok_name_set or not name_set_accepted or not ok_name_read or actual_name ~= take_name then
+    details.blocker = "take_name_readback_failed"
+    details.requested_take_name = take_name
+    details.actual_take_name = actual_name or JSON_NULL
+    return READ_B_MEDIA.handler_error("VERIFY_FAILED", "Media Take name write/readback did not match the source basename.", details, false)
+  end
+  identity.take_name = actual_name
+
+  if options.update_item ~= false then
+    local item = options.item
+    if not item then
+      local ok_item, resolved_item = call_reaper("GetMediaItemTake_Item", take)
+      item = ok_item and resolved_item or nil
+    end
+    local refreshed, refresh_reason = READ_B_MEDIA.refresh_item(item, options.refresh_arrange)
+    if not refreshed then
+      details.blocker = refresh_reason or "item_refresh_failed"
+      return READ_B_MEDIA.handler_error("COMMAND_FAILED", "Attached media Take could not be refreshed in the project.", details, false)
+    end
+  end
+  identity.take = take
+  identity.source_attached = true
+  return identity
+end
+
 function READ_B_MEDIA.metadata_keys_for_source(source, include_metadata_keys)
   local keys = json_array({})
   if include_metadata_keys ~= true then
@@ -506,6 +655,11 @@ function READ_B_MEDIA.mutation_success_summary_prototype(request, path_value, op
     undo_evidence = "required",
     artifacts_allowed = false,
     truncated = false,
+    -- These fields are returned by native source attach/readback. Keep the
+    -- budget prototype wider than any finite JSON number and bounded Take name.
+    source_type = string.rep("W", 80),
+    source_length_seconds = string.rep("9", MEDIA_SOURCE_LENGTH_MAX_DIGITS),
+    take_name = string.rep("W", MEDIA_TAKE_NAME_MAX_BYTES),
   }
   if capability == "media.relink_take_source" then
     summary.take_ref = "take:guid:" .. max_guid

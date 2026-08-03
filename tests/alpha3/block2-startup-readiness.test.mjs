@@ -105,7 +105,7 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
     }
   });
 
-  it("requires one fixed package-local launcher and keeps it after project and extra arguments", () => {
+  it("keeps a fixed package-local manual recovery Action without injecting it into REAPER argv", () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "openreaper-start-launcher-"));
     const binRoot = path.join(root, "current", "bin");
     const startPath = path.join(binRoot, "openreaper-start");
@@ -145,15 +145,15 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
 
       const source = readFileSync(startPath, "utf8");
       assert.doesNotMatch(source, /reaper_args\+=\("\$\{BRIDGE_SCRIPT\}"\)/u);
-      assert.match(source, /export OPENREAPER_EXPECTED_LAUNCHER_PATH="\$\{BRIDGE_LAUNCHER_SCRIPT\}"/u);
-      assert.match(source, /OPENREAPER_EXPECTED_LAUNCHER_PATH\) print -rn -- "\$\{BRIDGE_LAUNCHER_SCRIPT\}"/u);
-      assert.equal(source.match(/OPENREAPER_EXPECTED_LAUNCHER_PATH/gu)?.length >= 4, true);
+      assert.match(source, /BRIDGE_LAUNCHER_SCRIPT=/u);
+      assert.match(source, /trusted Bridge launcher must be a regular non-symlink package file/u);
+      assert.doesNotMatch(source, /OPENREAPER_EXPECTED_LAUNCHER_PATH/u);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  it("lets only the expected command-line launcher enter the Bridge loop", () => {
+  it("keeps the manual recovery Action bounded when an explicit launcher context is supplied", () => {
     const source = readFileSync(BRIDGE_LAUNCHER, "utf8");
     const expectedIndex = source.indexOf('os.getenv("OPENREAPER_EXPECTED_LAUNCHER_PATH")');
     const contextIndex = source.indexOf("reaper.get_action_context()", expectedIndex);
@@ -277,10 +277,10 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
     assert.doesNotMatch(source, /OPENREAPER_DOCTOR_READ_PROBE_TIMEOUT_MS=3000/u);
   });
 
-  it("does not expose the retired conditional-hook or manual bridge-script startup guidance", () => {
+  it("exposes the current conditional-hook startup guidance and manual recovery fallback", () => {
     const source = readFileSync(STARTUP_ASSISTANT, "utf8");
-    assert.match(source, /requires_conditional_reaper_startup_hook: false/u);
-    assert.match(source, /uses_trusted_package_command_line_reascript: true/u);
+    assert.match(source, /requires_conditional_reaper_startup_hook: true/u);
+    assert.match(source, /uses_trusted_package_command_line_reascript: false/u);
     assert.doesNotMatch(source, /Run the bundled OpenReaper script in REAPER/u);
     assert.doesNotMatch(source, /--install-startup-hook/u);
     assert.match(source, /manual recovery fallback/u);

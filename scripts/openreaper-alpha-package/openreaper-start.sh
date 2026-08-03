@@ -116,6 +116,8 @@ ARTIFACT_ROOT=""
 PROJECT_INDEX_STATE_ROOT=""
 BRIDGE_OWNER=""
 BRIDGE_GENERATION=""
+BRIDGE_GENERATION_REQUESTED=""
+BRIDGE_GENERATION_EXPLICIT=false
 START_WAIT_SECONDS="${OPENREAPER_START_WAIT_SECONDS:-20}"
 STARTUP_BUDGET_MS="${OPENREAPER_STARTUP_BUDGET_MS:-28500}"
 STARTUP_BUDGET_MAX_MS=28500
@@ -156,7 +158,6 @@ LAUNCHSERVICES_ENV_KEYS=(
   OPENREAPER_SESSION_ROOT
   OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR
   OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH
-  OPENREAPER_EXPECTED_LAUNCHER_PATH
   OPENREAPER_ARTIFACT_ROOT
   OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT
   OPENREAPER_LIVE_SMOKE_RENDER_ROOT
@@ -179,7 +180,6 @@ for stale_openreaper_env in \
   OPENREAPER_SESSION_ROOT \
   OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR \
   OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH \
-  OPENREAPER_EXPECTED_LAUNCHER_PATH \
   OPENREAPER_ARTIFACT_ROOT \
   OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT \
   OPENREAPER_LIVE_SMOKE_RENDER_ROOT \
@@ -294,7 +294,8 @@ while [[ $# -gt 0 ]]; do
       ;;
     --bridge-generation|--generation)
       require_option_value "$1" "$#" "${2-}"
-      BRIDGE_GENERATION="$2"
+      BRIDGE_GENERATION_REQUESTED="$2"
+      BRIDGE_GENERATION_EXPLICIT=true
       shift 2
       ;;
     --startup-dialog-consent=*)
@@ -600,6 +601,7 @@ if [[ -z "${ARTIFACT_ROOT}" ]]; then
 fi
 
 PROJECT_INDEX_STATE_ROOT="${SESSION_ROOT}/project-index"
+BRIDGE_GENERATION_RECORD="${SESSION_ROOT}/bridge-generation-v1.json"
 
 select_and_prepare_render_root() {
   local selection_mode="installed"
@@ -951,10 +953,6 @@ if [[ -z "${BRIDGE_OWNER}" ]]; then
   BRIDGE_OWNER="openreaper-alpha"
 fi
 
-if [[ -z "${BRIDGE_GENERATION}" ]]; then
-  BRIDGE_GENERATION="1"
-fi
-
 LOG_DIR="${SESSION_ROOT}/logs"
 START_LOG="${LOG_DIR}/openreaper-start-$(date -u +"%Y%m%dT%H%M%SZ").log"
 PID_FILE="${SESSION_ROOT}/reaper.pid"
@@ -1009,7 +1007,6 @@ fi
 
 export OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR="${TRANSPORT_DIR}"
 export OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH="${BRIDGE_SCRIPT}"
-export OPENREAPER_EXPECTED_LAUNCHER_PATH="${BRIDGE_LAUNCHER_SCRIPT}"
 export OPENREAPER_ARTIFACT_ROOT="${ARTIFACT_ROOT}"
 export OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT="${ARTIFACT_ROOT}"
 export OPENREAPER_LIVE_SMOKE_RENDER_ROOT="${RENDER_ROOT}"
@@ -1107,9 +1104,6 @@ launch_reaper() {
     reaper_args+=("${PROJECT_PATH}")
   fi
   reaper_args+=("${ARGS[@]}")
-  # REAPER stops a deferred command-line ReaScript when it subsequently loads
-  # a project. Keep the fixed package launcher last so its Bridge loop survives.
-  reaper_args+=("${BRIDGE_LAUNCHER_SCRIPT}")
 
   local reaper_pid
   local before_pids="${SESSION_ROOT}/reaper-before.pids"
@@ -1232,10 +1226,10 @@ reaper_pids() {
 }
 
 startup_launcher_argument_pids() {
-  local escaped_launcher
-  escaped_launcher="$(print -rn -- "${BRIDGE_LAUNCHER_SCRIPT}" | command sed 's/[][(){}.^$*+?|\\]/\\&/g')"
-  startup_run_bounded_external "${STARTUP_PROCESS_QUERY_TIMEOUT_MS}" \
-    /usr/bin/pgrep -f "(^|[[:space:]])${escaped_launcher}([[:space:]]|$)" 2>/dev/null | sort -n || true
+  # The conditional Scripts/__startup.lua hook is the trusted startup path.
+  # The LaunchServices/direct handoff already gives us the exact child PID;
+  # do not require a command-line ReaScript argument that REAPER may defer.
+  reaper_pids
 }
 
 startup_launch_candidate_pids() {
@@ -1321,7 +1315,7 @@ capture_startup_reaper_identity() {
   if ! reaper_pids | command grep -Fxq -- "${candidate_pid}"; then
     echo "[OpenReaper] startup-identity-stage=reaper_command_not_matched" >&2
   elif ! startup_launcher_argument_pids | command grep -Fxq -- "${candidate_pid}"; then
-    echo "[OpenReaper] startup-identity-stage=launcher_argument_not_matched" >&2
+    echo "[OpenReaper] startup-identity-stage=reaper_process_not_matched" >&2
   else
     echo "[OpenReaper] startup-identity-stage=executable_or_fingerprint_not_matched" >&2
   fi
@@ -1332,7 +1326,6 @@ launchservices_env_value() {
   case "$1" in
     OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR) print -rn -- "${TRANSPORT_DIR}" ;;
     OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH) print -rn -- "${BRIDGE_SCRIPT}" ;;
-    OPENREAPER_EXPECTED_LAUNCHER_PATH) print -rn -- "${BRIDGE_LAUNCHER_SCRIPT}" ;;
     OPENREAPER_ARTIFACT_ROOT) print -rn -- "${ARTIFACT_ROOT}" ;;
     OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT) print -rn -- "${ARTIFACT_ROOT}" ;;
     OPENREAPER_LIVE_SMOKE_RENDER_ROOT) print -rn -- "${RENDER_ROOT}" ;;
@@ -2093,6 +2086,162 @@ try {
 NODE
 }
 
+resolve_bridge_generation() {
+  local mode="$1"
+  local requested="${2-}"
+  local resolved
+  if ! resolved="$(node --input-type=module - \
+      "${BRIDGE_GENERATION_RECORD}" \
+      "${TRANSPORT_DIR}/openreaper-bridge-liveness-v1.json" \
+      "${BRIDGE_OWNER}" \
+      "${mode}" \
+      "${requested}" <<'NODE'
+import { constants as fsConstants } from "node:fs";
+import { lstat, open, readFile, rename, unlink } from "node:fs/promises";
+import path from "node:path";
+import { randomBytes } from "node:crypto";
+
+const [recordPath, heartbeatPath, owner, mode, requestedText] = process.argv.slice(2);
+const CONTRACT = "openreaper.bridge_generation.v1";
+const MAX_BYTES = 2048;
+
+function fail(message) {
+  process.stderr.write(`[OpenReaper] ${message}\n`);
+  process.exit(2);
+}
+
+function validGeneration(value) {
+  return Number.isSafeInteger(value) && value >= 1;
+}
+
+async function safeLstat(filePath) {
+  try {
+    return await lstat(filePath);
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+async function readJson(filePath, label) {
+  const entry = await safeLstat(filePath);
+  if (!entry) return null;
+  if (entry.isSymbolicLink() || !entry.isFile() || entry.size > MAX_BYTES) {
+    throw new Error(`${label} must be a bounded regular non-symlink file`);
+  }
+  const handle = await open(filePath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+  try {
+    const opened = await handle.stat();
+    if (!opened.isFile() || opened.isSymbolicLink?.() || opened.size > MAX_BYTES) {
+      throw new Error(`${label} changed while opening`);
+    }
+    const raw = await handle.readFile("utf8");
+    if (raw.length > MAX_BYTES) throw new Error(`${label} exceeds ${MAX_BYTES} bytes`);
+    return JSON.parse(raw);
+  } finally {
+    await handle.close();
+  }
+}
+
+async function readRecord() {
+  const value = await readJson(recordPath, "generation record");
+  if (value === null) return null;
+  if (value.contract !== CONTRACT || !validGeneration(value.generation)) {
+    throw new Error("generation record has an invalid contract or generation");
+  }
+  return value.generation;
+}
+
+async function readHeartbeat() {
+  const value = await readJson(heartbeatPath, "bridge heartbeat");
+  if (value === null) return null;
+  if (
+    value.contract !== "openreaper.bridge_liveness.v1" ||
+    value.active_owner !== owner ||
+    !validGeneration(value.active_generation)
+  ) return null;
+  return value.active_generation;
+}
+
+async function persist(generation) {
+  const parent = path.dirname(recordPath);
+  const parentEntry = await safeLstat(parent);
+  if (!parentEntry || parentEntry.isSymbolicLink() || !parentEntry.isDirectory()) {
+    throw new Error("generation record parent must be a real directory");
+  }
+  const existing = await safeLstat(recordPath);
+  if (existing && (existing.isSymbolicLink() || !existing.isFile())) {
+    throw new Error("generation record destination is not a regular file");
+  }
+  const temporary = `${recordPath}.tmp.${process.pid}.${randomBytes(8).toString("hex")}`;
+  let handle = null;
+  try {
+    handle = await open(
+      temporary,
+      fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | (fsConstants.O_NOFOLLOW ?? 0),
+      0o600,
+    );
+    await handle.writeFile(JSON.stringify({ contract: CONTRACT, generation }) + "\n", "utf8");
+    await handle.sync();
+    await handle.close();
+    handle = null;
+    await rename(temporary, recordPath);
+  } finally {
+    if (handle) await handle.close().catch(() => {});
+    await unlink(temporary).catch(() => {});
+  }
+}
+
+try {
+  if (mode === "current" && requestedText !== "") {
+    if (!/^[1-9][0-9]*$/u.test(requestedText)) throw new Error("--bridge-generation must be a positive safe integer");
+  }
+  if (mode === "adopt" && !/^[1-9][0-9]*$/u.test(requestedText)) {
+    throw new Error("--bridge-generation must be a positive safe integer");
+  }
+  const requested = requestedText === "" ? null : Number(requestedText);
+  if (requested !== null && !validGeneration(requested)) throw new Error("--bridge-generation exceeds the safe integer limit");
+  const recorded = await readRecord();
+  const heartbeat = await readHeartbeat();
+  const current = recorded ?? heartbeat ?? null;
+  let resolved;
+  if (mode === "current") {
+    if (current === null) throw new Error("running session has no recoverable bridge generation");
+    if (requested !== null && current !== requested) {
+      throw new Error(`requested generation ${requested} does not match the running session generation ${current}`);
+    }
+    resolved = current;
+    if (recorded === null) await persist(resolved);
+  } else if (mode === "adopt") {
+    if (current !== null && requested < current) {
+      throw new Error(`requested generation ${requested} would move backwards from persisted generation ${current}`);
+    }
+    resolved = requested;
+    await persist(resolved);
+  } else if (mode === "rotate") {
+    const base = current ?? 0;
+    if (!validGeneration(base + 1)) throw new Error("bridge generation exhausted safe integer range");
+    resolved = base + 1;
+    await persist(resolved);
+  } else {
+    throw new Error(`unknown bridge generation mode: ${mode}`);
+  }
+  process.stdout.write(String(resolved));
+} catch (error) {
+  fail(error?.message ?? String(error));
+}
+NODE
+    )"; then
+    return 1
+  fi
+  if [[ ! "${resolved}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "[OpenReaper] generation resolver returned an invalid value." >&2
+    return 1
+  fi
+  BRIDGE_GENERATION="${resolved}"
+  export OPENREAPER_LIVE_BRIDGE_GENERATION="${BRIDGE_GENERATION}"
+}
+
 run_startup_dialog_assist() {
   if [[ "$(uname -s)" != "Darwin" || ! -x "/usr/bin/osascript" ]]; then
     echo "unavailable"
@@ -2409,6 +2558,15 @@ trap 'exit 143' TERM
 
 if existing_reaper_pid="$(verified_existing_reaper_pid)"; then
   echo "[OpenReaper] existing-session=reaper_pid=${existing_reaper_pid};identity=verified"
+  if [[ "${BRIDGE_GENERATION_EXPLICIT}" == "true" ]]; then
+    if ! resolve_bridge_generation current "${BRIDGE_GENERATION_REQUESTED}"; then
+      echo "[OpenReaper] existing session generation could not be safely matched; refusing recovery." >&2
+      exit 1
+    fi
+  elif ! resolve_bridge_generation current; then
+    echo "[OpenReaper] existing session generation could not be recovered; refusing recovery." >&2
+    exit 1
+  fi
   if [[ "${RECOVER_EXISTING}" != "true" ]]; then
     echo "[OpenReaper] startup-status=existing_session"
     echo "[OpenReaper] recovery=If its Bridge is already running, use ${0} --recover-existing with the same session root to verify it. If the Bridge stopped, run the registered Bridge Action in that REAPER; no duplicate REAPER will be started." >&2
@@ -2422,6 +2580,15 @@ else
   existing_reaper_status=$?
   if (( existing_reaper_status == 2 )); then
     echo "[OpenReaper] existing session could not be safely verified; refusing to launch another REAPER." >&2
+    exit 1
+  fi
+  if [[ "${BRIDGE_GENERATION_EXPLICIT}" == "true" ]]; then
+    if ! resolve_bridge_generation adopt "${BRIDGE_GENERATION_REQUESTED}"; then
+      echo "[OpenReaper] explicit generation could not be persisted safely; refusing launch." >&2
+      exit 1
+    fi
+  elif ! resolve_bridge_generation rotate; then
+    echo "[OpenReaper] launch generation could not be rotated safely; refusing launch." >&2
     exit 1
   fi
   launch_reaper

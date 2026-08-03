@@ -29,10 +29,12 @@ local function read_take_source(request)
     filename = path
   end
   local length, _ = READ_B_MEDIA.source_length(source)
+  local ok_take_name, _, take_name = call_reaper("GetSetMediaItemTakeInfo_String", take, "P_NAME", "", false)
   local summary = {
     take_ref = READ_B_MEDIA.take_ref_string(take),
     file_ref = file_ref or JSON_NULL,
     source_type = READ_B_MEDIA.source_type(source),
+    take_name = ok_take_name and type(take_name) == "string" and take_name or JSON_NULL,
     filename = filename,
     length_seconds = length,
     channel_count = READ_B_MEDIA.source_channels(source),

@@ -731,19 +731,21 @@ local function e4_item_clone_active_take_footprint(footprint, target_item, sourc
     local _, failure = e4_item_handler_error("COMMAND_FAILED", "E4 copy_item_to_track could not create a target take.", {}, false)
     return nil, false, destroy_unowned_source(created_source, failure)
   end
-  local ok_source_set, source_set_accepted = call_reaper("SetMediaItemTake_Source", target_take, created_source)
-  local ok_assigned_source, assigned_source = call_reaper("GetMediaItemTake_Source", target_take)
-  local source_attached = ok_assigned_source and assigned_source == created_source
-  local source_may_be_attached = source_set_accepted == true or source_attached or not ok_assigned_source
-  local setter_accepted = source_set_accepted == nil or source_set_accepted == true
-  if not ok_source_set or not setter_accepted or not source_attached then
-    local _, failure = e4_item_handler_error("COMMAND_FAILED", "E4 copy_item_to_track could not verify the assigned target take source.", { blocker = "target_source_set_failed" }, false)
-    if source_may_be_attached then
+  local attachment, attachment_failure = READ_B_MEDIA.attach_take_source(target_take, created_source, {
+    item = target_item,
+    allow_zero_length = true,
+    update_item = false,
+    refresh_arrange = false,
+  })
+  if not attachment then
+    local details = attachment_failure and attachment_failure.details or {}
+    if details.source_attached == true or details.source_ownership_unknown == true then
       if source_entry then source_entry.attached = true end
-      return nil, true, failure
+      return nil, true, attachment_failure
     end
-    return nil, true, destroy_unowned_source(created_source, failure)
+    return nil, true, destroy_unowned_source(created_source, attachment_failure)
   end
+  if source_entry then source_entry.attached = true end
   local function set_take_value(key, value)
     local ok, accepted = call_reaper("SetMediaItemTakeInfo_Value", target_take, key, value)
     return ok and accepted == true
@@ -821,9 +823,10 @@ local function copy_item_to_track_prepared(request, source_snapshot, target_trac
     record_native_phase()
     return fail_after_mutation(failure)
   end
-  local ok_update = call_reaper("UpdateItemInProject", new_item)
-  if not ok_update then
+  local refreshed, refresh_reason = READ_B_MEDIA.refresh_item(new_item, true)
+  if not refreshed then
     local _, failure = e4_item_handler_error("COMMAND_FAILED", "E4 copy_item_to_track could not update the target item.", { blocker = "target_item_update_failed" }, false)
+    failure.details.blocker = refresh_reason or failure.details.blocker
     record_native_phase()
     return fail_after_mutation(failure)
   end

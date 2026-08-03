@@ -118,6 +118,7 @@ describe("Wave 2A media template descriptors", () => {
 
     assert.deepEqual(Object.keys(probe.inputSchema.properties), ["path", "include_metadata_keys"]);
     assert.deepEqual(readTakeSource.refs.input.map((entry) => entry.kind), ["take"]);
+    assert.equal(readTakeSource.outputSchema.properties.take_name.type, "string");
     assert.deepEqual(importFile.refs.input.map((entry) => entry.kind), ["file", "track"]);
     assert.deepEqual(importFile.refs.output.map((entry) => entry.kind), ["item", "file"]);
     assert.equal(importFile.summary.includes("existing track"), true);

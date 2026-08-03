@@ -32,7 +32,7 @@ export const OPENREAPER_AGENT_STARTUP_GUIDANCE_SUMMARY = deepFreeze({
     only_openreaper_startup_supported: true,
     startup_lifetime_action: "openreaper-start launches REAPER with the OpenReaper bridge environment and returns only after a matching heartbeat and bounded public read probe pass.",
     startup_dialog_assist: "On first use, ask the user whether exact safe startup-window assistance is allowed once, always, or should remain manual. Unknown and decision-bearing dialogs always fail closed.",
-    bridge_start_action: `openreaper-start passes a fixed trusted package-local ReaScript to REAPER after the project and extra arguments. The REAPER action "${OPENREAPER_BRIDGE_ACTION_NAME}" is a manual recovery fallback.`,
+    bridge_start_action: `openreaper-start passes the project and extra arguments to REAPER; the installed conditional Scripts/__startup.lua hook starts the Bridge only for an OpenReaper launch. The REAPER action "${OPENREAPER_BRIDGE_ACTION_NAME}" is a manual recovery fallback.`,
     connection_verification: "openreaper-start performs call_template(template.transport.read_state) before reporting startup-status=ready.",
   },
   startup_lifetime: {
@@ -101,7 +101,7 @@ export function createOpenReaperAgentStartupGuidance(input = {}) {
       {
         id: "start_reaper_for_live_mcp",
         when: "The user asks for live REAPER work and no current OpenReaper session is connected.",
-        agent_action: "Run the OpenReaper startup helper. It opens REAPER with the fixed trusted package launcher last and returns only after a matching heartbeat and public read probe pass.",
+        agent_action: "Run the OpenReaper startup helper. It opens REAPER with the OpenReaper launch environment; the installed conditional startup hook starts the Bridge and the helper returns only after a matching heartbeat and public read probe pass.",
         command: currentPackageStart ?? OPENREAPER_INSTALLED_START_COMMAND,
       },
       {

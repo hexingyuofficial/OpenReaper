@@ -165,6 +165,31 @@ describe("Alpha3.3 media.place_assets registered Macro", () => {
     assert.equal(fixture.items[0].length_seconds, 1);
     assert.equal(fixture.items[1].length_seconds, 1);
     assert.deepEqual(index.scopes, ["tracks", "items", "takes", "media"]);
+    assert.equal(response.result.changes.every((row) => row.live_readback.take_name), true);
+  });
+
+  it("rejects explicit same-Track overlaps against existing Items before media mutation", async () => {
+    const fixture = mediaFixture({ files: { "/a.wav": 1, "/b.wav": 1 }, tracks: { [TRACK_A]: [{ item_ref: "item:guid:{EXISTING}", position_seconds: 0, length_seconds: 1 }] } });
+    const response = await executeAlpha3_3MediaPlaceAssetsMacro({
+      request: request({ assets: [{ id: "a", path: "/a.wav", track_ref: TRACK_A, position_seconds: 0.5 }], placement: { mode: "explicit" }, track_policy: "explicit_per_asset", dry_run: false }),
+      executeAtomic: fixture.execute,
+    });
+    assert.equal(response.ok, false);
+    assert.equal(response.error.code, "MEDIA_TRACK_OVERLAP");
+    assert.equal(fixture.items.length, 0);
+    assert.equal(fixture.calls.some((call) => call.id.startsWith("template.media.import_") || call.id === "template.tracks.create_track"), false);
+  });
+
+  it("rejects planned same-Track overlaps before creating a shared Track", async () => {
+    const fixture = mediaFixture({ files: { "/a.wav": 1, "/b.wav": 1 } });
+    const response = await executeAlpha3_3MediaPlaceAssetsMacro({
+      request: request({ assets: [{ id: "a", path: "/a.wav", position_seconds: 0 }, { id: "b", path: "/b.wav", position_seconds: 0.5 }], placement: { mode: "explicit" }, track_policy: "one_shared_new_track", new_track: { name: "Overlap" }, dry_run: false }),
+      executeAtomic: fixture.execute,
+    });
+    assert.equal(response.ok, false);
+    assert.equal(response.error.code, "MEDIA_TRACK_OVERLAP");
+    assert.equal(Object.keys(fixture.tracks).length, 0);
+    assert.equal(fixture.calls.some((call) => call.id === "template.tracks.create_track" || call.id.startsWith("template.media.import_")), false);
   });
 
   it("supports stack, columns, shared-new, and per-asset-new deterministic layouts", async () => {
@@ -393,7 +418,7 @@ describe("Alpha3.3 media.place_assets registered Macro", () => {
     assert.equal(response.error.code, "MEDIA_RESPONSE_BUDGET_EXCEEDED");
     assert.equal(response.result.data.available_bytes, 2_048);
     assert.equal(response.budget.actual_bytes <= 2_048, true);
-    assert.deepEqual(bridge.capabilities, ["media.file.probe", "track.resolve_ref"]);
+    assert.deepEqual(bridge.capabilities, ["media.file.probe", "track.resolve_ref", "items.list_items_on_track"]);
     assert.equal(bridge.capabilities.some((capability) => capability.includes("import") || capability.includes("create")), false);
     assert.deepEqual(validateMacroExecutionEnvelope(response), { valid: true, errors: [] });
   });
@@ -465,6 +490,11 @@ class MediaBudgetRuntimeBridge extends RuntimeFoundationBridge {
         refs: [createObjectRef("track", { scheme: "guid", value: "{MEDIA-TRACK-A}" }, { ref: TRACK_A })],
         readback: { track_ref: TRACK_A, index: 0, name: "Media" },
       };
+    } else if (capability === "items.list_items_on_track") {
+      request.params.emits = {
+        refs: [createObjectRef("track", { scheme: "guid", value: "{MEDIA-TRACK-A}" }, { ref: TRACK_A })],
+        readback: { track_ref: TRACK_A, items: [], item_count: 0, truncated: false },
+      };
     } else {
       throw new Error(`Unexpected public budget dispatch: ${capability}`);
     }
@@ -528,7 +558,7 @@ function mediaFixture(seed = {}, { mismatchFirstReadback = false, failTrackCreat
             : fullLength * (batchRow.end_percent - batchRow.start_percent);
           const itemRef = `item:guid:{MEDIA-ITEM-${++itemSerial}}`;
           const takeRef = `take:guid:{MEDIA-TAKE-${itemSerial}}`;
-          const row = { id: batchRow.id, item_ref: itemRef, take_ref: takeRef, track_ref: trackRef, position_seconds: mismatchPending ? batchRow.position_seconds + 1 : batchRow.position_seconds, length_seconds: length, source_length_seconds: fullLength, source_file_ref: `file:path:${path}`, source_type: "audio" };
+          const row = { id: batchRow.id, item_ref: itemRef, take_ref: takeRef, take_name: path.slice(path.lastIndexOf("/") + 1), track_ref: trackRef, position_seconds: mismatchPending ? batchRow.position_seconds + 1 : batchRow.position_seconds, length_seconds: length, source_length_seconds: fullLength, source_file_ref: `file:path:${path}`, source_type: "audio" };
           mismatchPending = false;
           items.push(row); tracks[trackRef].push(row); takes[takeRef] = row.source_file_ref;
           rows.push(row);
@@ -545,7 +575,7 @@ function mediaFixture(seed = {}, { mismatchFirstReadback = false, failTrackCreat
         const length = call.id.endsWith("section_to_track") ? fullLength * (call.input.end_percent - call.input.start_percent) : fullLength;
         const itemRef = `item:guid:{MEDIA-ITEM-${++itemSerial}}`;
         const takeRef = `take:guid:{MEDIA-TAKE-${itemSerial}}`;
-        const row = { item_ref: itemRef, take_ref: takeRef, track_ref: trackRef, position_seconds: call.input.position_seconds, length_seconds: length, file_ref: `file:path:${path}` };
+        const row = { item_ref: itemRef, take_ref: takeRef, take_name: path.slice(path.lastIndexOf("/") + 1), track_ref: trackRef, position_seconds: call.input.position_seconds, length_seconds: length, file_ref: `file:path:${path}` };
         items.push(row); tracks[trackRef].push(row); takes[takeRef] = row.file_ref;
         return ok(call.id, { imported_item_refs: [itemRef], item_count: 1, source_file_ref: row.file_ref, track_ref: trackRef, position_seconds: row.position_seconds }, [objectRef("item", itemRef), fileRef(path)]);
       }
@@ -560,7 +590,7 @@ function mediaFixture(seed = {}, { mismatchFirstReadback = false, failTrackCreat
       if (call.id === "template.media.read_take_source") {
         const ref = call.refs.take_ref.ref;
         const filename = takes[ref].slice("file:path:".length);
-        return ok(call.id, { take_ref: ref, file_ref: takes[ref], filename, source_type: "audio" }, [objectRef("take", ref), fileRef(filename)]);
+        return ok(call.id, { take_ref: ref, file_ref: takes[ref], take_name: filename, filename, source_type: "audio" }, [objectRef("take", ref), fileRef(filename)]);
       }
       if (call.id === "template.media.relink_take_source") {
         const takeRef = call.refs.take_ref.ref;

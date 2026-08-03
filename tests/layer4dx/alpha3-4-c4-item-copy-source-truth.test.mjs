@@ -17,6 +17,27 @@ function first_number(value) return type(value) == "number" and value or nil end
 function first_string(value) return type(value) == "string" and value or nil end
 READ_B_MEDIA = {
   canonical_path = function(path) if type(path) ~= "string" or path == "" or path:find("\\0", 1, true) then return nil end if path:sub(1, 1) == "/" or path:match("^[A-Za-z]:[\\\\/]") or path:match("^\\\\\\\\") then return path end return nil end,
+  attach_take_source = function(take, source, options)
+    local ok_set, setter_result = call_reaper("SetMediaItemTake_Source", take, source)
+    local ok_read, assigned = call_reaper("GetMediaItemTake_Source", take)
+    local attached = ok_read and assigned == source
+    if not ok_set or (setter_result ~= nil and setter_result ~= true) or not attached then
+      return nil, { code = "COMMAND_FAILED", details = { source_attached = attached, source_ownership_unknown = not ok_read, blocker = "native_source_attach_failed" } }
+    end
+    local ok_path, path = call_reaper("GetMediaSourceFileName", assigned, "")
+    local ok_type, source_type = call_reaper("GetMediaSourceType", assigned, "")
+    local ok_length, length = call_reaper("GetMediaSourceLength", assigned)
+    if not ok_path or not ok_type or not ok_length then
+      return nil, { code = "VERIFY_FAILED", details = { source_attached = true, source_ownership_unknown = false, blocker = "source_readback_incomplete" } }
+    end
+    return { source = assigned, path = path, file_ref = "file:path:" .. path, source_type = source_type, source_length_seconds = length, take_name = path:match("([^/]+)$") }
+  end,
+  refresh_item = function(item, refresh_arrange)
+    local ok = call_reaper("UpdateItemInProject", item)
+    if not ok then return false, "item_update_failed" end
+    if refresh_arrange ~= false and not call_reaper("UpdateArrange") then return false, "arrange_refresh_failed" end
+    return true
+  end,
   inline_budget_allows_file_ref = function(request, path) local budget = request.budget or {}; local max = budget.max_inline_value_bytes or 65536; local bytes = #("file:path:" .. path); return bytes <= max, bytes, max end,
   complete_success_envelope_fits = function(request, summary, refs) local budget = request.budget or {}; local max = budget.max_response_bytes or 65536; local required = #summary.source_footprint.canonical_source_identity + 1024; return required <= max, required, { max_response_bytes = max } end,
 }
@@ -258,7 +279,14 @@ call_reaper = function(name, ...)
   if name == "CountMediaItems" then return true, 1 end
   if name == "GetMediaItem" then return true, source_item end
   if name == "GetSetMediaItemInfo_String" then return true, true, args[1].guid end
-  if name == "GetSetMediaItemTakeInfo_String" then return true, true, args[1].guid end
+  if name == "GetSetMediaItemTakeInfo_String" then
+    local take, key, value, set_new = args[1], args[2], args[3], args[4]
+    if key == "P_NAME" then
+      if set_new then take.name = value; return true, true end
+      return true, true, take.name or "source.wav"
+    end
+    return true, true, take.guid
+  end
   if name == "CountTracks" then return true, 2 end
   if name == "GetTrack" then return true, args[3] == 0 and source_track or target_track end
   if name == "GetTrackGUID" then return true, args[1].guid end
@@ -303,7 +331,7 @@ call_reaper = function(name, ...)
     return true, true
   end
   if name == "SetActiveTake" then return true end
-  if name == "UpdateItemInProject" then return true end
+  if name == "UpdateItemInProject" or name == "UpdateArrange" then return true end
   if name == "DeleteTrackMediaItem" then calls.delete = calls.delete + 1; return true, true end
   return false
 end
@@ -340,7 +368,14 @@ call_reaper = function(name, ...)
   if name == "GetMediaItem" then return true, source_item end
   if name == "BR_GetMediaItemGUID" then return false end
   if name == "GetSetMediaItemInfo_String" then return true, true, args[1].guid end
-  if name == "GetSetMediaItemTakeInfo_String" then return true, true, args[1].guid end
+  if name == "GetSetMediaItemTakeInfo_String" then
+    local take, key, value, set_new = args[1], args[2], args[3], args[4]
+    if key == "P_NAME" then
+      if set_new then take.name = value; return true, true end
+      return true, true, take.name or "source.wav"
+    end
+    return true, true, take.guid
+  end
   if name == "CountTracks" then return true, 1 end
   if name == "GetTrack" then return true, target_track end
   if name == "GetTrackGUID" then return true, args[1].guid end
@@ -395,7 +430,7 @@ call_reaper = function(name, ...)
     write_count = write_count + 1
     return true, true
   end
-  if name == "SetActiveTake" or name == "UpdateItemInProject" then return true end
+  if name == "SetActiveTake" or name == "UpdateItemInProject" or name == "UpdateArrange" then return true end
   if name == "DeleteTrackMediaItem" then return true, true end
   return false
 end
@@ -481,8 +516,10 @@ assert(summary == nil and failure.code == "BATCH_LIMIT_EXCEEDED" and failure.det
     assert.match(SOURCE, /unreadable_reasons = unreadable_reasons/);
     assert.match(SOURCE, /PCM_Source_CreateFromFile/);
     assert.match(SOURCE, /created_source_footprint_mismatch/);
-    assert.match(SOURCE, /SetMediaItemTake_Source[\s\S]*source_attached = ok_assigned_source and assigned_source == created_source/);
-    assert.match(SOURCE, /source_may_be_attached = source_set_accepted == true or source_attached or not ok_assigned_source/);
+    assert.match(SOURCE, /READ_B_MEDIA\.attach_take_source/);
+    assert.match(SOURCE, /source_attached == true/);
+    assert.match(SOURCE, /source_ownership_unknown == true/);
+    assert.match(SOURCE, /allow_zero_length = true/);
     assert.match(SOURCE, /partial_target_cleanup_failed/);
     assert.match(SOURCE, /READ_B_MEDIA\.canonical_path/);
     assert.match(SOURCE, /first_string\(source_type\) == "SECTION"/);

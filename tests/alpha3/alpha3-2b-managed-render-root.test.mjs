@@ -48,6 +48,54 @@ after(async () => {
 });
 
 describe("Alpha3.2-B2 managed render root", () => {
+  it("rotates and persists bridge generations without allowing an explicit rollback", async () => {
+    const fixture = await makeStartFixture("generation-rotation");
+
+    const first = await runFakeStartResult({
+      fixture,
+      label: "generation-first",
+      extraArgs: [],
+    });
+    assert.equal(first.result.code, 0, first.result.stderr || first.result.stdout);
+    assert.match(first.result.stdout, /bridge-heartbeat=ready owner=openreaper-alpha generation=1/u);
+    assert.deepEqual(JSON.parse(await readFile(path.join(fixture.installRoot, "session", "bridge-generation-v1.json"))), {
+      contract: "openreaper.bridge_generation.v1",
+      generation: 1,
+    });
+
+    const second = await runFakeStartResult({
+      fixture,
+      label: "generation-second",
+      extraArgs: [],
+    });
+    assert.equal(second.result.code, 0, second.result.stderr || second.result.stdout);
+    assert.match(second.result.stdout, /bridge-heartbeat=ready owner=openreaper-alpha generation=2/u);
+    assert.deepEqual(JSON.parse(await readFile(path.join(fixture.installRoot, "session", "bridge-generation-v1.json"))), {
+      contract: "openreaper.bridge_generation.v1",
+      generation: 2,
+    });
+
+    const adopted = await runFakeStartResult({
+      fixture,
+      label: "generation-adopted",
+      extraArgs: ["--bridge-generation", "4"],
+    });
+    assert.equal(adopted.result.code, 0, adopted.result.stderr || adopted.result.stdout);
+    assert.match(adopted.result.stdout, /bridge-heartbeat=ready owner=openreaper-alpha generation=4/u);
+
+    const rollback = await runFakeStartResult({
+      fixture,
+      label: "generation-rollback",
+      extraArgs: ["--bridge-generation", "3"],
+    });
+    assert.notEqual(rollback.result.code, 0);
+    assert.match(rollback.result.stderr, /would move backwards/u);
+    assert.deepEqual(JSON.parse(await readFile(path.join(fixture.installRoot, "session", "bridge-generation-v1.json"))), {
+      contract: "openreaper.bridge_generation.v1",
+      generation: 4,
+    });
+  });
+
   it("prints installer help without creating or replacing an install", async () => {
     const fixture = await makeInstallerFixture();
     const result = await runCaptured(process.execPath, [fixture.installerPath, "--help"], {
@@ -137,7 +185,7 @@ describe("Alpha3.2-B2 managed render root", () => {
     assert.equal(await readFile(path.join(recipeRoot, "revision.json"), "utf8"), "immutable-revision\n");
   });
 
-  it("uses one trusted package launcher while removing only legacy managed blocks byte-for-byte", async () => {
+  it("installs a conditional startup hook, preserves user bytes, and keeps the manual Action fallback", async () => {
     const fixture = await makeInstallerFixture();
     const scriptsRoot = path.join(fixture.home, "Library", "Application Support", "REAPER", "Scripts");
     const hookPath = path.join(scriptsRoot, "__startup.eel");
@@ -189,25 +237,31 @@ describe("Alpha3.2-B2 managed render root", () => {
     assert.equal(first.code, 0, first.stderr || first.stdout);
     const firstReport = parseInstallerReport(first.stdout);
     const installed = await readFile(hookPath, "utf8");
+    const conditionalHook = await readFile(legacyLuaPath, "utf8");
     assert.equal(installed, expectedEel);
-    assert.equal(firstReport.startup_hook.path, path.join(fixture.installRoot, "bin", "openreaper-start-mcp-bridge.lua"));
-    assert.equal(firstReport.startup_hook.mode, "trusted_package_command_line_reascript");
-    assert.equal(firstReport.startup_hook.package_local, true);
-    assert.equal(firstReport.startup_hook.always_enabled, true);
+    assert.equal(firstReport.startup_hook.path, legacyLuaPath);
+    assert.equal(firstReport.startup_hook.mode, "conditional_openreaper_environment");
+    assert.equal(firstReport.startup_hook.package_local, false);
+    assert.equal(firstReport.startup_hook.always_enabled, false);
+    assert.equal(firstReport.startup_hook.fallback_path, path.join(fixture.installRoot, "bin", "openreaper-start-mcp-bridge.lua"));
+    assert.equal(firstReport.startup_hook.fallback_mode, "trusted_package_manual_action_reascript");
+    assert.equal(firstReport.startup_hook.fallback_installed, true);
     assert.equal(firstReport.startup_hook.installed, true);
-    assert.deepEqual(firstReport.startup_hook.legacy_cleanup_paths.sort(), [hookPath, legacyLuaPath].sort());
+    assert.deepEqual(firstReport.startup_hook.legacy_cleanup_paths, [hookPath]);
     assert.equal(await readFile(firstReport.startup_hook.legacy_backup_paths[0], "utf8"), original);
-    assert.equal(firstReport.startup_hook.migrated_legacy_lua_path, legacyLuaPath);
-    assert.equal(await readFile(firstReport.startup_hook.legacy_backup_path, "utf8"), legacyLua);
-    const migratedLua = await readFile(legacyLuaPath, "utf8");
-    assert.equal(migratedLua, expectedLua);
+    assert.equal(firstReport.startup_hook.migrated_legacy_lua_path, null);
+    assert.equal(firstReport.startup_hook.legacy_backup_path, null);
+    assert.equal(await readFile(firstReport.startup_hook.backup_path, "utf8"), legacyLua);
+    assert.match(conditionalHook, /OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH/);
+    assert.match(conditionalHook, /environment_missing/);
+    assert.match(conditionalHook, /reaper\.ShowConsoleMsg\('keep user Lua startup'\)/);
     const actionScript = await readFile(firstReport.bridge_action.script, "utf8");
-    const installedLauncher = await readFile(firstReport.startup_hook.path, "utf8");
+    const installedLauncher = await readFile(firstReport.startup_hook.fallback_path, "utf8");
     assert.equal(actionScript, installedLauncher);
     assert.match(actionScript, /pcall\(dofile, bridge\)/);
     assert.match(actionScript, /openreaper-startup-status-v1\.json/);
     assert.match(actionScript, /bridge_dofile_failed/);
-    assert.equal((await lstat(firstReport.startup_hook.path)).mode & 0o777, 0o444);
+    assert.equal((await lstat(firstReport.startup_hook.fallback_path)).mode & 0o777, 0o444);
     assert.equal((await lstat(firstReport.bridge_action.script)).mode & 0o777, 0o444);
     const installedKb = await readFile(kbPath, "utf8");
     assert.equal(installedKb.startsWith(originalKb), true);
@@ -219,7 +273,7 @@ describe("Alpha3.2-B2 managed render root", () => {
     assert.deepEqual(secondReport.startup_hook.legacy_backup_paths, []);
     assert.equal(secondReport.startup_hook.legacy_backup_path, null);
     assert.equal(await readFile(hookPath, "utf8"), installed);
-    assert.equal(await readFile(legacyLuaPath, "utf8"), migratedLua);
+    assert.equal(await readFile(legacyLuaPath, "utf8"), conditionalHook);
     assert.equal(await readFile(kbPath, "utf8"), installedKb);
 
     const uninstall = await runUninstallerWithStartupHook(fixture);
@@ -1066,7 +1120,6 @@ describe("Alpha3.2-B2 managed render root", () => {
       projectPath,
       "-cfgfile",
       configPath,
-      path.join(await realpath(fixture.installRoot), "bin", "openreaper-start-mcp-bridge.lua"),
     ]);
   });
 
@@ -1103,7 +1156,6 @@ describe("Alpha3.2-B2 managed render root", () => {
       projectPath,
       "-cfgfile",
       configPath,
-      path.join(await realpath(harness.installRoot), "bin", "openreaper-start-mcp-bridge.lua"),
     ]);
     await harness.assertLockRemoved();
   });
@@ -1815,8 +1867,7 @@ async function makeLaunchServicesHarness(label, { source = null, fakePidDelayMs 
   const keys = [
     "OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR",
     "OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH",
-    "OPENREAPER_EXPECTED_LAUNCHER_PATH",
-    "OPENREAPER_ARTIFACT_ROOT",
+      "OPENREAPER_ARTIFACT_ROOT",
     "OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT",
     RENDER_ENV,
     "OPENREAPER_LIVE_BRIDGE_OWNER",

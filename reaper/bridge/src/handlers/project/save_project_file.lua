@@ -5,6 +5,18 @@ local PROJECT_FILE_SAVE_AS_OPTIONS = 8
 local PROJECT_FILE_SAVE_SUCCESS_ENVELOPE_FIXED_MAX_BYTES = 16384
 local PROJECT_FILE_SAVE_JSON_ESCAPE_FACTOR = 6
 local PROJECT_FILE_SAVE_JSON_FIELD_OVERHEAD_BYTES = 96
+local PROJECT_FILE_SAVE_CONTINUATION_CONTRACT = "openreaper.bridge.internal_continuation.v1"
+local PROJECT_FILE_SAVE_MAX_STABILIZATION_ATTEMPTS = 3
+
+local function project_file_save_continue(phase, state, next_phase_may_mutate)
+  return {
+    contract = PROJECT_FILE_SAVE_CONTINUATION_CONTRACT,
+    phase = phase,
+    state = state or {},
+    mutations_may_have_happened = true,
+    next_phase_may_mutate = next_phase_may_mutate == true,
+  }
+end
 
 local function project_file_save_error(code, message, details, recoverable)
   return nil, {
@@ -275,12 +287,102 @@ local function project_file_save_as_structural_target(request)
   return target, request.params.overwrite
 end
 
-local function save_project_as(request)
+local function save_project_as(request, resume_continuation)
   if not is_json_array(request.refs) or #request.refs ~= 0 then
     return project_file_save_error("REF_INVALID", "save_project_as accepts only the canonical current project and no caller-supplied refs.", {
       expected = "empty_refs_for_project_current",
     })
   end
+
+  if resume_continuation then
+    if type(resume_continuation) ~= "table"
+        or resume_continuation.contract ~= PROJECT_FILE_SAVE_CONTINUATION_CONTRACT
+        or type(resume_continuation.phase) ~= "string"
+        or type(resume_continuation.state) ~= "table" then
+      return project_file_save_error("INTERNAL_ERROR", "save_project_as received malformed continuation state.", {
+        blocker = "malformed_internal_continuation",
+      }, false)
+    end
+    local state = resume_continuation.state
+    local target = state.target_path
+    local overwrite = state.overwrite
+    local phase = resume_continuation.phase
+    local after, after_error = project_file_save_current_project_state()
+    if not after then
+      return nil, after_error
+    end
+    if after.path ~= target then
+      return project_file_save_error("VERIFY_FAILED", "save_project_as continuation changed the exact project path unexpectedly.", {
+        blocker = "project_path_target_mismatch_after_stabilization",
+        expected_path = bounded_string(target, PROJECT_FILE_SAVE_PATH_MAX_BYTES),
+        after_path = bounded_string(after.path, PROJECT_FILE_SAVE_PATH_MAX_BYTES),
+        overwrite = overwrite,
+        phase = phase,
+      }, false)
+    end
+    local attempts = tonumber(state.stabilization_attempts) or 0
+    if phase == "save_as.wait_after_save" then
+      if after.dirty or after.raw_dirty_state ~= 0 then
+        return project_file_save_continue("save_as.stabilize", state, true)
+      end
+      return project_file_save_continue("save_as.verify_stable", state, false)
+    end
+    if phase == "save_as.stabilize" then
+      if not (after.dirty or after.raw_dirty_state ~= 0) then
+        return project_file_save_continue("save_as.verify_stable", state, false)
+      end
+      if attempts >= PROJECT_FILE_SAVE_MAX_STABILIZATION_ATTEMPTS then
+        return project_file_save_error("VERIFY_FAILED", "save_project_as stabilization exceeded its bounded retry count.", {
+          blocker = "project_dirty_after_save_as",
+          expected_path = bounded_string(target, PROJECT_FILE_SAVE_PATH_MAX_BYTES),
+          after_dirty = after.dirty,
+          after_raw_dirty_state = after.raw_dirty_state,
+          overwrite = overwrite,
+          stabilization_attempts = attempts,
+        }, false)
+      end
+      local stabilized, stabilize_error = project_file_save_call_void_api("Main_SaveProject", after.project, false)
+      if not stabilized then
+        return nil, stabilize_error
+      end
+      state.stabilization_attempts = attempts + 1
+      return project_file_save_continue("save_as.verify_stable", state, false)
+    end
+    if phase == "save_as.verify_stable" then
+      if after.dirty or after.raw_dirty_state ~= 0 then
+        if attempts >= PROJECT_FILE_SAVE_MAX_STABILIZATION_ATTEMPTS then
+          return project_file_save_error("VERIFY_FAILED", "save_project_as did not read back a clean raw-zero dirty state after bounded stabilization.", {
+            blocker = "project_dirty_after_save_as",
+            expected_path = bounded_string(target, PROJECT_FILE_SAVE_PATH_MAX_BYTES),
+            after_dirty = after.dirty,
+            after_raw_dirty_state = after.raw_dirty_state,
+            overwrite = overwrite,
+            stabilization_attempts = attempts,
+          }, false)
+        end
+        return project_file_save_continue("save_as.stabilize", state, true)
+      end
+      return project_file_save_summary(request, {
+        project_ref = "project:current",
+        before_path = state.before_path,
+        after_path = after.path,
+        before_dirty = state.before_dirty,
+        before_raw_dirty_state = state.before_raw_dirty_state,
+        after_dirty = after.dirty,
+        after_raw_dirty_state = after.raw_dirty_state,
+        target_path = target,
+        overwrite = overwrite,
+        path_matches_target = true,
+        stabilization_attempts = attempts,
+        summary = "Saved the current project as the exact validated .RPP target under explicit overwrite=true race authorization; delayed native state was stabilized and current-project identity remains canonical with dirty state clean/raw 0.",
+      }), nil, nil, nil, project_file_save_refs()
+    end
+    return project_file_save_error("INTERNAL_ERROR", "save_project_as received an unknown continuation phase.", {
+      blocker = "malformed_internal_continuation",
+      phase = phase,
+    }, false)
+  end
+
   local target, overwrite_or_error = project_file_save_as_structural_target(request)
   if not target then
     return nil, overwrite_or_error
@@ -311,26 +413,12 @@ local function save_project_as(request)
       overwrite = overwrite,
     }, false)
   end
-  if after.dirty or after.raw_dirty_state ~= 0 then
-    return project_file_save_error("VERIFY_FAILED", "save_project_as did not read back a clean raw-zero dirty state.", {
-      blocker = "project_dirty_after_save_as",
-      expected_path = bounded_string(target, PROJECT_FILE_SAVE_PATH_MAX_BYTES),
-      after_dirty = after.dirty,
-      after_raw_dirty_state = after.raw_dirty_state,
-      overwrite = overwrite,
-    }, false)
-  end
-  return project_file_save_summary(request, {
-    project_ref = "project:current",
+  return project_file_save_continue("save_as.wait_after_save", {
+    target_path = target,
     before_path = before.path,
-    after_path = after.path,
     before_dirty = before.dirty,
     before_raw_dirty_state = before.raw_dirty_state,
-    after_dirty = after.dirty,
-    after_raw_dirty_state = after.raw_dirty_state,
-    target_path = target,
     overwrite = overwrite,
-    path_matches_target = true,
-    summary = "Saved the current project as the exact validated .RPP target under explicit overwrite=true race authorization; current-project identity remains canonical and dirty state is clean/raw 0.",
-  }), nil, nil, nil, project_file_save_refs()
+    stabilization_attempts = 0,
+  }, false)
 end

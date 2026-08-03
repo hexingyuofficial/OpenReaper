@@ -167,6 +167,29 @@ assert(results["/results/next.json"] == true)
 `);
   });
 
+  it("indexes terminal results at startup without deleting their durable requests", () => {
+    runFileTransportLoopLua(String.raw`
+run_poll(0.11)
+for index = 1, 1143 do
+  local filename = string.format("history-%04d.json", index)
+  assert(file_exists_calls["/results/" .. filename] == nil, "startup-indexed result must not be reopened: " .. tostring(file_exists_calls["/results/" .. filename]))
+  assert(read_calls["/requests/" .. filename] == nil, "startup-indexed request must not be reopened")
+  assert(requests["/requests/" .. filename] ~= nil, "durable request must remain")
+end
+assert(dispatch_calls.next == 1)
+assert(results["/results/next.json"] == true)
+`, String.raw`
+for index = 1, 1143 do
+  local filename = string.format("history-%04d.json", index)
+  files[index] = filename
+  requests["/requests/" .. filename] = { id = string.gsub(filename, "%.json$", ""), params = {} }
+  results["/results/" .. filename] = true
+end
+files[1144] = "next.json"
+requests["/requests/next.json"] = { id = "next", params = {} }
+`);
+  });
+
   it("does not mark a request complete until its result is written successfully", () => {
     runFileTransportLoopLua(String.raw`
 files = { "retry.json" }
@@ -215,6 +238,23 @@ assert(string.find(writes["/results/orphan.json"], "orphaned_request_after_bridg
 assert(string.find(writes["/results/orphan.json"], '"recoverable":false', 1, true) ~= nil)
 `, String.raw`
 requests["/claims/orphan.json"] = { id = "orphan", params = {} }
+`);
+  });
+
+  it("rejects an old unclaimed generation before creating a claim or dispatching a handler", () => {
+    runFileTransportLoopLua(String.raw`
+files = { "stale.json" }
+requests["/requests/stale.json"] = {
+  id = "stale",
+  bridge = { expected_generation = 0 },
+  params = {},
+}
+run_poll(0.11)
+assert(dispatch_count == 0)
+assert(results["/results/stale.json"] == true)
+assert(string.find(writes["/results/stale.json"], "BRIDGE_GENERATION_MISMATCH", 1, true) ~= nil)
+assert(requests["/claims/stale.json"] == nil)
+assert(requests["/requests/stale.json"] ~= nil)
 `);
   });
 
@@ -763,6 +803,15 @@ reaper = {
       local names = {}
       for path in pairs(requests) do
         local name = string.match(path, "^/claims/(.+)$")
+        if name then names[#names + 1] = name end
+      end
+      table.sort(names)
+      return names[index + 1]
+    end
+    if directory == RESULTS_DIR then
+      local names = {}
+      for path in pairs(results) do
+        local name = string.match(path, "^/results/(.+)$")
         if name then names[#names + 1] = name end
       end
       table.sort(names)
@@ -2806,6 +2855,10 @@ end
 reaper.BR_GetMediaItemTakeGUID = function(take) return take and take.guid or nil end
 reaper.GetSetMediaItemTakeInfo_String = function(take, key, value, setNewValue)
   if key == "GUID" then return true, true, take and take.guid or "" end
+  if key == "P_NAME" then
+    if setNewValue then take.name = value; return true end
+    return true, take and take.name or ""
+  end
   return false
 end
 reaper.GetMediaItemTake_Source = function(take)
@@ -3041,6 +3094,7 @@ end
 reaper.PCM_Source_CreateFromFileEx = function() native_call("PCM_Source_CreateFromFileEx") end
 reaper.PCM_Source_Destroy = function() native_call("PCM_Source_Destroy") end
 reaper.GetMediaSourceType = function(source) return source.source_type end
+reaper.GetMediaSourceFileName = function(source) return source.path end
 reaper.GetMediaSourceLength = function(source) return source.length, false end
 reaper.GetMediaSourceNumChannels = function(source) return source.channels end
 reaper.AddMediaItemToTrack = function(track)
@@ -3060,6 +3114,14 @@ end
 reaper.SetMediaItemTake_Source = function(take, source)
   native_call("SetMediaItemTake_Source")
   take.source = source
+end
+reaper.GetMediaItemTake_Source = function(take) return take.source end
+reaper.GetSetMediaItemTakeInfo_String = function(take, key, value, set_new)
+  if key == "P_NAME" then
+    if set_new then take.name = value; return true end
+    return true, take.name or ""
+  end
+  return true, take.guid
 end
 reaper.SetMediaItemTakeInfo_Value = function() native_call("SetMediaItemTakeInfo_Value") end
 reaper.UpdateItemInProject = function() native_call("UpdateItemInProject") end
@@ -3372,7 +3434,8 @@ local function make_worst(budget_bytes)
   return r
 end
 
--- Converge, then always re-dispatch at the converged bound (no early exit without execution).
+-- Converge the conservative preflight upper bound, then re-dispatch at that
+-- bound. The actual terminal may be smaller than the upper bound.
 local bound = 1200
 for _ = 1, 16 do
   media_project.items = {}
@@ -3381,7 +3444,7 @@ for _ = 1, 16 do
   local probe = dispatch_request(req, req.id, nil, { started_at = now_iso() })
   if type(probe) ~= "string" then error("PROBE_TYPE " .. type(probe)) end
   if string.find(probe, '"ok":true', 1, true) then
-    if #probe == bound then
+    if #probe <= bound then
       break
     end
     bound = #probe
@@ -3400,8 +3463,8 @@ end
 if not string.find(terminal, '"max_response_bytes":' .. tostring(bound), 1, true) then
   error("MAX_BYTES_DIAG bound=" .. tostring(bound) .. " actual_len=" .. tostring(#terminal) .. " " .. tostring(terminal):sub(1, 400))
 end
-if #terminal ~= bound then
-  error("EQ_DIAG actual=" .. tostring(#terminal) .. " bound=" .. tostring(bound))
+if #terminal > bound then
+  error("BOUND_DIAG actual=" .. tostring(#terminal) .. " bound=" .. tostring(bound))
 end
 if not string.find(terminal, '"source_file_ref":"file:path:' .. unknown_path .. '"', 1, true) then
   error("SOURCE_REF_DIAG " .. tostring(terminal):sub(1, 500))
@@ -3487,7 +3550,7 @@ for si, special in ipairs(special_guids) do
   end
   if #relink_term > roomy then error("RELINK_SIZE " .. tostring(#relink_term)) end
   if not string.find(relink_term, '"take_ref":"take:index:0"', 1, true) then error("RELINK_TAKE_IDX " .. relink_term:sub(1, 300)) end
-  if not string.find(relink_term, '"source_type":"unknown"', 1, true) then error("RELINK_STYPE " .. relink_term:sub(1, 300)) end
+if not string.find(relink_term, '"source_type":"WAVE"', 1, true) then error("RELINK_STYPE " .. relink_term:sub(1, 300)) end
   if string.find(relink_term, special, 1, true) then error("RELINK_ECHO_SPECIAL") end
   if not (#undo_begins == 1 and #mutation_calls > 0) then error("RELINK_UNDO") end
 end

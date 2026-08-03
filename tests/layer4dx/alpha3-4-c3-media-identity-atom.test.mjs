@@ -116,8 +116,8 @@ function longPathExampleFromDescriptor() {
 
 describe("Alpha3.4-C3 media canonical identity atom", () => {
   it("keeps public counts and embeds full-path identity helpers in generated bridge", () => {
-    assert.equal(WAVE2A_MEDIA_TEMPLATE_IDS.length, 6);
-    assert.equal(createWave2AMediaTemplates().length, 6);
+    assert.equal(WAVE2A_MEDIA_TEMPLATE_IDS.length, 7);
+    assert.equal(createWave2AMediaTemplates().length, 7);
     assert.equal(REGISTRY.entries.length, 239);
     assert.equal(new Set(REGISTRY.entries.map((entry) => entry.handler_file)).size, 91);
     const registry = loadBridgeHandlerRegistry({ cwd: ROOT.pathname });
@@ -183,6 +183,12 @@ call_reaper = function(name, ...)
   if name == "GetMediaSourceType" then return true, "WAVE" end
   if name == "GetMediaSourceLength" then return true, 1.0, false end
   if name == "GetMediaSourceNumChannels" then return true, 2 end
+  if name == "GetMediaSourceFileName" then return true, path end
+  if name == "GetMediaItemTake_Source" then return true, source end
+  if name == "GetSetMediaItemTakeInfo_String" then
+    if select(4, ...) == true then return true, true end
+    return true, true, "short.wav"
+  end
   if name == "PCM_Source_Destroy" then return true end
   return false
 end
@@ -284,6 +290,7 @@ assert(failure == nil, failure and (failure.message .. " " .. tostring(failure.c
 assert(summary.filename == path)
 assert(summary.file_ref == "file:path:" .. path)
 assert(summary.file_ref == "file:path:" .. summary.filename)
+assert(summary.take_name == "{TAKE-C3}")
 assert(#summary.filename > 240)
 `);
   });
@@ -299,9 +306,19 @@ local source = {}
 local writes = 0
 call_reaper = function(name, ...)
   if name == "PCM_Source_CreateFromFile" then return true, source end
+  if name == "GetMediaSourceFileName" then return true, path end
   if name == "GetMediaSourceType" then return true, "WAVE" end
   if name == "GetMediaSourceLength" then return true, 1.0, false end
   if name == "GetMediaSourceNumChannels" then return true, 2 end
+  if name == "GetMediaItemTake_Source" then return true, source end
+  if name == "GetSetMediaItemTakeInfo_String" then
+    local take, key, value, set_new = ...
+    if key == "P_NAME" then
+      if set_new then take.name = value; return true, true end
+      return true, true, take.name or "short.wav"
+    end
+    return true, true, "{TAKE-SHORT}"
+  end
   if name == "PCM_Source_Destroy" then return true end
   if name == "GetTrack" then return true, track end
   if name == "GetTrackGUID" then return true, "{TRACK-SHORT}" end

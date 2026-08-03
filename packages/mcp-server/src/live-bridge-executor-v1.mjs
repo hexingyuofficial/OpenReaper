@@ -1,5 +1,6 @@
+import { randomUUID } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
-import { access, open, readFile, stat, writeFile } from "node:fs/promises";
+import { access, link, open, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { resolve, join } from "node:path";
 import {
   FOUNDATION_BRIDGE_CONTRACT,
@@ -246,7 +247,7 @@ export function createLiveBridgeExecutor(options = {}) {
     const idempotencyRecord = idempotency.record;
     if (idempotencyRecord) idempotencyRecord.resultPath = paths.result;
     try {
-      await writeFile(paths.request, `${JSON.stringify(request)}\n`, { flag: "wx" });
+      await publishTransportRequest(paths.request, `${JSON.stringify(request)}\n`);
     } catch (error) {
       const recovered = error?.code === "EEXIST"
         ? await recoverExistingTransportRequest({
@@ -300,6 +301,19 @@ export function createLiveBridgeExecutor(options = {}) {
     dispatch,
     probeLiveness,
   });
+}
+
+// Publish only a complete request file. The Bridge polls directory entries, so
+// exposing the final .json path before its bytes are complete is a malformed
+// request, not a recoverable transport race.
+async function publishTransportRequest(requestPath, serializedRequest) {
+  const temporaryPath = `${requestPath}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporaryPath, serializedRequest, { flag: "wx" });
+    await link(temporaryPath, requestPath);
+  } finally {
+    await rm(temporaryPath, { force: true }).catch(() => {});
+  }
 }
 
 function resolveDispatchTimeoutMs({

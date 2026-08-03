@@ -1134,6 +1134,9 @@ export function createCallTemplateRuntime(options = {}) {
   const projectIndexArtifactReader = typeof options.projectIndexArtifactReader === "function"
     ? options.projectIndexArtifactReader
     : null;
+  const artifactWriter = typeof options.artifactWriter === "function"
+    ? options.artifactWriter
+    : null;
   const catalogDiscoveryTemplates = runtimeCatalogDiscoveryTemplates(catalog, live);
   const legacyProjectIndexCompatibilityDiscovery = [];
   const macroDiscovery = (id, createItems) => {
@@ -1327,6 +1330,7 @@ export function createCallTemplateRuntime(options = {}) {
           request: normalized,
           executeAtomic: macroAtomic,
           projectIndexRuntime,
+          artifactWriter,
           now,
         });
         retainEvidence(retainedEvidence, evidenceFromExecution(envelope, live.evidence), evidenceLimit);

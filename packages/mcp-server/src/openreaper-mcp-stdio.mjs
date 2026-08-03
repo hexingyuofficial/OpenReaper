@@ -23,6 +23,7 @@ import {
 } from "./call-template-runtime-v1.mjs";
 import { createDiscoveryCatalog } from "./discovery-menu-v1.mjs";
 import { createGetStateArtifactRuntime } from "./get-state-runtime-v1.mjs";
+import { createAudioBatchArtifactWriter } from "./audio-batch-artifact-writer-v1.mjs";
 import { createLiveBridgeExecutorFromEnv } from "./live-bridge-executor-v1.mjs";
 import {
   createOpenReaperAgentStartupGuidance,
@@ -87,9 +88,13 @@ async function main() {
   const artifactRuntime = process.env.OPENREAPER_ARTIFACT_ROOT
     ? createGetStateArtifactRuntime({ artifactRoot: process.env.OPENREAPER_ARTIFACT_ROOT })
     : null;
+  const artifactWriter = process.env.OPENREAPER_ARTIFACT_ROOT
+    ? createAudioBatchArtifactWriter({ artifactRoot: process.env.OPENREAPER_ARTIFACT_ROOT })
+    : null;
   const runtime = createCallTemplateRuntime({
     managedRenderRoot: process.env.OPENREAPER_LIVE_SMOKE_RENDER_ROOT,
     projectIndexRuntime,
+    artifactWriter,
     projectIndexArtifactReader: artifactRuntime
       ? ({ artifact_ref }) => artifactRuntime.get_state({
           scope: "artifact",
