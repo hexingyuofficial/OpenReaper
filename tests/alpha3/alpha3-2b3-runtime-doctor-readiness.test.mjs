@@ -867,7 +867,7 @@ describe("Alpha3.2-B3 runtime / doctor live readiness", () => {
     assert.match(doctorSource, /OPENREAPER_LIVE_SMOKE_RENDER_ROOT: effectiveRenderRoot/);
     assert.match(doctorSource, /report\.project_index = report\.smoke\?\.openreaper\?\.project_index\s+\?\? null/);
     assert.match(packageCommandSmoke, /createPackageCommandValidationRuntime\(\)/);
-    assert.match(packageCommandSmoke, /try \{[\s\S]*command: mcpCommand,[\s\S]*env: validationRuntime\.env,[\s\S]*assertExactArray\(toolNames, exactTools/);
+    assert.match(packageCommandSmoke, /try \{[\s\S]*command: mcpLaunch\.command,[\s\S]*args: mcpLaunch\.args,[\s\S]*env: validationRuntime\.env,[\s\S]*assertExactArray\(toolNames, exactTools/);
     assert.doesNotMatch(packageCommandSmoke, /path\.join\(installRoot, "session", "renders"\)/);
     assert.match(packageCommandSmoke, /validation_scope: "isolated_package_runtime"/);
     assert.match(packageCommandSmoke, /OPENREAPER_EXECUTABLE_RECIPE_ROOT: recipeRoot/);

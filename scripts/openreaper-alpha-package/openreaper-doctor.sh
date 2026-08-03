@@ -57,7 +57,10 @@ const sessionRoot = process.env.OPENREAPER_DOCTOR_SESSION_ROOT;
 const transportDir = process.env.OPENREAPER_DOCTOR_TRANSPORT_DIR;
 const artifactRoot = process.env.OPENREAPER_DOCTOR_ARTIFACT_ROOT;
 const executableRecipeRoot = process.env.OPENREAPER_DOCTOR_EXECUTABLE_RECIPE_ROOT;
-const mcpCommand = path.join(installRoot, "bin", "openreaper-mcp");
+const mcpCommand = path.join(installRoot, "bin", process.platform === "win32" ? "openreaper-mcp.ps1" : "openreaper-mcp");
+const mcpLaunch = process.platform === "win32"
+  ? { command: "powershell.exe", args: ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", mcpCommand] }
+  : { command: mcpCommand, args: [] };
 const vitalAgentMcpCommand = path.join(installRoot, "bin", "vital-agent-mcp");
 const mcpCommandAliases = pathAliases(mcpCommand);
 const vitalAgentMcpCommandAliases = pathAliases(vitalAgentMcpCommand);
@@ -72,8 +75,11 @@ const vitalAgentServerScript = path.join(installRoot, "vendor", "vital-agent-mcp
 const vitalAgentIncluded = existsSync(vitalAgentMcpCommand) && existsSync(vitalAgentServerScript);
 const bridgeScript = path.join(installRoot, "vendor", "openreaper-kernel", "reaper", "bridge", "openreaper-live-bridge.lua");
 const bridgeActionName = "OpenReaper: Start MCP bridge";
-const bridgeActionScript = path.join(home, "Library", "Application Support", "REAPER", "Scripts", "OpenReaper", "openreaper-start-mcp-bridge.lua");
-const reaperKbPath = path.join(home, "Library", "Application Support", "REAPER", "reaper-kb.ini");
+const reaperResourceRoot = process.platform === "win32"
+  ? path.join(process.env.APPDATA && path.isAbsolute(process.env.APPDATA) ? process.env.APPDATA : path.join(home, "AppData", "Roaming"), "REAPER")
+  : path.join(home, "Library", "Application Support", "REAPER");
+const bridgeActionScript = path.join(reaperResourceRoot, "Scripts", "OpenReaper", "openreaper-start-mcp-bridge.lua");
+const reaperKbPath = path.join(reaperResourceRoot, "reaper-kb.ini");
 const exactTools = ["call_recipe", "call_template", "get_state", "list_recipes", "list_templates", "ping"];
 const vitalAgentRequiredTools = ["create_openreaper_handoff_plan", "run_doctor"];
 const requiredMacros = ["macro.project.inspect", "macro.project.query"];
@@ -490,7 +496,9 @@ async function scanClientConfigs() {
   const configs = [
     { label: "Codex", path: path.join(home, ".codex", "config.toml"), type: "toml" },
     { label: "Cursor", path: path.join(home, ".cursor", "mcp.json"), type: "json" },
-    { label: "Claude Desktop", path: path.join(home, "Library", "Application Support", "Claude", "claude_desktop_config.json"), type: "json" },
+    { label: "Claude Desktop", path: process.platform === "win32"
+      ? path.join(process.env.APPDATA && path.isAbsolute(process.env.APPDATA) ? process.env.APPDATA : path.join(home, "AppData", "Roaming"), "Claude", "claude_desktop_config.json")
+      : path.join(home, "Library", "Application Support", "Claude", "claude_desktop_config.json"), type: "json" },
   ];
   for (const config of configs) {
     const text = await readTextIfExists(config.path);
@@ -592,8 +600,8 @@ async function smokeOpenReaperMcpCommandInner() {
   let lifecycle = null;
   try {
     const transport = new OwnedStdioClientTransport({
-      command: mcpCommand,
-      args: [],
+      command: mcpLaunch.command,
+      args: mcpLaunch.args,
       // Package reachability is intentionally independent of the selected live
       // session. Direct MCP above remains the only diagnosis of user roots.
       env: validationRuntime.env,

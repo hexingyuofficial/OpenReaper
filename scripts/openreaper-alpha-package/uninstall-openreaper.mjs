@@ -121,7 +121,7 @@ if (!skipStartupHook) {
 if (!skipClientConfig) {
   await removeCodexSection();
   await removeJsonServer(path.join(home, ".cursor", "mcp.json"), "Cursor");
-  await removeJsonServer(path.join(home, "Library", "Application Support", "Claude", "claude_desktop_config.json"), "Claude Desktop");
+  await removeJsonServer(defaultClaudeDesktopConfigPath(home), "Claude Desktop");
 } else {
   report.skipped.push("client config cleanup skipped because --skip-client-config was set");
 }
@@ -368,6 +368,16 @@ function defaultReaperResourceRoot(homeDirectory) {
     return path.join(appData, "REAPER");
   }
   return path.join(homeDirectory, "Library", "Application Support", "REAPER");
+}
+
+function defaultClaudeDesktopConfigPath(homeDirectory) {
+  if (process.platform === "win32") {
+    const appData = process.env.APPDATA && path.isAbsolute(process.env.APPDATA)
+      ? process.env.APPDATA
+      : path.join(homeDirectory, "AppData", "Roaming");
+    return path.join(appData, "Claude", "claude_desktop_config.json");
+  }
+  return path.join(homeDirectory, "Library", "Application Support", "Claude", "claude_desktop_config.json");
 }
 
 function printUninstallHelp() {

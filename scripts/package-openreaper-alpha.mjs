@@ -47,6 +47,7 @@ if (options.help === true) {
   process.stdout.write(`  --vital-agent-root PATH  override the companion source root (requires --with-vital)\n`);
   process.stdout.write(`  --version VALUE          package build id\n`);
   process.stdout.write(`  --out-dir PATH           output directory\n`);
+  process.stdout.write(`  --platform macos|windows package platform (default: macos)\n`);
   process.stdout.write(`  --skip-zip               leave the package directory unzipped\n`);
   process.stdout.write(`  --skip-smoke             skip package smoke checks\n`);
   process.exit(0);
@@ -56,13 +57,18 @@ if (options.vital_agent_root !== undefined && options.with_vital !== true) {
   process.exit(2);
 }
 const withVital = options.with_vital === true;
+const packagePlatform = String(options.platform ?? "macos").toLowerCase();
+if (packagePlatform !== "macos" && packagePlatform !== "windows") {
+  process.stderr.write("[OpenReaper] --platform must be macos or windows.\n");
+  process.exit(2);
+}
 const vitalAgentRoot = withVital
   ? path.resolve(options.vital_agent_root ?? path.join(repoRoot, "..", "vital-agent-mcp"))
   : null;
 const version = safeToken(options.version, `alpha-${compactTimestamp(new Date())}`);
 const outDir = path.resolve(options.out_dir ?? path.join(repoRoot, "dist", `openreaper-${version}`));
 const packageRoot = path.join(outDir, "OpenReaper-alpha");
-const OPENREAPER_PRODUCT_VERSION = "3.3.0-alpha.0";
+const OPENREAPER_PRODUCT_VERSION = JSON.parse(await readFile(path.join(repoRoot, "package.json"), "utf8")).version;
 const PACKAGE_PROVENANCE_CONTRACT = "openreaper.package.provenance.v1";
 const ALPHA3_3_PACKAGE_CATALOG_COUNTS = Object.freeze({
   exact_tool_count: 6,
@@ -148,7 +154,9 @@ async function buildPackage() {
     ? {
         project_index: await smokePackagedOpenReaperMcp(),
       }
-    : {
+    : packagePlatform === "windows"
+      ? { windows_package_contract: await smokeWindowsPackageContract() }
+      : {
         installer_upgrade_migration: await smokePackagedInstallerUpgradeMigration(),
         package_provenance: await smokePackagedProvenanceManifest(provenance),
         openreaper_start_helper: await smokePackagedOpenReaperStartHelper(),
@@ -161,7 +169,7 @@ async function buildPackage() {
 
   let zipPath = null;
   if (!skipZip) {
-    zipPath = path.join(outDir, `OpenReaper-${version}-macOS-alpha.zip`);
+    zipPath = path.join(outDir, `OpenReaper-${version}-${packagePlatform === "windows" ? "Windows" : "macOS"}.zip`);
     await removeDsStore(packageRoot);
     await zipPackage(zipPath);
     await removeDsStore(packageRoot);
@@ -178,11 +186,11 @@ async function buildPackage() {
       bridge: "vendor/openreaper-kernel/reaper/bridge/openreaper-live-bridge.lua",
       ...(withVital ? { companion_mcp: "vendor/vital-agent-mcp/dist/src/mcpServer.js" } : {}),
       entrypoints: [
-        "bin/openreaper-mcp",
+        packagePlatform === "windows" ? "bin/openreaper-mcp.ps1" : "bin/openreaper-mcp",
         ...(withVital ? ["bin/vital-agent-mcp"] : []),
-        "bin/openreaper-start",
+        packagePlatform === "windows" ? "bin/openreaper-start.ps1" : "bin/openreaper-start",
         "bin/openreaper-start-mcp-bridge.lua",
-        "bin/openreaper-doctor",
+        packagePlatform === "windows" ? "bin/openreaper-doctor.ps1" : "bin/openreaper-doctor",
       ],
       dependency_source: "package_root_npm_install",
     },
@@ -193,12 +201,13 @@ async function buildPackage() {
     smoke,
     package_cleanliness: packageCleanliness,
     install: {
-      command: "double-click install.command or run ./install.command",
-      default_install_root: "~/.openreaper/current",
-      default_render_root: "~/.openreaper/current/session/renders",
+      command: packagePlatform === "windows" ? "powershell.exe -ExecutionPolicy Bypass -File .\\install-openreaper.ps1" : "double-click install.command or run ./install.command",
+      default_install_root: packagePlatform === "windows" ? "%LOCALAPPDATA%\\OpenReaper\\current" : "~/.openreaper/current",
+      default_render_root: packagePlatform === "windows" ? "%LOCALAPPDATA%\\OpenReaper\\current\\session\\renders" : "~/.openreaper/current/session/renders",
       render_root_override: "--render-root /absolute/path/to/renders",
       mcp_server_name: "openreaper",
       startup_requirement: "REAPER must be started through openreaper-start for MCP to connect.",
+      platform: packagePlatform,
     },
   }, null, 2));
 }
@@ -213,7 +222,14 @@ async function writePackageProvenanceManifest() {
     throw new Error("Package provenance requires the exact OpenReaper git commit.");
   }
   if (!/^[0-9a-f]{40}$/u.test(gitCommit)) throw new Error("Package provenance git commit is invalid.");
-  if (gitStatus !== "") throw new Error("Package provenance requires a clean OpenReaper worktree so the packaged files match the recorded commit.");
+  const dirtyPaths = gitStatus
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => line.slice(3).trim())
+    .filter((filePath) => filePath !== "AGENTS.md");
+  if (dirtyPaths.length > 0) {
+    throw new Error(`Package provenance requires a clean OpenReaper worktree apart from the user-owned AGENTS.md change: ${dirtyPaths.join(", ")}`);
+  }
   let handlerRegistry;
   try {
     handlerRegistry = JSON.parse(await readFile(path.join(repoRoot, "reaper", "bridge", "registry", "BRIDGE_HANDLER_REGISTRY_V1.json"), "utf8"));
@@ -224,11 +240,13 @@ async function writePackageProvenanceManifest() {
   const manifest = {
     contract: PACKAGE_PROVENANCE_CONTRACT,
     product: "OpenReaper alpha",
+    platform: packagePlatform,
     package_version: OPENREAPER_PRODUCT_VERSION,
     build_id: version,
     openreaper_git_commit: gitCommit,
     build_time_utc: new Date().toISOString(),
     source_tree_clean: true,
+    source_tree_ignored_dirty_paths: gitStatus.includes("AGENTS.md") ? ["AGENTS.md"] : [],
     ...catalogFacts,
     ...(withVital ? {
       optional_companions: {
@@ -290,7 +308,7 @@ async function validatePackageProvenanceManifest(expected) {
     JSON.stringify(observed) !== JSON.stringify(expected) ||
     observed.package_version !== OPENREAPER_PRODUCT_VERSION ||
     packageMetadata.version !== OPENREAPER_PRODUCT_VERSION ||
-    observed.source_tree_clean !== true
+    observed.source_tree_clean !== true || observed.platform !== packagePlatform
   ) {
     throw new Error("Package provenance manifest does not match the package build truth.");
   }
@@ -318,14 +336,44 @@ async function copyInstallerTemplates() {
   const templateRoot = path.join(repoRoot, "scripts", "openreaper-alpha-package");
   await cp(path.join(templateRoot, "install-openreaper.mjs"), path.join(packageRoot, "installer", "install-openreaper.mjs"));
   await cp(path.join(templateRoot, "uninstall-openreaper.mjs"), path.join(packageRoot, "installer", "uninstall-openreaper.mjs"));
-  await cp(path.join(templateRoot, "openreaper-mcp.sh"), path.join(packageRoot, "bin", "openreaper-mcp"));
-  await cp(path.join(templateRoot, "openreaper-start.sh"), path.join(packageRoot, "bin", "openreaper-start"));
   await cp(path.join(templateRoot, "openreaper-start-mcp-bridge.lua"), path.join(packageRoot, "bin", "openreaper-start-mcp-bridge.lua"));
-  await cp(path.join(templateRoot, "openreaper-doctor.sh"), path.join(packageRoot, "bin", "openreaper-doctor"));
-  await chmod(path.join(packageRoot, "bin", "openreaper-mcp"), 0o755);
-  await chmod(path.join(packageRoot, "bin", "openreaper-start"), 0o755);
+  if (packagePlatform === "windows") {
+    for (const name of ["openreaper-mcp.ps1", "openreaper-doctor.ps1", "openreaper-start.ps1"]) {
+      await cp(path.join(templateRoot, name), path.join(packageRoot, "bin", name));
+    }
+    for (const name of ["install-openreaper.ps1", "uninstall-openreaper.ps1"]) {
+      await cp(path.join(templateRoot, name), path.join(packageRoot, name));
+    }
+    await writeFile(
+      path.join(packageRoot, "bin", "openreaper-doctor.mjs"),
+      await extractDoctorNodeRuntime(await readFile(path.join(templateRoot, "openreaper-doctor.sh"), "utf8")),
+      "utf8",
+    );
+  } else {
+    await cp(path.join(templateRoot, "openreaper-mcp.sh"), path.join(packageRoot, "bin", "openreaper-mcp"));
+    await cp(path.join(templateRoot, "openreaper-start.sh"), path.join(packageRoot, "bin", "openreaper-start"));
+    await cp(path.join(templateRoot, "openreaper-doctor.sh"), path.join(packageRoot, "bin", "openreaper-doctor"));
+  }
+  if (packagePlatform === "windows") {
+    await chmod(path.join(packageRoot, "bin", "openreaper-mcp.ps1"), 0o644);
+    await chmod(path.join(packageRoot, "bin", "openreaper-start.ps1"), 0o644);
+    await chmod(path.join(packageRoot, "bin", "openreaper-doctor.ps1"), 0o644);
+  } else {
+    await chmod(path.join(packageRoot, "bin", "openreaper-mcp"), 0o755);
+    await chmod(path.join(packageRoot, "bin", "openreaper-start"), 0o755);
+    await chmod(path.join(packageRoot, "bin", "openreaper-doctor"), 0o755);
+  }
   await chmod(path.join(packageRoot, "bin", "openreaper-start-mcp-bridge.lua"), 0o444);
-  await chmod(path.join(packageRoot, "bin", "openreaper-doctor"), 0o755);
+}
+
+function extractDoctorNodeRuntime(source) {
+  const begin = "exec node --input-type=module - \"$@\" <<'NODE'";
+  const start = source.indexOf(`${begin}\n`);
+  const end = source.lastIndexOf("\nNODE\n");
+  if (start === -1 || end === -1 || end <= start) {
+    throw new Error("Could not extract the Doctor Node runtime from openreaper-doctor.sh.");
+  }
+  return `${source.slice(start + begin.length + 1, end)}\n`;
 }
 
 async function copyOpenReaperKernel() {
@@ -401,6 +449,9 @@ async function installVitalAgentCompanion() {
 }
 
 async function writePackageEntrypoints() {
+  if (packagePlatform === "windows") {
+    return;
+  }
   const installCommand = `#!/bin/zsh
 set -euo pipefail
 cd "\${0:A:h}"
@@ -434,6 +485,29 @@ exec node "\${COMPANION_ROOT}/dist/src/mcpServer.js" "$@"
 }
 
 async function writeReadme() {
+  if (packagePlatform === "windows") {
+    const readme = `OpenReaper Windows package
+
+Install or upgrade from native Windows PowerShell:
+  powershell.exe -ExecutionPolicy Bypass -File .\\install-openreaper.ps1
+
+Default install root: %LOCALAPPDATA%\\OpenReaper\\current
+Default REAPER resource root: %APPDATA%\\REAPER
+Doctor:
+  powershell.exe -ExecutionPolicy Bypass -File %LOCALAPPDATA%\\OpenReaper\\current\\bin\\openreaper-doctor.ps1
+Start REAPER in the logged-in desktop session:
+  powershell.exe -ExecutionPolicy Bypass -File %LOCALAPPDATA%\\OpenReaper\\current\\bin\\openreaper-start.ps1
+Uninstall:
+  powershell.exe -ExecutionPolicy Bypass -File .\\uninstall-openreaper.ps1
+
+The shipped Windows path uses native PowerShell and Node.js 20 or newer. It
+does not require Git Bash, Git, WSL, SSH, SWS, ReaPack, or third-party plugins.
+License, plugin scan, recovery, version, and unknown REAPER decision windows
+remain user-mediated and fail closed.
+`;
+    await writeFile(path.join(packageRoot, "README.txt"), readme, "utf8");
+    return;
+  }
   const readme = `OpenReaper macOS alpha package
 
 What this package does:
@@ -541,6 +615,49 @@ async function zipPackage(zipPath) {
   await run("zip", ["-q", "-r", "-X", zipPath, "OpenReaper-alpha"], {
     cwd: outDir,
   });
+}
+
+async function smokeWindowsPackageContract() {
+  const requiredFiles = [
+    "install-openreaper.ps1",
+    "uninstall-openreaper.ps1",
+    "bin/openreaper-mcp.ps1",
+    "bin/openreaper-doctor.ps1",
+    "bin/openreaper-doctor.mjs",
+    "bin/openreaper-start.ps1",
+    "bin/openreaper-start-mcp-bridge.lua",
+    "installer/install-openreaper.mjs",
+    "installer/uninstall-openreaper.mjs",
+  ];
+  for (const relativePath of requiredFiles) {
+    await assertReadable(path.join(packageRoot, ...relativePath.split("/")));
+  }
+  const wrapperChecks = [
+    ["bin/openreaper-mcp.ps1", "powershell", "openreaper-mcp-stdio.mjs"],
+    ["bin/openreaper-doctor.ps1", "openreaper-doctor.mjs"],
+    ["bin/openreaper-start.ps1", "Start-Process", "openreaper-doctor.ps1"],
+    ["install-openreaper.ps1", "install-openreaper.mjs", "install-before.json", "install-after.json"],
+    ["uninstall-openreaper.ps1", "uninstall-openreaper.mjs", "uninstall-before.json", "uninstall-after.json"],
+  ];
+  for (const [relativePath, ...needles] of wrapperChecks) {
+    const source = await readFile(path.join(packageRoot, ...relativePath.split("/")), "utf8");
+    for (const needle of needles) {
+      if (!source.includes(needle)) throw new Error(`Windows package wrapper ${relativePath} is missing ${needle}.`);
+    }
+  }
+  const doctorRuntime = await readFile(path.join(packageRoot, "bin", "openreaper-doctor.mjs"), "utf8");
+  if (!doctorRuntime.startsWith("import ") || doctorRuntime.includes("<<'NODE'")) {
+    throw new Error("Windows Doctor runtime was not extracted as a standalone Node module.");
+  }
+  return {
+    ok: true,
+    platform: "windows",
+    required_files: requiredFiles,
+    native_entrypoints: true,
+    doctor_runtime: "standalone_node_module",
+    git_bash_runtime_dependency: false,
+    third_party_runtime_dependency: false,
+  };
 }
 
 async function smokePackagedOpenReaperMcp() {

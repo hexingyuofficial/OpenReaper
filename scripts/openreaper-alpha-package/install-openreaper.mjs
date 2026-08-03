@@ -90,7 +90,10 @@ const vitalAgentIncluded = existsSync(path.join(packageRoot, "bin", "vital-agent
   && existsSync(path.join(packageRoot, "vendor", "vital-agent-mcp", "dist", "src", "mcpServer.js"));
 
 const installedBin = path.join(installRoot, "bin");
-const mcpCommand = path.join(installedBin, "openreaper-mcp");
+const mcpCommand = path.join(installedBin, process.platform === "win32" ? "openreaper-mcp.ps1" : "openreaper-mcp");
+const mcpLaunch = process.platform === "win32"
+  ? { command: "powershell.exe", args: ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", mcpCommand] }
+  : { command: mcpCommand, args: [] };
 const vitalAgentMcpCommand = path.join(installedBin, "vital-agent-mcp");
 const startCommand = path.join(installedBin, "openreaper-start");
 const doctorCommand = path.join(installedBin, "openreaper-doctor");
@@ -121,6 +124,7 @@ const report = {
   package_root: packageRoot,
   install_root: installRoot,
   mcp_command: mcpCommand,
+  mcp_launch: mcpLaunch,
   optional_companions: {
     vital_agent_mcp: {
       included: vitalAgentIncluded,
@@ -659,8 +663,8 @@ async function backupStartupHook(hookPath) {
 async function configureCodex() {
   const configPath = path.join(home, ".codex", "config.toml");
   const openReaperSection = `[mcp_servers.openreaper]
-command = ${tomlString(mcpCommand)}
-args = []
+command = ${tomlString(mcpLaunch.command)}
+args = ${tomlArray(mcpLaunch.args)}
 
 [mcp_servers.openreaper.env]
 OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR = ${tomlString(transportDir)}
@@ -695,7 +699,7 @@ async function configureCursor() {
 }
 
 async function configureClaudeDesktop() {
-  const configPath = path.join(home, "Library", "Application Support", "Claude", "claude_desktop_config.json");
+  const configPath = defaultClaudeDesktopConfigPath(home);
   await upsertJsonMcpServer(configPath, "Claude Desktop");
 }
 
@@ -723,8 +727,8 @@ async function upsertJsonMcpServer(configPath, label) {
     report.changed.push(`removed legacy Streetlight MCP server from ${label} config at ${configPath}`);
   }
   parsed.mcpServers.openreaper = {
-    command: mcpCommand,
-    args: [],
+    command: mcpLaunch.command,
+    args: [...mcpLaunch.args],
     env: {
       OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR: transportDir,
       OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH: bridgeScript,
@@ -756,8 +760,8 @@ async function writeClientSnippets() {
   const jsonSnippet = {
     mcpServers: {
       openreaper: {
-        command: mcpCommand,
-        args: [],
+        command: mcpLaunch.command,
+        args: [...mcpLaunch.args],
         env: {
           OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR: transportDir,
           OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH: bridgeScript,
@@ -778,8 +782,8 @@ async function writeClientSnippets() {
   };
   await writeFile(path.join(snippetDir, "mcp.json"), `${JSON.stringify(jsonSnippet, null, 2)}\n`, "utf8");
   await writeFile(path.join(snippetDir, "codex-config.toml"), `[mcp_servers.openreaper]
-command = ${tomlString(mcpCommand)}
-args = []
+command = ${tomlString(mcpLaunch.command)}
+args = ${tomlArray(mcpLaunch.args)}
 
 [mcp_servers.openreaper.env]
 OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR = ${tomlString(transportDir)}
@@ -804,7 +808,7 @@ async function smokeMcpServer() {
     return;
   }
   await new Promise((resolve) => {
-    const child = spawn(mcpCommand, [], {
+    const child = spawn(mcpLaunch.command, mcpLaunch.args, {
       env: {
         ...process.env,
         OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR: transportDir,
@@ -821,7 +825,7 @@ async function smokeMcpServer() {
     child.stderr.on("data", (data) => {
       stderr += data;
     });
-    const timer = setTimeout(() => child.kill("SIGTERM"), 3000);
+    const timer = setTimeout(() => child.kill(process.platform === "win32" ? undefined : "SIGTERM"), 3000);
     child.on("exit", () => {
       clearTimeout(timer);
       if (stderr.includes("stdio server ready")) {
@@ -1070,6 +1074,10 @@ function compactTimestamp(date) {
 
 function tomlString(value) {
   return JSON.stringify(String(value));
+}
+
+function tomlArray(values) {
+  return `[${values.map((value) => tomlString(value)).join(", ")}]`;
 }
 
 function selectInstallerRenderRoot({ explicit, persisted, fallback }) {
@@ -1386,6 +1394,16 @@ function defaultReaperResourceRoot(homeDirectory) {
     return path.join(appData, "REAPER");
   }
   return path.join(homeDirectory, "Library", "Application Support", "REAPER");
+}
+
+function defaultClaudeDesktopConfigPath(homeDirectory) {
+  if (process.platform === "win32") {
+    const appData = process.env.APPDATA && path.isAbsolute(process.env.APPDATA)
+      ? process.env.APPDATA
+      : path.join(homeDirectory, "AppData", "Roaming");
+    return path.join(appData, "Claude", "claude_desktop_config.json");
+  }
+  return path.join(homeDirectory, "Library", "Application Support", "Claude", "claude_desktop_config.json");
 }
 
 function printInstallHelp() {
