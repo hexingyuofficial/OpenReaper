@@ -64,8 +64,8 @@ const mcpLaunch = process.platform === "win32"
 const vitalAgentMcpCommand = path.join(installRoot, "bin", "vital-agent-mcp");
 const mcpCommandAliases = pathAliases(mcpCommand);
 const vitalAgentMcpCommandAliases = pathAliases(vitalAgentMcpCommand);
-const startCommand = path.join(installRoot, "bin", "openreaper-start");
-const doctorCommand = path.join(installRoot, "bin", "openreaper-doctor");
+const startCommand = path.join(installRoot, "bin", process.platform === "win32" ? "openreaper-start.ps1" : "openreaper-start");
+const doctorCommand = path.join(installRoot, "bin", process.platform === "win32" ? "openreaper-doctor.ps1" : "openreaper-doctor");
 const provenanceManifestPath = path.join(installRoot, "provenance.json");
 const provenanceManifestMaxBytes = 16_384;
 const serverScript = path.join(installRoot, "vendor", "openreaper-kernel", "packages", "mcp-server", "src", "openreaper-mcp-stdio.mjs");
