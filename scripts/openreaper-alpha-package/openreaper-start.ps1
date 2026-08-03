@@ -156,7 +156,11 @@ $launchInfo | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $logPath -Encod
 
 $process = $null
 if (-not $existingPid -or -not (Get-Process -Id $existingPid -ErrorAction SilentlyContinue)) {
-    $process = Start-Process -FilePath $binary -ArgumentList $launchArgs -WorkingDirectory (Split-Path -Parent $binary) -PassThru
+    if ($launchArgs.Count -gt 0) {
+        $process = Start-Process -FilePath $binary -ArgumentList $launchArgs -WorkingDirectory (Split-Path -Parent $binary) -PassThru
+    } else {
+        $process = Start-Process -FilePath $binary -WorkingDirectory (Split-Path -Parent $binary) -PassThru
+    }
     Set-Content -LiteralPath $pidPath -Value $process.Id -Encoding ASCII
 } else {
     $process = Get-Process -Id $existingPid

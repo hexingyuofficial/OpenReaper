@@ -15,6 +15,10 @@ const doctorPs1 = await readFile(
   path.resolve(import.meta.dirname, "../../scripts/openreaper-alpha-package/openreaper-doctor.ps1"),
   "utf8",
 );
+const startPs1 = await readFile(
+  path.resolve(import.meta.dirname, "../../scripts/openreaper-alpha-package/openreaper-start.ps1"),
+  "utf8",
+);
 
 test("Windows installer secures the native PowerShell start and Doctor entrypoints", () => {
   assert.match(installer, /const startCommand = path\.join\(installedBin, process\.platform === "win32" \? "openreaper-start\.ps1" : "openreaper-start"\);/u);
@@ -26,4 +30,10 @@ test("Windows installer secures the native PowerShell start and Doctor entrypoin
   assert.match(doctorPs1, /\$env:OPENREAPER_DOCTOR_TRANSPORT_DIR = \$transportRoot/u);
   assert.match(doctorPs1, /\$env:OPENREAPER_DOCTOR_ARTIFACT_ROOT = \$artifactRoot/u);
   assert.match(doctorPs1, /\$env:OPENREAPER_DOCTOR_EXECUTABLE_RECIPE_ROOT = \$recipeRoot/u);
+});
+
+test("Windows start omits an empty Start-Process argument list", () => {
+  assert.match(startPs1, /if \(\$launchArgs\.Count -gt 0\) \{/u);
+  assert.match(startPs1, /Start-Process -FilePath \$binary -ArgumentList \$launchArgs/u);
+  assert.match(startPs1, /Start-Process -FilePath \$binary -WorkingDirectory \(Split-Path -Parent \$binary\) -PassThru/u);
 });
