@@ -356,6 +356,16 @@ local function read_file(path_value)
   return content
 end
 
+local function is_windows_runtime(path_value)
+  if reaper and type(reaper.GetOS) == "function" then
+    local ok, os_name = pcall(reaper.GetOS)
+    if ok and type(os_name) == "string" then
+      return os_name:match("^Win") ~= nil
+    end
+  end
+  return type(path_value) == "string" and (path_value:match("^[A-Za-z]:[\\/]") or path_value:sub(1, 2) == "\\\\") ~= nil
+end
+
 local function write_file_atomic(path_value, content)
   local temp_path = path_value .. ".tmp." .. tostring(math.floor((os.time() or 0))) .. "." .. tostring(math.random(100000, 999999))
   local handle = io.open(temp_path, "wb")
@@ -370,11 +380,43 @@ local function write_file_atomic(path_value, content)
     return false, tostring(write_error or "write_failed")
   end
   local renamed, rename_error = os.rename(temp_path, path_value)
-  if not renamed then
+  if renamed then
+    return true
+  end
+  if not is_windows_runtime(path_value) or not file_exists(path_value) then
     os.remove(temp_path)
     return false, tostring(rename_error or "rename_failed")
   end
-  return true
+
+  -- Lua's Windows os.rename cannot replace an existing file. Move the old
+  -- target aside, publish the complete temp file, and restore on failure.
+  local backup_path = path_value .. ".openreaper-replace." .. tostring(math.floor((os.time() or 0))) .. "." .. tostring(math.random(100000, 999999))
+  local moved, backup_error = os.rename(path_value, backup_path)
+  if not moved then
+    os.remove(temp_path)
+    return false, "windows_existing_target_move_failed: " .. tostring(backup_error or rename_error or "rename_failed")
+  end
+
+  local published, publish_error = os.rename(temp_path, path_value)
+  if published then
+    os.remove(backup_path)
+    return true
+  end
+
+  local restore_error = nil
+  if file_exists(path_value) and not os.remove(path_value) then
+    restore_error = "new_target_remove_failed"
+  else
+    local restored, error_message = os.rename(backup_path, path_value)
+    if not restored then
+      restore_error = "old_target_restore_failed: " .. tostring(error_message or "rename_failed")
+    end
+  end
+  os.remove(temp_path)
+  if restore_error then
+    return false, "windows_replace_failed: " .. tostring(publish_error or rename_error or "rename_failed") .. "; " .. restore_error
+  end
+  return false, "windows_replace_failed: " .. tostring(publish_error or rename_error or "rename_failed")
 end
 
 local function log(message)
