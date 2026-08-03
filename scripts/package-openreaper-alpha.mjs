@@ -225,8 +225,9 @@ async function writePackageProvenanceManifest() {
   const dirtyPaths = gitStatus
     .split("\n")
     .filter(Boolean)
+    .filter((line) => !line.trim().endsWith("AGENTS.md"))
     .map((line) => line.slice(3).trim())
-    .filter((filePath) => filePath !== "AGENTS.md");
+    .filter(Boolean);
   if (dirtyPaths.length > 0) {
     throw new Error(`Package provenance requires a clean OpenReaper worktree apart from the user-owned AGENTS.md change: ${dirtyPaths.join(", ")}`);
   }
