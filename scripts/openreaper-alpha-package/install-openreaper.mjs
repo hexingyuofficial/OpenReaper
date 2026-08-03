@@ -95,8 +95,8 @@ const mcpLaunch = process.platform === "win32"
   ? { command: "powershell.exe", args: ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", mcpCommand] }
   : { command: mcpCommand, args: [] };
 const vitalAgentMcpCommand = path.join(installedBin, "vital-agent-mcp");
-const startCommand = path.join(installedBin, "openreaper-start");
-const doctorCommand = path.join(installedBin, "openreaper-doctor");
+const startCommand = path.join(installedBin, process.platform === "win32" ? "openreaper-start.ps1" : "openreaper-start");
+const doctorCommand = path.join(installedBin, process.platform === "win32" ? "openreaper-doctor.ps1" : "openreaper-doctor");
 const bridgeLauncherScript = path.join(installedBin, BRIDGE_LAUNCHER_NAME);
 const packagedBridgeLauncherScript = path.join(packageRoot, "bin", BRIDGE_LAUNCHER_NAME);
 const sessionRoot = path.join(installRoot, "session");
