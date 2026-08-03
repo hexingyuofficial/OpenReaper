@@ -34,7 +34,8 @@ test("Windows installer secures the native PowerShell start and Doctor entrypoin
 
 test("Windows start omits an empty Start-Process argument list", () => {
   assert.match(startPs1, /\$resourceConfigFile = Join-Path \$ReaperResourceRoot "REAPER\.ini"/u);
-  assert.match(startPs1, /\$launchArgs = @\([\s\S]*"-resourcepath", \(Quote-ProcessArgument \$ReaperResourceRoot\),[\s\S]*"-cfgfile", \(Quote-ProcessArgument \$resourceConfigFile\)[\s\S]*\)/u);
+  assert.match(startPs1, /\$launchArgs = @\([\s\S]*"-cfgfile", \(Quote-ProcessArgument \$resourceConfigFile\)[\s\S]*\)/u);
+  assert.doesNotMatch(startPs1, /"-resourcepath"/u);
   assert.match(startPs1, /function Quote-ProcessArgument\(\[string\] \$Value\)/u);
   assert.match(startPs1, /if \(\$launchArgs\.Count -gt 0\) \{/u);
   assert.match(startPs1, /Start-Process -FilePath \$binary -ArgumentList \$launchArgs/u);
