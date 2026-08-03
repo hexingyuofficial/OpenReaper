@@ -74,3 +74,9 @@ test("Windows installer preserves after-manifest evidence when Node writes stder
   assert.match(installerPs1, /finally \{[\s\S]*\$ErrorActionPreference = \$previousErrorActionPreference/u);
   assert.match(installerPs1, /Get-ExternalManifest \$after/u);
 });
+
+test("Windows installer can upgrade its own read-only S3 Action files", () => {
+  assert.match(installer, /if \(existingStatus\) await chmod\(action\.targetPath, 0o644\);/u);
+  assert.match(installer, /await copyFile\(action\.sourcePath, action\.targetPath\);/u);
+  assert.match(installer, /if \(existingStatus\) await chmod\(action\.targetPath, 0o444\)\.catch\(\(\) => \{\}\);/u);
+});

@@ -513,7 +513,12 @@ async function installS3Actions() {
     const source = await readFile(action.sourcePath);
     const existing = existingStatus ? await readFile(action.targetPath) : null;
     if (!existing || !source.equals(existing)) {
-      await copyFile(action.sourcePath, action.targetPath);
+      if (existingStatus) await chmod(action.targetPath, 0o644);
+      try {
+        await copyFile(action.sourcePath, action.targetPath);
+      } finally {
+        if (existingStatus) await chmod(action.targetPath, 0o444).catch(() => {});
+      }
       report.changed.push(`installed REAPER Action support file ${action.title} at ${action.targetPath}`);
     }
     await chmod(action.targetPath, 0o444);
