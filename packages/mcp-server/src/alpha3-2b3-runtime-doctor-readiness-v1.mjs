@@ -65,6 +65,12 @@ const PERMISSION_ERROR_CODES = new Set(["EACCES", "EPERM"]);
 const REAPER_EXECUTABLE_BASENAMES = new Set(["REAPER", "reaper"]);
 const IDENTITY_HELPER_MAX_BYTES = 16_384;
 const IDENTITY_HELPER_TIMEOUT_MS = 2_000;
+const WINDOWS_POWERSHELL_RELATIVE_PATH = [
+  "System32",
+  "WindowsPowerShell",
+  "v1.0",
+  "powershell.exe",
+];
 const IDENTITY_REALPATH_TIMEOUT_MS = 1_000;
 const PID_RECORD_CLOCK_SKEW_MS = 5_000;
 const PID_RECORD_LAUNCH_WINDOW_MS = 120_000;
@@ -151,6 +157,26 @@ export function parseAlpha3_2B3ExpectedGeneration(value) {
   return Number.isSafeInteger(parsed) && parsed >= 0
     ? deepFreeze({ present: true, valid: true, value: parsed })
     : deepFreeze({ present: true, valid: false });
+}
+
+export async function resolveAlpha3_2B3ManagedBridgeGeneration(sessionRoot) {
+  const record = await readBoundedSingleLineRecord(
+    path.join(path.resolve(sessionRoot ?? "."), "bridge-generation-v1.json"),
+  );
+  if (record.status !== "valid") return "1";
+  try {
+    const value = JSON.parse(record.value);
+    if (
+      value?.contract !== "openreaper.bridge_generation.v1" ||
+      !Number.isSafeInteger(value.generation) ||
+      value.generation < 1
+    ) {
+      return "1";
+    }
+    return String(value.generation);
+  } catch {
+    return "1";
+  }
 }
 
 export async function inspectAlpha3_2B3RenderRoot(value) {
@@ -361,6 +387,7 @@ export async function resolveAlpha3_2B3DoctorRenderRoot(options = {}) {
 
 export async function inspectAlpha3_2B3ReaperProcess(options = {}) {
   const sessionRoot = path.resolve(options.sessionRoot ?? ".");
+  const platform = options.platform ?? process.platform;
   const pidFile = path.resolve(options.pidFile ?? path.join(sessionRoot, "reaper.pid"));
   const record = await readBoundedFile(pidFile, PID_MAX_BYTES);
   if (record.status === "missing") {
@@ -398,6 +425,7 @@ export async function inspectAlpha3_2B3ReaperProcess(options = {}) {
     recordStat: record.stat,
     helperRunner: options.identityHelperRunner,
     now: options.now,
+    platform,
   });
   if (identity.status !== "verified") {
     const publicStatus = identity.status === "mismatch"
@@ -419,12 +447,17 @@ export async function inspectAlpha3_2B3ReaperProcess(options = {}) {
     running: true,
     pid,
     identity_verified: true,
-    process_identity: "cockos_reaper_codesign",
+    process_identity: platform === "win32"
+      ? "cockos_reaper_authenticode"
+      : "cockos_reaper_codesign",
     launch_record_verified: true,
   });
 }
 
 async function inspectExactPidReaperIdentity(pid, options = {}) {
+  if ((options.platform ?? process.platform) === "win32") {
+    return inspectWindowsExactPidReaperIdentity(pid, options);
+  }
   const helperRunner = typeof options.helperRunner === "function"
     ? options.helperRunner
     : runBoundedIdentityHelper;
@@ -483,6 +516,122 @@ async function inspectExactPidReaperIdentity(pid, options = {}) {
   }
   if (!sameFileSnapshot(beforeSignature, afterSignature)) return { status: "unverified" };
   return { status: "verified" };
+}
+
+async function inspectWindowsExactPidReaperIdentity(pid, options = {}) {
+  const helperRunner = typeof options.helperRunner === "function"
+    ? options.helperRunner
+    : runBoundedIdentityHelper;
+  const now = Number.isFinite(options.now) ? options.now : Date.now();
+  const firstProcess = await readWindowsPidProcessSnapshot(pid, helperRunner);
+  if (firstProcess.status !== "valid") return { status: firstProcess.status };
+  if (!REAPER_EXECUTABLE_BASENAMES.has(firstProcess.process_name)) return { status: "mismatch" };
+  if (
+    firstProcess.signature_status !== "Valid" ||
+    !/\bCN=Cockos Incorporated\b/iu.test(firstProcess.signer_subject)
+  ) {
+    return { status: "mismatch" };
+  }
+  if (!pidRecordMatchesProcessStart(options.recordStat, firstProcess.start_ms, now)) {
+    return { status: "record_stale" };
+  }
+
+  const resolvedExecutable = await resolveBoundedExecutablePath(firstProcess.executable_path);
+  if (!resolvedExecutable) return { status: "unverified" };
+  let beforeSignature;
+  try {
+    beforeSignature = await lstat(resolvedExecutable);
+  } catch {
+    return { status: "unverified" };
+  }
+  if (beforeSignature.isSymbolicLink() || !beforeSignature.isFile()) {
+    return { status: "unverified" };
+  }
+
+  const secondProcess = await readWindowsPidProcessSnapshot(pid, helperRunner);
+  if (secondProcess.status !== "valid") return { status: "unverified" };
+  const secondResolvedExecutable = await resolveBoundedExecutablePath(secondProcess.executable_path);
+  if (
+    secondProcess.pid !== firstProcess.pid ||
+    secondProcess.process_name !== firstProcess.process_name ||
+    secondProcess.start_ms !== firstProcess.start_ms ||
+    secondResolvedExecutable !== resolvedExecutable
+  ) {
+    return { status: "unverified" };
+  }
+
+  let afterSignature;
+  try {
+    afterSignature = await lstat(resolvedExecutable);
+    process.kill(pid, 0);
+  } catch {
+    return { status: "not_running" };
+  }
+  if (!sameFileSnapshot(beforeSignature, afterSignature)) return { status: "unverified" };
+  return { status: "verified" };
+}
+
+async function readWindowsPidProcessSnapshot(pid, helperRunner) {
+  const powershell = windowsPowerShellPath();
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue`,
+    "if (-not $p -or -not $p.Path) { exit 3 }",
+    "$signature = Get-AuthenticodeSignature -LiteralPath $p.Path",
+    "[pscustomobject]@{ pid = $p.Id; process_name = $p.ProcessName; executable_path = $p.Path; start_ms = ([DateTimeOffset]$p.StartTime).ToUnixTimeMilliseconds(); signature_status = [string]$signature.Status; signer_subject = [string]$signature.SignerCertificate.Subject } | ConvertTo-Json -Compress",
+  ].join("; ");
+  const result = await callIdentityHelper(helperRunner, powershell, [
+    "-NoLogo",
+    "-NoProfile",
+    "-NonInteractive",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-Command",
+    script,
+  ]);
+  if (!result.ok) return { status: "unverified" };
+  const lines = boundedHelperLines(result.stdout);
+  if (!lines || lines.length !== 1) return { status: "unverified" };
+  let value;
+  try {
+    value = JSON.parse(lines[0]);
+  } catch {
+    return { status: "unverified" };
+  }
+  if (
+    !value ||
+    Array.isArray(value) ||
+    Number(value.pid) !== pid ||
+    typeof value.process_name !== "string" ||
+    !value.process_name ||
+    Buffer.byteLength(value.process_name, "utf8") > 128 ||
+    /[\u0000-\u001f\u007f/\\]/u.test(value.process_name) ||
+    typeof value.executable_path !== "string" ||
+    typeof value.start_ms !== "number" ||
+    !Number.isSafeInteger(value.start_ms) ||
+    value.start_ms < 0 ||
+    typeof value.signature_status !== "string" ||
+    typeof value.signer_subject !== "string" ||
+    Buffer.byteLength(value.signer_subject, "utf8") > 512
+  ) {
+    return { status: "unverified" };
+  }
+  return {
+    status: "valid",
+    pid,
+    process_name: value.process_name.toLowerCase(),
+    executable_path: value.executable_path,
+    start_ms: value.start_ms,
+    signature_status: value.signature_status,
+    signer_subject: value.signer_subject,
+  };
+}
+
+function windowsPowerShellPath() {
+  const systemRoot = typeof process.env.SystemRoot === "string" && process.env.SystemRoot !== ""
+    ? process.env.SystemRoot
+    : "C:\\Windows";
+  return path.join(systemRoot, ...WINDOWS_POWERSHELL_RELATIVE_PATH);
 }
 
 async function readExactPidProcessSnapshot(pid, helperRunner) {

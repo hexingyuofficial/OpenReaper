@@ -21,6 +21,7 @@ import {
   parseAlpha3_2B3DoctorArgs,
   parseAlpha3_2B3ExpectedGeneration,
   parseAlpha3_2B3ExpectedIdentity,
+  resolveAlpha3_2B3ManagedBridgeGeneration,
   resolveAlpha3_2B3DoctorRenderRoot,
 } from "../../packages/mcp-server/src/alpha3-2b3-runtime-doctor-readiness-v1.mjs";
 import {
@@ -64,6 +65,57 @@ describe("Alpha3.2-B3 runtime / doctor live readiness", () => {
     const absent = parseAlpha3_2B3ExpectedIdentity({});
     assert.equal(Object.hasOwn(absent.owner, "value"), false);
     assert.equal(Object.hasOwn(absent.generation, "value"), false);
+  });
+
+  it("resolves the managed Bridge generation for standalone Doctor runs", async () => {
+    const sessionRoot = await mkdtemp(path.join(os.tmpdir(), "openreaper-b3-generation-"));
+    await writeFile(
+      path.join(sessionRoot, "bridge-generation-v1.json"),
+      JSON.stringify({ contract: "openreaper.bridge_generation.v1", generation: 3 }),
+      "utf8",
+    );
+    assert.equal(await resolveAlpha3_2B3ManagedBridgeGeneration(sessionRoot), "3");
+
+    await writeFile(path.join(sessionRoot, "bridge-generation-v1.json"), "{bad json\n", "utf8");
+    assert.equal(await resolveAlpha3_2B3ManagedBridgeGeneration(sessionRoot), "1");
+  });
+
+  it("verifies a Windows REAPER PID through PowerShell and Authenticode", async () => {
+    const sessionRoot = await mkdtemp(path.join(os.tmpdir(), "openreaper-b3-windows-pid-"));
+    const executable = path.join(sessionRoot, "reaper.exe");
+    const startMs = Date.now() - 1_000;
+    await copyFile("/bin/sleep", executable);
+    await chmod(executable, 0o700);
+    await writeFile(path.join(sessionRoot, "reaper.pid"), `${process.pid}\n`, "utf8");
+
+    const helperRunner = makeWindowsIdentityHelperRunner({
+      pid: process.pid,
+      executable,
+      startMs,
+    });
+    const verified = await inspectAlpha3_2B3ReaperProcess({
+      sessionRoot,
+      platform: "win32",
+      identityHelperRunner: helperRunner,
+      now: Date.now(),
+    });
+    assert.equal(verified.status, "running");
+    assert.equal(verified.process_identity, "cockos_reaper_authenticode");
+    assert.equal(verified.identity_verified, true);
+
+    const unsigned = await inspectAlpha3_2B3ReaperProcess({
+      sessionRoot,
+      platform: "win32",
+      identityHelperRunner: makeWindowsIdentityHelperRunner({
+        pid: process.pid,
+        executable,
+        startMs,
+        signatureStatus: "NotSigned",
+      }),
+      now: Date.now(),
+    });
+    assert.equal(unsigned.status, "pid_identity_mismatch");
+    assert.equal(unsigned.running, false);
   });
 
   it("composes exact B1 statuses with bounded MCP, bridge, render-root, and not-run request proof", async () => {
@@ -1098,6 +1150,33 @@ function makeIdentityHelperRunner({ pid, executable, startMs, state = "S", lsofO
       return { ok: true, stdout: "" };
     }
     return { ok: false, failure: "unavailable", stdout: "" };
+  };
+}
+
+function makeWindowsIdentityHelperRunner({ pid, executable, startMs, signatureStatus = "Valid" }) {
+  return async ({ command, args, maxBytes, timeoutMs }) => {
+    assert.match(command, /powershell\.exe$/iu);
+    assert.deepEqual(args.slice(0, 5), [
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-ExecutionPolicy",
+      "Bypass",
+    ]);
+    assert.equal(args[5], "-Command");
+    assert.equal(maxBytes, 16_384);
+    assert.equal(timeoutMs, 2_000);
+    return {
+      ok: true,
+      stdout: `${JSON.stringify({
+        pid,
+        process_name: "reaper",
+        executable_path: executable,
+        start_ms: startMs,
+        signature_status: signatureStatus,
+        signer_subject: "CN=Cockos Incorporated, O=Cockos Incorporated",
+      })}\n`,
+    };
   };
 }
 

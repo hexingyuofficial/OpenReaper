@@ -113,6 +113,7 @@ const {
   normalizeAlpha3_2B3RequestResponseProof,
   parseAlpha3_2B3DoctorArgs,
   parseAlpha3_2B3ExpectedIdentity,
+  resolveAlpha3_2B3ManagedBridgeGeneration,
   resolveAlpha3_2B3DoctorRenderRoot,
 } = readinessModule;
 const { projectAlpha3_2_5BProjectQueryDoctorTask } = projectUnderstandingModule;
@@ -138,7 +139,7 @@ const expectedOwner = Object.prototype.hasOwnProperty.call(process.env, "OPENREA
   : "openreaper-alpha";
 const expectedGeneration = Object.prototype.hasOwnProperty.call(process.env, "OPENREAPER_LIVE_BRIDGE_GENERATION")
   ? process.env.OPENREAPER_LIVE_BRIDGE_GENERATION
-  : "1";
+  : await resolveAlpha3_2B3ManagedBridgeGeneration(sessionRoot);
 const mcpEnv = {
   ...process.env,
   OPENREAPER_MCP_PACKAGE_ROOT: installRoot,
