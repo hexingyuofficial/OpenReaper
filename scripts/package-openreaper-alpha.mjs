@@ -3237,7 +3237,7 @@ async function smokePackagedInstallerUpgradeMigration() {
     "openreaper-start-mcp-bridge.lua",
     "LEGACY_STARTUP_HOOKS",
     "__startup.eel",
-    "trusted_package_command_line_reascript",
+    "trusted_package_manual_action_reascript",
     "prior OpenReaper alpha startup hook",
     "legacy OpenReaper Alpha3 startup hook",
     "legacy Streetlight startup hook",
