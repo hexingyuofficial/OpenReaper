@@ -8,6 +8,10 @@ import {
   LIVE_BRIDGE_LIVENESS_STATUS,
   probeLiveBridgeLiveness,
 } from "./live-bridge-executor-v1.mjs";
+import {
+  inspectWindowsSafeDirectory,
+  readWindowsSafeFile,
+} from "./windows-safe-file-v1.mjs";
 
 export const ALPHA3_2B3_RUNTIME_DOCTOR_READINESS_CONTRACT =
   "alpha3.2.b3.runtime_doctor_readiness.v1";
@@ -182,6 +186,21 @@ export async function inspectAlpha3_2B3RenderRoot(value) {
   }
   if (!initial.isDirectory()) {
     return deepFreeze(renderRootResult("render_root_not_directory", candidate));
+  }
+  if (process.platform === "win32") {
+    const native = await inspectWindowsSafeDirectory(candidate);
+    if (native.status === "ready") {
+      return deepFreeze(renderRootResult("render_root_ready", candidate, { ready: true }));
+    }
+    if (native.status === "missing") return deepFreeze(renderRootResult("render_root_missing", candidate));
+    if (native.status === "symlink") return deepFreeze(renderRootResult("render_root_symlink", candidate));
+    if (native.status === "not_directory") return deepFreeze(renderRootResult("render_root_not_directory", candidate));
+    if (native.status === "not_writable") return deepFreeze(renderRootResult("render_root_not_writable", candidate));
+    return deepFreeze(renderRootResult(
+      "render_root_inspection_failed",
+      candidate,
+      { reason: "render_root_nofollow_unavailable", native_reason: native.reason ?? null },
+    ));
   }
   if (!Number.isInteger(fsConstants.O_NOFOLLOW) || !Number.isInteger(fsConstants.O_DIRECTORY)) {
     return deepFreeze(renderRootResult(
@@ -1283,6 +1302,9 @@ async function readBoundedSingleLineRecord(filePath) {
 }
 
 async function readBoundedFile(filePath, maxBytes) {
+  if (process.platform === "win32") {
+    return readBoundedFileWithWindowsSafeOpen(filePath, maxBytes);
+  }
   let handle;
   try {
     const entry = await lstat(filePath);
@@ -1342,6 +1364,40 @@ async function readBoundedFile(filePath, maxBytes) {
   } finally {
     await handle?.close().catch(() => {});
   }
+}
+
+async function readBoundedFileWithWindowsSafeOpen(filePath, maxBytes) {
+  const result = await readWindowsSafeFile(filePath, { maxBytes });
+  if (result.status === "missing") return { status: "missing" };
+  if (result.status !== "valid") {
+    const reasonMap = {
+      link_count_invalid: "record_link_count_invalid",
+      not_regular_file: "record_not_regular_file",
+      file_too_large: "record_too_large",
+      file_changed_during_read: "record_changed_during_read",
+    };
+    return {
+      status: "invalid",
+      reason: reasonMap[result.reason] ?? (
+        result.status === "unavailable" ? "record_nofollow_unavailable" : "record_read_failed"
+      ),
+    };
+  }
+
+  let value;
+  try {
+    value = new TextDecoder("utf-8", { fatal: true }).decode(result.bytes);
+  } catch {
+    return { status: "invalid", reason: "record_invalid_utf8" };
+  }
+  return {
+    status: "valid",
+    value,
+    stat: {
+      mtime_ms: result.mtime_ms,
+      ctime_ms: result.ctime_ms,
+    },
+  };
 }
 
 function invalidArgs(message) {

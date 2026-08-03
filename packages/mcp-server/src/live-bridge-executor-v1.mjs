@@ -8,6 +8,7 @@ import {
   foundationBridgeRequestFingerprint,
   validateFoundationBridgeResult,
 } from "../../core/src/foundation-bridge-v1.mjs";
+import { readWindowsSafeFile } from "./windows-safe-file-v1.mjs";
 
 export const LIVE_BRIDGE_EXECUTOR_CONTRACT = "live_bridge.executor.v1";
 export const LIVE_BRIDGE_LIVENESS_CONTRACT = "openreaper.bridge_liveness.v1";
@@ -957,6 +958,9 @@ async function readHeartbeatFileSafely({ heartbeatPath, openFile }) {
 }
 
 async function readHeartbeatFileOnce({ heartbeatPath, openFile }) {
+  if (process.platform === "win32" && openFile === open) {
+    return readHeartbeatFileWithWindowsSafeOpen(heartbeatPath);
+  }
   if (!Number.isInteger(fsConstants.O_NOFOLLOW)) {
     return {
       ok: false,
@@ -1058,6 +1062,42 @@ async function readHeartbeatFileOnce({ heartbeatPath, openFile }) {
       // The bounded read result remains valid; the handle was still closed best-effort.
     }
   }
+}
+
+async function readHeartbeatFileWithWindowsSafeOpen(heartbeatPath) {
+  const result = await readWindowsSafeFile(heartbeatPath, { maxBytes: HEARTBEAT_MAX_BYTES });
+  if (result.status === "missing") return { ok: false, missing: true };
+  if (result.status !== "valid") {
+    const reasonMap = {
+      link_count_invalid: "heartbeat_link_count_invalid",
+      not_regular_file: "heartbeat_not_regular_file",
+      file_too_large: "heartbeat_size_invalid",
+      file_changed_during_read: "heartbeat_changed_during_read",
+    };
+    return {
+      ok: false,
+      reason: reasonMap[result.reason] ?? "heartbeat_read_failed",
+      details: {
+        error_code: boundedString(result.error_code, 32),
+        native_reason: boundedString(result.reason, 64),
+      },
+    };
+  }
+
+  const statResult = {
+    isFile: () => true,
+    nlink: result.nlink,
+    size: result.size,
+    mtimeMs: result.mtime_ms,
+    ctimeMs: result.ctime_ms,
+  };
+  const statError = validateHeartbeatFileStat(statResult);
+  if (statError) return statError;
+  return {
+    ok: true,
+    raw: result.value,
+    stat: statResult,
+  };
 }
 
 function validateHeartbeatFileStat(fileStat) {

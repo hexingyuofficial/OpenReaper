@@ -70,6 +70,7 @@ const provenanceManifestPath = path.join(installRoot, "provenance.json");
 const provenanceManifestMaxBytes = 16_384;
 const serverScript = path.join(installRoot, "vendor", "openreaper-kernel", "packages", "mcp-server", "src", "openreaper-mcp-stdio.mjs");
 const readinessModulePath = path.join(installRoot, "vendor", "openreaper-kernel", "packages", "mcp-server", "src", "alpha3-2b3-runtime-doctor-readiness-v1.mjs");
+const windowsSafeFileModulePath = path.join(installRoot, "vendor", "openreaper-kernel", "packages", "mcp-server", "src", "windows-safe-file-v1.mjs");
 const projectUnderstandingModulePath = path.join(installRoot, "vendor", "openreaper-kernel", "packages", "mcp-server", "src", "alpha3-2-5-b-project-understanding-v1.mjs");
 const vitalAgentServerScript = path.join(installRoot, "vendor", "vital-agent-mcp", "dist", "src", "mcpServer.js");
 const vitalAgentIncluded = existsSync(vitalAgentMcpCommand) && existsSync(vitalAgentServerScript);
@@ -102,6 +103,7 @@ for (const [signal, exitCode] of [["SIGINT", 130], ["SIGTERM", 143]]) {
 
 const readinessModule = await import(pathToFileURL(readinessModulePath));
 const projectUnderstandingModule = await import(pathToFileURL(projectUnderstandingModulePath));
+const windowsSafeFileModule = await import(pathToFileURL(windowsSafeFileModulePath));
 const {
   ALPHA3_2B3_READ_PROBE_TEMPLATE_ID,
   alpha3_2B3ReadProbeTimeoutMs,
@@ -114,6 +116,7 @@ const {
   resolveAlpha3_2B3DoctorRenderRoot,
 } = readinessModule;
 const { projectAlpha3_2_5BProjectQueryDoctorTask } = projectUnderstandingModule;
+const { readWindowsSafeFile } = windowsSafeFileModule;
 
 const cli = parseAlpha3_2B3DoctorArgs(process.argv.slice(2));
 if (!cli.ok) {
@@ -372,17 +375,24 @@ async function readProvenanceManifest() {
       !before.isFile() ||
       before.size < 1 ||
       before.size > provenanceManifestMaxBytes ||
-      (before.mode & 0o222) !== 0 ||
-      !Number.isInteger(fsConstants.O_NOFOLLOW)
+      (process.platform !== "win32" && (before.mode & 0o222) !== 0)
     ) return { status: "invalid" };
-    handle = await open(provenanceManifestPath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
-    const opened = await handle.stat();
-    if (!sameFileSnapshot(before, opened)) return { status: "invalid" };
-    const raw = await handle.readFile({ encoding: "utf8" });
-    if (Buffer.byteLength(raw, "utf8") > provenanceManifestMaxBytes) return { status: "invalid" };
-    const [finalHandle, finalPath] = await Promise.all([handle.stat(), lstat(provenanceManifestPath)]);
-    if (finalPath.isSymbolicLink() || !sameFileSnapshot(opened, finalHandle) || !sameFileSnapshot(opened, finalPath)) {
-      return { status: "invalid" };
+    let raw;
+    if (process.platform === "win32") {
+      const native = await readWindowsSafeFile(provenanceManifestPath, { maxBytes: provenanceManifestMaxBytes });
+      if (native.status !== "valid" || native.read_only !== true) return { status: "invalid" };
+      raw = native.value;
+    } else {
+      if (!Number.isInteger(fsConstants.O_NOFOLLOW)) return { status: "invalid" };
+      handle = await open(provenanceManifestPath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+      const opened = await handle.stat();
+      if (!sameFileSnapshot(before, opened)) return { status: "invalid" };
+      raw = await handle.readFile({ encoding: "utf8" });
+      if (Buffer.byteLength(raw, "utf8") > provenanceManifestMaxBytes) return { status: "invalid" };
+      const [finalHandle, finalPath] = await Promise.all([handle.stat(), lstat(provenanceManifestPath)]);
+      if (finalPath.isSymbolicLink() || !sameFileSnapshot(opened, finalHandle) || !sameFileSnapshot(opened, finalPath)) {
+        return { status: "invalid" };
+      }
     }
     const value = JSON.parse(raw);
     if (
