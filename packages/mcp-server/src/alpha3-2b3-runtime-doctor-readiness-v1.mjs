@@ -401,7 +401,7 @@ export async function inspectAlpha3_2B3ReaperProcess(options = {}) {
       reason: record.reason,
     });
   }
-  const text = record.value.endsWith("\n") ? record.value.slice(0, -1) : record.value;
+  const text = record.value.replace(/\r?\n$/u, "");
   if (!/^[1-9][0-9]*$/u.test(text)) {
     return deepFreeze({ status: "pid_invalid", running: false, pid: null });
   }

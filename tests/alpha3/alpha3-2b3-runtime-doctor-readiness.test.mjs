@@ -86,7 +86,7 @@ describe("Alpha3.2-B3 runtime / doctor live readiness", () => {
     const startMs = Date.now() - 1_000;
     await copyFile("/bin/sleep", executable);
     await chmod(executable, 0o700);
-    await writeFile(path.join(sessionRoot, "reaper.pid"), `${process.pid}\n`, "utf8");
+    await writeFile(path.join(sessionRoot, "reaper.pid"), `${process.pid}\r\n`, "utf8");
 
     const helperRunner = makeWindowsIdentityHelperRunner({
       pid: process.pid,
