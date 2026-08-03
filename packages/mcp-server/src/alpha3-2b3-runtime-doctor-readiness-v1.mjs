@@ -455,7 +455,8 @@ export async function inspectAlpha3_2B3ReaperProcess(options = {}) {
 }
 
 async function inspectExactPidReaperIdentity(pid, options = {}) {
-  if ((options.platform ?? process.platform) === "win32") {
+  const platform = options.platform ?? process.platform;
+  if (platform === "win32") {
     return inspectWindowsExactPidReaperIdentity(pid, options);
   }
   const helperRunner = typeof options.helperRunner === "function"
@@ -465,7 +466,7 @@ async function inspectExactPidReaperIdentity(pid, options = {}) {
   const firstProcess = await readExactPidProcessSnapshot(pid, helperRunner);
   if (firstProcess.status !== "valid") return { status: firstProcess.status };
   if (!REAPER_EXECUTABLE_BASENAMES.has(firstProcess.ucomm)) return { status: "mismatch" };
-  if (!pidRecordMatchesProcessStart(options.recordStat, firstProcess.start_ms, now)) {
+  if (!pidRecordMatchesProcessStart(options.recordStat, firstProcess.start_ms, now, platform)) {
     return { status: "record_stale" };
   }
 
@@ -532,7 +533,7 @@ async function inspectWindowsExactPidReaperIdentity(pid, options = {}) {
   ) {
     return { status: "mismatch" };
   }
-  if (!pidRecordMatchesProcessStart(options.recordStat, firstProcess.start_ms, now)) {
+  if (!pidRecordMatchesProcessStart(options.recordStat, firstProcess.start_ms, now, "win32")) {
     return { status: "record_stale" };
   }
 
@@ -791,17 +792,20 @@ function parsePsLaunchTime({ weekday, month, dayText, timeText, yearText }) {
   return value.getTime();
 }
 
-function pidRecordMatchesProcessStart(recordStat, processStartMs, now) {
+export function pidRecordMatchesProcessStart(recordStat, processStartMs, now, platform = process.platform) {
   if (
     !recordStat ||
     !Number.isFinite(recordStat.mtime_ms) ||
-    !Number.isFinite(recordStat.ctime_ms) ||
+    (platform !== "win32" && !Number.isFinite(recordStat.ctime_ms)) ||
     !Number.isFinite(processStartMs) ||
     processStartMs > now + PID_RECORD_CLOCK_SKEW_MS
   ) {
     return false;
   }
-  return [recordStat.mtime_ms, recordStat.ctime_ms].every((recordTime) =>
+  const recordTimes = platform === "win32"
+    ? [recordStat.mtime_ms]
+    : [recordStat.mtime_ms, recordStat.ctime_ms];
+  return recordTimes.every((recordTime) =>
     recordTime >= processStartMs - PID_RECORD_CLOCK_SKEW_MS &&
     recordTime <= processStartMs + PID_RECORD_LAUNCH_WINDOW_MS &&
     recordTime <= now + PID_RECORD_CLOCK_SKEW_MS,

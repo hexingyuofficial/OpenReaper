@@ -41,3 +41,11 @@ test("Windows start omits an empty Start-Process argument list", () => {
   assert.match(startPs1, /Start-Process -FilePath \$binary -ArgumentList \$launchArgs/u);
   assert.match(startPs1, /Start-Process -FilePath \$binary -WorkingDirectory \(Split-Path -Parent \$binary\) -PassThru/u);
 });
+
+test("Windows start refuses an unmanaged REAPER process before launching", () => {
+  assert.match(startPs1, /function Get-RunningReaperProcesses/u);
+  assert.match(startPs1, /\$runningReaperProcesses = @\(Get-RunningReaperProcesses\)/u);
+  assert.match(startPs1, /An unmanaged REAPER process is already running/u);
+  assert.match(startPs1, /Refusing duplicate startup to protect REAPER configuration and Bridge identity/u);
+  assert.match(startPs1, /New-Item -ItemType Directory -Force -Path \$ReaperResourceRoot/u);
+});

@@ -20,6 +20,45 @@ configuration. A machine without an audio device can still run OpenReaper
 Bridge, project reads/writes, media processing, and offline renders. Real-time
 playback and recording require an available audio device later.
 
+## Known contained configuration-write dialog
+
+During the Windows 11 / REAPER 7.78 contained alpha11 launch, REAPER showed
+the user-reported dialog body:
+
+`Configuration write error. Can't write to REAPER configuration file. App behavior may be unexpected.`
+
+This was observed while launching the stock binary with the contained
+`-cfgfile` path in interactive Session 2. The dialog blocked REAPER's startup
+hook: the wrapper timed out with `startup_status=missing` while the REAPER
+process remained alive. After the logged-in desktop user selected `OK`, the
+normal REAPER window appeared, the startup hook reached
+`bridge_dofile_succeeded`, and a matching heartbeat/public-read recovery run
+passed. The evidence is retained under
+`C:\OpenReaperLab\contained-alpha10\evidence-start-alpha11-r1`.
+
+The paired English/Chinese path experiment, the contained directory ACL, and
+direct PowerShell write checks did not reproduce a username or permissions
+blocker. This is therefore a contained-fixture startup/configuration warning,
+not evidence that OpenReaper needs a virtual sound card or a Unicode-path
+workaround. Keep this handling development-only and user-mediated. The
+packaged runtime must not click configuration, license, recovery, plugin-scan,
+upgrade, or unknown REAPER dialogs automatically.
+
+The follow-up diagnosis stopped the owned REAPER process `68492`, then started
+the same contained package through the existing Session 2 native scheduled
+task. The clean launch returned `startup-status=ready`, `bridge-status=ready`,
+and `public-read-probe=passed` without reproducing the dialog. A second launch
+probe with an already-running REAPER and no trusted OpenReaper PID record now
+fails closed with the exact PID and executable path instead of starting a
+competing instance. Treat the original warning as a transient duplicate or
+residual-session configuration race until a fresh run proves otherwise.
+
+The Windows PowerShell start entrypoint creates the explicitly selected
+resource root and refuses an unmanaged `reaper.exe` process before mutation.
+This guard is a startup safety measure, not a dialog auto-dismiss rule. The
+user's normal REAPER process is never terminated by this path; close it and
+retry through OpenReaper when the guard reports it.
+
 ## Reusable procedure
 
 1. Confirm the REAPER PID and its interactive desktop session. The current

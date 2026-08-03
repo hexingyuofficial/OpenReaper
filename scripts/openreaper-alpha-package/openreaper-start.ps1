@@ -89,6 +89,17 @@ function Resolve-ReaperBinary {
     return [IO.Path]::GetFullPath($candidates[0])
 }
 
+function Get-RunningReaperProcesses {
+    @(
+        Get-Process -Name reaper -ErrorAction SilentlyContinue | ForEach-Object {
+            [pscustomobject]@{
+                id = $_.Id
+                path = try { $_.Path } catch { $null }
+            }
+        }
+    )
+}
+
 Assert-AbsolutePath $InstallRoot "-InstallRoot"
 Assert-AbsolutePath $SessionRoot "-SessionRoot"
 Assert-AbsolutePath $ReaperResourceRoot "-ReaperResourceRoot"
@@ -96,6 +107,41 @@ if ($RenderRoot) { Assert-AbsolutePath $RenderRoot "-RenderRoot" }
 if (-not (Test-Path -LiteralPath $bridgeScript -PathType Leaf)) { Fail "Packaged Bridge script is missing: $bridgeScript" }
 if (-not (Test-Path -LiteralPath $doctorScript -PathType Leaf)) { Fail "Packaged Doctor is missing: $doctorScript" }
 
+$binary = Resolve-ReaperBinary
+$runningReaperProcesses = @(Get-RunningReaperProcesses)
+$existingPid = $null
+$existingProcess = $null
+if (Test-Path -LiteralPath $pidPath -PathType Leaf) {
+    $existingPid = [int]((Get-Content -LiteralPath $pidPath -Raw).Trim())
+}
+if ($existingPid) {
+    $existingProcess = $runningReaperProcesses | Where-Object { $_.id -eq $existingPid } | Select-Object -First 1
+}
+if ($existingProcess) {
+    if (-not $RecoverExisting) { Fail "A managed REAPER session is already running (pid=$existingPid); refusing duplicate startup." }
+    $BridgeGeneration = [string](Read-Generation)
+} else {
+    if ($runningReaperProcesses.Count -gt 0) {
+        $details = ($runningReaperProcesses | ForEach-Object {
+            $path = if ($_.path) { $_.path } else { "path-unavailable" }
+            "pid=$($_.id),path=$path"
+        }) -join "; "
+        Fail "An unmanaged REAPER process is already running ($details); close it and retry. Refusing duplicate startup to protect REAPER configuration and Bridge identity."
+    }
+    $previousGeneration = Read-Generation
+    if ($BridgeGeneration) {
+        if ($BridgeGeneration -notmatch '^[1-9][0-9]*$') { Fail "-BridgeGeneration must be a positive integer." }
+        $nextGeneration = [int64]$BridgeGeneration
+        if ($nextGeneration -lt $previousGeneration) { Fail "-BridgeGeneration would move the managed generation backwards." }
+    } else {
+        $nextGeneration = [Math]::Max(1, $previousGeneration + 1)
+    }
+    $BridgeGeneration = [string]$nextGeneration
+    New-Item -ItemType Directory -Force -Path $SessionRoot | Out-Null
+    Write-Generation $nextGeneration
+}
+
+New-Item -ItemType Directory -Force -Path $ReaperResourceRoot | Out-Null
 New-Item -ItemType Directory -Force -Path $transportRoot, (Join-Path $transportRoot "requests"), (Join-Path $transportRoot "results"), $artifactRoot, $projectIndexRoot, $logRoot | Out-Null
 if (-not $RenderRoot) {
     $managedRecord = Join-Path $SessionRoot "managed-render-root.path"
@@ -107,27 +153,6 @@ if (-not $RenderRoot) {
 Assert-AbsolutePath $RenderRoot "effective render root"
 New-Item -ItemType Directory -Force -Path $RenderRoot | Out-Null
 
-$existingPid = $null
-if (Test-Path -LiteralPath $pidPath -PathType Leaf) {
-    $existingPid = [int]((Get-Content -LiteralPath $pidPath -Raw).Trim())
-}
-if ($existingPid -and (Get-Process -Id $existingPid -ErrorAction SilentlyContinue)) {
-    if (-not $RecoverExisting) { Fail "A managed REAPER session is already running (pid=$existingPid); refusing duplicate startup." }
-    $BridgeGeneration = [string](Read-Generation)
-} else {
-    $previousGeneration = Read-Generation
-    if ($BridgeGeneration) {
-        if ($BridgeGeneration -notmatch '^[1-9][0-9]*$') { Fail "-BridgeGeneration must be a positive integer." }
-        $nextGeneration = [int64]$BridgeGeneration
-        if ($nextGeneration -lt $previousGeneration) { Fail "-BridgeGeneration would move the managed generation backwards." }
-    } else {
-        $nextGeneration = [Math]::Max(1, $previousGeneration + 1)
-    }
-    $BridgeGeneration = [string]$nextGeneration
-    Write-Generation $nextGeneration
-}
-
-$binary = Resolve-ReaperBinary
 $resourceConfigFile = Join-Path $ReaperResourceRoot "REAPER.ini"
 $launchArgs = @(
     "-cfgfile", (Quote-ProcessArgument $resourceConfigFile)
@@ -164,7 +189,7 @@ $launchInfo = @{
 $launchInfo | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $logPath -Encoding UTF8
 
 $process = $null
-if (-not $existingPid -or -not (Get-Process -Id $existingPid -ErrorAction SilentlyContinue)) {
+if (-not $existingProcess) {
     if ($launchArgs.Count -gt 0) {
         $process = Start-Process -FilePath $binary -ArgumentList $launchArgs -WorkingDirectory (Split-Path -Parent $binary) -PassThru
     } else {

@@ -21,6 +21,7 @@ import {
   parseAlpha3_2B3DoctorArgs,
   parseAlpha3_2B3ExpectedGeneration,
   parseAlpha3_2B3ExpectedIdentity,
+  pidRecordMatchesProcessStart,
   resolveAlpha3_2B3ManagedBridgeGeneration,
   resolveAlpha3_2B3DoctorRenderRoot,
 } from "../../packages/mcp-server/src/alpha3-2b3-runtime-doctor-readiness-v1.mjs";
@@ -78,6 +79,16 @@ describe("Alpha3.2-B3 runtime / doctor live readiness", () => {
 
     await writeFile(path.join(sessionRoot, "bridge-generation-v1.json"), "{bad json\n", "utf8");
     assert.equal(await resolveAlpha3_2B3ManagedBridgeGeneration(sessionRoot), "1");
+  });
+
+  it("uses Windows pid mtime without treating native creation time as a launch timestamp", () => {
+    const startMs = 1_700_000_000_000;
+    const recordStat = {
+      mtime_ms: startMs + 25,
+      ctime_ms: startMs - (24 * 60 * 60 * 1_000),
+    };
+    assert.equal(pidRecordMatchesProcessStart(recordStat, startMs, startMs + 1_000, "win32"), true);
+    assert.equal(pidRecordMatchesProcessStart(recordStat, startMs, startMs + 1_000, "darwin"), false);
   });
 
   it("verifies a Windows REAPER PID through PowerShell and Authenticode", async () => {
