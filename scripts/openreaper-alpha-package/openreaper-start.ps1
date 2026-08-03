@@ -129,7 +129,10 @@ if ($existingPid -and (Get-Process -Id $existingPid -ErrorAction SilentlyContinu
 
 $binary = Resolve-ReaperBinary
 $resourceConfigFile = Join-Path $ReaperResourceRoot "REAPER.ini"
-$launchArgs = @("-cfgfile", (Quote-ProcessArgument $resourceConfigFile))
+$launchArgs = @(
+    "-resourcepath", (Quote-ProcessArgument $ReaperResourceRoot),
+    "-cfgfile", (Quote-ProcessArgument $resourceConfigFile)
+)
 if ($ProjectPath) {
     Assert-AbsolutePath $ProjectPath "-ProjectPath"
     if (-not (Test-Path -LiteralPath $ProjectPath -PathType Leaf)) { Fail "Project was not found: $ProjectPath" }
