@@ -3238,7 +3238,7 @@ async function smokePackagedInstallerUpgradeMigration() {
     "LEGACY_STARTUP_HOOKS",
     "__startup.eel",
     "trusted_package_manual_action_reascript",
-    "prior OpenReaper alpha startup hook",
+    "obsolete OpenReaper EEL startup hook",
     "legacy OpenReaper Alpha3 startup hook",
     "legacy Streetlight startup hook",
     "removeMarkedBlock",
