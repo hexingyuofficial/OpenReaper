@@ -45,6 +45,11 @@ function Fail([string] $Message) {
     exit 2
 }
 
+function Quote-ProcessArgument([string] $Value) {
+    if ($Value -notmatch '[\s"]') { return $Value }
+    return '"' + $Value.Replace('"', '\"') + '"'
+}
+
 function Assert-AbsolutePath([string] $Value, [string] $Label) {
     if (-not $Value -or -not [IO.Path]::IsPathRooted($Value)) { Fail "$Label must be an absolute path." }
 }
@@ -123,11 +128,12 @@ if ($existingPid -and (Get-Process -Id $existingPid -ErrorAction SilentlyContinu
 }
 
 $binary = Resolve-ReaperBinary
-$launchArgs = @()
+$resourceConfigFile = Join-Path $ReaperResourceRoot "REAPER.ini"
+$launchArgs = @("-cfgfile", (Quote-ProcessArgument $resourceConfigFile))
 if ($ProjectPath) {
     Assert-AbsolutePath $ProjectPath "-ProjectPath"
     if (-not (Test-Path -LiteralPath $ProjectPath -PathType Leaf)) { Fail "Project was not found: $ProjectPath" }
-    $launchArgs += $ProjectPath
+    $launchArgs += (Quote-ProcessArgument $ProjectPath)
 }
 $env:OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR = $transportRoot
 $env:OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH = $bridgeScript
@@ -147,6 +153,7 @@ $launchInfo = @{
     session_root = $SessionRoot
     reaper_binary = $binary
     reaper_resource_root = $ReaperResourceRoot
+    reaper_config_file = $resourceConfigFile
     bridge_owner = $BridgeOwner
     bridge_generation = [int64]$BridgeGeneration
     project_path = if ($ProjectPath) { [IO.Path]::GetFullPath($ProjectPath) } else { $null }
