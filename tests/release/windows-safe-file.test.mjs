@@ -20,6 +20,9 @@ test("Windows safe file helper uses the packaged native PowerShell contract", as
   assert.match(source, /FileFlagBackupSemantics/u);
   assert.match(source, /GetFileInformationByHandle/u);
   assert.match(source, /ReadFile/u);
+  assert.match(source, /\[DateTime\]::new\(1970, 1, 1, 0, 0, 0, \[DateTimeKind\]::Utc\)/u);
+  assert.match(source, /FromFileTimeUtc/u);
+  assert.doesNotMatch(source, /DateTime::Parse\(/u);
 });
 
 test("Windows safe file reader validates bounded native output", async () => {

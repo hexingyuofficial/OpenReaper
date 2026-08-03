@@ -87,7 +87,8 @@ function Get-UInt64([uint32] $High, [uint32] $Low) {
 
 function Convert-FileTimeToUnixMilliseconds([uint32] $High, [uint32] $Low) {
     $fileTime = Get-UInt64 $High $Low
-    return ([DateTime]::FromFileTimeUtc([int64]$fileTime) - [DateTime]::Parse("1970-01-01T00:00:00Z")).TotalMilliseconds
+    $unixEpoch = [DateTime]::new(1970, 1, 1, 0, 0, 0, [DateTimeKind]::Utc)
+    return ([DateTime]::FromFileTimeUtc([int64]$fileTime) - $unixEpoch).TotalMilliseconds
 }
 
 function Get-NativeSnapshot([Microsoft.Win32.SafeHandles.SafeFileHandle] $Handle) {
