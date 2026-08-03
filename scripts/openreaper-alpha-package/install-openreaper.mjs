@@ -595,7 +595,7 @@ do
     local temp_path = status_path .. ".tmp"
     local file = io.open(temp_path, "w")
     if not file then return end
-    file:write("{\\"contract\\":\\"openreaper.startup_status.v1\\",\\"stage\\":\\"" .. stage .. "\\"}\n")
+    file:write("{\\"contract\\":\\"openreaper.startup_status.v1\\",\\"stage\\":\\"" .. stage .. "\\"}\\n")
     file:close()
     os.remove(status_path)
     os.rename(temp_path, status_path)

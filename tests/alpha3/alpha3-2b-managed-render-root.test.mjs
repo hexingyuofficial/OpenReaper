@@ -254,6 +254,8 @@ describe("Alpha3.2-B2 managed render root", () => {
     assert.equal(await readFile(firstReport.startup_hook.backup_path, "utf8"), legacyLua);
     assert.match(conditionalHook, /OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH/);
     assert.match(conditionalHook, /environment_missing/);
+    assert.match(conditionalHook, /stage \.\. "\x5c"\}\x5cn"\)/u);
+    assert.doesNotMatch(conditionalHook, /stage \.\. "\x5c"\}\n"\)/u);
     assert.match(conditionalHook, /reaper\.ShowConsoleMsg\('keep user Lua startup'\)/);
     const actionScript = await readFile(firstReport.bridge_action.script, "utf8");
     const installedLauncher = await readFile(firstReport.startup_hook.fallback_path, "utf8");
