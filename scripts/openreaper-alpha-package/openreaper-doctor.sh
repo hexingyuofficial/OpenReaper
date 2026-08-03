@@ -559,6 +559,11 @@ function staleMarkers(text) {
 
 function pathAliases(filePath) {
   const aliases = new Set([filePath]);
+  const isWindowsPath = /^(?:[A-Za-z]:[\\/]|\\\\)/u.test(filePath);
+  if (isWindowsPath) {
+    // TOML and JSON serialize Windows backslashes as two characters.
+    aliases.add(filePath.replaceAll("\\", "\\\\"));
+  }
   if (filePath.startsWith("/private/tmp/")) {
     aliases.add(filePath.replace(/^\/private\/tmp\//, "/tmp/"));
   } else if (filePath.startsWith("/tmp/")) {

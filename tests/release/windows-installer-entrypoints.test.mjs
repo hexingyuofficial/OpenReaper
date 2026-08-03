@@ -49,3 +49,16 @@ test("Windows start refuses an unmanaged REAPER process before launching", () =>
   assert.match(startPs1, /Refusing duplicate startup to protect REAPER configuration and Bridge identity/u);
   assert.match(startPs1, /New-Item -ItemType Directory -Force -Path \$ReaperResourceRoot/u);
 });
+
+test("Windows Doctor matches escaped package paths in TOML and JSON configs", () => {
+  const functionSource = doctor.match(
+    /function pathAliases\(filePath\) \{[\s\S]*?return \[\.\.\.aliases\];\n\}/u,
+  )?.[0];
+  assert.ok(functionSource, "pathAliases implementation should remain discoverable for this focused contract test");
+  const pathAliases = Function(`return (${functionSource})`)();
+  const windowsPath = "C:\\Users\\何星宇\\AppData\\Local\\OpenReaper\\current\\bin\\openreaper-mcp.ps1";
+  assert.ok(pathAliases(windowsPath).includes(windowsPath.replaceAll("\\", "\\\\")));
+  assert.deepEqual(pathAliases("/Users/test/.openreaper/current/bin/openreaper-mcp"), [
+    "/Users/test/.openreaper/current/bin/openreaper-mcp",
+  ]);
+});
