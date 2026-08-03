@@ -634,7 +634,7 @@ async function smokeWindowsPackageContract() {
     await assertReadable(path.join(packageRoot, ...relativePath.split("/")));
   }
   const wrapperChecks = [
-    ["bin/openreaper-mcp.ps1", "powershell", "openreaper-mcp-stdio.mjs"],
+    ["bin/openreaper-mcp.ps1", "Resolve-OpenReaperNode", "openreaper-mcp-stdio.mjs"],
     ["bin/openreaper-doctor.ps1", "openreaper-doctor.mjs"],
     ["bin/openreaper-start.ps1", "Start-Process", "openreaper-doctor.ps1"],
     ["install-openreaper.ps1", "install-openreaper.mjs", "install-before.json", "install-after.json"],
