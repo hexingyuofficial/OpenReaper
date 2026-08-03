@@ -236,8 +236,9 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
     assert.equal(alpha3_2B3ReadProbeTimeoutMs({
       OPENREAPER_DOCTOR_READ_PROBE_TIMEOUT_MS: "99999",
     }), 15_000);
-    assert.match(source, /STARTUP_BUDGET_MS="\$\{OPENREAPER_STARTUP_BUDGET_MS:-28500\}"/u);
-    assert.match(source, /STARTUP_BUDGET_MAX_MS=28500/u);
+    assert.match(source, /STARTUP_BUDGET_MS="\$\{OPENREAPER_STARTUP_BUDGET_MS:-60000\}"/u);
+    assert.match(source, /STARTUP_BUDGET_MAX_MS=60000/u);
+    assert.match(source, /START_WAIT_SECONDS="\$\{OPENREAPER_START_WAIT_SECONDS:-45\}"/u);
     assert.match(source, /OPENREAPER_STARTUP_SUPERVISOR_ID/u);
     assert.match(source, /startup-budget-stage=supervisor_deadline/u);
     assert.match(source, /kill "TERM", -\$child/u);

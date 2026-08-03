@@ -6,10 +6,10 @@ set -euo pipefail
 # deadline is the final guard against any command that stops making progress.
 if [[ "${OPENREAPER_STARTUP_SUPERVISOR_ID:-}" != "${PPID}:$$" ]]; then
   unset OPENREAPER_STARTUP_SUPERVISOR_ID 2>/dev/null || true
-  supervisor_budget_ms="${OPENREAPER_STARTUP_BUDGET_MS:-28500}"
+  supervisor_budget_ms="${OPENREAPER_STARTUP_BUDGET_MS:-60000}"
   if [[ ! "${supervisor_budget_ms}" =~ '^[1-9][0-9]*$' ]] \
-      || (( supervisor_budget_ms < 4000 || supervisor_budget_ms > 28500 )); then
-    supervisor_budget_ms=28500
+      || (( supervisor_budget_ms < 4000 || supervisor_budget_ms > 60000 )); then
+    supervisor_budget_ms=60000
   fi
   supervisor_status=0
   /usr/bin/perl -MPOSIX=:sys_wait_h -MTime::HiRes=time,sleep -e '
@@ -118,9 +118,13 @@ BRIDGE_OWNER=""
 BRIDGE_GENERATION=""
 BRIDGE_GENERATION_REQUESTED=""
 BRIDGE_GENERATION_EXPLICIT=false
-START_WAIT_SECONDS="${OPENREAPER_START_WAIT_SECONDS:-20}"
-STARTUP_BUDGET_MS="${OPENREAPER_STARTUP_BUDGET_MS:-28500}"
-STARTUP_BUDGET_MAX_MS=28500
+# REAPER may spend more than the operation-performance gate loading the user's
+# project, media peaks, and plugin state before __startup.lua can run. Keep
+# startup independently bounded while leaving the <30000ms complete-operation
+# gate unchanged.
+START_WAIT_SECONDS="${OPENREAPER_START_WAIT_SECONDS:-45}"
+STARTUP_BUDGET_MS="${OPENREAPER_STARTUP_BUDGET_MS:-60000}"
+STARTUP_BUDGET_MAX_MS=60000
 STARTUP_CLEANUP_RESERVE_MS=6000
 STARTUP_DOCTOR_SMOKE_MAX_MS=22000
 STARTUP_DOCTOR_READ_MAX_MS=15000
