@@ -7,6 +7,10 @@ const installer = await readFile(
   path.resolve(import.meta.dirname, "../../scripts/openreaper-alpha-package/install-openreaper.mjs"),
   "utf8",
 );
+const installerPs1 = await readFile(
+  path.resolve(import.meta.dirname, "../../scripts/openreaper-alpha-package/install-openreaper.ps1"),
+  "utf8",
+);
 const doctor = await readFile(
   path.resolve(import.meta.dirname, "../../scripts/openreaper-alpha-package/openreaper-doctor.sh"),
   "utf8",
@@ -61,4 +65,12 @@ test("Windows Doctor matches escaped package paths in TOML and JSON configs", ()
   assert.deepEqual(pathAliases("/Users/test/.openreaper/current/bin/openreaper-mcp"), [
     "/Users/test/.openreaper/current/bin/openreaper-mcp",
   ]);
+});
+
+test("Windows installer preserves after-manifest evidence when Node writes stderr", () => {
+  assert.match(installerPs1, /\$installLog = Join-Path \$EvidenceRoot "install\.log"/u);
+  assert.match(installerPs1, /\$ErrorActionPreference = "Continue"/u);
+  assert.match(installerPs1, /\$PSNativeCommandUseErrorActionPreference = \$false/u);
+  assert.match(installerPs1, /finally \{[\s\S]*\$ErrorActionPreference = \$previousErrorActionPreference/u);
+  assert.match(installerPs1, /Get-ExternalManifest \$after/u);
 });

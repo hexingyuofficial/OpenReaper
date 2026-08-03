@@ -57,8 +57,28 @@ $arguments = @("$nodeScript", "--install-root", $InstallRoot, "--reaper-resource
 if ($RenderRoot) { $arguments += @("--render-root", $RenderRoot) }
 if ($SkipClientConfig) { $arguments += "--skip-client-config" }
 if ($SkipStartupHook) { $arguments += "--skip-startup-hook" }
-& $nodePath @arguments 2>&1 | Tee-Object -FilePath (Join-Path $EvidenceRoot "install.log") | Write-Output
-$exitCode = $LASTEXITCODE
+$installLog = Join-Path $EvidenceRoot "install.log"
+$previousErrorActionPreference = $ErrorActionPreference
+$previousNativeErrorActionPreference = $null
+$hasNativeErrorActionPreference = $null -ne (Get-Variable -Name PSNativeCommandUseErrorActionPreference -ErrorAction SilentlyContinue)
+if ($hasNativeErrorActionPreference) {
+    $previousNativeErrorActionPreference = $PSNativeCommandUseErrorActionPreference
+    $PSNativeCommandUseErrorActionPreference = $false
+}
+$exitCode = 1
+try {
+    # Native Node stderr must be recorded without preventing the after-manifest.
+    $ErrorActionPreference = "Continue"
+    & $nodePath @arguments 2>&1 | Tee-Object -FilePath $installLog | Write-Output
+    $exitCode = $LASTEXITCODE
+} catch {
+    $_ | Out-String | Add-Content -LiteralPath $installLog -Encoding UTF8
+} finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+    if ($hasNativeErrorActionPreference) {
+        $PSNativeCommandUseErrorActionPreference = $previousNativeErrorActionPreference
+    }
+}
 Get-ExternalManifest $after
 if ($exitCode -ne 0) { throw "OpenReaper installer failed with exit code $exitCode. See $EvidenceRoot\install.log" }
 Write-Output "[OpenReaper] installed; before=$before; after=$after"
