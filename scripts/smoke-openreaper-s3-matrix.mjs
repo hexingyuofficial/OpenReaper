@@ -6,6 +6,11 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import {
+  buildS3AudioRunRow,
+  resultData,
+  summarizeS3Result,
+} from "./lib/s3-release-matrix-results.mjs";
 
 const args = parseArgs(process.argv.slice(2));
 const ROOT = args.evidence_root;
@@ -321,29 +326,8 @@ async function runAudio(client, mode, refs, extra, label) {
   // Query templates place their payload under result.summary. Keep the
   // readback parser aligned with the public template envelope so a valid
   // Track item list is not mistaken for an empty result.
-  const data = value.result?.summary ?? value.result?.data ?? value.result ?? {};
-  const row = {
-    label,
-    ok: value.ok === true,
-    elapsed_ms: elapsed,
-    target_count: data.target_count ?? refs.length,
-    returned_target_count: data.returned_target_count ?? data.aggregate_readback_count ?? data.aggregate_readback?.length ?? 0,
-    plan_hash: data.plan_hash ?? value.result?.plan_hash ?? null,
-    zero_write: data.zero_write ?? false,
-    undo_opened: data.undo_opened ?? data.undo?.undo_opened ?? false,
-    undo_closed: data.undo_closed ?? data.undo?.undo_closed ?? false,
-    source_media_deleted: data.source_media_deleted ?? false,
-    aggregate_readback_count: data.aggregate_readback_count ?? data.aggregate_readback?.length ?? 0,
-    artifact_refs: data.artifact_refs ?? value.result?.verification?.evidence_refs ?? [],
-    timings: data.timings ?? data.batch_timings ?? {},
-    native_counters: data.native_counters ?? {},
-    status: value.execution?.status ?? null,
-    error_code: value.error?.code ?? null,
-    reason_code: value.error?.details?.reason_code ?? null,
-    aggregate_readback: data.aggregate_readback ?? [],
-    before_item: null,
-  };
-  if (refs.length <= 8) row.raw_data = data;
+  const row = buildS3AudioRunRow(value, { label, refs, elapsedMs: elapsed });
+  if (refs.length <= 8) row.raw_data = resultData(value);
   return row;
 }
 
@@ -590,19 +574,7 @@ async function tryCreateAndRejectMidi(client, trackRef) {
 
 function assetRef(row) { return row.live_readback?.item_ref ?? row.item_ref ?? row.target_ref; }
 function summarize(value) {
-  const row = value ?? {};
-  const data = row.result?.summary ?? row.result?.data ?? row.result ?? row.raw_data ?? row;
-  const aggregate = Array.isArray(row.aggregate_readback) ? row.aggregate_readback : data.aggregate_readback ?? [];
-  return {
-    ok: row.ok ?? false,
-    execution_status: row.execution?.status ?? row.status ?? null,
-    error_code: row.error?.code ?? row.error_code ?? null,
-    error_message: row.error?.message ?? row.error_message ?? null,
-    reason_code: row.error?.details?.reason_code ?? row.reason_code ?? null,
-    zero_write: data.zero_write === true || row.zero_write === true,
-    status: aggregate[0]?.status ?? row.status ?? null,
-    code: aggregate[0]?.code ?? null,
-  };
+  return summarizeS3Result(value);
 }
 function assertMacro(value, label) { if (value?.contract !== "macro.execution.v1" || value.ok !== true) throw new Error(`${label} failed: ${JSON.stringify(value?.error ?? value)}`); }
 function assertTemplate(value, label) { if (value?.contract !== "template.execution.v1" || value.ok !== true) throw new Error(`${label} failed: ${JSON.stringify(value?.error ?? value)}`); }

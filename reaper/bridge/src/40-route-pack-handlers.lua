@@ -2105,14 +2105,18 @@ local function dispatch_request(request, fallback_id, resume_continuation, runti
       or (phase_may_mutate and d30_write_capability)
       or request.__openreaper_undo_required_any == true
     local details = handler_failure.details or {}
-    if mutated then
+    -- A handler can prove that its failure happened during preflight before
+    -- content mutation. Opening and closing the required Undo block is not
+    -- itself content mutation, so preserve that typed truth.
+    local handler_proved_zero_write = details.zero_write == true
+    if mutated and not handler_proved_zero_write then
       details.zero_write = false
       if details.outcome == nil then
         details = unknown_outcome_details(true, details)
       end
     end
     return bridge_error_envelope(request, handler_failure.code or "INTERNAL_ERROR", handler_failure.message or "Scoped live bridge handler failed.", {
-      recoverable = mutated and false or (handler_failure.recoverable ~= false),
+      recoverable = (mutated and not handler_proved_zero_write) and false or (handler_failure.recoverable ~= false),
       started_at = started_at,
       details = details,
     })

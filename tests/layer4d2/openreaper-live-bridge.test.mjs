@@ -2136,7 +2136,37 @@ assert(string.find(terminal, '"recoverable":false', 1, true) ~= nil, terminal)
 assert(string.find(terminal, '"outcome":"unknown"', 1, true) ~= nil, terminal)
 assert(string.find(terminal, '"zero_write":false', 1, true) ~= nil, terminal)
 assert(string.find(terminal, '"reason":"malformed_internal_continuation"', 1, true) ~= nil, terminal)
+    D30_PROJECT_CONTAINER_HANDLERS["project.create_subproject"] = original_handler
+`);
+  });
+
+  it("preserves a handler-proven zero-write failure after opening an empty required Undo", () => {
+    runActualProductD30CompositionLua(String.raw`
+local original_handler = D30_PROJECT_CONTAINER_HANDLERS["project.create_subproject"]
+local request = make_d30_request("handler_zero_write", "project.create_subproject", { name = "Preflight Failure" }, {})
+local runtime = { started_at = now_iso(), deadline_monotonic = now + 100, now_monotonic = now }
+local preflight = dispatch_request(request, request.id, nil, runtime)
+assert(type(preflight) == "table" and preflight.phase == "create_subproject.mutate_create")
+
+D30_PROJECT_CONTAINER_HANDLERS["project.create_subproject"] = function()
+  return nil, {
+    code = "PARAMS_INVALID",
+    message = "fixture preflight failure",
+    recoverable = true,
+    details = { blocker = "fixture_zero_write", zero_write = true },
+  }
+end
+local terminal = dispatch_request(request, request.id, preflight, runtime)
 D30_PROJECT_CONTAINER_HANDLERS["project.create_subproject"] = original_handler
+
+assert(type(terminal) == "string", terminal)
+assert(string.find(terminal, '"code":"PARAMS_INVALID"', 1, true) ~= nil, terminal)
+assert(string.find(terminal, '"blocker":"fixture_zero_write"', 1, true) ~= nil, terminal)
+assert(string.find(terminal, '"zero_write":true', 1, true) ~= nil, terminal)
+assert(string.find(terminal, '"outcome":"unknown"', 1, true) == nil, terminal)
+assert(string.find(terminal, '"recoverable":true', 1, true) ~= nil, terminal)
+assert(#undo_begins == 1 and #undo_ends == 1)
+assert(open_undo_handle == nil and #guard_failures == 0)
 `);
   });
 

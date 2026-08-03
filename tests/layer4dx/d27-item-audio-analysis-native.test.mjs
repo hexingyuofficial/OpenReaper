@@ -83,11 +83,14 @@ function install_fake(config)
     accessor_start = config.accessor_start ~= nil and config.accessor_start or 0,
     accessor_end = config.accessor_end ~= nil and config.accessor_end or (config.item_length or 1),
   }
-  calls = { normalization = {}, peaks = {}, samples = {}, accessor_starts = 0, accessor_ends = 0, artifacts = 0, destroy = 0 }
+  calls = { normalization = {}, peaks = {}, samples = {}, accessor_starts = 0, accessor_ends = 0, artifacts = 0, destroy = 0, probe_destroy = 0 }
   local item = {}
   local take = {}
   local source = {}
+  local probe_source = {}
   local accessor = {}
+  fake.attached_source = source
+  fake.probe_source = probe_source
   reaper = {}
   reaper.GetSelectedMediaItem = function(project, index) return item end
   reaper.GetActiveTake = function(actual_item) assert(actual_item == item); return take end
@@ -258,6 +261,53 @@ close(calls.normalization[1].range_start, 0.45)
 close(calls.normalization[1].range_end, 0.65)
 assert(captured.payload.native_api.name == "CalculateNormalization")
 assert(captured.payload.measurement.item_gain == "not_included")
+`);
+  });
+
+  it("recovers zero attached-source metadata through a validated fresh native probe", () => {
+    runLua(`
+install_fake({ source_filename = "/tmp/d27-fallback.wav", sample_rate = 0, source_length = 0 })
+fake.source_filename = "/tmp/d27-fallback.wav"
+file_exists = function(path) return path == fake.source_filename end
+reaper.GetMediaSourceFileName = function(actual_source)
+  if actual_source == fake.attached_source or actual_source == fake.probe_source then return fake.source_filename end
+  error("unexpected source filename pointer")
+end
+reaper.GetMediaSourceType = function(actual_source)
+  if actual_source == fake.attached_source or actual_source == fake.probe_source then return "WAVE" end
+  error("unexpected source type pointer")
+end
+reaper.GetMediaSourceLength = function(actual_source)
+  if actual_source == fake.attached_source then return 0, false end
+  if actual_source == fake.probe_source then return 30, false end
+  error("unexpected source length pointer")
+end
+reaper.GetMediaSourceSampleRate = function(actual_source)
+  if actual_source == fake.attached_source then return 0 end
+  if actual_source == fake.probe_source then return 48000 end
+  error("unexpected source rate pointer")
+end
+reaper.GetMediaSourceNumChannels = function(actual_source)
+  if actual_source == fake.attached_source then return 1 end
+  if actual_source == fake.probe_source then return 1 end
+  error("unexpected source channels pointer")
+end
+reaper.PCM_Source_CreateFromFile = function(path)
+  assert(path == fake.source_filename)
+  return fake.probe_source
+end
+reaper.PCM_Source_Destroy = function(actual_source)
+  assert(actual_source == fake.probe_source)
+  calls.probe_destroy = calls.probe_destroy + 1
+  return true
+end
+local summary, failure = measure_item_rms(make_request({ start_seconds = 0, end_seconds = 0.1 }))
+assert(failure == nil, failure and (failure.message .. " " .. tostring(failure.details and failure.details.reason_code)) or "unexpected failure")
+assert(summary.sample_rate == 48000, tostring(summary.sample_rate))
+assert(summary.channels == 1, tostring(summary.channels))
+assert(summary.coverage.source_end_seconds == 0.1, tostring(summary.coverage.source_end_seconds))
+assert(#calls.normalization == 2)
+assert(calls.probe_destroy == 1)
 `);
   });
 

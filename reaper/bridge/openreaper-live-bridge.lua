@@ -10640,6 +10640,7 @@ end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/analysis/d27_item_audio_analysis.lua
 __openreaper_register_handler_module("analysis/d27_item_audio_analysis.lua", function()
+local READ_B_MEDIA = __openreaper_shared_table("READ_B_MEDIA")
 local function read_item_summary(...)
   return OPENREAPER_HANDLER_EXPORTS.read_item_summary(...)
 end
@@ -10840,6 +10841,99 @@ local function d27_analysis_api_number(api_name, object, key)
   return value, nil
 end
 
+local function d27_analysis_paths_match(expected, actual)
+  if type(expected) ~= "string" or expected == "" or type(actual) ~= "string" or actual == "" then
+    return false
+  end
+  if type(READ_B_MEDIA) == "table" and type(READ_B_MEDIA.canonical_path) == "function" then
+    local expected_path = READ_B_MEDIA.canonical_path(expected)
+    local actual_path = READ_B_MEDIA.canonical_path(actual)
+    if expected_path and actual_path then
+      return expected_path == actual_path
+    end
+  end
+  return expected == actual
+end
+
+local function d27_analysis_probe_source_metadata(source_filename, source_type, current)
+  local needs_probe = current.sample_rate == nil or current.sample_rate <= 0
+    or current.channels == nil or current.channels < 1
+    or current.source_length == nil or current.source_length <= 0
+  if not needs_probe then
+    return current, nil
+  end
+
+  local diagnostics = {
+    attempted = false,
+    path = source_filename,
+    attached_source_type = source_type,
+  }
+  if source_filename == "" or type(file_exists) ~= "function" or not file_exists(source_filename) then
+    diagnostics.blocker = "source_file_unavailable_for_native_probe"
+    return current, diagnostics
+  end
+  diagnostics.attempted = true
+
+  local ok_probe, probe_source = call_reaper("PCM_Source_CreateFromFile", source_filename)
+  if not ok_probe or not probe_source then
+    diagnostics.blocker = "native_probe_create_failed"
+    return current, diagnostics
+  end
+
+  local ok_filename, filename_value = call_reaper("GetMediaSourceFileName", probe_source, "")
+  local ok_type, type_value = call_reaper("GetMediaSourceType", probe_source, "")
+  local ok_length, length_value, length_is_qn = call_reaper("GetMediaSourceLength", probe_source)
+  local ok_rate, rate_value = call_reaper("GetMediaSourceSampleRate", probe_source)
+  local ok_channels, channels_value = call_reaper("GetMediaSourceNumChannels", probe_source)
+  local filename = ok_filename and type(filename_value) == "string" and filename_value or ""
+  local fresh_type = ok_type and type(type_value) == "string" and type_value or ""
+  local fresh_length = ok_length and d27_analysis_number(first_number(length_value)) or nil
+  local fresh_rate = ok_rate and d27_analysis_number(first_number(rate_value)) or nil
+  local fresh_channels = ok_channels and d27_analysis_number(first_number(channels_value)) or nil
+  diagnostics.native = {
+    filename = filename,
+    source_type = fresh_type,
+    source_length = fresh_length,
+    source_length_is_qn = length_is_qn == true,
+    sample_rate = fresh_rate or 0,
+    channels = fresh_channels or 0,
+    api_status = {
+      GetMediaSourceFileName = ok_filename == true,
+      GetMediaSourceType = ok_type == true,
+      GetMediaSourceLength = ok_length == true,
+      GetMediaSourceSampleRate = ok_rate == true,
+      GetMediaSourceNumChannels = ok_channels == true,
+    },
+  }
+  local valid = d27_analysis_paths_match(source_filename, filename)
+    and source_type ~= "" and fresh_type == source_type
+    and fresh_length ~= nil and fresh_length > 0 and length_is_qn ~= true
+    and fresh_rate ~= nil and fresh_rate > 0 and fresh_rate == math.floor(fresh_rate)
+    and fresh_channels ~= nil and fresh_channels >= 1 and fresh_channels == math.floor(fresh_channels)
+    and fresh_channels <= D27_MAX_CHANNELS
+
+  local ok_destroy = call_reaper("PCM_Source_Destroy", probe_source)
+  diagnostics.destroy_ok = ok_destroy == true
+  if not ok_destroy then
+    diagnostics.blocker = "native_probe_destroy_failed"
+    return nil, d27_analysis_error("ANALYSIS_READ_FAILED", "REAPER did not release the temporary native source probe.", {
+      api = "PCM_Source_Destroy",
+      probe = diagnostics,
+    }, false)
+  end
+  if not valid then
+    diagnostics.blocker = "native_probe_identity_or_metadata_invalid"
+    return current, diagnostics
+  end
+  diagnostics.accepted = true
+  return {
+    sample_rate = fresh_rate,
+    channels = fresh_channels,
+    source_length = fresh_length,
+    source_length_is_qn = false,
+  }, diagnostics
+end
+
 local function d27_analysis_context(request)
   local item = d27_analysis_item_from_request_refs(request)
   if not item then
@@ -10951,6 +11045,25 @@ local function d27_analysis_context(request)
       GetMediaSourceLength = ok_source_length == true,
     },
   }
+  local source_metadata, source_probe = d27_analysis_probe_source_metadata(source_filename, source_type, {
+    sample_rate = sample_rate,
+    channels = channels,
+    source_length = source_length,
+  })
+  if not source_metadata then
+    return nil, source_probe
+  end
+  if source_probe then
+    sample_rate = source_metadata.sample_rate
+    channels = source_metadata.channels
+    source_length = source_metadata.source_length
+    length_is_qn = source_metadata.source_length_is_qn
+    source_diagnostics.fresh_source_probe = source_probe
+  end
+  source_diagnostics.sample_rate = sample_rate or 0
+  source_diagnostics.channels = channels or 0
+  source_diagnostics.source_length = source_length
+  source_diagnostics.source_length_is_qn = length_is_qn == true
   if sample_rate == nil or sample_rate <= 0 or sample_rate ~= math.floor(sample_rate) then
     return nil, d27_analysis_error("AUDIO_SOURCE_UNSUPPORTED", "Item audio analysis requires an audio source with a native sample rate.", {
       api = "GetMediaSourceSampleRate",
@@ -38950,14 +39063,18 @@ local function dispatch_request(request, fallback_id, resume_continuation, runti
       or (phase_may_mutate and d30_write_capability)
       or request.__openreaper_undo_required_any == true
     local details = handler_failure.details or {}
-    if mutated then
+    -- A handler can prove that its failure happened during preflight before
+    -- content mutation. Opening and closing the required Undo block is not
+    -- itself content mutation, so preserve that typed truth.
+    local handler_proved_zero_write = details.zero_write == true
+    if mutated and not handler_proved_zero_write then
       details.zero_write = false
       if details.outcome == nil then
         details = unknown_outcome_details(true, details)
       end
     end
     return bridge_error_envelope(request, handler_failure.code or "INTERNAL_ERROR", handler_failure.message or "Scoped live bridge handler failed.", {
-      recoverable = mutated and false or (handler_failure.recoverable ~= false),
+      recoverable = (mutated and not handler_proved_zero_write) and false or (handler_failure.recoverable ~= false),
       started_at = started_at,
       details = details,
     })
