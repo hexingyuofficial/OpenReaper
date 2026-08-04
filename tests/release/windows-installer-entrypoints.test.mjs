@@ -23,6 +23,10 @@ const startPs1 = await readFile(
   path.resolve(import.meta.dirname, "../../scripts/openreaper-alpha-package/openreaper-start.ps1"),
   "utf8",
 );
+const liveBridgeExecutor = await readFile(
+  path.resolve(import.meta.dirname, "../../packages/mcp-server/src/live-bridge-executor-v1.mjs"),
+  "utf8",
+);
 
 test("Windows installer secures the native PowerShell start and Doctor entrypoints", () => {
   assert.match(installer, /const startCommand = path\.join\(installedBin, process\.platform === "win32" \? "openreaper-start\.ps1" : "openreaper-start"\);/u);
@@ -44,6 +48,11 @@ test("Windows start omits an empty Start-Process argument list", () => {
   assert.match(startPs1, /if \(\$launchArgs\.Count -gt 0\) \{/u);
   assert.match(startPs1, /Start-Process -FilePath \$binary -ArgumentList \$launchArgs/u);
   assert.match(startPs1, /Start-Process -FilePath \$binary -WorkingDirectory \(Split-Path -Parent \$binary\) -PassThru/u);
+});
+
+test("Windows live bridge default script path converts file URLs natively", () => {
+  assert.match(liveBridgeExecutor, /fileURLToPath\(new URL\("\.\.\/\.\.\/\.\.\/reaper\/bridge\/openreaper-live-bridge\.lua", import\.meta\.url\)\)/u);
+  assert.doesNotMatch(liveBridgeExecutor, /new URL\("\.\.\/\.\.\/\.\.\/reaper\/bridge\/openreaper-live-bridge\.lua", import\.meta\.url\)\.pathname/u);
 });
 
 test("Windows start refuses an unmanaged REAPER process before launching", () => {

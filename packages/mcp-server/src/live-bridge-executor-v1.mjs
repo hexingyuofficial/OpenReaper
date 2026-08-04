@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import { access, link, open, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { resolve, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   FOUNDATION_BRIDGE_CONTRACT,
   FOUNDATION_BRIDGE_DEFAULT_BUDGET,
@@ -52,7 +53,7 @@ export const LIVE_BRIDGE_EXECUTOR_BLOCKERS = Object.freeze([
 ]);
 
 const DEFAULT_REAPER_BRIDGE_SCRIPT_PATH = resolve(
-  new URL("../../../reaper/bridge/openreaper-live-bridge.lua", import.meta.url).pathname,
+  fileURLToPath(new URL("../../../reaper/bridge/openreaper-live-bridge.lua", import.meta.url)),
 );
 const DEFAULT_TIMEOUT_MS = 5_000;
 const DEFAULT_POLL_INTERVAL_MS = 100;
