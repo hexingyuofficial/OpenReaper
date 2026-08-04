@@ -335,8 +335,8 @@ sleep 0.5
     assert.match(source, /exact_tool_count/);
     assert.match(source, /"call_recipe"/);
     assert.match(source, /bridge_handler_count/);
-    const productVersion = source.match(/OPENREAPER_PRODUCT_VERSION = "([^"]+)"/u)?.[1];
-    assert.equal(productVersion, "3.3.0-alpha.0");
+    const productVersion = JSON.parse(await readFile(path.join(root, "package.json"), "utf8")).version;
+    assert.match(source, /const OPENREAPER_PRODUCT_VERSION = JSON\.parse\(await readFile\(path\.join\(repoRoot, "package\.json"\), "utf8"\)\)\.version;/u);
     assert.match(productVersion, /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u);
     assert.match(source, /ALPHA3_3_B1_VISIBLE_EXECUTABLE_IDS/);
     assert.match(source, /ALPHA3_3_B1_DEPRECATED_ALIASES/);
