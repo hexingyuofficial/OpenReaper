@@ -81,7 +81,9 @@ function Resolve-ReaperBinary {
         return [IO.Path]::GetFullPath($ReaperBinary)
     }
     $candidates = @(
+        (Join-Path ${env:ProgramFiles} "REAPER (x64)\reaper.exe"),
         (Join-Path ${env:ProgramFiles} "REAPER\reaper.exe"),
+        (Join-Path ${env:ProgramFiles(x86)} "REAPER (x86)\reaper.exe"),
         (Join-Path ${env:ProgramFiles(x86)} "REAPER\reaper.exe"),
         (Join-Path $env:LOCALAPPDATA "Programs\REAPER\reaper.exe")
     ) | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) }
