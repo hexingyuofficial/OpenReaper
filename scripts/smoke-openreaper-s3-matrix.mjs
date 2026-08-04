@@ -251,8 +251,10 @@ if (error) process.exitCode = 1;
 async function connect(name, projectPath, sessionKey) {
   const client = new Client({ name, version: "0.1.0-alpha.1" });
   await client.connect(new StdioClientTransport({
-    command: STDIO,
-    args: [],
+    command: process.platform === "win32" ? "powershell.exe" : STDIO,
+    args: process.platform === "win32"
+      ? ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", STDIO]
+      : [],
     cwd: REPO,
     env: {
       ...process.env,

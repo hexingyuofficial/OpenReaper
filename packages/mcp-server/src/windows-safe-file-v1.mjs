@@ -27,6 +27,7 @@ export async function readWindowsSafeFile(filePath, options = {}) {
     mode: "ReadFile",
     filePath,
     maxBytes,
+    allowMetadataChange: options.allowMetadataChange === true,
     scriptPath: options.scriptPath,
     commandRunner: options.commandRunner,
   });
@@ -109,6 +110,7 @@ async function invokeWindowsSafeFilePowerShell({
   mode,
   filePath,
   maxBytes,
+  allowMetadataChange = false,
   scriptPath,
   commandRunner,
 }) {
@@ -137,6 +139,7 @@ async function invokeWindowsSafeFilePowerShell({
     "-LiteralPath",
     filePath,
   ];
+  if (allowMetadataChange) args.push("-AllowMetadataChange");
   if (maxBytes !== undefined) args.push("-MaxBytes", String(maxBytes));
 
   let raw;

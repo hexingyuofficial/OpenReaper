@@ -22,6 +22,7 @@ test("Windows safe file helper uses the packaged native PowerShell contract", as
   assert.match(source, /ReadFile/u);
   assert.match(source, /\[DateTime\]::new\(1970, 1, 1, 0, 0, 0, \[DateTimeKind\]::Utc\)/u);
   assert.match(source, /FromFileTimeUtc/u);
+  assert.match(source, /AllowMetadataChange/u);
   assert.doesNotMatch(source, /DateTime::Parse\(/u);
 });
 
@@ -62,6 +63,31 @@ test("Windows safe file reader validates bounded native output", async () => {
   ]);
   assert.equal(calls[0].args.includes("-File"), true);
   assert.equal(calls[0].args.includes("-MaxBytes"), true);
+  const metadataChangeAllowed = await readWindowsSafeFile("C:\\OpenReaperLab\\heartbeat.json", {
+    platform: "win32",
+    maxBytes: 2_048,
+    allowMetadataChange: true,
+    commandRunner: async ({ args }) => {
+      calls.push({ args });
+      return {
+        stdout: JSON.stringify({
+          contract: WINDOWS_SAFE_FILE_CONTRACT,
+          status: "valid",
+          kind: "file",
+          size: 2,
+          bytes: 2,
+          base64: Buffer.from("{}", "utf8").toString("base64"),
+          mtime_ms: 1_700_000_000_000,
+          ctime_ms: 1_700_000_000_000,
+          nlink: 1,
+          read_only: false,
+        }),
+      };
+    },
+  });
+  assert.equal(metadataChangeAllowed.status, "valid");
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].args.includes("-AllowMetadataChange"), true);
 });
 
 test("Windows safe directory reader maps native fail-closed states", async () => {

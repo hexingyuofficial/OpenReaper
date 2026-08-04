@@ -1065,7 +1065,13 @@ async function readHeartbeatFileOnce({ heartbeatPath, openFile }) {
 }
 
 async function readHeartbeatFileWithWindowsSafeOpen(heartbeatPath) {
-  const result = await readWindowsSafeFile(heartbeatPath, { maxBytes: HEARTBEAT_MAX_BYTES });
+  // The Windows heartbeat is refreshed in place/replaced on a live cadence.
+  // The native handle still bounds identity, size, and complete-byte reads;
+  // JSON and timestamp validation below reject torn or stale content.
+  const result = await readWindowsSafeFile(heartbeatPath, {
+    maxBytes: HEARTBEAT_MAX_BYTES,
+    allowMetadataChange: true,
+  });
   if (result.status === "missing") return { ok: false, missing: true };
   if (result.status !== "valid") {
     const reasonMap = {

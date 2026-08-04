@@ -5,6 +5,7 @@ param(
     [string] $Mode,
     [Parameter(Mandatory = $true)]
     [string] $LiteralPath,
+    [switch] $AllowMetadataChange,
     [ValidateRange(1, 1048576)]
     [int] $MaxBytes = 16384
 )
@@ -186,8 +187,10 @@ try {
         $before.index -ne $after.index -or
         $before.size -ne $after.size -or
         $before.nlink -ne $after.nlink -or
-        $before.mtime_ms -ne $after.mtime_ms -or
-        $before.ctime_ms -ne $after.ctime_ms
+        (-not $AllowMetadataChange -and (
+            $before.mtime_ms -ne $after.mtime_ms -or
+            $before.ctime_ms -ne $after.ctime_ms
+        ))
     ) {
         Write-Result @{ status = "invalid"; reason = "file_changed_during_read" }
     }
