@@ -958,7 +958,8 @@ async function readHeartbeatFileSafely({ heartbeatPath, openFile }) {
     const replacedWhileOpen =
       (result?.reason === "heartbeat_link_count_invalid"
         && result?.details?.link_count === 0)
-      || result?.reason === "heartbeat_changed_during_read";
+      || result?.reason === "heartbeat_changed_during_read"
+      || result?.missing === true;
     if (!replacedWhileOpen || attempt === HEARTBEAT_REPLACEMENT_READ_ATTEMPTS) return result;
     if (process.platform === "win32") {
       await new Promise((resolveDelay) => setTimeout(resolveDelay, HEARTBEAT_REPLACEMENT_RETRY_DELAY_MS));

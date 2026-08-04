@@ -924,6 +924,62 @@ describe("Layer 4D.1 live bridge executor binding", () => {
     assert.equal(mixedOpenCount, 5);
   });
 
+  it("retries a transient missing heartbeat during Windows-style replacement and still fails closed when it persists", async () => {
+    const now = new Date("2026-07-10T12:00:10.000Z");
+    const transport = await makeTransport();
+    const heartbeat = `${JSON.stringify({
+      contract: LIVE_BRIDGE_LIVENESS_CONTRACT,
+      active_owner: "owner-test",
+      active_generation: 3,
+      sequence: 2,
+      refreshed_at_unix_s: Math.floor(now.getTime() / 1_000),
+      interval_ms: 500,
+    })}\n`;
+
+    let transientOpenCount = 0;
+    const recovered = await probeLiveBridgeLiveness({
+      transportDir: transport.root,
+      expectedOwner: "owner-test",
+      expectedGeneration: 3,
+      now: () => now,
+      __openHeartbeatFileForTest: async () => {
+        transientOpenCount += 1;
+        if (transientOpenCount === 1) {
+          throw Object.assign(new Error("heartbeat temporarily absent"), { code: "ENOENT" });
+        }
+        let read = false;
+        const fileStat = fakeFileStat({
+          size: Buffer.byteLength(heartbeat),
+          mtimeMs: now.getTime(),
+        });
+        return {
+          stat: async () => fileStat,
+          read: async (buffer) => {
+            if (read) return { bytesRead: 0 };
+            read = true;
+            buffer.write(heartbeat, 0, "utf8");
+            return { bytesRead: Buffer.byteLength(heartbeat) };
+          },
+          close: async () => {},
+        };
+      },
+    });
+    assert.equal(recovered.status, LIVE_BRIDGE_LIVENESS_STATUS.READY);
+    assert.equal(transientOpenCount, 2);
+
+    let persistentOpenCount = 0;
+    const persistent = await probeLiveBridgeLiveness({
+      transportDir: transport.root,
+      now: () => now,
+      __openHeartbeatFileForTest: async () => {
+        persistentOpenCount += 1;
+        throw Object.assign(new Error("heartbeat absent"), { code: "ENOENT" });
+      },
+    });
+    assert.equal(persistent.status, LIVE_BRIDGE_LIVENESS_STATUS.ACTION_NOT_RUNNING);
+    assert.equal(persistentOpenCount, 5);
+  });
+
   it("uses exact max-age boundaries and rejects clearly future filesystem or heartbeat times", async () => {
     const now = new Date("2026-07-10T12:00:10.000Z");
     const transport = await makeTransport();
