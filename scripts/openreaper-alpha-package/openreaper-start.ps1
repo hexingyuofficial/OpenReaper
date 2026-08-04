@@ -86,7 +86,8 @@ function Resolve-ReaperBinary {
         (Join-Path ${env:ProgramFiles(x86)} "REAPER (x86)\reaper.exe"),
         (Join-Path ${env:ProgramFiles(x86)} "REAPER\reaper.exe"),
         (Join-Path $env:LOCALAPPDATA "Programs\REAPER\reaper.exe")
-    ) | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) }
+    )
+    $candidates = @($candidates | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) })
     if (-not $candidates) { Fail "REAPER was not found. Pass -ReaperBinary with the installed reaper.exe path." }
     return [IO.Path]::GetFullPath($candidates[0])
 }
