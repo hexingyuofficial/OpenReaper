@@ -64,8 +64,11 @@ const HEARTBEAT_OWNER_MAX_LENGTH = 256;
 const HEARTBEAT_SEQUENCE_MAX = 999_999_999;
 const HEARTBEAT_TIME_MAX_UNIX_S = Math.floor(Number.MAX_SAFE_INTEGER / 1_000);
 const HEARTBEAT_INTERVAL_BOUNDS_MS = Object.freeze({ min: 50, max: 5_000 });
-const HEARTBEAT_REPLACEMENT_READ_ATTEMPTS = 5;
-const HEARTBEAT_REPLACEMENT_RETRY_DELAY_MS = 25;
+// Native PowerShell inspection is slower than the REAPER heartbeat cadence;
+// keep replacement recovery bounded while allowing a full replacement phase
+// to pass before failing closed.
+const HEARTBEAT_REPLACEMENT_READ_ATTEMPTS = 9;
+const HEARTBEAT_REPLACEMENT_RETRY_DELAY_MS = 40;
 const HEARTBEAT_FIELDS = Object.freeze([
   "active_generation",
   "active_owner",

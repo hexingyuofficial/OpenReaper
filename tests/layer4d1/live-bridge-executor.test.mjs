@@ -711,9 +711,9 @@ describe("Layer 4D.1 live bridge executor binding", () => {
     });
     assert.equal(changedDuringRead.status, LIVE_BRIDGE_LIVENESS_STATUS.HEARTBEAT_INVALID);
     assert.equal(changedDuringRead.details.reason, "heartbeat_changed_during_read");
-    assert.equal(statCount, 10);
-    assert.equal(changedReadCount, 10);
-    assert.equal(changedOpenCount, 5);
+    assert.equal(statCount, 18);
+    assert.equal(changedReadCount, 18);
+    assert.equal(changedOpenCount, 9);
     assert.equal(changedHandleClosed, true);
   });
 
@@ -785,7 +785,7 @@ describe("Layer 4D.1 live bridge executor binding", () => {
     assert.equal(persistent.status, LIVE_BRIDGE_LIVENESS_STATUS.HEARTBEAT_INVALID);
     assert.equal(persistent.details.reason, "heartbeat_link_count_invalid");
     assert.equal(persistent.details.link_count, 0);
-    assert.equal(persistentOpenCount, 5);
+    assert.equal(persistentOpenCount, 9);
   });
 
   it("reopens changed heartbeat snapshots with one shared bounded replacement budget", async () => {
@@ -878,7 +878,7 @@ describe("Layer 4D.1 live bridge executor binding", () => {
     });
     assert.equal(persistent.status, LIVE_BRIDGE_LIVENESS_STATUS.HEARTBEAT_INVALID);
     assert.equal(persistent.details.reason, "heartbeat_changed_during_read");
-    assert.equal(persistentOpenCount, 5);
+    assert.equal(persistentOpenCount, 9);
 
     const mixedReasons = ["changed", "unlinked", "changed", "unlinked", "changed"];
     let mixedOpenCount = 0;
@@ -921,7 +921,7 @@ describe("Layer 4D.1 live bridge executor binding", () => {
     });
     assert.equal(mixed.status, LIVE_BRIDGE_LIVENESS_STATUS.HEARTBEAT_INVALID);
     assert.equal(mixed.details.reason, "heartbeat_changed_during_read");
-    assert.equal(mixedOpenCount, 5);
+    assert.equal(mixedOpenCount, 9);
   });
 
   it("retries a transient missing heartbeat during Windows-style replacement and still fails closed when it persists", async () => {
@@ -977,7 +977,7 @@ describe("Layer 4D.1 live bridge executor binding", () => {
       },
     });
     assert.equal(persistent.status, LIVE_BRIDGE_LIVENESS_STATUS.ACTION_NOT_RUNNING);
-    assert.equal(persistentOpenCount, 5);
+    assert.equal(persistentOpenCount, 9);
   });
 
   it("uses exact max-age boundaries and rejects clearly future filesystem or heartbeat times", async () => {
