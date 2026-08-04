@@ -952,8 +952,9 @@ async function readHeartbeatFileSafely({ heartbeatPath, openFile }) {
   for (let attempt = 1; attempt <= HEARTBEAT_REPLACEMENT_READ_ATTEMPTS; attempt += 1) {
     const result = await readHeartbeatFileOnce({ heartbeatPath, openFile });
     const replacedWhileOpen =
-      result?.reason === "heartbeat_link_count_invalid"
-      && result?.details?.link_count === 0;
+      (result?.reason === "heartbeat_link_count_invalid"
+        && result?.details?.link_count === 0)
+      || result?.reason === "heartbeat_changed_during_read";
     if (!replacedWhileOpen || attempt === HEARTBEAT_REPLACEMENT_READ_ATTEMPTS) return result;
   }
 }
