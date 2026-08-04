@@ -65,6 +65,7 @@ const HEARTBEAT_SEQUENCE_MAX = 999_999_999;
 const HEARTBEAT_TIME_MAX_UNIX_S = Math.floor(Number.MAX_SAFE_INTEGER / 1_000);
 const HEARTBEAT_INTERVAL_BOUNDS_MS = Object.freeze({ min: 50, max: 5_000 });
 const HEARTBEAT_REPLACEMENT_READ_ATTEMPTS = 5;
+const HEARTBEAT_REPLACEMENT_RETRY_DELAY_MS = 25;
 const HEARTBEAT_FIELDS = Object.freeze([
   "active_generation",
   "active_owner",
@@ -333,7 +334,6 @@ export async function probeLiveBridgeLiveness(options = {}) {
   const transportDir = normalizeNonEmptyString(options.transportDir);
   const maxAgeMs = normalizeHeartbeatMaxAge(options.maxAgeMs);
   const expectedIdentity = normalizeExpectedIdentity(options);
-  const nowMs = safeNowMs(options.now);
 
   if (!expectedIdentity.valid) {
     return livenessResult({
@@ -435,6 +435,10 @@ export async function probeLiveBridgeLiveness(options = {}) {
     });
   }
 
+  // Windows PowerShell file inspection is intentionally native and bounded,
+  // but it can outlive the probe's initial clock sample while REAPER replaces
+  // the heartbeat. Measure freshness after the complete snapshot is read.
+  const nowMs = safeNowMs(options.now);
   const fileMtimeMs = heartbeatRead.stat.mtimeMs;
   if (!Number.isFinite(fileMtimeMs)) {
     return invalidHeartbeatResult({
@@ -956,6 +960,9 @@ async function readHeartbeatFileSafely({ heartbeatPath, openFile }) {
         && result?.details?.link_count === 0)
       || result?.reason === "heartbeat_changed_during_read";
     if (!replacedWhileOpen || attempt === HEARTBEAT_REPLACEMENT_READ_ATTEMPTS) return result;
+    if (process.platform === "win32") {
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, HEARTBEAT_REPLACEMENT_RETRY_DELAY_MS));
+    }
   }
 }
 
