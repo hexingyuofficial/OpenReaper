@@ -24,6 +24,12 @@ test("Windows safe file helper uses the packaged native PowerShell contract", as
   assert.match(source, /FromFileTimeUtc/u);
   assert.match(source, /AllowMetadataChange/u);
   assert.doesNotMatch(source, /DateTime::Parse\(/u);
+
+  const moduleSource = await readFile(
+    path.resolve(import.meta.dirname, "../../packages/mcp-server/src/windows-safe-file-v1.mjs"),
+    "utf8",
+  );
+  assert.match(moduleSource, /\? process\.env\.SystemRoot\s*:\s*"C:\\\\Windows"/u);
 });
 
 test("Windows safe file reader validates bounded native output", async () => {

@@ -181,15 +181,15 @@ async function invokeWindowsSafeFilePowerShell({
 }
 
 async function resolveWindowsPowerShell() {
-  const systemRoot = process.env.SystemRoot;
-  if (typeof systemRoot === "string" && systemRoot !== "") {
-    const candidate = path.join(systemRoot, WINDOWS_POWERSHELL_RELATIVE_PATH);
-    try {
-      await access(candidate, fsConstants.X_OK);
-      return candidate;
-    } catch {
-      // Fall through to the native command lookup.
-    }
+  const systemRoot = typeof process.env.SystemRoot === "string" && process.env.SystemRoot !== ""
+    ? process.env.SystemRoot
+    : "C:\\Windows";
+  const candidate = path.join(systemRoot, WINDOWS_POWERSHELL_RELATIVE_PATH);
+  try {
+    await access(candidate, fsConstants.X_OK);
+    return candidate;
+  } catch {
+    // Fall through to the native command lookup.
   }
   return "powershell.exe";
 }
