@@ -500,6 +500,12 @@ export async function executeAlpha3_2_5CProjectFileMacro({
         mutationAttempted,
       });
     }
+    const mutationUnknown = mutationAttempted === true;
+    const failureDetails = {
+      ...(error.details ?? {}),
+      zero_write: mutationUnknown ? false : true,
+      ...(mutationUnknown ? { outcome: "unknown", recoverable: false } : {}),
+    };
     return fileEnvelope({
       entry,
       request,
@@ -507,7 +513,7 @@ export async function executeAlpha3_2_5CProjectFileMacro({
       now,
       status: mutationAttempted ? "partial_failure" : "failed",
       stages,
-      blockers: [blocker(error.code ?? "PROJECT_FILE_EXECUTION_FAILED", error.message ?? "Project-file Macro failed.", error.details, error.details?.recoverable)],
+      blockers: [blocker(error.code ?? "PROJECT_FILE_EXECUTION_FAILED", error.message ?? "Project-file Macro failed.", failureDetails, mutationUnknown ? false : error.details?.recoverable)],
       summary: error.message ?? "Project-file Macro failed.",
       data: {
         operation: input.operation ?? null,
@@ -517,7 +523,16 @@ export async function executeAlpha3_2_5CProjectFileMacro({
         dirty_after: dirtyProjection(afterDirty),
         calls: calls.length,
         index_update: compactIndexUpdate(invalidation),
-        outcome: projectFileOutcome(verifiedChange, invalidation),
+        zero_write: mutationUnknown ? false : true,
+        outcome: {
+          mutation: { status: mutationUnknown ? "unknown" : "not_run" },
+          live_readback: { status: readbackPassed ? "passed" : "not_run" },
+          index_maintenance: {
+            status: verifiedChange?.index_maintenance?.status ?? "not_run",
+            scopes: Array.isArray(invalidation?.scopes) ? invalidation.scopes.slice(0, 16) : [],
+            blocker_code: invalidation?.blockers?.[0]?.code ?? null,
+          },
+        },
       },
       changes: verifiedChange ? [verifiedChange] : [],
       sqlite: sqliteEvidence(projectIndexRuntime, invalidation),

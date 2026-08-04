@@ -102,3 +102,23 @@ test("Windows safe directory reader maps native fail-closed states", async () =>
   });
   assert.deepEqual(result, { status: "symlink" });
 });
+
+test("Windows safe file reader preserves link-count evidence for heartbeat retry", async () => {
+  const result = await readWindowsSafeFile("C:\\OpenReaperLab\\heartbeat.json", {
+    platform: "win32",
+    commandRunner: async () => ({
+      stdout: JSON.stringify({
+        contract: WINDOWS_SAFE_FILE_CONTRACT,
+        status: "invalid",
+        reason: "link_count_invalid",
+        link_count: 0,
+      }),
+    }),
+  });
+  assert.deepEqual(result, {
+    status: "invalid",
+    reason: "link_count_invalid",
+    error_code: null,
+    link_count: 0,
+  });
+});

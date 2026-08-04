@@ -158,7 +158,13 @@ try {
     }
 
     if ($hasDirectoryAttribute) { Write-Result @{ status = "invalid"; reason = "not_regular_file" } }
-    if ($before.nlink -ne 1) { Write-Result @{ status = "invalid"; reason = "link_count_invalid" } }
+    if ($before.nlink -ne 1) {
+        Write-Result @{
+            status = "invalid"
+            reason = "link_count_invalid"
+            link_count = [int]$before.nlink
+        }
+    }
     if ($before.size -gt [uint64]$MaxBytes) { Write-Result @{ status = "invalid"; reason = "file_too_large" } }
 
     $stream = New-Object IO.MemoryStream

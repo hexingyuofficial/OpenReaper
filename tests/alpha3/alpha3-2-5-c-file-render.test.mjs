@@ -267,6 +267,43 @@ describe("Alpha3.2.5-C executable file/render Macros", () => {
     assert.deepEqual(validateMacroExecutionEnvelope(response), { valid: true, errors: [] });
   });
 
+  it("does not promote a post-mutation child zero-write into a Macro zero-write", async () => {
+    let pathReads = 0;
+    const response = await executeAlpha3_2_5CProjectFileMacro({
+      request: { request_id: "save-postflight-bridge-gap", input: { operation: "save_as", target_path: "/tmp/postflight-gap.RPP", overwrite: true } },
+      now,
+      executeAtomic: async ({ id }) => {
+        if (id === "template.project.read_current_project_path") {
+          pathReads += 1;
+          if (pathReads === 1) return atomicExecution({ readback: { has_project_path: true, path_state: "saved_project", path: "/tmp/original.RPP" } });
+          return {
+            contract: "template.execution.v1",
+            ok: false,
+            error: {
+              code: "BRIDGE_NOT_RUNNING",
+              message: "Live bridge is not ready for request dispatch.",
+              details: { blocker: "bridge_action_not_running", zero_write: true },
+            },
+          };
+        }
+        if (id === "template.project.read_dirty_state") return atomicExecution({ readback: { raw_dirty_state: 1, dirty_state: "dirty", dirty: true } });
+        return atomicExecution({ summary: { saved: true } });
+      },
+    });
+
+    assert.equal(response.ok, false);
+    assert.equal(response.execution.status, "partial_failure");
+    assert.equal(response.error.code, "BRIDGE_NOT_RUNNING");
+    assert.notEqual(response.error.details.zero_write, true);
+    assert.equal(response.error.details.outcome, "unknown");
+    assert.equal(response.blockers[0].recoverable, false);
+    assert.equal(response.result.data.zero_write, false);
+    assert.equal(response.result.data.outcome.mutation.status, "unknown");
+    assert.equal(response.result.data.outcome.live_readback.status, "not_run");
+    assert.match(response.recovery.action, /Inspect live project state/u);
+    assert.deepEqual(validateMacroExecutionEnvelope(response), { valid: true, errors: [] });
+  });
+
   it("invalidates only project_head for save_current and never rebinds identity", async () => {
     let saved = false;
     const invalidations = [];

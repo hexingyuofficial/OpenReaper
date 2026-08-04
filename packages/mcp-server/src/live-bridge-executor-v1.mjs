@@ -1086,6 +1086,7 @@ async function readHeartbeatFileWithWindowsSafeOpen(heartbeatPath) {
       details: {
         error_code: boundedString(result.error_code, 32),
         native_reason: boundedString(result.reason, 64),
+        ...(Number.isSafeInteger(result.link_count) ? { link_count: result.link_count } : {}),
       },
     };
   }

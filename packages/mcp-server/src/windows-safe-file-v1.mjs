@@ -34,10 +34,14 @@ export async function readWindowsSafeFile(filePath, options = {}) {
   if (!result.ok) return result;
   if (result.payload?.status === "missing") return { status: "missing" };
   if (result.payload?.status !== "valid") {
+    const linkCount = Number.isSafeInteger(result.payload?.link_count)
+      ? result.payload.link_count
+      : null;
     return {
       status: "invalid",
       reason: normalizeReason(result.payload?.reason, "windows_safe_file_invalid"),
       error_code: normalizeErrorCode(result.payload?.error_code),
+      ...(linkCount === null ? {} : { link_count: linkCount }),
     };
   }
   const payload = result.payload;
