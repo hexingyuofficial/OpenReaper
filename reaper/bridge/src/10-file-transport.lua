@@ -82,7 +82,7 @@ local function write_file_atomic(path, content)
   end
 
   -- Lua's Windows os.rename cannot replace an existing file. Move the old
-  -- target aside, publish the complete temp file, and restore on failure.
+  -- target aside, place the complete temp file, and restore on failure.
   local backup_path = path .. ".openreaper-replace." .. tostring(math.floor((os.time() or 0))) .. "." .. tostring(math.random(100000, 999999))
   local moved, backup_error = os.rename(path, backup_path)
   if not moved then
@@ -90,8 +90,8 @@ local function write_file_atomic(path, content)
     return false, "windows_existing_target_move_failed: " .. tostring(backup_error or rename_error or "rename_failed")
   end
 
-  local published, publish_error = os.rename(temp_path, path)
-  if published then
+  local replaced, replace_error = os.rename(temp_path, path)
+  if replaced then
     os.remove(backup_path)
     return true
   end
@@ -107,9 +107,9 @@ local function write_file_atomic(path, content)
   end
   os.remove(temp_path)
   if restore_error then
-    return false, "windows_replace_failed: " .. tostring(publish_error or rename_error or "rename_failed") .. "; " .. restore_error
+    return false, "windows_replace_failed: " .. tostring(replace_error or rename_error or "rename_failed") .. "; " .. restore_error
   end
-  return false, "windows_replace_failed: " .. tostring(publish_error or rename_error or "rename_failed")
+  return false, "windows_replace_failed: " .. tostring(replace_error or rename_error or "rename_failed")
 end
 
 local function write_bridge_heartbeat()
