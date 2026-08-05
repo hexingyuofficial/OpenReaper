@@ -33,6 +33,9 @@ const liveBridgeExecutor = await readFile(
 );
 
 test("Windows installer secures the native PowerShell start and Doctor entrypoints", () => {
+  assert.match(installer, /resolveWindowsPowerShellCommand\(\)/u);
+  assert.match(installer, /System32.*WindowsPowerShell.*v1\.0.*powershell\.exe/u);
+  assert.match(installer, /return existsSync\(nativePath\) \? nativePath : "powershell\.exe"/u);
   assert.match(installer, /const startCommand = path\.join\(installedBin, process\.platform === "win32" \? "openreaper-start\.ps1" : "openreaper-start"\);/u);
   assert.match(installer, /const doctorCommand = path\.join\(installedBin, process\.platform === "win32" \? "openreaper-doctor\.ps1" : "openreaper-doctor"\);/u);
   assert.match(doctor, /const startCommand = path\.join\(installRoot, "bin", process\.platform === "win32" \? "openreaper-start\.ps1" : "openreaper-start"\);/u);

@@ -92,7 +92,7 @@ const vitalAgentIncluded = existsSync(path.join(packageRoot, "bin", "vital-agent
 const installedBin = path.join(installRoot, "bin");
 const mcpCommand = path.join(installedBin, process.platform === "win32" ? "openreaper-mcp.ps1" : "openreaper-mcp");
 const mcpLaunch = process.platform === "win32"
-  ? { command: "powershell.exe", args: ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", mcpCommand] }
+  ? { command: resolveWindowsPowerShellCommand(), args: ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", mcpCommand] }
   : { command: mcpCommand, args: [] };
 const vitalAgentMcpCommand = path.join(installedBin, "vital-agent-mcp");
 const startCommand = path.join(installedBin, process.platform === "win32" ? "openreaper-start.ps1" : "openreaper-start");
@@ -117,6 +117,14 @@ const bridgeScript = path.join(installRoot, "vendor", "openreaper-kernel", "reap
 const bridgeActionScript = path.join(reaperResourceRoot, "Scripts", ...BRIDGE_ACTION_RELATIVE_SCRIPT.split("/"));
 const conditionalStartupHookPath = path.join(reaperResourceRoot, "Scripts", "__startup.lua");
 const bridgeActionCommand = `_${BRIDGE_ACTION_COMMAND_ID}`;
+
+function resolveWindowsPowerShellCommand() {
+  const systemRoot = [process.env.SystemRoot, process.env.WINDIR]
+    .find((value) => typeof value === "string" && value.length > 0)
+    ?? "C:\\Windows";
+  const nativePath = path.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+  return existsSync(nativePath) ? nativePath : "powershell.exe";
+}
 
 const report = {
   product: "OpenReaper alpha",
