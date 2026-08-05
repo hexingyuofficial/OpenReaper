@@ -153,11 +153,14 @@ local function ensure_directory(path)
 end
 
 local function is_absolute_path(value)
-  if type(value) ~= "string" then
+  if type(value) ~= "string" or value == "" then
     return false
   end
-  if value:match("^[A-Za-z]:[\\/]") then
-    return false
+  if value:sub(1, 1) == "/" then
+    return true
   end
-  return value:sub(1, 1) == "/"
+  if value:match("^%a:[/\\]") then
+    return true
+  end
+  return value:match("^\\\\[^\\/]+[/\\][^\\/]+") ~= nil
 end

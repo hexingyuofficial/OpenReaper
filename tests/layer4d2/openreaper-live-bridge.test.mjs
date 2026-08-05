@@ -66,6 +66,8 @@ describe("Layer 4D.2 REAPER-side live bridge script", () => {
     assert.match(sourceModules["20-bridge-envelope-kernel.lua"], /FIXED_FAMILIES/);
     assert.match(sourceModules["10-file-transport.lua"], /write_file_atomic/);
     assert.match(sourceModules["10-file-transport.lua"], /local TRANSPORT_DIR = non_empty\(os\.getenv\(TRANSPORT_ENV\)\)/);
+    assert.match(sourceModules["10-file-transport.lua"], /value:match\("\^%a:\[\/\\\\\]"\)/, "transport paths must accept Windows drive-letter roots");
+    assert.match(sourceModules["10-file-transport.lua"], /value:match\("\^\\\\\\\\\[\^\\\\\/\]\+\[\/\\\\\]\[\^\\\\\/\]\+"\)/, "transport paths must accept UNC roots");
     assert.match(sourceModules["10-file-transport.lua"], /os\.rename\(temp_path, path\)/);
     assert.match(sourceModules["10-file-transport.lua"], /local HEARTBEAT_CONTRACT = "openreaper\.bridge_liveness\.v1"/);
     assert.match(sourceModules["10-file-transport.lua"], /local HEARTBEAT_FILENAME = "openreaper-bridge-liveness-v1\.json"/);

@@ -59,6 +59,53 @@ This guard is a startup safety measure, not a dialog auto-dismiss rule. The
 user's normal REAPER process is never terminated by this path; close it and
 retry through OpenReaper when the guard reports it.
 
+## Known project recovery warning
+
+The Windows 11 / REAPER 7.78 fixture can also show this recovery decision
+after a previous project load failed:
+
+- window title: `REAPER - Previously failed while loading project`
+- top-level class: `#32770`
+- body marker: `This project failed the last time a load was attempted` followed
+  by the exact failed `.RPP` path and `Would you like to load it anyway?`
+- observed button AutomationIds: `6` and `7`
+
+This is a recovery/decision dialog, not the bounded missing-file or project
+extension warning. The Windows UI inventory retained under
+`C:\\OpenReaperLab\\windows-s5-r26-candidate\\evidence\\ui-probe-current-r2.json`
+observed it for the failed S3 fixture project. Because choosing to load the
+failed project changes the experiment state, development and packaged startup
+must keep this dialog user-mediated and fail-closed. Do not add a generic
+click fallback or infer the button from a localized label. The user should
+choose the no-load option, then the managed start may continue.
+
+## Known Project Load Warning
+
+The Windows 11 / REAPER 7.78 fixture project can show this exact development
+warning when it contains AU/SWS state that is unavailable on Windows:
+
+- window title: `Project Load Warning`
+- top-level class: `#32770`
+- button: `OK`, class `Button`, `AutomationId=1`
+- body markers: `There were 1 elements in the project that were saved by
+  extensions.`, `AU: Pro-Q 3 (FabFilter)`, `AU: Pro-C 2 (FabFilter)`,
+  `AU: Pro-L 2 (FabFilter)`, and `Project tokens not recognized:
+  SWSAUTOCOLOR`
+
+The exact observed body also reported one hundred eighty-one offline file
+locations. This is a fixture warning, not evidence of a Chinese-path or
+audio-device problem. The development-only helper
+`scripts/windows/dismiss-known-reaper-project-load-warning.ps1` matches the
+process, session, title, class, body markers, and button before sending one
+bounded `OK` command, then verifies that the exact dialog is gone. The fresh
+Windows evidence is retained at
+`C:\OpenReaperLab\windows-s5-r26-candidate\evidence\project-warning-dismiss-r1.json`.
+
+This helper is not a shipped runtime behavior. The packaged product remains
+user-mediated/fail-closed for this warning and for all license, plugin-scan,
+recovery, upgrade, and unknown decision dialogs. Do not save the fixture after
+accepting the warning unless the test explicitly covers extension-state loss.
+
 ## Reusable procedure
 
 1. Confirm the REAPER PID and its interactive desktop session. The current
