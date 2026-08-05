@@ -106,6 +106,8 @@ BRIDGE_LAUNCHER_SCRIPT="${INSTALL_ROOT}/bin/openreaper-start-mcp-bridge.lua"
 REAPER_BIN="/Applications/REAPER.app/Contents/MacOS/REAPER"
 REAPER_APP=""
 DIRECT_BINARY=false
+REAPER_RESOURCE_ROOT=""
+REAPER_RESOURCE_ROOT_EXPLICIT=false
 SESSION_ROOT="${INSTALL_ROOT}/session"
 SESSION_ROOT_EXPLICIT=false
 RENDER_ROOT=""
@@ -251,6 +253,21 @@ while [[ $# -gt 0 ]]; do
       REAPER_BIN="${REAPER_APP}/Contents/MacOS/REAPER"
       shift 2
       ;;
+    --reaper-resource-root=*)
+      REAPER_RESOURCE_ROOT="${1#*=}"
+      if [[ -z "${REAPER_RESOURCE_ROOT}" ]]; then
+        echo "[OpenReaper] --reaper-resource-root requires a non-empty value" >&2
+        exit 2
+      fi
+      REAPER_RESOURCE_ROOT_EXPLICIT=true
+      shift
+      ;;
+    --reaper-resource-root)
+      require_option_value "$1" "$#" "${2-}"
+      REAPER_RESOURCE_ROOT="$2"
+      REAPER_RESOURCE_ROOT_EXPLICIT=true
+      shift 2
+      ;;
     --session-root=*)
       SESSION_ROOT="${1#*=}"
       if [[ -z "${SESSION_ROOT}" ]]; then
@@ -332,6 +349,7 @@ Usage:
   openreaper-start --reaper-binary /path/to/REAPER [--project-path /path/to/project.RPP]
   openreaper-start --direct-binary --reaper-binary /path/to/REAPER [--project-path /path/to/project.RPP]
   openreaper-start --reaper-app /path/to/REAPER.app [--project-path /path/to/project.RPP]
+  openreaper-start --reaper-resource-root /absolute/path/to/contained/REAPER [--project-path /path/to/project.RPP]
   openreaper-start --session-root /path/to/session [--project-path /path/to/project.RPP]
   openreaper-start --render-root /absolute/path/to/renders [--project-path /path/to/project.RPP]
   openreaper-start --recover-existing [--session-root /path/to/session]
@@ -350,6 +368,12 @@ the parent shell. Use explicit --session-root/--render-root/--transport-dir/
 --artifact-root/--bridge-owner/--bridge-generation only for a bounded evidence
 window. With --session-root and no --render-root, the render root is the
 explicit session's renders child.
+
+By default REAPER uses its normal user resource/configuration root. The helper
+does not select or write a theme. For contained development or release
+verification, pass --reaper-resource-root; that option adds only the explicit
+root's REAPER.ini through REAPER's -cfgfile option and never copies the user's
+license, theme, plugins, or preferences into it.
 
 If REAPER is installed somewhere other than /Applications, the agent can pass
 --reaper-app or --reaper-binary. On macOS the helper also tries Spotlight app
@@ -424,6 +448,15 @@ fi
 if [[ "${RECOVER_EXISTING}" == "true" && ( -n "${PROJECT_PATH}" || ${#ARGS[@]} -gt 0 ) ]]; then
   echo "[OpenReaper] --recover-existing cannot be combined with a project path or REAPER arguments." >&2
   exit 2
+fi
+
+if [[ "${REAPER_RESOURCE_ROOT_EXPLICIT}" == "true" ]]; then
+  for reaper_arg in "${ARGS[@]}"; do
+    if [[ "${reaper_arg:l}" == "-cfgfile" ]]; then
+      echo "[OpenReaper] --reaper-resource-root cannot be combined with a REAPER -cfgfile argument" >&2
+      exit 2
+    fi
+  done
 fi
 
 persist_startup_dialog_consent() {
@@ -602,6 +635,46 @@ fi
 
 if [[ -z "${ARTIFACT_ROOT}" ]]; then
   ARTIFACT_ROOT="${SESSION_ROOT}/artifacts"
+fi
+
+prepare_reaper_resource_root() {
+  [[ "${REAPER_RESOURCE_ROOT_EXPLICIT}" == "true" ]] || return 0
+  node --input-type=module - "${REAPER_RESOURCE_ROOT}" <<'NODE'
+import { lstat, mkdir, realpath } from "node:fs/promises";
+import path from "node:path";
+
+const requested = process.argv[2];
+if (!requested || !path.isAbsolute(requested)) throw new Error("resource root must be an absolute path");
+if (/[\u0000-\u001f\u007f]/u.test(requested)) throw new Error("resource root contains a control character");
+if (Buffer.byteLength(requested, "utf8") > 3072) throw new Error("resource root exceeds 3072 UTF-8 bytes");
+const normalized = path.normalize(requested);
+if (normalized === path.parse(normalized).root) throw new Error("resource root must not be the filesystem root");
+
+async function safeLstat(candidate) {
+  try { return await lstat(candidate); } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+let entry = await safeLstat(normalized);
+if (entry?.isSymbolicLink()) throw new Error("resource root final component must not be a symlink");
+if (entry && !entry.isDirectory()) throw new Error("resource root must be a directory");
+if (!entry) {
+  await mkdir(normalized, { recursive: true, mode: 0o700 });
+  entry = await safeLstat(normalized);
+}
+if (!entry || entry.isSymbolicLink() || !entry.isDirectory()) throw new Error("resource root is not a real directory");
+await realpath(normalized);
+process.stdout.write(path.resolve(normalized));
+NODE
+}
+
+if [[ "${REAPER_RESOURCE_ROOT_EXPLICIT}" == "true" ]]; then
+  if ! REAPER_RESOURCE_ROOT="$(prepare_reaper_resource_root)"; then
+    echo "[OpenReaper] resource-root validation failed: ${REAPER_RESOURCE_ROOT}" >&2
+    exit 2
+  fi
 fi
 
 PROJECT_INDEX_STATE_ROOT="${SESSION_ROOT}/project-index"
@@ -1025,6 +1098,13 @@ echo "[OpenReaper] render-root=${RENDER_ROOT}"
 echo "[OpenReaper] project-index-state-root=${PROJECT_INDEX_STATE_ROOT}"
 echo "[OpenReaper] bridge=${BRIDGE_SCRIPT}"
 echo "[OpenReaper] reaper-log=${START_LOG}"
+if [[ "${REAPER_RESOURCE_ROOT_EXPLICIT}" == "true" ]]; then
+  echo "[OpenReaper] reaper-config-mode=explicit_cfgfile"
+  echo "[OpenReaper] reaper-resource-root=${REAPER_RESOURCE_ROOT}"
+  echo "[OpenReaper] reaper-config-file=${REAPER_RESOURCE_ROOT}/REAPER.ini"
+else
+  echo "[OpenReaper] reaper-config-mode=user_default"
+fi
 if [[ "${USE_LAUNCHSERVICES}" == "true" ]]; then
   echo "[OpenReaper] launch-method=macos_launchservices"
   echo "[OpenReaper] reaper-app=${REAPER_APP}"
@@ -1104,6 +1184,9 @@ startup_run_bounded_external() {
 launch_reaper() {
   local -a reaper_args
   reaper_args=("-newinst" "-nosplash")
+  if [[ "${REAPER_RESOURCE_ROOT_EXPLICIT}" == "true" ]]; then
+    reaper_args+=("-cfgfile" "${REAPER_RESOURCE_ROOT}/REAPER.ini")
+  fi
   if [[ -n "${PROJECT_PATH}" ]]; then
     reaper_args+=("${PROJECT_PATH}")
   fi

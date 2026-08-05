@@ -1125,6 +1125,36 @@ describe("Alpha3.2-B2 managed render root", () => {
     ]);
   });
 
+  it("uses an explicit contained REAPER resource root without changing the user-default launch", async () => {
+    const fixture = await makeStartFixture("contained-reaper-resource-root");
+    const resourceRoot = path.join(fixture.root, "contained REAPER config");
+
+    const isolated = await runFakeStartResult({
+      fixture,
+      label: "contained-reaper-resource-root",
+      extraArgs: ["--reaper-resource-root", resourceRoot],
+    });
+    assert.equal(isolated.result.code, 0, isolated.result.stderr || isolated.result.stdout);
+    assert.equal((await lstat(resourceRoot)).isDirectory(), true);
+    assert.deepEqual(JSON.parse(await readFile(isolated.argvCapturePath, "utf8")), [
+      "-newinst",
+      "-nosplash",
+      "-cfgfile",
+      path.join(resourceRoot, "REAPER.ini"),
+    ]);
+    assert.match(isolated.result.stdout, /reaper-config-mode=explicit_cfgfile/u);
+    assert.match(isolated.result.stdout, /reaper-resource-root=/u);
+
+    const conflict = await runFakeStartResult({
+      fixture,
+      label: "contained-reaper-resource-root-conflict",
+      extraArgs: ["--reaper-resource-root", resourceRoot, "-cfgfile", path.join(fixture.root, "other.ini")],
+    });
+    assert.equal(conflict.result.code, 2);
+    assert.match(conflict.result.stderr, /cannot be combined with a REAPER -cfgfile argument/u);
+    assert.equal(conflict.fixturePid, null);
+  });
+
   it("restores LaunchServices values with spaces, empty-but-set presence, and unset presence", async () => {
     const harness = await makeLaunchServicesHarness("presence");
     await harness.setState("OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR", true, "previous transport with spaces");

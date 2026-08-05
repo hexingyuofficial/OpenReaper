@@ -23,6 +23,10 @@ const startPs1 = await readFile(
   path.resolve(import.meta.dirname, "../../scripts/openreaper-alpha-package/openreaper-start.ps1"),
   "utf8",
 );
+const startSh = await readFile(
+  path.resolve(import.meta.dirname, "../../scripts/openreaper-alpha-package/openreaper-start.sh"),
+  "utf8",
+);
 const liveBridgeExecutor = await readFile(
   path.resolve(import.meta.dirname, "../../packages/mcp-server/src/live-bridge-executor-v1.mjs"),
   "utf8",
@@ -64,6 +68,16 @@ test("Windows start refuses an unmanaged REAPER process before launching", () =>
   assert.match(startPs1, /An unmanaged REAPER process is already running/u);
   assert.match(startPs1, /Refusing duplicate startup to protect REAPER configuration and Bridge identity/u);
   assert.match(startPs1, /New-Item -ItemType Directory -Force -Path \$ReaperResourceRoot/u);
+});
+
+test("macOS start keeps user configuration as the default and isolates only explicit release roots", () => {
+  assert.match(startSh, /REAPER_RESOURCE_ROOT_EXPLICIT=false/u);
+  assert.match(startSh, /--reaper-resource-root/u);
+  assert.match(startSh, /reaper_args=\("-newinst" "-nosplash"\)/u);
+  assert.match(startSh, /if \[\[ "\$\{REAPER_RESOURCE_ROOT_EXPLICIT\}" == "true" \]\]; then\s+reaper_args\+=\("-cfgfile" "\$\{REAPER_RESOURCE_ROOT\}\/REAPER\.ini"\)/u);
+  assert.match(startSh, /echo "\[OpenReaper\] reaper-config-mode=user_default"/u);
+  assert.match(startSh, /does not select or write a theme/u);
+  assert.match(startSh, /cannot be combined with a REAPER -cfgfile argument/u);
 });
 
 test("Windows Doctor matches escaped package paths in TOML and JSON configs", () => {
