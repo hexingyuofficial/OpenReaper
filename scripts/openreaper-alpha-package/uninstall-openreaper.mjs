@@ -482,8 +482,8 @@ async function removeCodexSection() {
   const configPath = path.join(home, ".codex", "config.toml");
   const existing = await readTextIfExists(configPath);
   if (existing === "") return;
-  let next = removeTomlSection(existing, "mcp_servers.openreaper");
-  next = removeTomlSection(next, "mcp_servers.vital-agent-mcp");
+  let next = removeTomlSectionTree(existing, "mcp_servers.openreaper");
+  next = removeTomlSectionTree(next, "mcp_servers.vital-agent-mcp");
   if (next !== existing) {
     await writeFile(configPath, next, "utf8");
     report.changed.push(`removed Codex openreaper and vital-agent-mcp MCP config from ${configPath}`);
@@ -541,19 +541,22 @@ function removeLinesPreservingBytes(existing, keepLine) {
   return next;
 }
 
-function removeTomlSection(existing, sectionName) {
-  const header = `[${sectionName}]`;
+function removeTomlSectionTree(existing, sectionName) {
   const lines = existing.split(/\r?\n/);
-  const start = lines.findIndex((line) => line.trim() === header);
-  if (start === -1) return existing;
-  let end = lines.length;
-  for (let i = start + 1; i < lines.length; i += 1) {
-    if (/^\s*\[/.test(lines[i])) {
-      end = i;
-      break;
+  const prefix = `${sectionName}.`;
+  const kept = [];
+  let removing = false;
+  for (const line of lines) {
+    const match = /^\s*\[([^\]]+)\]/u.exec(line);
+    if (match) {
+      const name = match[1].trim();
+      removing = name === sectionName || name.startsWith(prefix);
     }
+    if (!removing) kept.push(line);
   }
-  return `${[...lines.slice(0, start), ...lines.slice(end)].join("\n").trimEnd()}\n`;
+  return kept.length === lines.length
+    ? existing
+    : `${kept.join("\n").trimEnd()}\n`;
 }
 
 async function readTextIfExists(filePath) {

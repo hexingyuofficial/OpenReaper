@@ -185,6 +185,36 @@ describe("Alpha3.2-B2 managed render root", () => {
     assert.equal(await readFile(path.join(recipeRoot, "revision.json"), "utf8"), "immutable-revision\n");
   });
 
+  it("removes the complete OpenReaper Codex TOML section tree", async () => {
+    const fixture = await makeInstallerFixture();
+    const codexPath = path.join(fixture.home, ".codex", "config.toml");
+    await mkdir(path.dirname(codexPath), { recursive: true });
+    await writeFile(codexPath, [
+      "[mcp_servers.openreaper.env]",
+      "OPENREAPER_ARTIFACT_ROOT = 'owned'",
+      "",
+      "[mcp_servers.keep]",
+      "command = 'keep'",
+      "",
+      "[mcp_servers.openreaper.experimental]",
+      "enabled = true",
+      "",
+      "[mcp_servers.vital-agent-mcp.env]",
+      "STALE = 'owned'",
+      "",
+      "[user]",
+      "keep = true",
+      "",
+    ].join("\n"), "utf8");
+
+    const result = await runUninstallerWithClientConfig(fixture);
+    assert.equal(result.code, 0, result.stderr || result.stdout);
+    const remaining = await readFile(codexPath, "utf8");
+    assert.doesNotMatch(remaining, /mcp_servers\.(?:openreaper|vital-agent-mcp)/u);
+    assert.match(remaining, /\[mcp_servers\.keep\]/u);
+    assert.match(remaining, /\[user\]/u);
+  });
+
   it("installs a conditional startup hook, preserves user bytes, and keeps the manual Action fallback", async () => {
     const fixture = await makeInstallerFixture();
     const scriptsRoot = path.join(fixture.home, "Library", "Application Support", "REAPER", "Scripts");
@@ -1770,6 +1800,15 @@ function runUninstaller(fixture) {
     "--skip-client-config",
     "--skip-startup-hook",
   ], { cwd: fixture.root, env: { ...process.env, HOME: fixture.home } });
+}
+
+function runUninstallerWithClientConfig(fixture) {
+  return runCaptured(process.execPath, [
+    fixture.uninstallerPath,
+    "--install-root",
+    fixture.installRoot,
+    "--skip-startup-hook",
+  ], { cwd: fixture.packageRoot, env: { ...process.env, HOME: fixture.home } });
 }
 
 function runUninstallerWithStartupHook(fixture) {
