@@ -19,6 +19,10 @@ const doctorPs1 = await readFile(
   path.resolve(import.meta.dirname, "../../scripts/openreaper-alpha-package/openreaper-doctor.ps1"),
   "utf8",
 );
+const mcpPs1 = await readFile(
+  path.resolve(import.meta.dirname, "../../scripts/openreaper-alpha-package/openreaper-mcp.ps1"),
+  "utf8",
+);
 const startPs1 = await readFile(
   path.resolve(import.meta.dirname, "../../scripts/openreaper-alpha-package/openreaper-start.ps1"),
   "utf8",
@@ -58,6 +62,19 @@ test("Windows start omits an empty Start-Process argument list", () => {
   assert.match(startPs1, /if \(\$launchArgs\.Count -gt 0\) \{/u);
   assert.match(startPs1, /Start-Process -FilePath \$binary -ArgumentList \$launchArgs/u);
   assert.match(startPs1, /Start-Process -FilePath \$binary -WorkingDirectory \(Split-Path -Parent \$binary\) -PassThru/u);
+});
+
+test("Windows MCP wrapper binds the shared Recipe store and session roots", () => {
+  assert.match(mcpPs1, /OPENREAPER_EXECUTABLE_RECIPE_ROOT/u);
+  assert.match(mcpPs1, /OPENREAPER_OFFICIAL_EXECUTABLE_RECIPE_ROOT/u);
+  assert.match(mcpPs1, /DefaultPath \(Join-Path \(Split-Path -Parent \$installRoot\)/u);
+  assert.match(mcpPs1, /data\\executable-recipes/u);
+  assert.match(mcpPs1, /Join-Path \$sessionRoot "executable-recipes\.official"/u);
+  assert.match(mcpPs1, /\$env:OPENREAPER_EXECUTABLE_RECIPE_ROOT = \$recipeRoot/u);
+  assert.match(mcpPs1, /\$env:OPENREAPER_OFFICIAL_EXECUTABLE_RECIPE_ROOT = \$officialRecipeRoot/u);
+  assert.match(mcpPs1, /\$env:OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR = \$transportRoot/u);
+  assert.match(mcpPs1, /Resolve-OpenReaperDirectory/u);
+  assert.match(mcpPs1, /ReparsePoint/u);
 });
 
 test("Windows live bridge default script path converts file URLs natively", () => {
