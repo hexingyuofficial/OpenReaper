@@ -65,10 +65,19 @@ test("Windows start omits an empty Start-Process argument list", () => {
   assert.match(startPs1, /\$env:OPENREAPER_SESSION_ROOT = \$SessionRoot/u);
   assert.match(startPs1, /\$doctorArgs = @\("--wait-bridge=5"\)/u);
   assert.doesNotMatch(startPs1, /\$doctorArgs = @\("--wait-bridge=2"\)/u);
+  assert.match(startPs1, /\$doctorSmokeTimeoutMs = 22000/u);
+  assert.match(startPs1, /\$doctorReadProbeTimeoutMs = 15000/u);
+  assert.match(startPs1, /\$env:OPENREAPER_DOCTOR_SMOKE_TIMEOUT_MS = \[string\]\$doctorSmokeTimeoutMs/u);
+  assert.match(startPs1, /\$env:OPENREAPER_DOCTOR_READ_PROBE_TIMEOUT_MS = \[string\]\$doctorReadProbeTimeoutMs/u);
   assert.ok(
     startPs1.indexOf("$env:OPENREAPER_SESSION_ROOT = $SessionRoot")
       < startPs1.indexOf("& powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $doctorScript"),
     "Windows start must bind its effective session root before invoking packaged Doctor",
+  );
+  assert.ok(
+    startPs1.indexOf("$env:OPENREAPER_DOCTOR_SMOKE_TIMEOUT_MS = [string]$doctorSmokeTimeoutMs")
+      < startPs1.indexOf("& powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $doctorScript"),
+    "Windows start must bind its bounded cold-smoke timeout before invoking packaged Doctor",
   );
 });
 

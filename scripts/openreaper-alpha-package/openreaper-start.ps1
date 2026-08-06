@@ -39,6 +39,8 @@ $doctorScript = Join-Path $binRoot "openreaper-doctor.ps1"
 $startupStatusPath = Join-Path $transportRoot "openreaper-startup-status-v1.json"
 $heartbeatPath = Join-Path $transportRoot "openreaper-bridge-liveness-v1.json"
 $launchStarted = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+$doctorSmokeTimeoutMs = 22000
+$doctorReadProbeTimeoutMs = 15000
 
 function Fail([string] $Message) {
     Write-Error "[OpenReaper] $Message"
@@ -232,6 +234,8 @@ if (-not (Test-HeartbeatReady)) {
 
 $doctorArgs = @("--wait-bridge=5")
 if ($ProjectPath) { $doctorArgs += "--for=project-query" }
+$env:OPENREAPER_DOCTOR_SMOKE_TIMEOUT_MS = [string]$doctorSmokeTimeoutMs
+$env:OPENREAPER_DOCTOR_READ_PROBE_TIMEOUT_MS = [string]$doctorReadProbeTimeoutMs
 $doctorOutput = & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $doctorScript @doctorArgs 2>&1
 $doctorOutput | Tee-Object -FilePath $logPath -Append | Write-Output
 if ($LASTEXITCODE -ne 0) { Fail "Doctor public read probe failed; log=$logPath" }
