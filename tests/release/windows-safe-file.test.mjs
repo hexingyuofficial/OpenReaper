@@ -32,6 +32,21 @@ test("Windows safe file helper uses the packaged native PowerShell contract", as
   assert.match(moduleSource, /\? process\.env\.SystemRoot\s*:\s*"C:\\\\Windows"/u);
 });
 
+test("packaged Doctor fixture carries the Windows safe-file dependency closure", async () => {
+  const packageSource = await readFile(
+    path.resolve(import.meta.dirname, "../../scripts/package-openreaper-alpha.mjs"),
+    "utf8",
+  );
+  const fixtureStart = packageSource.indexOf("async function smokePackagedDoctorNeverSettlingPing(");
+  const fixtureEnd = packageSource.indexOf("async function smokePackagedDoctorFixtureTimeoutCleanup(");
+  assert.ok(fixtureStart >= 0);
+  assert.ok(fixtureEnd > fixtureStart);
+  const fixtureSource = packageSource.slice(fixtureStart, fixtureEnd);
+  assert.match(fixtureSource, /"live-bridge-executor-v1\.mjs"/u);
+  assert.match(fixtureSource, /"windows-safe-file-v1\.mjs"/u);
+  assert.match(fixtureSource, /"windows-safe-file-read\.ps1"/u);
+});
+
 test("Windows safe file reader validates bounded native output", async () => {
   const calls = [];
   const result = await readWindowsSafeFile("C:\\OpenReaperLab\\何星宇\\heartbeat.json", {

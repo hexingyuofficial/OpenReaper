@@ -2057,6 +2057,14 @@ async function smokePackagedDoctorNeverSettlingPing({
     path.join(path.dirname(sourceReadiness), "live-bridge-executor-v1.mjs"),
     path.join(path.dirname(candidateReadiness), "live-bridge-executor-v1.mjs"),
   );
+  await cp(
+    path.join(path.dirname(sourceReadiness), "windows-safe-file-v1.mjs"),
+    path.join(path.dirname(candidateReadiness), "windows-safe-file-v1.mjs"),
+  );
+  await cp(
+    path.join(path.dirname(sourceReadiness), "windows-safe-file-read.ps1"),
+    path.join(path.dirname(candidateReadiness), "windows-safe-file-read.ps1"),
+  );
   await writeFile(candidateProjectUnderstanding, `export function projectAlpha3_2_5BProjectQueryDoctorTask({ task } = {}) {
   return task ?? {};
 }
