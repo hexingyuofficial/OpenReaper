@@ -45,7 +45,7 @@ if (options.help === true) {
   process.stdout.write(`Default: build and smoke the OpenReaper core package only.\n`);
   process.stdout.write(`  --with-vital             bundle and smoke vital-agent-mcp as an optional companion\n`);
   process.stdout.write(`  --vital-agent-root PATH  override the companion source root (requires --with-vital)\n`);
-  process.stdout.write(`  --version VALUE          package build id\n`);
+  process.stdout.write(`  --version VALUE          assert the root package version (release builds derive it automatically)\n`);
   process.stdout.write(`  --out-dir PATH           output directory\n`);
   process.stdout.write(`  --platform macos|windows package platform (default: macos)\n`);
   process.stdout.write(`  --skip-zip               leave the package directory unzipped\n`);
@@ -65,10 +65,13 @@ if (packagePlatform !== "macos" && packagePlatform !== "windows") {
 const vitalAgentRoot = withVital
   ? path.resolve(options.vital_agent_root ?? path.join(repoRoot, "..", "vital-agent-mcp"))
   : null;
-const version = safeToken(options.version, `alpha-${compactTimestamp(new Date())}`);
+const OPENREAPER_PRODUCT_VERSION = JSON.parse(await readFile(path.join(repoRoot, "package.json"), "utf8")).version;
+const version = OPENREAPER_PRODUCT_VERSION;
+if (options.version !== undefined && safeToken(options.version, "") !== version) {
+  throw new Error(`--version ${String(options.version)} disagrees with root package.json version ${version}.`);
+}
 const outDir = path.resolve(options.out_dir ?? path.join(repoRoot, "dist", `openreaper-${version}`));
 const packageRoot = path.join(outDir, "OpenReaper-alpha");
-const OPENREAPER_PRODUCT_VERSION = JSON.parse(await readFile(path.join(repoRoot, "package.json"), "utf8")).version;
 const PACKAGE_PROVENANCE_CONTRACT = "openreaper.package.provenance.v1";
 const ALPHA3_3_PACKAGE_CATALOG_COUNTS = Object.freeze({
   exact_tool_count: 6,
@@ -290,7 +293,7 @@ export function createOpenReaperAlphaPackageCatalogFacts(handlerRegistry) {
     || handlerRegistry.entries.length !== facts.accepted_template_count
     || Object.entries(ALPHA3_3_PACKAGE_CATALOG_COUNTS).some(([key, value]) => facts[key] !== value)
   ) {
-    throw new Error(`Package provenance Alpha3.3 catalog facts do not match the frozen product: ${JSON.stringify(facts)}.`);
+    throw new Error(`Package provenance catalog facts do not match the frozen product: ${JSON.stringify(facts)}.`);
   }
   return Object.freeze(facts);
 }
@@ -487,7 +490,7 @@ exec node "\${COMPANION_ROOT}/dist/src/mcpServer.js" "$@"
 
 async function writeReadme() {
   if (packagePlatform === "windows") {
-    const readme = `OpenReaper Windows package
+    const readme = `OpenReaper ${OPENREAPER_PRODUCT_VERSION} Windows package
 
 Install or upgrade from native Windows PowerShell:
   powershell.exe -ExecutionPolicy Bypass -File .\\install-openreaper.ps1
@@ -509,11 +512,11 @@ remain user-mediated and fail closed.
     await writeFile(path.join(packageRoot, "README.txt"), readme, "utf8");
     return;
   }
-  const readme = `OpenReaper macOS alpha package
+  const readme = `OpenReaper ${OPENREAPER_PRODUCT_VERSION} macOS package
 
 What this package does:
-- installs OpenReaper alpha to ~/.openreaper/current
-- exposes the flat fifteen-Macro Alpha3.3 menu, with full manuals only on exact id expansion
+- installs OpenReaper to ~/.openreaper/current
+- exposes the flat fifteen-Macro menu, with full manuals only on exact id expansion
 - registers MCP server name "openreaper" for Codex, Cursor, and Claude Desktop where their config files live at standard macOS paths
 - writes MCP config snippets for other clients, including Trae, under ~/.openreaper/current/config-snippets
 - registers a REAPER action named "OpenReaper: Start MCP bridge"
@@ -545,7 +548,7 @@ absolute writable directory during install, run:
   ./install.command --render-root /absolute/path/to/renders
 The selection is persisted for MCP and normal openreaper-start sessions.
 
-Upgrade from an older OpenReaper alpha:
+Upgrade from an older OpenReaper installation:
 Run the newer downloaded package's install.command directly.
 Do not manually delete the old ~/.openreaper/current folder first; the installer handles the
 rename-first replacement, rewrites MCP client config, and then runs a startup
@@ -602,8 +605,8 @@ root is moved into a uniquely allocated preservation container beside
 ~/.openreaper/current before the install tree is removed; the uninstaller
 reports that path.
 
-Alpha caveat:
-The external product name and MCP server name are OpenReaper. This package uses the OpenReaper alpha stdio MCP kernel from vendor/openreaper-kernel. Some live REAPER execution paths remain evidence-gated; registered executable Macros and verified Templates are discovered through list_templates and invoked through call_template.
+Candidate caveat:
+The external product name and MCP server name are OpenReaper. This package uses the versioned stdio MCP kernel from vendor/openreaper-kernel. Support claims remain evidence-bound; registered executable Macros and verified Templates are discovered through list_templates and invoked through call_template.
 ${withVital
     ? 'The optional companion vital-agent-mcp server is plan-only and does not execute REAPER or Vital writes.'
     : 'Vital companion support remains available only in packages explicitly built with --with-vital.'}
@@ -753,7 +756,7 @@ async function smokePackagedOpenReaperMcp() {
       name: "ping",
       arguments: {},
     }));
-    if (ping.kernel !== "openreaper-mcp alpha kernel") {
+    if (ping.kernel !== "openreaper-mcp kernel") {
       throw new Error(`Packaged MCP ping kernel mismatch: ${ping.kernel}`);
     }
     assertAgentStartupGuidance(ping.agent_startup_guidance, {
@@ -1819,7 +1822,7 @@ async function smokePackagedRuntimeDoctorReadiness() {
           defaultResult.report.status !== "ready" ||
           defaultResult.report.package_status !== "ready" ||
           commandSmoke?.ok !== true ||
-          commandSmoke?.kernel !== "openreaper-mcp alpha kernel"
+          commandSmoke?.kernel !== "openreaper-mcp kernel"
         ) {
           throw new Error(`Packaged default doctor coupled ${fixture.name} render readiness to package health: ${defaultResult.stderr || defaultResult.stdout}`);
         }

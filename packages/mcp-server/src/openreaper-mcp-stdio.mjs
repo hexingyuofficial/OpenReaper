@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import path from "node:path";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -67,8 +68,12 @@ import {
   seedAlpha345OfficialExecutableRecipeRevisions,
 } from "./alpha3-45-official-executable-recipes-v1.mjs";
 
-const KERNEL = "openreaper-mcp alpha kernel";
-const VERSION = "0.3.0-alpha";
+const PACKAGE_METADATA_PATH = process.env.OPENREAPER_MCP_PACKAGE_ROOT
+  ? path.join(process.env.OPENREAPER_MCP_PACKAGE_ROOT, "package.json")
+  : path.join(path.dirname(fileURLToPath(import.meta.url)), "../../../package.json");
+const PACKAGE_METADATA = JSON.parse(readFileSync(PACKAGE_METADATA_PATH, "utf8"));
+const KERNEL = "openreaper-mcp kernel";
+const VERSION = PACKAGE_METADATA.version;
 const TOOL_SURFACE = OPENREAPER_PUBLIC_TOOL_IDS;
 const AGENT_START_HERE_HINT = `Follow ${OPENREAPER_AGENT_START_HERE_DOCUMENT} (MCP initialization instructions): ${OPENREAPER_AGENT_FIRST_ROUND_FLOW}. Macro-first; full manuals only on exact ids.`;
 export const CALL_RECIPE_STAGE_BUDGET = Object.freeze({

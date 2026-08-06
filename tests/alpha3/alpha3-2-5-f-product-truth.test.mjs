@@ -341,7 +341,7 @@ sleep 0.5
     assert.match(source, /ALPHA3_3_B1_VISIBLE_EXECUTABLE_IDS/);
     assert.match(source, /ALPHA3_3_B1_DEPRECATED_ALIASES/);
     assert.match(source, /createOpenReaperAlphaPackageCatalogFacts/);
-    assert.match(source, /exposes the flat fifteen-Macro Alpha3\.3 menu/);
+    assert.match(source, /exposes the flat fifteen-Macro menu/);
     assert.equal(source.includes("ALPHA3_2_5_0_MACRO_INVENTORY_COUNTS"), false);
     assert.match(source, /0o444/);
     assert.match(source, /source_tree_clean/);

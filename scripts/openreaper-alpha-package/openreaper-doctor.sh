@@ -628,7 +628,7 @@ async function smokeOpenReaperMcpCommandInner() {
     const toolNames = (await client.listTools()).tools.map((tool) => tool.name).sort();
     assertExactArray(toolNames, exactTools, "packaged MCP command tool surface");
     const ping = parseJsonToolResult(await client.callTool({ name: "ping", arguments: {} }));
-    if (ping.kernel !== "openreaper-mcp alpha kernel") {
+    if (ping.kernel !== "openreaper-mcp kernel") {
       throw new Error(`expected packaged MCP command kernel, got ${ping.kernel}`);
     }
     return {
@@ -705,8 +705,8 @@ async function smokeOpenReaperMcpInner() {
     assertExactArray(toolNames, exactTools, "MCP tool surface");
     let ping = parseJsonToolResult(await client.callTool({ name: "ping", arguments: {} }));
     let waitPolls = 1;
-    if (ping.kernel !== "openreaper-mcp alpha kernel") {
-      throw new Error(`expected openreaper-mcp alpha kernel, got ${ping.kernel}`);
+    if (ping.kernel !== "openreaper-mcp kernel") {
+      throw new Error(`expected openreaper-mcp kernel, got ${ping.kernel}`);
     }
     assertDiscoveredIds(
       parseJsonToolResult(await client.callTool({ name: "list_templates", arguments: { ids: requiredMacros } })),

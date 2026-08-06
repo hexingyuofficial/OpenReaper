@@ -129,7 +129,7 @@ export async function runInstalledWrapperCanary({ installedWrapper, sourceProjec
     const ping = await canaryCall({ journal, client, step: "installed-wrapper-ping", tool: "ping", args: {}, report });
     assertCanary(ping?.ok === true, "CANARY_PING_NOT_OK", { response: ping });
     assertCanary(
-      ping?.product === "OpenReaper" && ping?.kernel === "openreaper-mcp alpha kernel",
+      ping?.product === "OpenReaper" && ping?.kernel === "openreaper-mcp kernel",
       "CANARY_RUNTIME_IDENTITY_MISMATCH",
       { product: ping?.product ?? null, kernel: ping?.kernel ?? null },
     );

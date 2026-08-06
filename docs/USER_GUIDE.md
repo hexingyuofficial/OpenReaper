@@ -1,6 +1,6 @@
 # OpenReaper User Guide
 
-Status: Alpha3.3 executable product guide. Support remains evidence-bound.
+Status: OpenReaper 0.1.0 candidate. Support remains evidence-bound.
 
 OpenReaper lets you work with a live REAPER project by talking to an agent. You
 do not need to understand Macros, Templates, SQLite, object refs, artifacts, or
@@ -32,9 +32,9 @@ Save the current project.
 The agent must not report a plan, preview, or successful dispatch as completed
 work. A successful write requires live REAPER readback.
 
-## The Alpha3.3 Macro Highway
+## The Macro Surface
 
-Alpha3.3 has 15 visible, executable Macros. They are one flat product surface;
+OpenReaper has 15 visible, executable Macros. They are one flat product surface;
 there is no Primary/Secondary tier.
 
 | Macro | Current role |
@@ -93,7 +93,7 @@ Reconnect to my REAPER session.
 Check whether OpenReaper is healthy.
 ```
 
-For the installable macOS alpha package, the agent should:
+For the installed package, the agent should:
 
 1. Run `~/.openreaper/current/bin/openreaper-start`.
 2. On first use, choose whether OpenReaper may handle its exact safe startup
@@ -102,6 +102,15 @@ For the installable macOS alpha package, the agent should:
    across upgrades, while `once` applies only to that launch.
 4. Wait for the autonomous Bridge heartbeat and public read probe to pass.
 5. Reconnect the MCP server named `openreaper` if its prior session was stale.
+
+On Windows, the equivalent native PowerShell command is:
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\OpenReaper\current\bin\openreaper-start.ps1"
+```
+
+Windows normal operation does not require Git Bash, Git, WSL, SSH, SWS,
+ReaPack, or third-party plugins. Node.js 20 or newer is required.
 
 The three exact choices are:
 
@@ -166,6 +175,27 @@ OpenReaper should summarize first and expand only the details needed for the
 task. You should not need to construct refs or choose between a Macro, Template,
 artifact, or SQLite query yourself.
 
+## Remove Silence And Normalize
+
+For selected audio Items, OpenReaper provides two packaged REAPER Actions:
+`Remove Silence...` and `Repeat Remove Silence with Last Settings`. The first
+collects settings; the second reuses the last accepted settings. An agent may
+use the same shared batch core through `macro.items.apply` with
+`mode=remove_silence`. Supported scopes are `all`, `leading`, `trailing`,
+`edges`, and `internal`, with threshold, minimum silence, leading/trailing
+padding, minimum kept audio, and fade settings.
+
+OpenReaper analyzes the whole selection before changing anything, preserves
+source files, Tracks, and timeline positions, and closes the batch in one Undo.
+An all-silent Item is kept and reported. MIDI and unsupported Items fail closed.
+The maximum is 64 exact selected audio Items; 65 or more must return zero-write.
+
+For normalization, use `macro.items.apply` with `mode=normalize_level`. Metrics
+are LUFS-I, RMS-I, peak, true peak, LUFS-M max, and LUFS-S max. OpenReaper uses
+REAPER's native normalization calculation. This is source/item/take pre-FX
+normalization, not post-FX output normalization. The same 64-Item maximum,
+zero-write overflow rule, one native batch, one readback, and one Undo apply.
+
 ## Authorization And Safety
 
 OpenReaper should not ask you to approve every small reversible step. A good
@@ -229,8 +259,7 @@ supported.
 
 ## Current Evidence Boundary
 
-The current Alpha3.3 surface contains 15 visible executable Macros and 232
-accepted Templates with registered bridge handlers across 91 handler modules.
+The candidate surface contains 15 visible executable Macros and six MCP tools.
 Support remains narrower than the names of some Macro families:
 
 - MIDI supports bounded `create_clips`, indexed existing-note edits,
@@ -246,10 +275,9 @@ Support remains narrower than the names of some Macro families:
   profiles; compare, MIDI, and loop profiles remain held.
 - Item apply supports alignment, sequencing, distribution, anchoring, moving
   exact Items onto existing Tracks, accepted Item properties, exact Active Take
-  selection, fades, exact trims, Take playback, and snap offsets. Loudness,
-  onset/transient processing, silence trimming, and adjacent crossfade modes
-  remain held. Item-level pan is not a proven field; explicit Active Take pan
-  uses the accepted Take-control route instead.
+  selection, fades, exact trims, Take playback, snap offsets, native level
+  normalization, and shared-core silence removal. Item-level pan is not a
+  proven field; explicit Active Take pan uses the accepted Take-control route.
 - Automation supports the exact modes published by its manual; real-time
   touch/write/latch behavior, arbitrary curves, and raw Action/chunk mutation
   are not exposed.

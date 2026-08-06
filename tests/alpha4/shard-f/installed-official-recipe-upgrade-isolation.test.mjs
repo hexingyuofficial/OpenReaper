@@ -161,7 +161,7 @@ async function makeInstallablePackage(packageRoot, buildId, options = {}) {
     writeFile(path.join(packageRoot, "install.command"), "#!/bin/zsh\nexit 0\n", "utf8"),
     writeFile(path.join(packageRoot, "uninstall.command"), "#!/bin/zsh\nexit 0\n", "utf8"),
     writeFile(path.join(packageRoot, "provenance.json"), `${JSON.stringify({ contract: "openreaper.package.provenance.v1", build_id: buildId })}\n`, "utf8"),
-    writeFile(path.join(packageRoot, "package.json"), `${JSON.stringify({ name: "openreaper-alpha4-upgrade-fixture", private: true })}\n`, "utf8"),
+    writeFile(path.join(packageRoot, "package.json"), `${JSON.stringify({ name: "openreaper-alpha4-upgrade-fixture", version: "0.1.0-alpha.1", private: true })}\n`, "utf8"),
     writeFile(path.join(packageRoot, "BUILD_ID"), `${buildId}\n`, "utf8"),
   ]);
   const serverSourceRoot = path.join(REPO, "packages", "mcp-server", "src");

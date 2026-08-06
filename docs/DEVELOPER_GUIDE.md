@@ -1,9 +1,9 @@
 # OpenReaper Developer Guide
 
-Status: Alpha3.3 portfolio-complete, package/trial closeout-active developer guide.
+Status: OpenReaper 0.1.0 candidate developer guide.
 
 This guide is for maintainers, worker agents, reviewers, macro/pack authors,
-and future contributors. It explains the Phase 3 architecture boundaries and
+and future contributors. It explains the architecture boundaries and
 how to extend OpenReaper without creating dual truth, hidden execution paths,
 or unsupported product claims.
 
@@ -41,9 +41,9 @@ Use the same product words internally and externally when possible:
 - `macro`: a product category of template for bounded high-frequency
   operations. It remains a template, not a new tool layer.
 
-## Seven-Layer Phase 3 Model
+## Seven-Layer Model
 
-Phase 3 uses seven developer-facing layers:
+OpenReaper uses seven developer-facing layers:
 
 ```text
 1. Truth Sources
@@ -76,7 +76,7 @@ become independent truth sources for execution.
 
 ## 2. Tool Surface
 
-The agent-facing MCP tool surface remains five tools:
+The agent-facing MCP tool surface remains exactly six tools:
 
 ```text
 ping
@@ -84,11 +84,11 @@ get_state
 list_templates
 list_recipes
 call_template
+call_recipe
 ```
 
-Do not add a sixth tool, public `call_recipe`, hidden recipe executor, raw Lua
-runner, raw REAPER action path, shell path, or UI automation path as a product
-capability.
+Do not add a seventh tool, a second Recipe executor, raw Lua runner, raw REAPER
+action path, shell path, or UI automation path as a product capability.
 
 ## 3. Capability Layer
 
@@ -106,7 +106,7 @@ fix the handler/template first in a bounded window.
 Recipes compose known powers. They must not define raw Lua, raw actions, shell
 commands, unreviewed templates, or bypass paths.
 
-### Flat Alpha3.3 Macro portfolio
+### Flat Macro Portfolio
 
 The default agent context has one flat menu of fifteen executable Macros:
 
@@ -327,6 +327,20 @@ notes.
 Do not turn the user guide into an architecture manual, and do not hide
 architecture rules in the user guide.
 
-For Alpha3.3, do not publish raw SQL, direct SQLite writes, raw Lua/actions,
-shell or UI bypasses, a hidden executor, or public `call_recipe` as a workaround
-for a missing Macro or held mode.
+Do not publish raw SQL, direct SQLite writes, raw Lua/actions, shell or UI
+bypasses, a hidden executor, or a second Recipe path as a workaround for a
+missing Macro or held mode.
+
+## Versioning And Packaging
+
+The root `package.json.version` is the only hand-edited product SemVer. MCP
+server metadata, package metadata, provenance, Doctor output, build id, and ZIP
+filename derive from it; a caller-supplied packaging version must match exactly
+or the build fails. Candidate versions use `0.1.0-alpha.N`. Promotion to
+`0.1.0` requires fresh installed acceptance for both exact platform artifacts
+and the final source-blind trust review.
+
+Build platform packages with `scripts/package-openreaper-alpha.mjs`. macOS
+ships POSIX/zsh entrypoints; Windows ships native PowerShell entrypoints. Shared
+kernel, Recipe, transport, safety, and evidence truth must remain identical.
+Windows runtime paths cannot depend on Git Bash, Git, WSL, or SSH.

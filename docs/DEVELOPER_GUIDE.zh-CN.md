@@ -1,67 +1,36 @@
 # OpenReaper 开发者指南
 
-状态：Alpha3.3 能力组合已闭合、package/trial 收口仍在进行的开发者指南。
+状态：OpenReaper 0.1.0 候选版本开发者指南。
 
-本指南面向 OpenReaper 维护者、worker agent、reviewer、macro 作者、extension pack 作者和未来贡献者。它说明改动应该放在哪里、哪个层级拥有某类决策，以及如何扩展 OpenReaper，同时避免制造双重真相、隐藏执行路径或没有证据的产品支持声明。
-
-面向用户的说明书见 `docs/USER_GUIDE.md`。operator/live 证据流程见 `docs/RUNBOOK.md`。
+本指南面向维护者、worker agent、reviewer、Macro/pack 作者和未来贡献者，说明
+OpenReaper 的架构边界，以及如何在不制造双重真相、隐藏执行路径或无证据支持
+声明的前提下扩展产品。
 
 ## 修改前必读
 
-修改文件前先读仓库规则和当前层级文档：
+修改文件前先读：
 
 - `AGENTS.md`
 - `docs/FOUNDATION_FREEZE_PLAN.md`
 - `docs/REPOSITORY_LAYOUT.md`
 - `docs/LAYER_PROGRESS.md`
 - `docs/RATCHET_MODEL.md`
-- 你正在修改的层级对应 ABI 或 taxonomy 文档
+- 当前层级对应的 ABI 或 taxonomy 文档
 
-开始新工作时先看状态：
-
-```bash
-git status --short
-```
-
-尊重文件所有权。architecture/process 文件和冻结的 ABI/taxonomy 文档属于 control tower，除非 prompt 明确打开这些文件，否则不要编辑。layer 或 docs worker 窗口不要 commit，除非 prompt 明确允许。
-
-## 仓库地图
-
-重要路径：
-
-```text
-docs/                       architecture, ABI, taxonomy, guides, support docs
-docs/abi/                   frozen layer contracts
-docs/taxonomy/              core capability pack taxonomy
-packages/core/              shared contracts, catalog, registry, helpers
-packages/mcp-server/        MCP server and runtime binding
-reaper/bridge/              REAPER-side bridge runtime
-reaper/packs/<pack>/        internal core capability packs
-recipes/official/           official recipe/workflow contracts
-recipes/user/               local user-authored recipes
-scripts/                    checks and local entrypoints
-tests/                      layer, runtime, Alpha3, and integration tests
-```
-
-不要把旧仓库里 workflow-shaped 的 pack，例如 `loop`、`cleanup`、`delivery`、`layer`、`music_sketch`，迁移成 OpenReaper 顶层 pack。在这个仓库里，它们是 workflow family、recipe tag 或未来产品流程，不是 core capability domain。
+开始工作时先运行 `git status --short`。只按精确路径 stage，不要还原用户或其他
+窗口的改动。
 
 ## 产品术语
 
-保持术语一致：
+- `workflow`：用户面对的可复用流程，内部可以是 Recipe contract 或文件。
+- `pack`：面向用户的 plugin、领域、workflow、媒体库、搜索或本地能力扩展包。
+- `core capability pack`：冻结的内部能力域，例如 `reaper/packs/<pack>`。
+- `extension pack`：用户可见 pack 的开发者术语。
+- `macro`：有边界高频操作的 Template 产品类别，不是新工具层。
 
-- `workflow`：用户面对的可复用流程。内部可表示为 recipe file 或 recipe packet。
-- `recipe`：开发者层面的工作流契约，包含 checkpoint，组合已知能力。
-- `template`：经过审查的原子能力，连接 runtime/bridge 行为。
-- `macro`：面向常见有边界操作的 template 产品类别。通过 `list_templates` 发现，通过 `call_template` 执行。
-- `pack`：用户面对的扩展包。
-- `extension pack`：可安装/可分享的插件、工作流、媒体库、搜索或领域能力包。
-- `core capability pack`：内部冻结的 taxonomy owner，例如 `reaper/packs/fx`；普通用户不应需要理解这个概念。
+## 七层模型
 
-Macro 不是第六个工具。Pack 不是原始代码加载后门。Workflow 不是隐藏执行器。
-
-## Phase 3 七层模型
-
-Phase 3 使用七个开发者面对的层级：
+OpenReaper 使用七个开发者层级：
 
 ```text
 1. Truth Sources
@@ -73,21 +42,17 @@ Phase 3 使用七个开发者面对的层级：
 7. Product UX Layer
 ```
 
-核心原则是：合并概念，不合并真相源。只有职责清楚的冗余视图才应该保留。
+原则是合并概念，不合并真相源。
 
-### 1. Truth Sources
+## 1. 真相源
 
-项目真相是 REAPER project state。
+工程真相是 REAPER project state；能力真相是 repo descriptor 与 validated
+runtime catalog。SQLite、artifact、搜索缓存、Recipe 或 pack 不能成为独立的
+执行真相。
 
-能力真相是已审查的 repo descriptors 加 validated runtime catalog。
+## 2. 工具表面
 
-证据真相是保留的 artifacts 和已审查 evidence records。证据可以支撑声明，但它本身不授权执行。
-
-不要让 Project SQLite Index、CapabilitySearchIndex、workflow packets、extension packs 或 artifact summaries 变成独立执行真相。
-
-### 2. Tool Surface
-
-公开的 agent-facing MCP 表面保持严格五个工具：
+公开 agent-facing MCP 表面恰好有六个工具：
 
 ```text
 ping
@@ -95,29 +60,25 @@ get_state
 list_templates
 list_recipes
 call_template
+call_recipe
 ```
 
-不要添加第六个 MCP 工具、公开 `call_recipe`、隐藏 recipe executor、raw Lua runner、raw REAPER action 路径、shell 路径，或把 UI automation 作为产品能力。
+不要添加第七个工具、第二套 Recipe executor、raw Lua runner、raw REAPER
+Action、shell 或 UI automation 产品路径。
 
-### 3. Capability Layer
+## 3. 能力层
 
-Capability Layer 包含：
+- `template`：建立在 handler 上、经过审查的原子能力。
+- `macro`：由 `list_templates` 发现、由 `call_template` 执行的 Template 产品类别。
+- `recipe`：带 checkpoint、risk gate、recovery 和复用行为的长 workflow。
 
-- templates：已审查的原子能力；
-- macros：产品级 templates，带 label、task intent、safety policy、compact readback、typed blockers、声明依赖和测试；
-- recipes：更长的 workflow contracts，带 checkpoints、assertions、evidence、risk gates、recovery 和 portability metadata。
+Macro 不是新工具层。若 Macro 缺少能力，应在有边界窗口内先修 handler/Template。
+Recipe 只能组合已知能力，不得定义 raw Lua、raw Action、shell、未审查 Template
+或 bypass。
 
-层级关系保持：
+### 平级 Macro 组合
 
-```text
-REAPER handler -> template -> macro -> recipe -> agent/user
-```
-
-如果 macro 或 recipe 需要缺失能力，不要用 raw Lua、raw action、shell、UI automation 或私有 executor 隐藏它。应打开有边界的 handler/template 窗口，添加经过审查的能力，运行相关 gate，然后再连接更高层产品面。
-
-### Alpha3.3 平级 Macro 组合
-
-默认 agent context 只有一个平级的十五 Macro 菜单：
+默认 Agent context 有十五个平级、可执行 Macro：
 
 ```text
 project.inspect / query / delete_targets / apply_layout / file
@@ -131,326 +92,103 @@ automation.apply
 render.targets
 ```
 
-Discovery 按当前意图推荐一到三个 Macro；只有精确 id 才展开完整 action
-manual。产品不再有 Primary/Secondary 等级。旧名称只保留隐藏兼容映射；Direct
-Template 是带类型和原因记录的长尾 fallback，不与 Macro 默认入口竞争。
+Discovery 为当前意图排序一到三个候选，只对精确 id 展开完整 manual。没有
+Primary/Secondary 产品等级。改名 id 只作为隐藏兼容映射；direct Template 是带
+typed reason 的长尾 fallback。
 
-每个 public Macro 都必须执行固定、代码拥有的程序，并说明 inputs、preflights、
-mutation/read stages、live readback、blockers、recovery 和有界结果。Plan-only
-行为不能作为已完成的 public Macro。
+每个公开 Macro 必须执行固定、代码拥有的程序，并暴露 inputs、preflight、
+mutation/read stages、live readback、blocker、recovery 和有界结果。Plan-only
+行为不能作为已完成 Macro。
 
-保留的 macro portfolio 目标是覆盖约 80% 的普通 agent REAPER 操作。其余能力
-应放在经过审查的 templates、recipes 或 extension packs 中，而不是继续增加
-狭窄的 public macro。
-
-Covered-legacy 规则：当 canonical Macro 完整替代旧 Macro 且 replacement tests
-通过后，从 public discovery 移除被覆盖的旧 id。temporary alias 只能作为已接受
-package/test gate 的有边界迁移手段，不能作为推荐的 agent-facing macro。仍有独立
-行为时，必须进入 canonical 可见 Macro 或带类型原因的 direct-Template fallback，
-不能再建立 secondary legacy menu。
-
-### 4. Discovery / Search
+## 4. 发现与搜索
 
 Discovery 使用 `list_templates`、`list_recipes` 和 `CapabilitySearchIndex`。
-
-`CapabilitySearchIndex` 是 Discovery/Search 的缓存和排序抽象。它可以索引 templates、macros、recipes、workflows 和未来 extension-pack capability cards。它首先应是 in-memory。只有 installed workflows/packs 或 UI search 规模证明必要时，才考虑 SQLite-backed 实现。
-
-执行规则：
+搜索索引只是 cache/ranking abstraction，不是能力真相。执行规则是：
 
 ```text
-CapabilitySearchIndex may suggest.
-Runtime catalog must authorize.
+capability search may suggest
+runtime catalog must authorize
 ```
 
-搜索输出默认应 compact，通过 exact-id expansion 和 field selection 获取细节。搜索不得绕过 lifecycle、risk、support 或 catalog authorization。
+## 5. 状态层
 
-### 5. State Layer
+Artifact Store 保存 evidence original、report、snapshot、analysis payload、readback
+proof 和 hydration source。Project SQLite Index 保存 query/navigation cache、
+freshness、coverage、selected context、changed-since 和轻量搜索字段。
 
-State Layer 有两个主要 store，职责不同。
+`macro.project.query` 是唯一 Project SQLite Index query/navigation 表面；它不是
+raw SQL、write executor、render 或 save 表面。写入前必须按需 hydrate，并在
+REAPER 中重新解析 live candidate。SQLite row 本身永远不能授权写入。
 
-Artifact Store：
+## 6. 编排层
 
-- 保留 evidence originals；
-- 存储 reports、snapshots、analysis payloads 和 readback proof；
-- 用 artifact refs 持有大 payload；
-- 是 `payload_ref` hydration 的来源。
-
-Project SQLite Index：
-
-- 为当前 project/session 存储 query/navigation/cache rows；
-- 跟踪 freshness 和 coverage；
-- 支持 selected context、changed-since、paging 和轻量 searchable fields；
-- 只有完整匹配 project/session/bridge identity 时，持久化 rows 才可用。
-
-`macro.project.query` 是唯一的 Project SQLite Index query/navigation
-surface。它返回带 entity fields、freshness、coverage 和 canonical refs 的紧凑候选
-rows；不是 raw SQL、write executor、render 或 save surface。refresh 由 OpenReaper
-负责；写操作前 agent 必须按需 hydrate，并在 REAPER 中 live re-resolve 候选。
-SQLite rows 本身永远不能授权写操作。
-
-常见 SQLite row 形状：
-
-```text
-ref
-owner_ref
-summary fields
-freshness_status
-coverage_status
-observed_at
-snapshot_id
-payload_ref
-```
-
-`payload_ref` 指向 Artifact Store 证据。不要默认把深 payload 复制进 SQLite。SQLite 可以让决策更快，但写操作前仍必须由 REAPER 确认真相。
-
-### 6. Orchestration Layer
-
-Orchestration Layer 组织安全、快速的工作：
-
-- query macros；
-- selected-context 和 hydration planning；
-- batch readback；
-- safe parallel reads；
-- serial authorized mutations；
-- 固定可执行的 controls 和 task Macros；
-- recovery 和 cleanup planning；
-- risk gates 和 typed blockers。
-
-写路径：
+该层组织 query、safe parallel reads、串行授权 mutation、批量 readback、固定
+可执行 Macro、risk gate、recovery 和 cleanup。写路径是：
 
 ```text
 SQLite candidate refs
--> refresh or re-resolve in REAPER
--> execute through accepted capability path
--> batch readback from REAPER
--> update Artifact Store and Project SQLite Index
+-> 在 REAPER 中重新解析
+-> 通过已接受能力路径执行
+-> 从 REAPER 批量读回
+-> 更新 Artifact Store 与 Project SQLite Index
 ```
 
-Plan-only orchestration 可以返回可跟随的 request plan，但不能声称已经执行。Readback mismatch、stale refs、catalog drift 和 unsupported fields 必须返回 typed blockers，而不是成功形状的响应。
+不支持的 render format/target mode、control field、任意 plugin 和 hardware/device
+routing 必须 fail closed，不能变成 bypass。
 
-### 7. Product UX Layer
+## 7. 产品 UX 层
 
-Product UX 包含：
+Product UX 包含 startup/reconnect、connection health、stale-session guard、范围化
+授权、workflow save/share/install/fork、pack readiness、stock plugin fluency 和
+初学者可读 blocker。不要要求用户理解 Template、Macro、handler、SQLite、
+artifact、Bridge internals、ABI、session id 或 owner/generation。
 
-- startup 和 reconnect；
-- connection health 和 stale-session guard；
-- scoped authorization；
-- concise readback；
-- workflow save/scrub/share/install/fork；
-- extension-pack install/readiness/support status；
-- stock plugin semantic controls；
-- beginner-readable blockers 和 recovery。
+## 好冗余与坏冗余
 
-用户主要用自然语言表达。不要要求用户理解 templates、macros、handlers、SQLite、artifacts、ABI layers、session ids 或 owner/generation values。
+好的冗余包括 Artifact payload 与 SQLite index row、runtime catalog 与搜索索引、
+Recipe checkpoint 与 readback artifact。坏的冗余包括双重真相、双执行路径、双份
+完整 payload，以及默认倾倒 FX parameter、Automation point、routing graph 或媒体
+分析。
 
-## 好冗余和坏冗余
+## Macro 与 Pack 编写
 
-好冗余：
+Macro 和 extension pack 作者必须声明 namespace/owner、task intent、用户 label、
+inputs/modes/ranges、依赖、plugin identity、risk policy、readback contract 和
+evidence/support status。官方 Macro alias 只有通过有边界合同才能成为全局唯一
+exact alias；partner/DLC/local pack alias 默认 package-scoped，冲突会阻止安装或
+promotion。
 
-- Artifact payload 加 SQLite indexed rows。
-- Runtime catalog 加 CapabilitySearchIndex。
-- Recipe checkpoints 加 readback artifacts。
-- Plan output 加 post-action readback。
+Extension pack 的 manifest、permission、install/share/fork、scrub、validation、
+evidence tier 和 plugin/media pack 规则见 `docs/EXTENSION_PACK_STANDARD.md`。
 
-坏冗余：
+## 测试与证据
 
-- 双执行路径；
-- project state 的双重真相；
-- capability support 的双重真相；
-- 默认把完整 artifact payload 复制进 SQLite；
-- 默认倾倒 FX parameters、automation points、routing graphs、media analysis 或巨大 project overview。
+先运行最窄且有意义的测试；共享行为改变后再扩大。常见 gate 包括 descriptor/
+static validation、fake smoke、runtime binding、discovery/menu、risk gate、readback
+verification、用户流程 review，以及明确授权窗口内的 bounded live REAPER evidence。
 
-## Template、Macro 和 Recipe 规则
+Support wording 必须绑定匹配证据。Static docs、fake smoke、draft Recipe 或无关
+portability note 不能提升 live support。
 
-Templates 是危险边界。它们会触及 REAPER state、files、routing、FX、automation、render、actions、bridge/runtime behavior 和 artifacts。Template 扩展是经过审查的 maintainer/developer-mode 工作。
+## 文档边界
 
-Macros 被接受后是 customer entrypoints。一个 macro 需要：
+- `docs/USER_GUIDE.md` 面向用户并保持 task-first。
+- `docs/DEVELOPER_GUIDE.md` 承载 architecture 与 extension 规则。
+- `docs/EXTENSION_PACK_STANDARD.md` 面向 pack 作者和验证。
+- `docs/RUNBOOK.md` 面向 operator/live evidence 验收。
 
-- canonical id 和 namespace；
-- user label 和 task intent；
-- menu group；
-- input/output schema；
-- execution shape；
-- risk policy 和 hard stops；
-- required templates/handlers/plugins/services/indexes；
-- compact readback；
-- typed blockers；
-- 与支持声明匹配的 tests 和 evidence。
+不得用 raw SQL、直接 SQLite 写入、raw Lua/Action、shell/UI bypass、hidden
+executor 或第二套 Recipe 路径绕过缺失 Macro 或 held mode。
 
-Recipes 组合已知能力。它们可以声明 steps、checkpoints、assertions、recovery、idempotency、expected outputs 和 portability metadata，但不能创造新能力。
+## 版本与打包
 
-没有公开 `call_recipe`。Agents 通过正常 discovery、`call_template` 和 `get_state` 调用执行 workflows。
+根 `package.json.version` 是唯一手工编辑的产品 SemVer。MCP server metadata、
+package metadata、provenance、Doctor 输出、build id 和 ZIP 文件名都从它派生；
+传入的打包版本必须完全一致，否则 build 失败。候选版本使用 `0.1.0-alpha.N`。
+只有两平台 exact artifact 都完成 fresh installed acceptance，并通过最终
+source-blind trust review，才能提升为 `0.1.0`。
 
-## CapabilitySearchIndex
-
-这个 index 用于快速找到可能适合的产品能力。它可以按这些维度排序：
-
-- task intent；
-- user label；
-- aliases；
-- tags；
-- lifecycle/support status；
-- pack 或 namespace；
-- risk class；
-- required plugin/service；
-- evidence level。
-
-最低接口方向：
-
-```text
-buildFromCatalog(catalog)
-search(query, filters, fields, limit, cursor)
-getFingerprint()
-invalidate()
-```
-
-Invalidation 应跟随 catalog fingerprints、installed workflow/pack changes 和 extension-pack registry changes。Index 不能决定某个能力可执行。它只返回 candidates；runtime catalog validation 和 risk policy 决定执行。
-
-## Project SQLite Index
-
-Project SQLite Index 的目标是让用户级 query 和 macro flows 更快、更安全。它不是通用 raw-SQL 表面。
-
-已接受的 Alpha3 覆盖包括 resident/project index helpers、optional SQLite persistence、identity guards、freshness/coverage rows、selected context、tracks、items、takes、FX、routing、markers/regions、media、changed-since、hydrate-ref planning、catalog-drift blockers 和有序 next-action guidance。
-
-Automation inventory 已通过 GUID-first、完整逻辑分页和 revision 检查接入
-`macro.project.query`。任何 incomplete coverage 仍必须 fail closed，不能返回
-definitive not-found。
-
-规则：
-
-- 不暴露 user raw SQL；
-- stale 或 missing identity 应进入 degraded/blocked，而不是 trusted；
-- write tasks 需要 fresh target refs 和相关 owner context；
-- refresh plans 只能发出 accepted call-template requests；
-- catalog drift 返回 typed blockers；
-- writes 只能在 REAPER readback 后更新 SQLite。
-
-## Artifact Store
-
-Artifacts 是保留证据和大 payload。它们通过 refs 寻址，不是文件路径。Agents 通过 `get_state` 读取 bounded summaries 或 payloads。
-
-适合用 artifacts 保存：
-
-- large project snapshots；
-- observation bundles；
-- analysis reports；
-- render 或 delivery reports；
-- cleanup/fingerprint evidence；
-- readback proof；
-- 默认响应放不下的大 payload。
-
-不要把本地文件路径、traversal、公开 `last_result` artifact aliases 或 raw payload dumps 作为正常用户态 state 暴露。
-
-## Orchestration 和 Risk Gates
-
-产品应该快，但不能鲁莽。
-
-Alpha3.3 orchestration 执行固定 Macro 程序，组织 safe parallel reads、serial
-authorized mutations、batch readback、hard stops、recovery 和 concise reporting。
-`macro.render.targets` 与 `macro.controls.set` 已是可执行 registered programs。
-不支持的 render format/target mode、control field、project new/open/create、任意
-plugin 和 hardware/device routing 仍应 fail closed，不能变成 escape hatch。
-
-Risk policy 应支持 scoped authorization，例如：
-
-```text
-Allow reversible track, item, send, and stock-plugin parameter changes for
-this task; do not delete, export, overwrite, scan private folders, or change
-hardware I/O.
-```
-
-破坏性删除、overwrite/export、hardware I/O、paid/licensed downloads、privacy-sensitive scans 和 ambiguous irreversible actions 仍然是 hard stops。
-
-## Extension Pack Standard
-
-Extension packs 详见 `docs/EXTENSION_PACK_STANDARD.md`。
-
-一个 extension pack 必须声明：
-
-- `pack_id`、namespace、owner、version、compatibility 和 support status；
-- contributed capabilities 和 workflow entries；
-- 对 plugins、services、indexes、templates 或 handlers 的依赖；
-- permissions 和 risk classes；
-- aliases；
-- evidence；
-- privacy、scrub、cache、changelog 和 deprecation policy。
-
-Aliases 默认 package-scoped。Global alias execution 尚未广泛启用；promotion 需要明确的有边界契约和证据。Pack installation/portability gates 可以写 manifest 和 disabled registry rows，但 D2.4 不会改变 enabled execution state，也不会暴露 global aliases。
-
-Plugin-control packs 需要 plugin identity、semantic parameter maps、safe ranges、owner-scoped FX checks、compact readback、tests 和有边界 live/customer smoke，才能使用 supported wording。
-
-Media/search packs 需要 source permissions、privacy policy、provenance、candidate refs、preview/import contracts 和 typed blockers。搜索结果不授权写操作。
-
-## Stock Plugin Fluency
-
-Alpha3 stock plugin 工作覆盖 ReaEQ、ReaComp、ReaGate、ReaDelay、ReaSynth、RS5k、ReaTune、ReaPitch、ReaXcomp 和 ReaLimit 的 semantic controls。
-
-当前边界：
-
-- semantic maps、starter actions、hydration guidance、readback/evidence envelopes 和 agent execution flow 已接受；
-- ReaComp 有有边界的 live write/readback 证据；
-- 其他优先 stock plugins 在使用 broad live support wording 前，需要有边界 live 证据；
-- 这项工作没有添加 alias expansion、hidden executor、公开 `call_recipe` 或 raw bypass。
-
-## Tests 和 Evidence
-
-先用最窄但有意义的 check；如果改动触及共享表面，再扩大检查范围。
-
-常见 gates：
-
-- descriptor/static validation；
-- fake smoke；
-- runtime binding tests；
-- discovery/menu tests；
-- risk gate tests；
-- readback verification tests；
-- workflow/pack portability tests；
-- support-matrix wording review；
-- customer-facing flows 的 trial-officer review；
-- 只有明确打开窗口时才做 bounded live REAPER evidence。
-
-常用命令：
-
-```bash
-npm run check:layout
-npm run check:template-runtime
-npm run check:alpha3-c3
-npm run check:alpha3-c4
-npm run check:alpha3-c5
-npm run check:alpha3-d1
-npm run check:alpha3-d2
-npm run check:alpha3-e1
-npm test
-git diff --check
-```
-
-Support wording 必须绑定匹配证据。Static docs、fake smoke、draft recipes、portability packets 和 plan-only orchestration 本身都不能提升 live support。
-
-## 当前限制
-
-在代码注释、产品 metadata、docs 和 reviews 中，相关时应保持这些限制可见：
-
-- 本地 macOS manual-bridge support 仍是 evidence-bound live baseline；
-- true customer-ready one-click/app-wrapper startup 仍需要 bounded live startup evidence；
-- extension-pack enable/disable/update/uninstall/global alias execution 仍是 readiness-gated；
-- 十五个公开 Macro 必须保持 registered execution 与 live readback 语义；
-- Automation query 只有在完整 logical coverage 与稳定 revision 下才可声明完整；
-- ReaComp 是当前唯一有 bounded live macro evidence 的 stock-plugin 行；
-- recipe-level live/local portability 仅对 `recipe.project.cleanup_fingerprint_report` 接受；
-- remote-clone/new-machine portability 尚未证明；
-- 普通产品路径不允许用户创建 templates 或新的 automation powers。
-
-## Review Checklist
-
-返回工作前自查：
-
-- 是否只改了分配范围？
-- 是否保留冻结 lower-layer contracts？
-- 是否保持 REAPER 和 runtime catalog 作为真相？
-- 是否避免新工具、隐藏执行器、raw Lua/action/shell/UI bypass 和公开 `call_recipe`？
-- 是否区分 plan/static/fake/live evidence？
-- 是否添加或运行了与影响面匹配的 tests？
-- 是否避免没有证据的 broad support wording？
-- 是否报告未 commit 和剩余风险？
-
-对 docs，还要检查 `docs/USER_GUIDE.md` 是否保持 task-first 和 beginner-readable，而本指南是否承载 architecture 和 extension 规则。Alpha3.3 不得用 raw SQL、直接 SQLite 写入、raw Lua/action、shell/UI bypass、hidden executor 或公开 `call_recipe` 绕过缺失 macro 或 defer 的 render/control 证据。
+平台包由 `scripts/package-openreaper-alpha.mjs` 构建。macOS 使用 POSIX/zsh
+entrypoint；Windows 使用原生 PowerShell entrypoint。共享 kernel、Recipe、
+transport、safety 和 evidence truth 必须一致。Windows runtime 不能依赖 Git
+Bash、Git、WSL 或 SSH。

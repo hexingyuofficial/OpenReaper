@@ -1,6 +1,6 @@
 # OpenReaper 用户指南
 
-状态：Alpha3.3 可执行产品指南。所有支持声明仍以证据为准。
+状态：OpenReaper 0.1.0 候选版本。所有支持声明仍以证据为准。
 
 OpenReaper 让你通过和代理对话来操作 live REAPER 工程。你不需要理解
 Macro、Template、SQLite、对象 ref、artifact 或桥接内部。只需描述想要的结果；
@@ -29,9 +29,9 @@ Macro、Template、SQLite、对象 ref、artifact 或桥接内部。只需描述
 代理不能把计划、预览或 dispatch 成功当成工作完成。写操作只有经过 live
 REAPER 读回后，才能报告成功。
 
-## Alpha3.3 Macro 高速公路
+## Macro 产品面
 
-Alpha3.3 有 15 个平级、可见、可执行的 Macro，不再有 Primary/Secondary
+OpenReaper 有 15 个平级、可见、可执行的 Macro，不再有 Primary/Secondary
 等级。
 
 | Macro | 当前职责 |
@@ -85,7 +85,7 @@ REAPER Action、任意 shell、raw SQL 或隐藏 recipe executor。
 检查 OpenReaper 是否健康。
 ```
 
-对于可安装的 macOS alpha 包，代理应该：
+对于已经安装的软件包，代理应该：
 
 1. 运行 `~/.openreaper/current/bin/openreaper-start`。
 2. 等固定的包内 launcher 自动启动 Bridge，并读取命令输出的提示。
@@ -93,6 +93,15 @@ REAPER Action、任意 shell、raw SQL 或隐藏 recipe executor。
    Action：`OpenReaper: Start MCP bridge`。
 4. 重连名为 `openreaper` 的 MCP server。
 5. 在声称 bridge 已连接前，先运行一次有界 live probe。
+
+Windows 对应的原生 PowerShell 启动命令是：
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\OpenReaper\current\bin\openreaper-start.ps1"
+```
+
+Windows 正常运行不依赖 Git Bash、Git、WSL、SSH、SWS、ReaPack 或第三方
+插件；需要 Node.js 20 或更高版本。
 
 首次启动必须选择 `once`、`always` 或 `manual`。只有获得许可后，OpenReaper
 才可以自动关闭精确匹配的 Project Settings / Notes、`Ignore all missing files`
@@ -139,6 +148,25 @@ definitive not-found。
 
 OpenReaper 应该先总结，再只展开任务需要的细节。你不需要自己构造 ref，也不需要
 自己判断该用 Macro、Template、artifact 还是 SQLite query。
+
+## 移除静音与响度标准化
+
+对于选中的音频 Item，OpenReaper 提供两个软件包内 REAPER Action：
+`Remove Silence...` 和 `Repeat Remove Silence with Last Settings`。前者收集
+设置，后者复用最近一次已接受设置。代理可通过 `macro.items.apply` 的
+`mode=remove_silence` 使用同一个共享批处理核心。支持 `all`、`leading`、
+`trailing`、`edges`、`internal` 五种 scope，以及 threshold、minimum
+silence、前后 padding、minimum kept audio 和 fade 设置。
+
+OpenReaper 会在任何修改前分析完整选择，保留源文件、Track 和时间线位置，整个
+批次只产生一次 Undo。全静音 Item 会保留并明确报告；MIDI 和不支持的 Item 会
+fail closed。上限是 64 个精确选中的音频 Item；65 个或更多必须 zero-write。
+
+响度标准化使用 `macro.items.apply` 的 `mode=normalize_level`。支持 LUFS-I、
+RMS-I、peak、true peak、LUFS-M max 和 LUFS-S max，并调用 REAPER 原生
+normalization 计算。这是 source/item/take pre-FX normalization，不是 post-FX
+输出标准化。同样适用 64 Item 上限、溢出 zero-write、一次 native batch、一次
+读回和一次 Undo。
 
 ## 授权与安全
 
@@ -197,9 +225,8 @@ global alias execution 或所有插件都受支持。
 
 ## 当前证据边界
 
-当前 Alpha3.3 产品面包含 15 个可见可执行 Macro，以及 232 个带已注册 bridge
-handler 的 Template；这些 handler 分布在 91 个模块中。部分 Macro 家族的真实支持
-范围仍比名称窄：
+当前候选产品面包含 15 个可见可执行 Macro 和六个 MCP 工具。部分 Macro 家族的
+真实支持范围仍比名称窄：
 
 - MIDI 支持有界 `create_clips`、按 index 编辑现有音符、量化和 PPQ CC 插入；不支持
   在现有 Take 中任意新建音符、编辑已有 CC、text/sysex 或隐式插入乐器。
@@ -209,9 +236,9 @@ handler 的 Template；这些 handler 分布在 91 个模块中。部分 Macro �
 - Item 分析支持已发布的 `quick`、`audio`、`timing`、`full` profile；compare、
   MIDI、loop profile 仍 held。
 - Item apply 支持对齐、顺排、分布、锚定、把精确 Item 移到现有 Track、已接受 Item
-  属性、精确 Active Take 选择、fade、精确 trim、Take playback 和 snap offset。
-  loudness、onset/transient 处理、silence trim 和相邻 crossfade mode 仍 held。
-  Item-level pan 不是已证明字段；明确的 Active Take pan 应使用已接受的 Take 控制路径。
+  属性、精确 Active Take 选择、fade、精确 trim、Take playback、snap offset、
+  原生 level normalization 和共享核心 silence removal。Item-level pan 不是已证明
+  字段；明确的 Active Take pan 应使用已接受的 Take 控制路径。
 - Automation 支持精确手册中发布的 mode；不暴露实时 touch/write/latch、任意曲线、
   raw Action 或 chunk mutation。
 - Render 使用 managed render root 和已接受的 WAV/OGG target mode，不承诺任意输出

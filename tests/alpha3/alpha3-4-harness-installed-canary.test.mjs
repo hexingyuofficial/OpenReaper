@@ -59,7 +59,7 @@ test("installed-wrapper canary performs exactly ping plus one bounded project re
     assert.equal(report.provenance.package_provenance.package_version, "3.3.0-alpha.0");
     assert.deepEqual(report.provenance.runtime_ping, {
       product: "OpenReaper",
-      kernel: "openreaper-mcp alpha kernel",
+      kernel: "openreaper-mcp kernel",
       version: "0.3.0-alpha",
     });
     assert.match(report.provenance.package_provenance.provenance_sha256, /^[0-9a-f]{64}$/u);
@@ -189,7 +189,7 @@ function jsonResponse(value) {
 }
 
 function runtimePing() {
-  return { ok: true, product: "OpenReaper", kernel: "openreaper-mcp alpha kernel", version: "0.3.0-alpha" };
+  return { ok: true, product: "OpenReaper", kernel: "openreaper-mcp kernel", version: "0.3.0-alpha" };
 }
 
 async function writeInstalledFixture(root) {

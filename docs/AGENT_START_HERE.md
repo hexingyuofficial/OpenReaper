@@ -1,6 +1,6 @@
 # OpenReaper Agent Start Here
 
-Status: Alpha3.4-B unique Agent startup source.
+Status: OpenReaper 0.1.0 candidate, unique English runtime startup source.
 
 This document is the only long-form Agent entry for OpenReaper. Runtime MCP
 initialization projects the marked compact section below. Do not invent a second
@@ -108,6 +108,22 @@ fuzzy guesses). `mode=semantic` is compatibility-only and fails closed with
 For ordinary Audio Take FX, publicly query one exact `take_ref`, call
 `macro.fx.apply_chain` with that ref, copy the exact returned `fx_ref`, then call
 `macro.fx.set_controls`; never construct the FX ref or invoke an internal resolver.
+
+Audio Items: preserve source files, Track identity, and timeline position unless
+the exact requested Macro says otherwise. For simultaneous layers, place each
+source on a separate Track; do not create accidental same-Track overlap. Use
+`macro.items.apply` with `mode=remove_silence` for agent-driven batching, or the
+packaged `Remove Silence...` Action for an interactive REAPER run. The repeat
+Action reuses the last accepted settings. Valid scopes are `all`, `leading`,
+`trailing`, `edges`, and `internal`. The Macro and Action routes share one
+REAPER-side batch plan; never loop over Items or fragments through MCP.
+
+For level normalization, use `macro.items.apply` with
+`mode=normalize_level`. Valid metrics are `lufs_i`, `rms_i`, `peak`,
+`true_peak`, `lufs_m_max`, and `lufs_s_max`. This is REAPER-native
+source/item/take pre-FX normalization, not post-FX loudness processing. Both
+audio operations accept at most 64 exact selected audio Items; a larger
+selection must fail before mutation with zero-write truth.
 
 ## Flat 15 Macro menu
 
