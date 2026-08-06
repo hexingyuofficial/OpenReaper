@@ -196,6 +196,24 @@ describe("S3 remove-silence and normalization static release contract", () => {
     );
   });
 
+  it("hashes the resolved audio plan independently of selected versus exact entry", () => {
+    const checksumBody = between(
+      d27Source,
+      "local function d27_batch_checksum_plan(rows, params, operation)",
+      "local function d27_batch_owner_track(context)",
+    );
+    assert.doesNotMatch(
+      checksumBody,
+      /params\.target/,
+      "equivalent selected and exact requests must share one compiled plan hash",
+    );
+    assert.match(checksumBody, /row\.item_ref/);
+    assert.match(checksumBody, /row\.context\.item_position/);
+    assert.match(checksumBody, /row\.context\.item_length/);
+    assert.match(checksumBody, /row\.scan[\s\S]*silence_segments/);
+    assert.match(checksumBody, /row\.ranges/);
+  });
+
   it("reports MIDI as typed unsupported truth before native audio metadata probing", () => {
     sourceWith(d27Source, /TakeIsMIDI[\s\S]{0,320}MIDI_UNSUPPORTED/u, "MIDI must be identified with native TakeIsMIDI and typed unsupported truth");
     sourceWith(d27Source, /MIDI_UNSUPPORTED[\s\S]{0,160}typed_truth/u, "MIDI rejection must carry typed truth");

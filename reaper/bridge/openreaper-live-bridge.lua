@@ -12266,7 +12266,6 @@ end
 local function d27_batch_checksum_plan(rows, params, operation)
   local parts = {
     operation,
-    params.target or "selected",
     params.silence_scope or "all",
     tostring(params.silence_threshold_dbfs or -60),
     tostring(params.min_silence_ms or 250),
