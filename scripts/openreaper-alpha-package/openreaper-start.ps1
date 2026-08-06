@@ -230,7 +230,7 @@ if (-not (Test-HeartbeatReady)) {
     Fail "Bridge heartbeat did not become ready for owner=$BridgeOwner generation=$BridgeGeneration; startup_status=$stage; log=$logPath"
 }
 
-$doctorArgs = @("--wait-bridge=2")
+$doctorArgs = @("--wait-bridge=5")
 if ($ProjectPath) { $doctorArgs += "--for=project-query" }
 $doctorOutput = & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $doctorScript @doctorArgs 2>&1
 $doctorOutput | Tee-Object -FilePath $logPath -Append | Write-Output
