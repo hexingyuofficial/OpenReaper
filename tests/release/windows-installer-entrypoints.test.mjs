@@ -62,6 +62,12 @@ test("Windows start omits an empty Start-Process argument list", () => {
   assert.match(startPs1, /if \(\$launchArgs\.Count -gt 0\) \{/u);
   assert.match(startPs1, /Start-Process -FilePath \$binary -ArgumentList \$launchArgs/u);
   assert.match(startPs1, /Start-Process -FilePath \$binary -WorkingDirectory \(Split-Path -Parent \$binary\) -PassThru/u);
+  assert.match(startPs1, /\$env:OPENREAPER_SESSION_ROOT = \$SessionRoot/u);
+  assert.ok(
+    startPs1.indexOf("$env:OPENREAPER_SESSION_ROOT = $SessionRoot")
+      < startPs1.indexOf("& powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $doctorScript"),
+    "Windows start must bind its effective session root before invoking packaged Doctor",
+  );
 });
 
 test("Windows MCP wrapper binds the shared Recipe store and session roots", () => {

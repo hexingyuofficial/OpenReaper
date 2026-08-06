@@ -636,7 +636,7 @@ async function smokeWindowsPackageContract() {
   const wrapperChecks = [
     ["bin/openreaper-mcp.ps1", "Resolve-OpenReaperNode", "openreaper-mcp-stdio.mjs"],
     ["bin/openreaper-doctor.ps1", "openreaper-doctor.mjs"],
-    ["bin/openreaper-start.ps1", "Start-Process", "openreaper-doctor.ps1"],
+    ["bin/openreaper-start.ps1", "Start-Process", "OPENREAPER_SESSION_ROOT", "openreaper-doctor.ps1"],
     ["install-openreaper.ps1", "install-openreaper.mjs", "install-before.json", "install-after.json"],
     ["uninstall-openreaper.ps1", "uninstall-openreaper.mjs", "uninstall-before.json", "uninstall-after.json"],
   ];

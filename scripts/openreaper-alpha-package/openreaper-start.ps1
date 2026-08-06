@@ -166,6 +166,7 @@ if ($ProjectPath) {
     $launchArgs += (Quote-ProcessArgument $ProjectPath)
 }
 $env:OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR = $transportRoot
+$env:OPENREAPER_SESSION_ROOT = $SessionRoot
 $env:OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH = $bridgeScript
 $env:OPENREAPER_ARTIFACT_ROOT = $artifactRoot
 $env:OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT = $artifactRoot
