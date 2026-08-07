@@ -189,7 +189,7 @@ describe("Alpha3.2-B2 managed render root", () => {
     const fixture = await makeInstallerFixture();
     const codexPath = path.join(fixture.home, ".codex", "config.toml");
     await mkdir(path.dirname(codexPath), { recursive: true });
-    await writeFile(codexPath, [
+    const existing = [
       "[mcp_servers.openreaper.env]",
       "OPENREAPER_ARTIFACT_ROOT = 'owned'",
       "",
@@ -205,14 +205,189 @@ describe("Alpha3.2-B2 managed render root", () => {
       "[user]",
       "keep = true",
       "",
-    ].join("\n"), "utf8");
+    ].join("\r\n");
+    const expected = [
+      "",
+      "[mcp_servers.keep]",
+      "command = 'keep'",
+      "",
+      "",
+      "",
+      "[user]",
+      "keep = true",
+      "",
+    ].join("\r\n");
+    await writeFile(codexPath, existing, "utf8");
 
     const result = await runUninstallerWithClientConfig(fixture);
     assert.equal(result.code, 0, result.stderr || result.stdout);
     const remaining = await readFile(codexPath, "utf8");
+    assert.equal(remaining, expected);
     assert.doesNotMatch(remaining, /mcp_servers\.(?:openreaper|vital-agent-mcp)/u);
     assert.match(remaining, /\[mcp_servers\.keep\]/u);
     assert.match(remaining, /\[user\]/u);
+  });
+
+  it("preserves every unrelated Codex TOML byte across install and upgrade", async () => {
+    const fixture = await makeInstallerFixture();
+    const codexPath = path.join(fixture.home, ".codex", "config.toml");
+    const prefix = [
+      "\uFEFF# user preamble with CRLF",
+      "model = 'custom'  ",
+      "",
+      "[model_providers.custom] # keep comment",
+      "name = '随想'",
+      "",
+    ].join("\r\n");
+    const owned = [
+      "[mcp_servers.openreaper]",
+      "command = 'stale-owned'",
+      "",
+      "[mcp_servers.openreaper.env]",
+      "OPENREAPER_ARTIFACT_ROOT = 'stale-owned'",
+      "",
+    ].join("\r\n");
+    const suffix = [
+      "[projects.'c:\\\\users\\\\何星宇']",
+      "trust_level = 'trusted' # preserve me",
+      "",
+      "",
+    ].join("\r\n");
+    await mkdir(path.dirname(codexPath), { recursive: true });
+    await writeFile(codexPath, `${prefix}${owned}${suffix}`, "utf8");
+
+    for (let pass = 0; pass < 2; pass += 1) {
+      const result = await runInstallerWithClientConfig(fixture);
+      assert.equal(result.code, 0, result.stderr || result.stdout);
+      const installed = await readFile(codexPath, "utf8");
+      assert.equal(installed.slice(0, prefix.length), prefix);
+      assert.equal(installed.slice(-suffix.length), suffix);
+      assert.match(installed, /\[mcp_servers\.openreaper\]/u);
+      assert.match(installed, /\[mcp_servers\.openreaper\.env\]/u);
+      assert.doesNotMatch(installed, /stale-owned/u);
+    }
+  });
+
+  it("preserves a direct BOM, TOML-equivalent quoted tables, and trailing user trivia", async () => {
+    const fixture = await makeInstallerFixture();
+    const codexPath = path.join(fixture.home, ".codex", "config.toml");
+    const prefix = "\uFEFF";
+    const owned = [
+      "[mcp_servers . \"openreaper\"] # equivalent owned table",
+      "command = 'stale-owned'",
+      "",
+      "[mcp_servers . 'openreaper' . env]",
+      "OPENREAPER_ARTIFACT_ROOT = 'stale-owned'",
+      "",
+    ].join("\r\n");
+    const suffix = [
+      "# user comment before the next table  ",
+      "[mcp_servers.keep]",
+      "command = 'keep'",
+      "",
+      "# user EOF comment  ",
+      "",
+    ].join("\r\n");
+    await mkdir(path.dirname(codexPath), { recursive: true });
+    await writeFile(codexPath, `${prefix}${owned}${suffix}`, "utf8");
+
+    for (let pass = 0; pass < 2; pass += 1) {
+      const result = await runInstallerWithClientConfig(fixture);
+      assert.equal(result.code, 0, result.stderr || result.stdout);
+      const installed = await readFile(codexPath, "utf8");
+      assert.equal(installed[0], prefix);
+      assert.equal(installed.slice(-suffix.length), suffix);
+      assert.equal((installed.match(/^(?:\uFEFF)?\[mcp_servers\.openreaper\]\r?$/gmu) ?? []).length, 1);
+      assert.doesNotMatch(installed, /equivalent owned table|stale-owned/u);
+    }
+
+    const uninstall = await runUninstallerWithClientConfig(fixture);
+    assert.equal(uninstall.code, 0, uninstall.stderr || uninstall.stdout);
+    assert.equal(await readFile(codexPath, "utf8"), `${prefix}${suffix}`);
+  });
+
+  it("preserves comments and whitespace after an owned TOML section at EOF", async () => {
+    const fixture = await makeInstallerFixture();
+    const codexPath = path.join(fixture.home, ".codex", "config.toml");
+    const prefix = [
+      "[user]",
+      "keep = true",
+      "",
+    ].join("\n");
+    const owned = [
+      "[mcp_servers . openreaper]",
+      "command = 'stale-owned'",
+      "",
+    ].join("\n");
+    const suffix = "# preserve this EOF comment  \n\n";
+    await mkdir(path.dirname(codexPath), { recursive: true });
+    await writeFile(codexPath, `${prefix}${owned}${suffix}`, "utf8");
+
+    const install = await runInstallerWithClientConfig(fixture);
+    assert.equal(install.code, 0, install.stderr || install.stdout);
+    assert.equal((await readFile(codexPath, "utf8")).slice(-suffix.length), suffix);
+
+    const uninstall = await runUninstallerWithClientConfig(fixture);
+    assert.equal(uninstall.code, 0, uninstall.stderr || uninstall.stdout);
+    assert.equal(await readFile(codexPath, "utf8"), `${prefix}${suffix}`);
+  });
+
+  it("ignores apparent OpenReaper tables inside TOML multiline strings byte for byte", async () => {
+    const fixture = await makeInstallerFixture();
+    const codexPath = path.join(fixture.home, ".codex", "config.toml");
+    const original = [
+      "\uFEFF[user]",
+      'basic = """',
+      "[mcp_servers.openreaper]",
+      'command = "documentation only"',
+      '[[mcp_servers."openreaper".examples]]',
+      'escaped = \\\"not the end\\\"',
+      '"""',
+      "literal = '''",
+      "[mcp_servers . 'openreaper']",
+      "command = 'also documentation only'",
+      "'''",
+      "",
+    ].join("\r\n");
+    await mkdir(path.dirname(codexPath), { recursive: true });
+    await writeFile(codexPath, original, "utf8");
+
+    for (let pass = 0; pass < 2; pass += 1) {
+      const result = await runInstallerWithClientConfig(fixture);
+      assert.equal(result.code, 0, result.stderr || result.stdout);
+      const installed = await readFile(codexPath, "utf8");
+      assert.equal(installed.slice(0, original.length), original);
+      assert.match(installed, /documentation only/u);
+      assert.equal((installed.match(/^(?:\uFEFF)?\[mcp_servers\.openreaper\]\r?$/gmu) ?? []).length, 2);
+    }
+
+    const uninstall = await runUninstallerWithClientConfig(fixture);
+    assert.equal(uninstall.code, 0, uninstall.stderr || uninstall.stdout);
+    assert.equal(await readFile(codexPath, "utf8"), original);
+  });
+
+  it("restores a Codex config with no final newline exactly after install update uninstall", async () => {
+    const fixture = await makeInstallerFixture();
+    const codexPath = path.join(fixture.home, ".codex", "config.toml");
+    const vitalEntry = path.join(fixture.packageRoot, "vendor", "vital-agent-mcp", "dist", "src", "mcpServer.js");
+    const original = "\uFEFF[user]\r\nname = '没有尾换行'";
+    await mkdir(path.dirname(vitalEntry), { recursive: true });
+    await writeFile(vitalEntry, "// fixture only\n", "utf8");
+    await mkdir(path.dirname(codexPath), { recursive: true });
+    await writeFile(codexPath, original, "utf8");
+
+    for (let pass = 0; pass < 2; pass += 1) {
+      const result = await runInstallerWithClientConfig(fixture);
+      assert.equal(result.code, 0, result.stderr || result.stdout);
+      const installed = await readFile(codexPath, "utf8");
+      assert.equal(installed.slice(0, original.length), original);
+      assert.match(installed, /\[mcp_servers\.openreaper\] # OpenReaper owns the preceding line ending\r\n/u);
+      assert.match(installed, /\[mcp_servers\.vital-agent-mcp\]\r\n/u);
+    }
+
+    const uninstall = await runUninstallerWithClientConfig(fixture);
+    assert.equal(uninstall.code, 0, uninstall.stderr || uninstall.stdout);
+    assert.equal(await readFile(codexPath, "utf8"), original);
   });
 
   it("installs a conditional startup hook, preserves user bytes, and keeps the manual Action fallback", async () => {
@@ -1788,6 +1963,16 @@ function runInstallerWithStartupHook(fixture, extraArgs = []) {
     "--install-root",
     fixture.installRoot,
     "--skip-client-config",
+    ...extraArgs,
+  ], { cwd: fixture.packageRoot, env: { ...process.env, HOME: fixture.home } });
+}
+
+function runInstallerWithClientConfig(fixture, extraArgs = []) {
+  return runCaptured(process.execPath, [
+    fixture.installerPath,
+    "--install-root",
+    fixture.installRoot,
+    "--skip-startup-hook",
     ...extraArgs,
   ], { cwd: fixture.packageRoot, env: { ...process.env, HOME: fixture.home } });
 }

@@ -53,6 +53,7 @@ const S3_ACTIONS = Object.freeze([
   }),
 ]);
 const S3_ACTION_SUPPORT_RELATIVE_SCRIPT = "OpenReaper/remove-silence-shared.lua";
+const CODEX_OWNED_LEADING_LINE_ENDING_MARKER = "# OpenReaper owns the preceding line ending";
 const MANAGED_RENDER_ROOT_RECORD_MAX_BYTES = 4096;
 const MANAGED_RENDER_ROOT_PATH_MAX_BYTES = 3072;
 
@@ -482,8 +483,8 @@ async function removeCodexSection() {
   const configPath = path.join(home, ".codex", "config.toml");
   const existing = await readTextIfExists(configPath);
   if (existing === "") return;
-  let next = removeTomlSectionTree(existing, "mcp_servers.openreaper");
-  next = removeTomlSectionTree(next, "mcp_servers.vital-agent-mcp");
+  let next = removeTomlSectionTree(existing, "mcp_servers.vital-agent-mcp");
+  next = removeTomlSectionTree(next, "mcp_servers.openreaper");
   if (next !== existing) {
     await writeFile(configPath, next, "utf8");
     report.changed.push(`removed Codex openreaper and vital-agent-mcp MCP config from ${configPath}`);
@@ -542,21 +543,199 @@ function removeLinesPreservingBytes(existing, keepLine) {
 }
 
 function removeTomlSectionTree(existing, sectionName) {
-  const lines = existing.split(/\r?\n/);
-  const prefix = `${sectionName}.`;
-  const kept = [];
-  let removing = false;
-  for (const line of lines) {
-    const match = /^\s*\[([^\]]+)\]/u.exec(line);
-    if (match) {
-      const name = match[1].trim();
-      removing = name === sectionName || name.startsWith(prefix);
-    }
-    if (!removing) kept.push(line);
+  const matches = coalesceTomlSectionMatches(
+    existing,
+    tomlSectionSpans(existing).filter((section) => tomlPathStartsWith(section.path, sectionName)),
+  );
+  if (matches.length === 0) return existing;
+  let next = "";
+  let cursor = 0;
+  for (const section of matches) {
+    next += existing.slice(cursor, section.start);
+    cursor = section.end;
   }
-  return kept.length === lines.length
-    ? existing
-    : `${kept.join("\n").trimEnd()}\n`;
+  return `${next}${existing.slice(cursor)}`;
+}
+
+function coalesceTomlSectionMatches(existing, matches) {
+  const coalesced = [];
+  for (const match of matches) {
+    const previous = coalesced.at(-1);
+    if (previous && /^[\t \r\n]*$/u.test(existing.slice(previous.end, match.start))) {
+      previous.end = match.end;
+    } else {
+      coalesced.push({ ...match });
+    }
+  }
+  return coalesced;
+}
+
+function tomlSectionSpans(existing) {
+  const lines = [];
+  let cursor = 0;
+  let multilineState = null;
+  while (cursor < existing.length) {
+    const start = cursor;
+    while (cursor < existing.length && existing[cursor] !== "\r" && existing[cursor] !== "\n") cursor += 1;
+    const lineEnd = cursor;
+    if (existing.startsWith("\r\n", cursor)) cursor += 2;
+    else if (cursor < existing.length) cursor += 1;
+    const contentStart = start === 0 && existing.charCodeAt(0) === 0xfeff ? 1 : start;
+    const line = existing.slice(contentStart, lineEnd);
+    lines.push({
+      start,
+      contentStart,
+      lineEnd,
+      segmentEnd: cursor,
+      line,
+      path: multilineState === null ? tomlSectionPath(line) : null,
+    });
+    multilineState = tomlMultilineStateAfterLine(line, multilineState);
+  }
+  const headerIndexes = lines.flatMap((line, index) => line.path === null ? [] : [index]);
+  return headerIndexes.map((lineIndex, headerIndex) => {
+    const header = lines[lineIndex];
+    const nextLineIndex = headerIndexes[headerIndex + 1] ?? lines.length;
+    let end = header.segmentEnd;
+    for (let index = lineIndex + 1; index < nextLineIndex; index += 1) {
+      const line = existing.slice(lines[index].start, lines[index].lineEnd).trim();
+      if (line !== "" && !line.startsWith("#")) end = lines[index].segmentEnd;
+    }
+    const ownsLeadingLineEnding = header.line.trimEnd().endsWith(CODEX_OWNED_LEADING_LINE_ENDING_MARKER);
+    return {
+      path: header.path,
+      start: ownsLeadingLineEnding ? precedingLineEndingStart(existing, header.contentStart) : header.contentStart,
+      end,
+      ownsLeadingLineEnding,
+    };
+  });
+}
+
+function precedingLineEndingStart(existing, start) {
+  if (start >= 2 && existing.slice(start - 2, start) === "\r\n") return start - 2;
+  if (start >= 1 && (existing[start - 1] === "\r" || existing[start - 1] === "\n")) return start - 1;
+  return start;
+}
+
+function tomlMultilineStateAfterLine(line, initialState) {
+  let state = initialState;
+  let cursor = 0;
+  while (cursor < line.length) {
+    if (state === "literal") {
+      if (line.startsWith("'''", cursor)) {
+        state = null;
+        cursor += 3;
+      } else {
+        cursor += 1;
+      }
+      continue;
+    }
+    if (state === "basic") {
+      if (line[cursor] === "\\") {
+        cursor += 2;
+      } else if (line.startsWith('\"\"\"', cursor)) {
+        state = null;
+        cursor += 3;
+      } else {
+        cursor += 1;
+      }
+      continue;
+    }
+    if (line[cursor] === "#") break;
+    if (line.startsWith("'''", cursor)) {
+      state = "literal";
+      cursor += 3;
+      continue;
+    }
+    if (line.startsWith('\"\"\"', cursor)) {
+      state = "basic";
+      cursor += 3;
+      continue;
+    }
+    if (line[cursor] === "'") {
+      const end = line.indexOf("'", cursor + 1);
+      cursor = end === -1 ? line.length : end + 1;
+      continue;
+    }
+    if (line[cursor] === '"') {
+      cursor += 1;
+      while (cursor < line.length && line[cursor] !== '"') {
+        cursor += line[cursor] === "\\" ? 2 : 1;
+      }
+      cursor += 1;
+      continue;
+    }
+    cursor += 1;
+  }
+  return state;
+}
+
+function tomlSectionPath(line) {
+  let cursor = skipTomlWhitespace(line, 0);
+  const arrayTable = line.startsWith("[[", cursor);
+  if (!line.startsWith(arrayTable ? "[[" : "[", cursor)) return null;
+  cursor += arrayTable ? 2 : 1;
+  const path = [];
+  while (cursor < line.length) {
+    cursor = skipTomlWhitespace(line, cursor);
+    const key = readTomlKey(line, cursor);
+    if (key === null) return null;
+    path.push(key.value);
+    cursor = skipTomlWhitespace(line, key.end);
+    if (line[cursor] === ".") {
+      cursor += 1;
+      continue;
+    }
+    const close = arrayTable ? "]]" : "]";
+    if (!line.startsWith(close, cursor)) return null;
+    cursor = skipTomlWhitespace(line, cursor + close.length);
+    return cursor === line.length || line[cursor] === "#" ? path : null;
+  }
+  return null;
+}
+
+function readTomlKey(line, cursor) {
+  if (line[cursor] === "'") {
+    const end = line.indexOf("'", cursor + 1);
+    return end === -1 ? null : { value: line.slice(cursor + 1, end), end: end + 1 };
+  }
+  if (line[cursor] === '"') {
+    let value = "";
+    for (let index = cursor + 1; index < line.length; index += 1) {
+      const character = line[index];
+      if (character === '"') return { value, end: index + 1 };
+      if (character !== "\\") {
+        value += character;
+        continue;
+      }
+      const escape = line[++index];
+      const simple = { b: "\b", t: "\t", n: "\n", f: "\f", r: "\r", '"': '"', "\\": "\\" }[escape];
+      if (simple !== undefined) {
+        value += simple;
+        continue;
+      }
+      const digits = escape === "u" ? 4 : escape === "U" ? 8 : 0;
+      const hex = digits > 0 ? line.slice(index + 1, index + 1 + digits) : "";
+      if (digits === 0 || !new RegExp(`^[0-9a-fA-F]{${digits}}$`, "u").test(hex)) return null;
+      const codePoint = Number.parseInt(hex, 16);
+      if (codePoint > 0x10ffff || (codePoint >= 0xd800 && codePoint <= 0xdfff)) return null;
+      value += String.fromCodePoint(codePoint);
+      index += digits;
+    }
+    return null;
+  }
+  const match = /^[A-Za-z0-9_-]+/u.exec(line.slice(cursor));
+  return match ? { value: match[0], end: cursor + match[0].length } : null;
+}
+
+function skipTomlWhitespace(line, cursor) {
+  while (line[cursor] === " " || line[cursor] === "\t") cursor += 1;
+  return cursor;
+}
+
+function tomlPathStartsWith(path, sectionName) {
+  const expected = sectionName.split(".");
+  return path.length >= expected.length && expected.every((part, index) => path[index] === part);
 }
 
 async function readTextIfExists(filePath) {

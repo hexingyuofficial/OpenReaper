@@ -46,6 +46,7 @@ const MANAGED_RENDER_ROOT_PATH_MAX_BYTES = 3072;
 const PACKAGE_PROVENANCE_MANIFEST = "provenance.json";
 const SWS_MISC_SECTION = "[Misc]";
 const SWS_GLOBAL_STARTUP_KEY = "GlobalStartupAction";
+const CODEX_OWNED_LEADING_LINE_ENDING_MARKER = "# OpenReaper owns the preceding line ending";
 const BRIDGE_ACTION_TITLE = "OpenReaper: Start MCP bridge";
 const BRIDGE_ACTION_RELATIVE_SCRIPT = "OpenReaper/openreaper-start-mcp-bridge.lua";
 const BRIDGE_ACTION_COMMAND_ID = `RS${createHash("sha1").update("openreaper.alpha.start_mcp_bridge.v1").digest("hex")}`;
@@ -936,118 +937,288 @@ function removeLinesPreservingBytes(existing, keepLine) {
 }
 
 function upsertTomlSection(existing, sectionName, sectionText) {
-  const header = `[${sectionName}]`;
-  const lines = existing.split(/\r?\n/);
-  const start = lines.findIndex((line) => line.trim() === header);
-  if (start === -1) {
-    const prefix = existing.trimEnd();
-    return prefix === "" ? `${sectionText.trimEnd()}\n` : `${prefix}\n\n${sectionText.trimEnd()}\n`;
-  }
-  let end = lines.length;
-  for (let i = start + 1; i < lines.length; i += 1) {
-    if (/^\s*\[/.test(lines[i])) {
-      end = i;
-      break;
-    }
-  }
-  const nextLines = [...lines.slice(0, start), ...sectionText.trimEnd().split("\n"), ...lines.slice(end)];
-  return `${nextLines.join("\n").trimEnd()}\n`;
+  return rewriteTomlSectionsPreservingBytes(
+    existing,
+    (section) => tomlPathEquals(section.path, sectionName),
+    sectionText,
+  );
 }
 
 function upsertTomlSectionTree(existing, sectionName, sectionText) {
-  const sections = splitTomlSections(existing);
-  const matchesTree = (section) =>
-    section.name === sectionName || section.name?.startsWith(`${sectionName}.`);
-  if (!sections.some(matchesTree)) {
-    const prefix = existing.trimEnd();
-    return prefix === "" ? `${sectionText.trimEnd()}\n` : `${prefix}\n\n${sectionText.trimEnd()}\n`;
-  }
-
-  const replacement = {
-    name: sectionName,
-    lines: sectionText.trimEnd().split("\n"),
-  };
-  const nextSections = [];
-  let inserted = false;
-  for (const section of sections) {
-    if (matchesTree(section)) {
-      if (!inserted) {
-        nextSections.push(replacement);
-        inserted = true;
-      }
-      continue;
-    }
-    nextSections.push(section);
-  }
-
-  const nextLines = nextSections.flatMap((section) => section.lines);
-  return `${nextLines.join("\n").trimEnd()}\n`;
+  return rewriteTomlSectionsPreservingBytes(
+    existing,
+    (section) => tomlPathStartsWith(section.path, sectionName),
+    sectionText,
+  );
 }
 
 function removeTomlSectionTree(existing, sectionName) {
-  const sections = splitTomlSections(existing).filter((section) =>
-    section.name !== sectionName && !section.name?.startsWith(`${sectionName}.`));
-  return `${sections.flatMap((section) => section.lines).join("\n").replace(/\n{3,}/g, "\n\n").trimEnd()}\n`;
+  return rewriteTomlSectionsPreservingBytes(
+    existing,
+    (section) => tomlPathStartsWith(section.path, sectionName),
+  );
 }
 
-function splitTomlSections(existing) {
-  const sections = [];
-  let current = { name: null, lines: [] };
-  for (const line of existing.split(/\r?\n/)) {
-    const name = tomlSectionName(line);
-    if (name !== null) {
-      if (current.name !== null || current.lines.some((currentLine) => currentLine !== "")) {
-        sections.push(current);
-      }
-      current = { name, lines: [line] };
+function rewriteTomlSectionsPreservingBytes(existing, matchesSection, replacementText = null) {
+  const matches = coalesceTomlSectionMatches(
+    existing,
+    tomlSectionSpans(existing).filter(matchesSection),
+  );
+  if (matches.length === 0) {
+    return replacementText === null
+      ? existing
+      : appendTomlSectionPreservingBytes(existing, replacementText);
+  }
+
+  let replacement = replacementText === null
+    ? ""
+    : normalizeTomlSectionText(replacementText, preferredLineEnding(existing));
+  if (replacement !== "" && matches[0]?.ownsLeadingLineEnding === true) {
+    replacement = withOwnedLeadingLineEnding(replacement, preferredLineEnding(existing));
+  }
+  let next = "";
+  let cursor = 0;
+  let inserted = false;
+  for (const section of matches) {
+    next += existing.slice(cursor, section.start);
+    if (!inserted && replacement !== "") {
+      next += replacement;
+      inserted = true;
+    }
+    cursor = section.end;
+  }
+  return `${next}${existing.slice(cursor)}`;
+}
+
+function coalesceTomlSectionMatches(existing, matches) {
+  const coalesced = [];
+  for (const match of matches) {
+    const previous = coalesced.at(-1);
+    if (previous && /^[\t \r\n]*$/u.test(existing.slice(previous.end, match.start))) {
+      previous.end = match.end;
     } else {
-      current.lines.push(line);
+      coalesced.push({ ...match });
     }
   }
-  if (current.name !== null || current.lines.some((line) => line !== "")) {
-    sections.push(current);
-  }
-  return sections;
+  return coalesced;
 }
 
-function tomlSectionName(line) {
-  const arrayTable = line.match(/^\s*\[\[([^\[\]]+)\]\]\s*(?:#.*)?$/);
-  if (arrayTable) return arrayTable[1].trim();
-  const table = line.match(/^\s*\[([^\[\]]+)\]\s*(?:#.*)?$/);
-  return table ? table[1].trim() : null;
+function appendTomlSectionPreservingBytes(existing, sectionText) {
+  const lineEnding = preferredLineEnding(existing);
+  const replacement = normalizeTomlSectionText(sectionText, lineEnding);
+  if (existing === "") return replacement;
+  return /(?:\r\n|\r|\n)$/u.test(existing)
+    ? `${existing}${replacement}`
+    : `${existing}${withOwnedLeadingLineEnding(replacement, lineEnding)}`;
+}
+
+function withOwnedLeadingLineEnding(sectionText, lineEnding) {
+  const firstLineEnd = sectionText.indexOf(lineEnding);
+  if (firstLineEnd === -1) throw new Error("OpenReaper Codex section must contain a line ending");
+  return `${lineEnding}${sectionText.slice(0, firstLineEnd)} ${CODEX_OWNED_LEADING_LINE_ENDING_MARKER}${sectionText.slice(firstLineEnd)}`;
+}
+
+function normalizeTomlSectionText(sectionText, lineEnding) {
+  const normalized = sectionText.replace(/\r\n|\r|\n/gu, "\n").trimEnd();
+  return `${normalized.replace(/\n/gu, lineEnding)}${lineEnding}`;
+}
+
+function preferredLineEnding(existing) {
+  const match = existing.match(/\r\n|\r|\n/u);
+  return match?.[0] ?? "\n";
+}
+
+function tomlSectionSpans(existing) {
+  const lines = [];
+  let cursor = 0;
+  let multilineState = null;
+  while (cursor < existing.length) {
+    const start = cursor;
+    while (cursor < existing.length && existing[cursor] !== "\r" && existing[cursor] !== "\n") cursor += 1;
+    const lineEnd = cursor;
+    if (existing.startsWith("\r\n", cursor)) cursor += 2;
+    else if (cursor < existing.length) cursor += 1;
+    const contentStart = start === 0 && existing.charCodeAt(0) === 0xfeff ? 1 : start;
+    const line = existing.slice(contentStart, lineEnd);
+    lines.push({
+      start,
+      contentStart,
+      lineEnd,
+      segmentEnd: cursor,
+      line,
+      path: multilineState === null ? tomlSectionPath(line) : null,
+    });
+    multilineState = tomlMultilineStateAfterLine(line, multilineState);
+  }
+  const headerIndexes = lines.flatMap((line, index) => line.path === null ? [] : [index]);
+  return headerIndexes.map((lineIndex, headerIndex) => {
+    const header = lines[lineIndex];
+    const nextLineIndex = headerIndexes[headerIndex + 1] ?? lines.length;
+    let end = header.segmentEnd;
+    for (let index = lineIndex + 1; index < nextLineIndex; index += 1) {
+      const line = existing.slice(lines[index].start, lines[index].lineEnd).trim();
+      if (line !== "" && !line.startsWith("#")) end = lines[index].segmentEnd;
+    }
+    const ownsLeadingLineEnding = header.line.trimEnd().endsWith(CODEX_OWNED_LEADING_LINE_ENDING_MARKER);
+    return {
+      path: header.path,
+      start: ownsLeadingLineEnding ? precedingLineEndingStart(existing, header.contentStart) : header.contentStart,
+      end,
+      ownsLeadingLineEnding,
+    };
+  });
+}
+
+function precedingLineEndingStart(existing, start) {
+  if (start >= 2 && existing.slice(start - 2, start) === "\r\n") return start - 2;
+  if (start >= 1 && (existing[start - 1] === "\r" || existing[start - 1] === "\n")) return start - 1;
+  return start;
+}
+
+function tomlMultilineStateAfterLine(line, initialState) {
+  let state = initialState;
+  let cursor = 0;
+  while (cursor < line.length) {
+    if (state === "literal") {
+      if (line.startsWith("'''", cursor)) {
+        state = null;
+        cursor += 3;
+      } else {
+        cursor += 1;
+      }
+      continue;
+    }
+    if (state === "basic") {
+      if (line[cursor] === "\\") {
+        cursor += 2;
+      } else if (line.startsWith('\"\"\"', cursor)) {
+        state = null;
+        cursor += 3;
+      } else {
+        cursor += 1;
+      }
+      continue;
+    }
+    if (line[cursor] === "#") break;
+    if (line.startsWith("'''", cursor)) {
+      state = "literal";
+      cursor += 3;
+      continue;
+    }
+    if (line.startsWith('\"\"\"', cursor)) {
+      state = "basic";
+      cursor += 3;
+      continue;
+    }
+    if (line[cursor] === "'") {
+      const end = line.indexOf("'", cursor + 1);
+      cursor = end === -1 ? line.length : end + 1;
+      continue;
+    }
+    if (line[cursor] === '"') {
+      cursor += 1;
+      while (cursor < line.length && line[cursor] !== '"') {
+        cursor += line[cursor] === "\\" ? 2 : 1;
+      }
+      cursor += 1;
+      continue;
+    }
+    cursor += 1;
+  }
+  return state;
+}
+
+function tomlSectionPath(line) {
+  let cursor = skipTomlWhitespace(line, 0);
+  const arrayTable = line.startsWith("[[", cursor);
+  if (!line.startsWith(arrayTable ? "[[" : "[", cursor)) return null;
+  cursor += arrayTable ? 2 : 1;
+  const path = [];
+  while (cursor < line.length) {
+    cursor = skipTomlWhitespace(line, cursor);
+    const key = readTomlKey(line, cursor);
+    if (key === null) return null;
+    path.push(key.value);
+    cursor = skipTomlWhitespace(line, key.end);
+    if (line[cursor] === ".") {
+      cursor += 1;
+      continue;
+    }
+    const close = arrayTable ? "]]" : "]";
+    if (!line.startsWith(close, cursor)) return null;
+    cursor = skipTomlWhitespace(line, cursor + close.length);
+    return cursor === line.length || line[cursor] === "#" ? path : null;
+  }
+  return null;
+}
+
+function readTomlKey(line, cursor) {
+  if (line[cursor] === "'") {
+    const end = line.indexOf("'", cursor + 1);
+    return end === -1 ? null : { value: line.slice(cursor + 1, end), end: end + 1 };
+  }
+  if (line[cursor] === '"') {
+    let value = "";
+    for (let index = cursor + 1; index < line.length; index += 1) {
+      const character = line[index];
+      if (character === '"') return { value, end: index + 1 };
+      if (character !== "\\") {
+        value += character;
+        continue;
+      }
+      const escape = line[++index];
+      const simple = { b: "\b", t: "\t", n: "\n", f: "\f", r: "\r", '"': '"', "\\": "\\" }[escape];
+      if (simple !== undefined) {
+        value += simple;
+        continue;
+      }
+      const digits = escape === "u" ? 4 : escape === "U" ? 8 : 0;
+      const hex = digits > 0 ? line.slice(index + 1, index + 1 + digits) : "";
+      if (digits === 0 || !new RegExp(`^[0-9a-fA-F]{${digits}}$`, "u").test(hex)) return null;
+      const codePoint = Number.parseInt(hex, 16);
+      if (codePoint > 0x10ffff || (codePoint >= 0xd800 && codePoint <= 0xdfff)) return null;
+      value += String.fromCodePoint(codePoint);
+      index += digits;
+    }
+    return null;
+  }
+  const match = /^[A-Za-z0-9_-]+/u.exec(line.slice(cursor));
+  return match ? { value: match[0], end: cursor + match[0].length } : null;
+}
+
+function skipTomlWhitespace(line, cursor) {
+  while (line[cursor] === " " || line[cursor] === "\t") cursor += 1;
+  return cursor;
+}
+
+function tomlPathEquals(path, sectionName) {
+  const expected = sectionName.split(".");
+  return path.length === expected.length && path.every((part, index) => part === expected[index]);
+}
+
+function tomlPathStartsWith(path, sectionName) {
+  const expected = sectionName.split(".");
+  return path.length >= expected.length && expected.every((part, index) => path[index] === part);
 }
 
 function removeLegacyOpenReaperTomlSections(existing) {
-  const lines = existing.split(/\r?\n/);
-  const sections = [];
-  let current = { header: null, lines: [] };
-  for (const line of lines) {
-    if (/^\s*\[[^\]]+\]\s*$/.test(line)) {
-      sections.push(current);
-      current = { header: line.trim(), lines: [line] };
-    } else {
-      current.lines.push(line);
-    }
-  }
-  sections.push(current);
-  const kept = sections.filter((section) => {
-    const body = section.lines.join("\n");
-    if (section.header === "[mcp_servers.streetlight]") {
+  return rewriteTomlSectionsPreservingBytes(existing, (section) => {
+    const body = existing.slice(section.start, section.end);
+    if (tomlPathEquals(section.path, "mcp_servers.streetlight")) {
       report.changed.push("removed legacy Codex MCP server streetlight");
-      return false;
+      return true;
     }
-    if (section.header === "[mcp_servers.streetlight.env]") return false;
-    if (section.header === "[mcp_servers.openreaper]" && isLegacyOpenReaperTomlSection(body)) {
+    if (tomlPathEquals(section.path, "mcp_servers.streetlight.env")) return true;
+    if (tomlPathEquals(section.path, "mcp_servers.openreaper") && isLegacyOpenReaperTomlSection(body)) {
       report.changed.push("removed stale Codex MCP server openreaper that pointed at the legacy Streetlight kernel");
-      return false;
+      return true;
     }
-    if (section.header === "[mcp_servers.openreaper.env]" && isLegacyOpenReaperTomlSection(body)) {
+    if (tomlPathEquals(section.path, "mcp_servers.openreaper.env") && isLegacyOpenReaperTomlSection(body)) {
       report.changed.push("removed stale STREETLIGHT_* env block from Codex openreaper server");
-      return false;
+      return true;
     }
-    return true;
+    return false;
   });
-  return `${kept.map((section) => section.lines.join("\n").trimEnd()).join("\n").replace(/\n{3,}/g, "\n\n").trimEnd()}\n`;
 }
 
 function readIniValue(source, sectionName, keyName) {

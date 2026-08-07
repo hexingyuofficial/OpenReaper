@@ -3354,8 +3354,10 @@ async function smokePackagedInstallerUpgradeMigration() {
   const requiredSnippets = [
     "replaceInstallRoot",
     "upsertTomlSectionTree",
-    "splitTomlSections",
-    "tomlSectionName",
+    "rewriteTomlSectionsPreservingBytes",
+    "tomlSectionPath",
+    "tomlMultilineStateAfterLine",
+    "OpenReaper owns the preceding line ending",
     "removeLegacyOpenReaperTomlSections",
     "isLegacyOpenReaperTomlSection",
     "installBridgeAction",
@@ -3535,6 +3537,15 @@ async function smokePackagedInstallerManagedRenderRoot(installerPath) {
     const fixtureUninstaller = path.join(fixturePackage, "installer", "uninstall-openreaper.mjs");
     const fakeReaper = path.join(fixtureRoot, "fake-reaper");
     const fakeReaperStarted = path.join(fixtureRoot, "fake-reaper.started");
+    const codexConfigPath = path.join(home, ".codex", "config.toml");
+    const codexOriginal = [
+      "\uFEFF[user]",
+      'example = """',
+      "[mcp_servers.openreaper]",
+      'command = "documentation only"',
+      '"""',
+      "name = '没有尾换行'",
+    ].join("\r\n");
     await mkdir(path.dirname(fixtureInstaller), { recursive: true });
     await mkdir(path.join(fixturePackage, "bin"), { recursive: true });
     await mkdir(path.join(fixturePackage, "vendor", "openreaper-kernel", "reaper", "bridge"), { recursive: true });
@@ -3560,12 +3571,13 @@ async function smokePackagedInstallerManagedRenderRoot(installerPath) {
     );
     await Promise.all((await readdir(path.join(fixturePackage, "bin"))).map((name) => chmod(path.join(fixturePackage, "bin", name), 0o755)));
     await chmod(fakeReaper, 0o755);
+    await mkdir(path.dirname(codexConfigPath), { recursive: true });
+    await writeFile(codexConfigPath, codexOriginal, "utf8");
 
     const installerArgs = [
       fixtureInstaller,
       "--install-root",
       installRoot,
-      "--skip-client-config",
       "--skip-startup-hook",
     ];
     const fresh = await runCaptured(process.execPath, installerArgs, {
@@ -3583,6 +3595,11 @@ async function smokePackagedInstallerManagedRenderRoot(installerPath) {
     if (!freshReport.render_root?.created || freshReport.render_root?.writable !== true || freshReport.render_root?.source !== "default") {
       throw new Error(`packaged installer fresh managed render report mismatch: ${JSON.stringify(freshReport.render_root)}`);
     }
+    const freshCodex = await readFile(codexConfigPath, "utf8");
+    if (!freshCodex.startsWith(codexOriginal)
+      || !freshCodex.includes("[mcp_servers.openreaper] # OpenReaper owns the preceding line ending\r\n")) {
+      throw new Error("packaged installer did not preserve the no-final-newline Codex fixture with owned separator truth.");
+    }
     const outputPath = path.join(defaultRoot, "existing-output.wav");
     await writeFile(outputPath, "preserve-me\n", "utf8");
 
@@ -3598,6 +3615,12 @@ async function smokePackagedInstallerManagedRenderRoot(installerPath) {
     }
     if (upgradeReport.render_root?.source !== "persisted" || upgradeReport.render_root?.writable !== true) {
       throw new Error(`packaged installer upgrade render report mismatch: ${JSON.stringify(upgradeReport.render_root)}`);
+    }
+    const upgradedCodex = await readFile(codexConfigPath, "utf8");
+    if (!upgradedCodex.startsWith(codexOriginal)
+      || (upgradedCodex.match(/OpenReaper owns the preceding line ending/gu) ?? []).length !== 1
+      || (upgradedCodex.match(/^\[mcp_servers\.openreaper\]/gmu) ?? []).length !== 2) {
+      throw new Error("packaged installer upgrade did not preserve multiline TOML bytes or exact managed section cardinality.");
     }
     const capturedRoots = (await readFile(capturePath, "utf8")).trim().split(/\r?\n/);
     if (capturedRoots.length !== 2 || capturedRoots.some((value) => value !== defaultRoot)) {
@@ -3627,7 +3650,6 @@ async function smokePackagedInstallerManagedRenderRoot(installerPath) {
       path.join(installRoot, "installer", "uninstall-openreaper.mjs"),
       "--install-root",
       installRoot,
-      "--skip-client-config",
       "--skip-startup-hook",
     ], {
       cwd: installRoot,
@@ -3637,6 +3659,9 @@ async function smokePackagedInstallerManagedRenderRoot(installerPath) {
     const uninstallReport = JSON.parse(uninstall.stdout);
     if (await fileExists(consentPath) || uninstallReport.startup_dialog_consent?.removed !== true) {
       throw new Error(`packaged uninstaller did not remove startup consent: ${uninstall.stdout}`);
+    }
+    if (await readFile(codexConfigPath, "utf8") !== codexOriginal) {
+      throw new Error("packaged uninstaller did not restore the original no-final-newline Codex bytes exactly.");
     }
     assertEqualText(await readFile(userRecipePath, "utf8"), userRecipe.trim(), "packaged uninstaller user Recipe preservation");
 
@@ -3667,6 +3692,7 @@ async function smokePackagedInstallerManagedRenderRoot(installerPath) {
       existing_output_preserved: true,
       installer_mcp_smoke_env: true,
       installed_provenance_read_only: true,
+      codex_config_byte_roundtrip: true,
       invalid_record_rejected_before_replacement: true,
       consent_lifecycle: {
         uninstall_removed_consent: true,
@@ -3675,7 +3701,7 @@ async function smokePackagedInstallerManagedRenderRoot(installerPath) {
         reaper_not_started: true,
       },
       atomic_backup_container: /\.openreaper-install-backup-/.test(upgradeReport.recovery?.previous_install_backup ?? ""),
-      safety_flags: ["--skip-client-config", "--skip-startup-hook"],
+      safety_flags: ["--skip-startup-hook"],
     };
   } finally {
     await rm(fixtureRoot, { recursive: true, force: true });
