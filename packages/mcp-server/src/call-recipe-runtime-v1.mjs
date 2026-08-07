@@ -3021,6 +3021,8 @@ function requiredRunMutationResponseBytes(revision, operation) {
 function enforceCallRecipeResponseBudget(response, budget, context = {}) {
   if (responseBytes(response) <= budget.max_response_bytes) return response;
   if (response?.ok === true && context.operation === "list") {
+    const paged = shrinkFinalListResponse(response, budget.max_response_bytes);
+    if (paged) return freeze(paged);
     const tooLarge = {
       contract: CALL_RECIPE_RUNTIME_CONTRACT,
       ok: false,
@@ -3051,6 +3053,37 @@ function enforceCallRecipeResponseBudget(response, budget, context = {}) {
   };
   if (responseBytes(minimal) <= budget.max_response_bytes) return freeze(minimal);
   return freeze({ ok: false, error: { code: "RESPONSE_TOO_LARGE" } });
+}
+
+function shrinkFinalListResponse(response, maxResponseBytes) {
+  const items = Array.isArray(response?.items) ? response.items : null;
+  const page = response?.page;
+  const start = Number(page?.cursor);
+  const total = response?.total;
+  if (
+    !items
+    || !Number.isSafeInteger(start)
+    || start < 0
+    || !Number.isSafeInteger(total)
+    || total < start + items.length
+  ) return null;
+
+  for (let count = items.length - 1; count > 0; count -= 1) {
+    const end = start + count;
+    const candidate = {
+      ...response,
+      count,
+      items: items.slice(0, count),
+      page: {
+        ...page,
+        cursor: String(start),
+        next_cursor: end < total ? String(end) : null,
+        has_more: end < total,
+      },
+    };
+    if (responseBytes(candidate) <= maxResponseBytes) return candidate;
+  }
+  return null;
 }
 
 function compactCallRecipeResponse(response, operation) {

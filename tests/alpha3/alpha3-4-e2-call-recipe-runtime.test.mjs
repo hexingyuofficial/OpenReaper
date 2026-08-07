@@ -1598,6 +1598,42 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
     assert.equal(failure.proven_partial_changes.length, 1);
   });
 
+  it("shrinks the final default-budget Recipe list envelope after performance evidence without losing cursor coverage", async () => {
+    const { runtime } = makeRuntime();
+    for (let revision = 1; revision <= 32; revision += 1) {
+      const saved = await runtime.call_recipe({
+        operation: "save",
+        draft: makeDraft(),
+        version: "1.0.0",
+        revision_number: revision,
+        saved_at: new Date(revision * 1000).toISOString(),
+      });
+      assert.equal(saved.ok, true);
+    }
+
+    const seen = [];
+    let cursor;
+    for (let pageIndex = 0; pageIndex < 32; pageIndex += 1) {
+      const page = await runtime.call_recipe({
+        operation: "list",
+        limit: 32,
+        ...(cursor ? { cursor } : {}),
+      });
+      assert.equal(page.ok, true);
+      assert.equal(page.count > 0, true);
+      assert.equal(Buffer.byteLength(JSON.stringify(page), "utf8") <= 16_384, true);
+      assert.equal(page.page.cursor, cursor ?? "0");
+      seen.push(...page.items.map((item) => item.revision));
+      if (!page.page.has_more) {
+        assert.equal(page.page.next_cursor, null);
+        break;
+      }
+      assert.equal(page.page.next_cursor, String(seen.length));
+      cursor = page.page.next_cursor;
+    }
+    assert.deepEqual(seen, Array.from({ length: 32 }, (_, index) => index + 1));
+  });
+
   it("sizes the mutation floor from a valid 48-stage revision before any dispatcher write", async () => {
     const catalog = makeCatalog();
     const root = mkdtempSync(path.join(os.tmpdir(), "openreaper-e2-max-graph-budget-"));
