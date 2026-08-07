@@ -7,6 +7,7 @@ import {
   FOUNDATION_BRIDGE_CONTRACT,
   FOUNDATION_BRIDGE_DEFAULT_BUDGET,
   foundationBridgeRequestFingerprint,
+  normalizeFoundationBridgeRequest,
   validateFoundationBridgeResult,
 } from "../../core/src/foundation-bridge-v1.mjs";
 import { readWindowsSafeFile } from "./windows-safe-file-v1.mjs";
@@ -69,6 +70,11 @@ const HEARTBEAT_INTERVAL_BOUNDS_MS = Object.freeze({ min: 50, max: 5_000 });
 // to pass before failing closed.
 const HEARTBEAT_REPLACEMENT_READ_ATTEMPTS = 9;
 const HEARTBEAT_REPLACEMENT_RETRY_DELAY_MS = 40;
+// A Windows safe heartbeat read launches native Windows PowerShell. Reuse one
+// exact ready identity briefly across adjacent Bridge dispatches; every Bridge
+// request still carries owner/generation and is rejected REAPER-side if that
+// generation has changed. Public probes always bypass this dispatch-only lease.
+const WINDOWS_DISPATCH_LIVENESS_LEASE_MS = 5_000;
 const HEARTBEAT_FIELDS = Object.freeze([
   "active_generation",
   "active_owner",
@@ -125,7 +131,15 @@ export function createLiveBridgeExecutor(options = {}) {
   const pollIntervalMs = normalizePositiveInteger(options.pollIntervalMs, DEFAULT_POLL_INTERVAL_MS);
   const heartbeatMaxAgeMs = normalizeHeartbeatMaxAge(options.heartbeatMaxAgeMs);
   const now = typeof options.now === "function" ? options.now : () => new Date();
+  const platform = options.__platformForTest ?? process.platform;
+  const livenessProbe = typeof options.__probeLivenessForTest === "function"
+    ? options.__probeLivenessForTest
+    : probeLiveBridgeLiveness;
+  const dispatchLeaseNow = typeof options.__dispatchLeaseNowForTest === "function"
+    ? options.__dispatchLeaseNowForTest
+    : Date.now;
   const idempotencyRecords = new Map();
+  let dispatchLivenessLease = null;
 
   const config = deepFreeze({
     contract: LIVE_BRIDGE_EXECUTOR_CONTRACT,
@@ -141,7 +155,8 @@ export function createLiveBridgeExecutor(options = {}) {
   });
 
   async function probeLiveness(probeOptions = {}) {
-    return probeLiveBridgeLiveness({
+    dispatchLivenessLease = null;
+    return livenessProbe({
       transportDir,
       ...(Object.prototype.hasOwnProperty.call(probeOptions, "expectedOwner")
         ? { expectedOwner: probeOptions.expectedOwner }
@@ -152,6 +167,53 @@ export function createLiveBridgeExecutor(options = {}) {
       maxAgeMs: probeOptions.maxAgeMs ?? heartbeatMaxAgeMs,
       now: probeOptions.now ?? now,
     });
+  }
+
+  async function probeDispatchLiveness(request) {
+    const expectedOwner = request?.bridge?.expected_owner;
+    const expectedGeneration = request?.bridge?.expected_generation;
+    const monotonicNowMs = dispatchLeaseNow();
+    if (
+      platform === "win32"
+      && dispatchLivenessLease
+      && dispatchLivenessLease.owner === expectedOwner
+      && dispatchLivenessLease.generation === expectedGeneration
+      && monotonicNowMs <= dispatchLivenessLease.expires_at_ms
+    ) {
+      return dispatchLivenessLease.result;
+    }
+
+    dispatchLivenessLease = null;
+    const result = await livenessProbe({
+      transportDir,
+      expectedOwner,
+      expectedGeneration,
+      maxAgeMs: heartbeatMaxAgeMs,
+      now,
+    });
+    if (
+      platform === "win32"
+      && result?.status === LIVE_BRIDGE_LIVENESS_STATUS.READY
+      && typeof expectedOwner === "string"
+      && expectedOwner !== ""
+      && Number.isSafeInteger(expectedGeneration)
+      && expectedGeneration >= 0
+    ) {
+      const observedAgeMs = Number.isFinite(result?.heartbeat?.observed?.age_ms)
+        ? Math.max(0, Math.floor(result.heartbeat.observed.age_ms))
+        : heartbeatMaxAgeMs;
+      const remainingFreshnessMs = Math.max(0, heartbeatMaxAgeMs - observedAgeMs);
+      const leaseMs = Math.min(WINDOWS_DISPATCH_LIVENESS_LEASE_MS, remainingFreshnessMs);
+      if (leaseMs > 0) {
+        dispatchLivenessLease = {
+          owner: expectedOwner,
+          generation: expectedGeneration,
+          expires_at_ms: dispatchLeaseNow() + leaseMs,
+          result,
+        };
+      }
+    }
+    return result;
   }
 
   async function dispatch(request) {
@@ -174,10 +236,7 @@ export function createLiveBridgeExecutor(options = {}) {
       });
     }
 
-    const liveness = await probeLiveness({
-      expectedOwner: request?.bridge?.expected_owner,
-      expectedGeneration: request?.bridge?.expected_generation,
-    });
+    const liveness = await probeDispatchLiveness(request);
     if (liveness.status !== LIVE_BRIDGE_LIVENESS_STATUS.READY) {
       return bridgeBlockerEnvelope(request, {
         blocker: liveness.status,
@@ -295,6 +354,64 @@ export function createLiveBridgeExecutor(options = {}) {
     });
   }
 
+  async function dispatchReadBatch(requests) {
+    if (!Array.isArray(requests) || requests.length < 2 || requests.length > 64) {
+      throw new TypeError("Managed Bridge read batch requires 2-64 requests.");
+    }
+    const first = requests[0];
+    const expectedOwner = first?.bridge?.expected_owner;
+    const expectedGeneration = first?.bridge?.expected_generation;
+    for (const request of requests) {
+      if (
+        request?.pack?.risk !== "read"
+        || request?.bridge?.expected_owner !== expectedOwner
+        || request?.bridge?.expected_generation !== expectedGeneration
+      ) {
+        throw new TypeError("Managed Bridge read batch requires one exact read-only owner/generation identity.");
+      }
+    }
+    const timeoutMs = Math.max(...requests.map((request) => request.timeout_ms));
+    const outerRequest = normalizeFoundationBridgeRequest({
+      contract: FOUNDATION_BRIDGE_CONTRACT,
+      id: `cmd_recipe_read_batch_${randomUUID().replaceAll("-", "")}`,
+      created_at: first.created_at,
+      client: { ...first.client },
+      bridge: { ...first.bridge },
+      operation: { family: "run_command", name: "template.execute" },
+      pack: { id: "core", capability: "recipe.read_batch", risk: "read" },
+      params: {
+        contract: "openreaper.recipe_read_batch.v1",
+        rows: requests,
+      },
+      refs: [],
+      undo: { mode: "none" },
+      verification: { mode: "required", checks: ["all_child_results_returned"] },
+      artifacts: { allow: false },
+      budget: {
+        max_response_bytes: Math.max(
+          FOUNDATION_BRIDGE_DEFAULT_BUDGET.max_response_bytes,
+          Math.min(1_048_576, requests.reduce((sum, request) => sum + request.budget.max_response_bytes, 0)),
+        ),
+        max_items: requests.length,
+        max_inline_value_bytes: Math.max(
+          FOUNDATION_BRIDGE_DEFAULT_BUDGET.max_inline_value_bytes,
+          ...requests.map((request) => request.budget.max_inline_value_bytes),
+        ),
+      },
+      timeout_ms: timeoutMs,
+    });
+    const bridgeResult = await dispatch(outerRequest);
+    const results = bridgeResult?.ok === true && Array.isArray(bridgeResult?.result?.summary?.rows)
+      ? bridgeResult.result.summary.rows
+      : [];
+    return {
+      ok: bridgeResult?.ok === true,
+      request: outerRequest,
+      bridgeResult,
+      results,
+    };
+  }
+
   return deepFreeze({
     contract: LIVE_BRIDGE_EXECUTOR_CONTRACT,
     config,
@@ -304,7 +421,9 @@ export function createLiveBridgeExecutor(options = {}) {
     // existing aggregate Item/Take and Automation batch paths.
     supportsItemTakeControlsBatch: true,
     supportsAutomationFxParameterEnvelopePointsBatch: true,
+    supportsRecipeReadBatch: true,
     dispatch,
+    dispatchReadBatch,
     probeLiveness,
   });
 }

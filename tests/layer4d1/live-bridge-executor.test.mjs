@@ -9,6 +9,7 @@ import { describe, it } from "node:test";
 import { FakeFoundationBridge } from "../../packages/core/src/foundation-bridge-v1.mjs";
 import {
   buildTemplateBridgeRequest,
+  executeTemplateReadBatch,
   TEMPLATE_EXECUTION_DEFAULT_DISPATCH_TIMEOUT_MS,
 } from "../../packages/core/src/template-execution-harness-v1.mjs";
 import { createTemplateCatalogWave1aTemplates } from "../../packages/core/src/template-catalog-fixtures-v1.mjs";
@@ -74,6 +75,102 @@ describe("Layer 4D.1 live bridge executor binding", () => {
       now: () => now,
     });
     assert.equal(beyondBoundedGrace.status, LIVE_BRIDGE_LIVENESS_STATUS.LOOP_UNRESPONSIVE);
+  });
+
+  it("dispatches a generic dependency-safe read batch through one existing Template operation", async () => {
+    const transport = await makeTransport();
+    const bridgeScriptPath = join(transport.root, "openreaper-live-bridge.lua");
+    await writeFile(bridgeScriptPath, "-- minimal test fixture; not a runtime\n");
+    await writeHeartbeat(transport.root, {
+      active_owner: "owner-test",
+      active_generation: 1,
+    });
+    const executor = createLiveBridgeExecutor({
+      transportDir: transport.root,
+      bridgeScriptPath,
+      timeoutMs: 250,
+      pollIntervalMs: 1,
+    });
+    const catalog = createTemplateCatalogWave1aTemplates();
+    const requests = ["template.project.read_summary", "template.transport.read_state"]
+      .map((id, index) => buildTemplateBridgeRequest({
+        descriptor: catalog.find((entry) => entry.id === id),
+        input: {},
+        refs: [],
+        context: context({ request_sequence: index + 1 }),
+        requestId: `cmd_batch_child_${index + 1}`,
+      }));
+
+    const responsePromise = executor.dispatchReadBatch(requests);
+    const requestPath = await waitForSingleRequest(transport.root);
+    const outerRequest = JSON.parse(await readFile(requestPath, "utf8"));
+    assert.deepEqual(outerRequest.operation, { family: "run_command", name: "template.execute" });
+    assert.deepEqual(outerRequest.pack, { id: "core", capability: "recipe.read_batch", risk: "read" });
+    assert.deepEqual(outerRequest.params.rows.map((row) => row.id), requests.map((row) => row.id));
+
+    const bridge = new FakeFoundationBridge({ owner: "owner-test", generation: 1 });
+    const childResults = requests.map((request, index) => bridge.okEnvelope(
+      request,
+      request.created_at,
+      { summary: { child_index: index + 1 } },
+    ));
+    const aggregate = bridge.okEnvelope(outerRequest, outerRequest.created_at, {
+      summary: { rows: childResults, row_count: childResults.length },
+    });
+    await writeFile(
+      join(transport.root, "results", `${outerRequest.id}.json`),
+      `${JSON.stringify(aggregate)}\n`,
+    );
+
+    const response = await responsePromise;
+    assert.equal(response.ok, true);
+    assert.equal(response.results.length, 2);
+    assert.equal((await readdir(join(transport.root, "requests"))).length, 1);
+
+    const ownerDrift = structuredClone(requests);
+    ownerDrift[1].bridge.expected_owner = "other-owner";
+    await assert.rejects(
+      executor.dispatchReadBatch(ownerDrift),
+      /one exact read-only owner\/generation identity/,
+    );
+    const writeChild = idempotentProjectRequest({
+      id: "cmd_batch_write_child",
+      idempotencyKey: "batch-write-child",
+      name: "Batch Write Child",
+      timeoutMs: 250,
+    });
+    await assert.rejects(
+      executor.dispatchReadBatch([requests[0], writeChild]),
+      /one exact read-only owner\/generation identity/,
+    );
+    assert.equal((await readdir(join(transport.root, "requests"))).length, 1);
+  });
+
+  it("rejects a mixed-risk read batch during complete Node preflight with zero transport writes", async () => {
+    const catalog = createTemplateCatalogWave1aTemplates();
+    let dispatchCount = 0;
+    const result = await executeTemplateReadBatch({
+      items: ["template.project.read_summary", "template.project.create_subproject"]
+        .map((id, index) => ({
+          descriptor: catalog.find((entry) => entry.id === id),
+          input: id === "template.project.create_subproject"
+            ? { name: "Must Not Run", activate: true, inherit_time_selection: false }
+            : {},
+          refs: [],
+          context: context({ request_sequence: index + 1 }),
+        })),
+      executor: {
+        async dispatchReadBatch() {
+          dispatchCount += 1;
+          throw new Error("mixed-risk preflight must not dispatch");
+        },
+      },
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.zero_write, true);
+    assert.equal(result.error.code, "TEMPLATE_INPUT_INVALID");
+    assert.equal(dispatchCount, 0);
   });
 
   it("allows live executor dispatch only for Wave 0 canary ids", async () => {
@@ -1197,6 +1294,114 @@ describe("Layer 4D.1 live bridge executor binding", () => {
       now: () => new Date("invalid"),
     });
     assert.equal(invalidNow.status, LIVE_BRIDGE_LIVENESS_STATUS.ACTION_NOT_RUNNING);
+  });
+
+  it("leases Windows dispatch liveness only for the exact ready owner and generation", async () => {
+    const transport = await makeTransport();
+    const bridgeScriptPath = join(transport.root, "openreaper-live-bridge.lua");
+    await writeFile(bridgeScriptPath, "-- minimal test fixture; not a runtime\n");
+    let leaseNowMs = 0;
+    let probeCount = 0;
+    const livenessProbe = async ({ expectedOwner, expectedGeneration }) => {
+      probeCount += 1;
+      return {
+        contract: LIVE_BRIDGE_LIVENESS_PROBE_CONTRACT,
+        status: LIVE_BRIDGE_LIVENESS_STATUS.READY,
+        ready: true,
+        heartbeat: { observed: { age_ms: 0 } },
+        expected: { owner: expectedOwner, generation: expectedGeneration },
+        details: {},
+      };
+    };
+    const executor = createLiveBridgeExecutor({
+      transportDir: transport.root,
+      bridgeScriptPath,
+      __platformForTest: "win32",
+      __probeLivenessForTest: livenessProbe,
+      __dispatchLeaseNowForTest: () => leaseNowMs,
+    });
+
+    const dispatchPrepared = async (suffix, generation = 1) => {
+      const request = structuredClone(idempotentProjectRequest({
+        id: `cmd_windows_lease_${suffix}`,
+        idempotencyKey: `windows-lease-${suffix}`,
+        name: `Windows Lease ${suffix}`,
+        timeoutMs: 250,
+      }));
+      request.bridge.expected_generation = generation;
+      const bridge = new FakeFoundationBridge({ owner: "owner-test", generation });
+      const result = bridge.okEnvelope(request, request.created_at, { summary: { suffix } });
+      await writeFile(join(transport.root, "results", `${request.id}.json`), `${JSON.stringify(result)}\n`);
+      const response = await executor.dispatch(request);
+      assert.equal(response.ok, true);
+    };
+
+    await dispatchPrepared("first");
+    await dispatchPrepared("same_identity");
+    assert.equal(probeCount, 1, "adjacent same-identity dispatches should share one ready probe");
+
+    await executor.probeLiveness({ expectedOwner: "owner-test", expectedGeneration: 1 });
+    assert.equal(probeCount, 2, "public probe must always read fresh liveness");
+    await dispatchPrepared("after_public_probe");
+    assert.equal(probeCount, 3, "public probe must not seed the dispatch-only lease");
+
+    await dispatchPrepared("new_generation", 2);
+    assert.equal(probeCount, 4, "generation changes must invalidate the lease");
+    leaseNowMs = 5_001;
+    await dispatchPrepared("expired", 2);
+    assert.equal(probeCount, 5, "the bounded lease must expire");
+  });
+
+  it("never leases a failed Windows dispatch liveness probe", async () => {
+    const transport = await makeTransport();
+    const bridgeScriptPath = join(transport.root, "openreaper-live-bridge.lua");
+    await writeFile(bridgeScriptPath, "-- minimal test fixture; not a runtime\n");
+    let ready = false;
+    let probeCount = 0;
+    const executor = createLiveBridgeExecutor({
+      transportDir: transport.root,
+      bridgeScriptPath,
+      __platformForTest: "win32",
+      __dispatchLeaseNowForTest: () => 0,
+      __probeLivenessForTest: async ({ expectedOwner, expectedGeneration }) => {
+        probeCount += 1;
+        return {
+          contract: LIVE_BRIDGE_LIVENESS_PROBE_CONTRACT,
+          status: ready
+            ? LIVE_BRIDGE_LIVENESS_STATUS.READY
+            : LIVE_BRIDGE_LIVENESS_STATUS.LOOP_UNRESPONSIVE,
+          ready,
+          heartbeat: { observed: { age_ms: 0 } },
+          expected: { owner: expectedOwner, generation: expectedGeneration },
+          details: {},
+        };
+      },
+    });
+    const blockedRequest = idempotentProjectRequest({
+      id: "cmd_windows_lease_failed",
+      idempotencyKey: "windows-lease-failed",
+      name: "Windows Lease Failed",
+      timeoutMs: 250,
+    });
+    const blocked = await executor.dispatch(blockedRequest);
+    assert.equal(blocked.ok, false);
+    assert.equal(blocked.error.details.zero_write, true);
+
+    ready = true;
+    const recoveredRequest = idempotentProjectRequest({
+      id: "cmd_windows_lease_recovered",
+      idempotencyKey: "windows-lease-recovered",
+      name: "Windows Lease Recovered",
+      timeoutMs: 250,
+    });
+    const bridge = new FakeFoundationBridge({ owner: "owner-test", generation: 1 });
+    const result = bridge.okEnvelope(recoveredRequest, recoveredRequest.created_at, { summary: { recovered: true } });
+    await writeFile(
+      join(transport.root, "results", `${recoveredRequest.id}.json`),
+      `${JSON.stringify(result)}\n`,
+    );
+    assert.equal((await executor.dispatch(recoveredRequest)).ok, true);
+    assert.equal(probeCount, 2, "a failed probe must not be reused");
   });
 
   it("live smoke script skips by default and stays on the Wave 1A read-handler allowlist", async () => {

@@ -101,6 +101,97 @@ export async function executeTemplate(options = {}) {
   }
 }
 
+export async function executeTemplateReadBatch(options = {}) {
+  const items = Array.isArray(options.items) ? options.items : [];
+  const performance = options.performance;
+  let prepared = [];
+  try {
+    if (items.length < 2 || items.length > 64) {
+      throw new TemplateExecutionHarnessError(
+        "TEMPLATE_INPUT_INVALID",
+        "Template read batch requires 2-64 child requests.",
+        { recoverable: true, details: { zero_write: true, child_count: items.length } },
+      );
+    }
+    const validationStartedAt = Date.now();
+    prepared = items.map((item) => prepareTemplateExecution(item));
+    if (prepared.some((entry) => entry.descriptor.risk !== "read")) {
+      throw new TemplateExecutionHarnessError(
+        "TEMPLATE_INPUT_INVALID",
+        "Template read batch accepts only read-risk dependencies.",
+        { recoverable: true, details: { zero_write: true } },
+      );
+    }
+    addExecutionPerformancePhase(performance, "validation", Date.now() - validationStartedAt);
+    const executor = options.executor;
+    if (!executor || typeof executor.dispatchReadBatch !== "function") {
+      throw new TemplateExecutionHarnessError(
+        "TEMPLATE_EXECUTOR_INVALID",
+        "Template read batch requires a managed executor with dispatchReadBatch.",
+        { recoverable: false, details: { zero_write: true } },
+      );
+    }
+
+    const transportStartedAt = Date.now();
+    const dispatched = await executor.dispatchReadBatch(
+      prepared.map((entry) => entry.request),
+      { signal: options.signal ?? null },
+    );
+    const dispatchElapsedMs = Date.now() - transportStartedAt;
+    if (!dispatched || !dispatched.bridgeResult) {
+      throw new TemplateExecutionHarnessError(
+        "BRIDGE_RESULT_INVALID",
+        "Managed Template read batch returned no aggregate Bridge result.",
+        { recoverable: false, details: { zero_write: true } },
+      );
+    }
+    recordExecutionPerformanceBridgeResult(
+      performance,
+      dispatched.request ?? null,
+      dispatched.bridgeResult,
+      { dispatch_elapsed_ms: dispatchElapsedMs },
+    );
+    validateFoundationBridgeResult(dispatched.bridgeResult);
+    if (dispatched.ok !== true) {
+      return deepFreeze({
+        ok: false,
+        zero_write: dispatched.bridgeResult?.error?.details?.zero_write !== false,
+        error: cloneJson(dispatched.bridgeResult.error),
+        results: [],
+      });
+    }
+    if (!Array.isArray(dispatched.results) || dispatched.results.length !== prepared.length) {
+      throw new TemplateExecutionHarnessError(
+        "BRIDGE_RESULT_INVALID",
+        "Managed Template read batch returned an incomplete child result set.",
+        { recoverable: false, details: { zero_write: true } },
+      );
+    }
+    const results = dispatched.results.map((bridgeResult, index) => {
+      validateBridgeResult(prepared[index].request, bridgeResult);
+      return mapBridgeResult(prepared[index], bridgeResult);
+    });
+    return deepFreeze({
+      ok: true,
+      zero_write: true,
+      results,
+      batch: {
+        child_count: results.length,
+        transport_call_count: 1,
+        batch_count: 1,
+      },
+    });
+  } catch (error) {
+    addExecutionPerformancePhase(performance, "validation", 0);
+    return deepFreeze({
+      ok: false,
+      zero_write: true,
+      error: normalizeExecutionError(error),
+      results: [],
+    });
+  }
+}
+
 export function validateTemplateInput(input, schema) {
   const errors = [];
   if (!isPlainObject(input)) {

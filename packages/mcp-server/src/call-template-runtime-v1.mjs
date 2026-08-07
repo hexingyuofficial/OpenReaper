@@ -29,7 +29,10 @@ import {
   createTemplateCatalogWave2aTemplates,
   createTemplateCatalogWave3bTemplates,
 } from "../../core/src/template-catalog-fixtures-v1.mjs";
-import { executeTemplate } from "../../core/src/template-execution-harness-v1.mjs";
+import {
+  executeTemplate,
+  executeTemplateReadBatch,
+} from "../../core/src/template-execution-harness-v1.mjs";
 import {
   createExecutionDeadline,
   effectiveDispatchTimeoutMs,
@@ -1240,6 +1243,82 @@ export function createCallTemplateRuntime(options = {}) {
       : observedExecution;
   }
 
+  async function executeAcceptedAtomicReadBatch({
+    children,
+    recipe_undo = null,
+    dispatchTimeoutMs = null,
+    signal = null,
+    deadline = null,
+    performance = null,
+  }) {
+    const validationStartedAt = Date.now();
+    assertTemplateRequestActive(signal, "Template read batch was cancelled before preflight.", deadline);
+    const executor = live.enabled ? live.executor : options.executor;
+    if (!executor || executor.supportsRecipeReadBatch !== true) {
+      return {
+        ok: false,
+        zero_write: true,
+        error: {
+          code: "CALL_TEMPLATE_EXECUTION_FAILED",
+          message: "Managed Recipe read batching is unavailable.",
+          details: { zero_write: true },
+        },
+        results: [],
+      };
+    }
+    const preparedChildren = [];
+    try {
+      for (const child of children ?? []) {
+        assertLiveRuntimeDispatchAllowed(live, child.id);
+        const descriptor = resolveAcceptedCatalogDescriptor(catalog, child.id);
+        if (descriptor.risk !== "read") {
+          throw new CallTemplateRuntimeError(
+            "CALL_TEMPLATE_REQUEST_INVALID",
+            `Recipe read batch rejected non-read dependency ${child.id}.`,
+            { recoverable: true, details: { zero_write: true, id: child.id } },
+          );
+        }
+        const normalizedInput = await preflightTemplateInput(child.id, child.input ?? {}, child.budget);
+        preparedChildren.push({
+          descriptor,
+          input: normalizedInput,
+          refs: child.refs ?? [],
+          context: child.context,
+          budget: child.budget,
+          idempotency_key: child.idempotency_key,
+          recipeUndo: recipe_undo,
+          dispatchTimeoutMs: effectiveDispatchTimeoutMs(
+            normalizeInternalDispatchTimeoutMs(dispatchTimeoutMs),
+            deadline,
+          ),
+          deadlineMs: deadline?.remainingMs?.() === null
+            ? null
+            : Math.max(1, deadline.remainingMs()),
+        });
+      }
+    } catch (error) {
+      addExecutionPerformancePhase(performance, "validation", Date.now() - validationStartedAt);
+      return {
+        ok: false,
+        zero_write: true,
+        error: {
+          code: error?.code ?? "CALL_TEMPLATE_REQUEST_INVALID",
+          message: error?.message ?? "Recipe read batch preflight failed.",
+          details: { ...(isPlainObject(error?.details) ? error.details : {}), zero_write: true },
+        },
+        results: [],
+      };
+    }
+    addExecutionPerformancePhase(performance, "validation", Date.now() - validationStartedAt);
+    assertTemplateRequestActive(signal, "Template read batch was cancelled before REAPER dispatch.", deadline);
+    return executeTemplateReadBatch({
+      items: preparedChildren,
+      executor,
+      signal,
+      performance,
+    });
+  }
+
   // The generic Macro executor reads capability flags from its atomic
   // function. Preserve the managed executor's declarations across the
   // Template harness, which binds object dispatch methods into a new function.
@@ -1247,6 +1326,9 @@ export function createCallTemplateRuntime(options = {}) {
     (live.executor ?? options.executor)?.supportsItemTakeControlsBatch === true;
   executeAcceptedAtomic.supportsAutomationFxParameterEnvelopePointsBatch =
     (live.executor ?? options.executor)?.supportsAutomationFxParameterEnvelopePointsBatch === true;
+  executeAcceptedAtomic.supportsRecipeReadBatch =
+    (live.executor ?? options.executor)?.supportsRecipeReadBatch === true;
+  executeAcceptedAtomic.batchReads = executeAcceptedAtomicReadBatch;
 
   async function call_template(request = {}, execution = {}) {
     let id = null;
@@ -2716,6 +2798,38 @@ function createMacroAtomicExecutor(
   // managed Bridge. Legacy test executors intentionally keep the old path.
   macroAtomic.supportsItemTakeControlsBatch = executeAtomic?.supportsItemTakeControlsBatch === true;
   macroAtomic.supportsAutomationFxParameterEnvelopePointsBatch = executeAtomic?.supportsAutomationFxParameterEnvelopePointsBatch === true;
+  macroAtomic.supportsRecipeReadBatch = executeAtomic?.supportsRecipeReadBatch === true;
+  macroAtomic.batchReads = async (children = []) => {
+    if (typeof executeAtomic?.batchReads !== "function") {
+      return { ok: false, zero_write: true, results: [] };
+    }
+    const contextualized = children.map((childRequest = {}) => {
+      childIndex += 1;
+      const sourceContext = isPlainObject(childRequest.context)
+        ? childRequest.context
+        : isPlainObject(parentContext)
+          ? parentContext
+          : {};
+      const baseTime = new Date(sourceContext.created_at ?? Date.now()).getTime();
+      return {
+        ...childRequest,
+        context: {
+          ...sourceContext,
+          created_at: new Date(
+            (Number.isFinite(baseTime) ? baseTime : Date.now()) + childIndex,
+          ).toISOString(),
+        },
+      };
+    });
+    return executeAtomic.batchReads({
+      children: contextualized,
+      recipe_undo: recipeUndo,
+      dispatchTimeoutMs: effectiveDispatchTimeoutMs(dispatchTimeoutMs, deadline),
+      signal,
+      deadline,
+      performance,
+    });
+  };
   return macroAtomic;
 }
 

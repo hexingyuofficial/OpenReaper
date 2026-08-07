@@ -523,6 +523,49 @@ describe("Alpha3.2.5-C executable project-write Macros", () => {
     assert.equal(calls.filter((call) => isWrite(call.id)).every((call) => !JSON.stringify(call.refs).includes("planned:")), true);
   });
 
+  it("batches independent layout preflight and readback only when the managed executor declares support", async () => {
+    const request = {
+      id: "macro.project.apply_layout",
+      input: {
+        layout: [
+          { id: "fx", kind: "track", name: "FX", index: 0 },
+        ],
+        annotations: [
+          { id: "intro", kind: "marker", name: "Intro", position_seconds: 1 },
+        ],
+        dry_run: false,
+      },
+    };
+    const calls = [];
+    const batches = [];
+    const executeAtomic = fakeAtomic(calls);
+    executeAtomic.supportsRecipeReadBatch = true;
+    executeAtomic.batchReads = async (children) => {
+      batches.push(children.map((child) => child.id));
+      return {
+        ok: true,
+        zero_write: true,
+        results: await Promise.all(children.map((child) => executeAtomic(child))),
+      };
+    };
+
+    const result = await executeAlpha3_2_5CProjectWriteMacro({
+      request,
+      executeAtomic,
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(batches.length >= 2, true, JSON.stringify(batches));
+    assert.deepEqual(batches[0], [
+      "template.tracks.list_tracks",
+      "template.tracks.read_folder_structure",
+      "template.project.list_markers_regions",
+    ]);
+    assert.equal(batches.some((ids) => ids.includes("template.tracks.list_tracks") && ids.includes("template.project.list_markers_regions")), true);
+    assert.equal(calls.some((call) => isWrite(call.id)), true);
+  });
+
   it("uses complete live exact-name preflight for dry-run recovery and never recreates matched tracks", async () => {
     const existingTracks = [{
       track_ref: "track:guid:{EXISTING-HIGHWAY-001}",

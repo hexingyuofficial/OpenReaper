@@ -940,6 +940,7 @@ async function opRun(request, options, { startedAt, resume, budget }) {
     let outcome;
     let dispatcherThrew = false;
     const transportCallsBeforeStage = executionPerformanceCounter(options.performance, "transport_call_count");
+    const batchesBeforeStage = executionPerformanceCounter(options.performance, "batch_count");
     const stageStartedAt = Date.now();
     try {
       outcome = await dispatcher({
@@ -981,6 +982,10 @@ async function opRun(request, options, { startedAt, resume, budget }) {
     const stageTransportCallCount = transportCallsBeforeStage === null || transportCallsAfterStage === null
       ? 0
       : Math.max(0, transportCallsAfterStage - transportCallsBeforeStage);
+    const batchesAfterStage = executionPerformanceCounter(options.performance, "batch_count");
+    const stageBatchCount = batchesBeforeStage === null || batchesAfterStage === null
+      ? 0
+      : Math.max(0, batchesAfterStage - batchesBeforeStage);
     const stageTelemetry = recordStageTelemetry(
       telemetry,
       stage,
@@ -988,6 +993,7 @@ async function opRun(request, options, { startedAt, resume, budget }) {
       normalized,
       Date.now() - stageStartedAt,
       stageTransportCallCount,
+      stageBatchCount,
     );
     const stageTruth = stageMutationTruth(stage, normalized, stageTelemetry);
     processed += 1;
@@ -997,6 +1003,7 @@ async function opRun(request, options, { startedAt, resume, budget }) {
       timing: { duration_ms: stageTelemetry.duration_ms },
       counters: {
         transport_call_count: stageTelemetry.transport_call_count,
+        batch_count: stageTelemetry.batch_count,
         native_mutation_count: stageTelemetry.native_mutation_count,
         readback_count: stageTelemetry.readback_count,
       },
@@ -2279,6 +2286,7 @@ function createRunTelemetry(existing = null) {
     counter_source: "call_recipe_runtime",
     stage_dispatch_count: nonNegativeInteger(existing?.stage_dispatch_count ?? existing?.transport_call_count),
     transport_call_count: nonNegativeInteger(existing?.transport_call_count),
+    batch_count: nonNegativeInteger(existing?.batch_count),
     native_mutation_count: nonNegativeInteger(existing?.native_mutation_count),
     readback_count: nonNegativeInteger(existing?.readback_count),
     stage_timings: Array.isArray(existing?.stage_timings)
@@ -2293,13 +2301,14 @@ function snapshotRunTelemetry(telemetry) {
     counter_source: telemetry.counter_source,
     stage_dispatch_count: telemetry.stage_dispatch_count,
     transport_call_count: telemetry.transport_call_count,
+    batch_count: telemetry.batch_count,
     native_mutation_count: telemetry.native_mutation_count,
     readback_count: telemetry.readback_count,
     stage_timings: telemetry.stage_timings.map((item) => cloneJson(item)),
   });
 }
 
-function recordStageTelemetry(telemetry, stage, outcome, normalized, durationMs, transportCallCount = 0) {
+function recordStageTelemetry(telemetry, stage, outcome, normalized, durationMs, transportCallCount = 0, batchCount = 0) {
   const nativeMutationCount = provenNativeMutationCount(stage, outcome, normalized);
   const readbackCount = acceptedReadbackCount(stage, outcome, normalized);
   const actualTransportCallCount = nonNegativeInteger(transportCallCount);
@@ -2308,11 +2317,13 @@ function recordStageTelemetry(telemetry, stage, outcome, normalized, durationMs,
     kind: stage.kind,
     duration_ms: Math.max(0, nonNegativeInteger(durationMs)),
     transport_call_count: actualTransportCallCount,
+    batch_count: nonNegativeInteger(batchCount),
     native_mutation_count: nativeMutationCount,
     readback_count: readbackCount,
   });
   telemetry.stage_dispatch_count += 1;
   telemetry.transport_call_count += actualTransportCallCount;
+  telemetry.batch_count += item.batch_count;
   telemetry.native_mutation_count += nativeMutationCount;
   telemetry.readback_count += readbackCount;
   telemetry.stage_timings.push(item);
@@ -2376,6 +2387,7 @@ function buildRunSummaryEvidence({ startedAt, telemetry, undo, mutationTruth }) 
       counter_source: telemetry.counter_source,
       stage_dispatch_count: telemetry.stage_dispatch_count,
       transport_call_count: telemetry.transport_call_count,
+      batch_count: telemetry.batch_count,
       native_mutation_count: telemetry.native_mutation_count,
       readback_count: telemetry.readback_count,
     },
@@ -2441,6 +2453,7 @@ function withRunExecutionTruth(response, {
       counter_source: snapshot.counter_source,
       stage_dispatch_count: snapshot.stage_dispatch_count,
       transport_call_count: snapshot.transport_call_count,
+      batch_count: snapshot.batch_count,
       native_mutation_count: snapshot.native_mutation_count,
       readback_count: snapshot.readback_count,
       performance: telemetry.performance
@@ -2896,6 +2909,7 @@ function requiredRunMutationResponseBytes(revision, operation) {
     counter_source: "call_recipe_runtime",
     stage_dispatch_count: Number.MAX_SAFE_INTEGER,
     transport_call_count: Number.MAX_SAFE_INTEGER,
+    batch_count: Number.MAX_SAFE_INTEGER,
     native_mutation_count: Number.MAX_SAFE_INTEGER,
     readback_count: Number.MAX_SAFE_INTEGER,
   };

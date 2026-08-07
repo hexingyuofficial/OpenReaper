@@ -39126,6 +39126,104 @@ local function dispatch_request(request, fallback_id, resume_continuation, runti
   return bridge_ok_envelope(request, started_at, summary, artifacts, jobs, refs)
 end
 
+ALLOWED_OPERATIONS["run_command:template.execute"].handler = (function(original_handler)
+return function(request, resume_continuation)
+  if request.pack.capability ~= "recipe.read_batch" then
+    return original_handler(request, resume_continuation)
+  end
+
+  local params = is_object(request.params) and request.params or {}
+  local rows = params.rows
+  if params.contract ~= "openreaper.recipe_read_batch.v1" or not is_json_array(rows) or #rows < 2 or #rows > 64 then
+    return handler_error("PARAMS_INVALID", "Recipe read batch requires 2-64 frozen child requests.", {
+      zero_write = true,
+      child_count = is_json_array(rows) and #rows or 0,
+    })
+  end
+
+  local compiled = json_array({})
+  local seen_ids = {}
+  for index = 1, #rows do
+    local child = rows[index]
+    local valid, reason = validate_request(child)
+    if not valid then
+      return handler_error("PARAMS_INVALID", "Recipe read batch child preflight failed.", {
+        zero_write = true,
+        failed_index = index,
+        reason = bounded_string(reason, 240),
+      })
+    end
+    local key = child.operation.family .. ":" .. child.operation.name
+    local operation = ALLOWED_OPERATIONS[key]
+    if child.pack.capability == "recipe.read_batch"
+        or (child.operation.family ~= "query_state" and child.operation.family ~= "artifact_metadata")
+        or child.pack.risk ~= "read"
+        or child.undo.mode ~= "none"
+        or not operation
+        or (operation.pack and operation.pack ~= child.pack.id)
+        or child.bridge.expected_owner ~= request.bridge.expected_owner
+        or child.bridge.expected_generation ~= request.bridge.expected_generation
+        or seen_ids[child.id] then
+      return handler_error("PARAMS_INVALID", "Recipe read batch rejected a child outside its read-only identity boundary.", {
+        zero_write = true,
+        failed_index = index,
+        child_id = bounded_string(child.id, 120),
+      })
+    end
+    seen_ids[child.id] = true
+    compiled[#compiled + 1] = { request = child, operation = operation }
+  end
+
+  local results = json_array({})
+  for index = 1, #compiled do
+    local entry = compiled[index]
+    local child = entry.request
+    local started_at = now_iso()
+    local ok, summary, handler_failure, artifacts, jobs, refs = pcall(entry.operation.handler, child)
+    if not ok then
+      results[#results + 1] = json.decode(bridge_error_envelope(child, "INTERNAL_ERROR", "Recipe read batch child handler failed.", {
+        recoverable = false,
+        started_at = started_at,
+        details = {
+          zero_write = true,
+          failed_index = index,
+          message = bounded_string(summary, 240),
+        },
+      }))
+    elseif handler_failure then
+      local details = handler_failure.details or {}
+      details.zero_write = true
+      results[#results + 1] = json.decode(bridge_error_envelope(
+        child,
+        handler_failure.code or "INTERNAL_ERROR",
+        handler_failure.message or "Recipe read batch child failed.",
+        {
+          recoverable = handler_failure.recoverable ~= false,
+          started_at = started_at,
+          details = details,
+        }
+      ))
+    else
+      results[#results + 1] = json.decode(bridge_ok_envelope(child, started_at, summary, artifacts, jobs, refs))
+    end
+  end
+
+  return {
+    contract = "openreaper.recipe_read_batch.v1",
+    execution_shape = "single_bridge_request_dependency_safe_read_batch",
+    aggregate_readback = true,
+    rows = results,
+    row_count = #results,
+    batch_timings = {
+      batch_count = 1,
+      readback_count = #results,
+      native_readback_count = #results,
+      native_mutation_count = 0,
+    },
+  }
+end
+end)(ALLOWED_OPERATIONS["run_command:template.execute"].handler)
+
 return dispatch_request
 end)()
 local completed_request_files = {}

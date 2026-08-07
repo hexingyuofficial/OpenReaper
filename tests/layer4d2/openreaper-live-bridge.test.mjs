@@ -83,6 +83,15 @@ describe("Layer 4D.2 REAPER-side live bridge script", () => {
     assert.match(sourceModules["35-route-policy.lua"], /Safe-Write-A write\/safe requests must use undo\.mode required/);
     assert.match(sourceModules["40-route-pack-handlers.lua"], /local ALLOWED_OPERATIONS = \{/);
     assert.match(sourceModules["40-route-pack-handlers.lua"], /handler = read_project_summary/);
+    assert.match(sourceModules["40-route-pack-handlers.lua"], /request\.pack\.capability ~= "recipe\.read_batch"/);
+    assert.match(sourceModules["40-route-pack-handlers.lua"], /single_bridge_request_dependency_safe_read_batch/);
+    assert.match(sourceModules["40-route-pack-handlers.lua"], /json\.decode\(bridge_ok_envelope\(child/);
+    assert.equal(
+      sourceModules["40-route-pack-handlers.lua"].match(/json\.decode\(bridge_error_envelope\(/g)?.length,
+      2,
+      "aggregate rows must contain child envelope objects rather than JSON strings",
+    );
+    assert.doesNotMatch(sourceModules["40-route-pack-handlers.lua"], /\["query_state:recipe\.read_batch"\]/);
     assert.doesNotMatch(sourceModules["40-route-pack-handlers.lua"], /local function validate_request\(request\)/);
     assert.doesNotMatch(sourceModules["40-route-pack-handlers.lua"], /template_count = 133/);
     assert.doesNotMatch(sourceModules["40-route-pack-handlers.lua"], /template_count = 119/);

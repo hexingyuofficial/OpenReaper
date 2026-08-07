@@ -198,13 +198,21 @@ export async function executeAlpha3_2_5CProjectWriteMacro({
     initializeRoutingOperationOutcomes(state, plan);
   }
   try {
-    const selectionReads = dryRun ? dryReadsForPlan(program, plan) : plan.preflight_requests ?? [];
-    for (const child of selectionReads) {
-      const readRequest = child.id === "template.media.probe_file" && child.input === null
-        ? null
-        : child;
-      if (readRequest === null) continue;
-      const execution = await atomicStage({ program, request, executeAtomic, stages, state, id: child.id, input: child.input ?? {}, refs: child.refs ?? {}, stageId: `select-${stageToken(child.id)}`, kind: "selector_resolve", now });
+    const selectionReads = (dryRun ? dryReadsForPlan(program, plan) : plan.preflight_requests ?? [])
+      .filter((child) => !(child.id === "template.media.probe_file" && child.input === null));
+    const selectionExecutions = await atomicReadStages({
+      program,
+      request,
+      executeAtomic,
+      stages,
+      state,
+      children: selectionReads,
+      kind: "selector_resolve",
+      now,
+    });
+    for (let index = 0; index < selectionReads.length; index += 1) {
+      const child = selectionReads[index];
+      const execution = selectionExecutions[index];
       bindPreflightLocalRef(plan, child, execution, state);
       captureLayoutPreflight(program, plan, child, execution, state);
       validateLayoutAnnotationPreflight(program, plan, child, execution);
@@ -253,6 +261,7 @@ export async function executeAlpha3_2_5CProjectWriteMacro({
     if (program.entry.macro_id === ALPHA3_2E_PROJECT_DELETE_TARGETS_MACRO_ID) {
       await verifyDeletedTargets({ program, plan, request, executeAtomic, stages, state, now });
     } else {
+      const verificationChildren = [];
       for (const child of verificationReads(program, plan, state)) {
         const refs = await liveResolveRefs({
           program,
@@ -264,7 +273,21 @@ export async function executeAlpha3_2_5CProjectWriteMacro({
           allowProducedObjectRefs: true,
           now,
         });
-        const execution = await atomicStage({ program, request, executeAtomic, stages, state, id: child.id, input: child.input ?? {}, refs, stageId: `verify-${stageToken(child.id)}`, kind: "verify", now });
+        verificationChildren.push({ ...child, refs });
+      }
+      const verificationExecutions = await atomicReadStages({
+        program,
+        request,
+        executeAtomic,
+        stages,
+        state,
+        children: verificationChildren,
+        kind: "verify",
+        now,
+      });
+      for (let index = 0; index < verificationChildren.length; index += 1) {
+        const child = verificationChildren[index];
+        const execution = verificationExecutions[index];
         try {
           validateLayoutAnnotationVerification(program, plan, child, execution);
         } catch (error) {
@@ -532,13 +555,88 @@ function exactGuidObjectRef(kind, ref) {
 async function atomicStage({ program, request, executeAtomic, stages, state, id, input, refs, stageId, kind, mutation = null, plan = null, now }) {
   const materializedRefs = materializeRefs(refs, state);
   if (kind === "template_execute") state.writeAttempted = true;
+  const budget = projectAtomicBudget(request, id, kind, state);
+  const execution = await executeAtomic({ id, input, refs: materializedRefs, context: request.context, budget, observeProjectIndex: false });
+  return acceptAtomicStageExecution({
+    program,
+    stages,
+    state,
+    id,
+    refs,
+    kind,
+    mutation,
+    plan,
+    execution,
+  });
+}
+
+async function atomicReadStages({ program, request, executeAtomic, stages, state, children, kind, now }) {
+  if (!Array.isArray(children) || children.length === 0) return [];
+  if (
+    children.length < 2
+    || executeAtomic?.supportsRecipeReadBatch !== true
+    || typeof executeAtomic?.batchReads !== "function"
+  ) {
+    const executions = [];
+    for (const child of children) {
+      executions.push(await atomicStage({
+        program,
+        request,
+        executeAtomic,
+        stages,
+        state,
+        id: child.id,
+        input: child.input ?? {},
+        refs: child.refs ?? {},
+        stageId: `${kind}-${stageToken(child.id)}`,
+        kind,
+        now,
+      }));
+    }
+    return executions;
+  }
+
+  const prepared = children.map((child) => ({
+    id: child.id,
+    input: child.input ?? {},
+    refs: materializeRefs(child.refs ?? {}, state),
+    context: request.context,
+    budget: projectAtomicBudget(request, child.id, kind, state),
+    observeProjectIndex: false,
+  }));
+  const batch = await executeAtomic.batchReads(prepared);
+  if (batch?.ok !== true || !Array.isArray(batch.results) || batch.results.length !== children.length) {
+    throw coded(
+      batch?.error?.code ?? "PROJECT_WRITE_ATOMIC_FAILED",
+      batch?.error?.message ?? "Dependency-safe Recipe read batch failed before mutation.",
+      [{
+        code: batch?.error?.code ?? "PROJECT_WRITE_ATOMIC_FAILED",
+        message: batch?.error?.message ?? "Dependency-safe Recipe read batch failed before mutation.",
+        zero_write: batch?.zero_write !== false,
+      }],
+    );
+  }
+  return batch.results.map((execution, index) => acceptAtomicStageExecution({
+    program,
+    stages,
+    state,
+    id: children[index].id,
+    refs: children[index].refs ?? {},
+    kind,
+    execution,
+  }));
+}
+
+function projectAtomicBudget(request, id, kind, state) {
   const selectorRead = request?.input?.selectors?.length > 0 && ["template.tracks.list_tracks", "template.tracks.read_mixer_controls", "template.project.read_track_item_overview"].includes(id);
   const selectorMutation = kind === "template_execute" && state.trustedSelectorRefs?.size > 0;
   const selectorReadback = state.selectorDelete !== null && ((state.selectorDelete.entity_kind === "item" && id === "template.project.read_track_item_overview") || (state.selectorDelete.entity_kind === "track" && ["template.tracks.list_tracks", "template.tracks.read_mixer_controls"].includes(id)));
-  const budget = selectorRead || selectorMutation || selectorReadback
+  return selectorRead || selectorMutation || selectorReadback
     ? { ...PROJECT_WRITE_INTERNAL_BUDGET, max_items: 513 }
     : PROJECT_WRITE_INTERNAL_BUDGET;
-  const execution = await executeAtomic({ id, input, refs: materializedRefs, context: request.context, budget, observeProjectIndex: false });
+}
+
+function acceptAtomicStageExecution({ program, stages, state, id, refs, kind, mutation = null, plan = null, execution }) {
   const evidence = boundedProgramEvidenceRefs(program, evidenceRefs(execution));
   state.evidenceRefs.push(...evidence);
   const childVerification = execution?.verification ?? execution?.result?.verification;

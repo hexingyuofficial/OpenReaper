@@ -406,6 +406,7 @@ describe("Alpha4 Shard B Recipe truth", () => {
         template: (_stage, options) => {
           seen.push(options.performance);
           options.performance.counters.transport_call_count += 1;
+          options.performance.counters.batch_count += 1;
           return templateSuccess();
         },
       });
@@ -417,7 +418,11 @@ describe("Alpha4 Shard B Recipe truth", () => {
       assert.equal(seen[0].gate_mode, result.execution_truth.performance.gate_mode);
       assert.equal(result.execution_truth.stage_dispatch_count, 3);
       assert.equal(result.execution_truth.transport_call_count, 2);
+      assert.equal(result.execution_truth.batch_count, 2);
       assert.equal(result.performance.counters.transport_call_count, 2);
+      assert.equal(result.performance.counters.batch_count, 2);
+      const evidence = fixture.evidenceStore.get(result.evidence_ref);
+      assert.equal(evidence.run_summary.counters.batch_count, 2);
     } finally {
       fixture.cleanup();
     }
