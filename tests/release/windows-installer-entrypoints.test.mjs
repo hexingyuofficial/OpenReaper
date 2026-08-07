@@ -69,6 +69,11 @@ test("Windows start omits an empty Start-Process argument list", () => {
   assert.match(startPs1, /\$doctorReadProbeTimeoutMs = 15000/u);
   assert.match(startPs1, /\$env:OPENREAPER_DOCTOR_SMOKE_TIMEOUT_MS = \[string\]\$doctorSmokeTimeoutMs/u);
   assert.match(startPs1, /\$env:OPENREAPER_DOCTOR_READ_PROBE_TIMEOUT_MS = \[string\]\$doctorReadProbeTimeoutMs/u);
+  assert.match(
+    startPs1,
+    /Get-Content -LiteralPath \$managedRecord -Raw -Encoding UTF8/u,
+    "Windows PowerShell 5.1 must not decode a UTF-8 no-BOM managed render path through the active ANSI code page",
+  );
   assert.ok(
     startPs1.indexOf("$env:OPENREAPER_SESSION_ROOT = $SessionRoot")
       < startPs1.indexOf("& powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $doctorScript"),

@@ -151,7 +151,7 @@ New-Item -ItemType Directory -Force -Path $transportRoot, (Join-Path $transportR
 if (-not $RenderRoot) {
     $managedRecord = Join-Path $SessionRoot "managed-render-root.path"
     if (Test-Path -LiteralPath $managedRecord -PathType Leaf) {
-        $RenderRoot = (Get-Content -LiteralPath $managedRecord -Raw).Trim()
+        $RenderRoot = (Get-Content -LiteralPath $managedRecord -Raw -Encoding UTF8).Trim()
     }
     if (-not $RenderRoot) { $RenderRoot = Join-Path $SessionRoot "renders" }
 }
