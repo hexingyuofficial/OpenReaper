@@ -197,9 +197,10 @@ $launchInfo | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $logPath -Encod
 $process = $null
 if (-not $existingProcess) {
     if ($launchArgs.Count -gt 0) {
-        $process = Start-Process -FilePath $binary -ArgumentList $launchArgs -WorkingDirectory (Split-Path -Parent $binary) -PassThru
+        # Keep the launcher host hidden while making the REAPER GUI explicit.
+        $process = Start-Process -FilePath $binary -ArgumentList $launchArgs -WorkingDirectory (Split-Path -Parent $binary) -WindowStyle Normal -PassThru
     } else {
-        $process = Start-Process -FilePath $binary -WorkingDirectory (Split-Path -Parent $binary) -PassThru
+        $process = Start-Process -FilePath $binary -WorkingDirectory (Split-Path -Parent $binary) -WindowStyle Normal -PassThru
     }
     Set-Content -LiteralPath $pidPath -Value $process.Id -Encoding ASCII
 } else {

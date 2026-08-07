@@ -60,8 +60,8 @@ test("Windows start omits an empty Start-Process argument list", () => {
   assert.doesNotMatch(startPs1, /"-resourcepath"/u);
   assert.match(startPs1, /function Quote-ProcessArgument\(\[string\] \$Value\)/u);
   assert.match(startPs1, /if \(\$launchArgs\.Count -gt 0\) \{/u);
-  assert.match(startPs1, /Start-Process -FilePath \$binary -ArgumentList \$launchArgs/u);
-  assert.match(startPs1, /Start-Process -FilePath \$binary -WorkingDirectory \(Split-Path -Parent \$binary\) -PassThru/u);
+  assert.match(startPs1, /Start-Process -FilePath \$binary -ArgumentList \$launchArgs .* -WindowStyle Normal -PassThru/u);
+  assert.match(startPs1, /Start-Process -FilePath \$binary -WorkingDirectory \(Split-Path -Parent \$binary\) -WindowStyle Normal -PassThru/u);
   assert.match(startPs1, /\$env:OPENREAPER_SESSION_ROOT = \$SessionRoot/u);
   assert.match(startPs1, /\$doctorArgs = @\("--wait-bridge=5"\)/u);
   assert.doesNotMatch(startPs1, /\$doctorArgs = @\("--wait-bridge=2"\)/u);
