@@ -54,7 +54,7 @@ function readProductFile(relativePath) {
 
 function walkSourceFiles(root, output = []) {
   for (const entry of readdirSync(root, { withFileTypes: true })) {
-    if ([".git", "node_modules", "dist"].includes(entry.name)) continue;
+    if ([".git", "node_modules", "dist"].includes(entry.name) || entry.name.startsWith(".tmp-")) continue;
     const absolute = path.join(root, entry.name);
     if (entry.isDirectory()) {
       walkSourceFiles(absolute, output);
