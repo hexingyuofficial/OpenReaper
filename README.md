@@ -3,7 +3,7 @@
 OpenReaper is an evidence-bound MCP bridge and task runtime for REAPER. It lets
 an MCP-capable agent inspect a project, execute reviewed Macros, Templates, and
 Recipes, verify changes from live REAPER readback, and retain bounded evidence.
-The candidate release is `0.1.0-alpha.1` for macOS and Windows x64.
+Version `0.1.0` is the evidence-bound macOS and Windows x64 release line.
 
 OpenReaper exposes exactly six agent-facing MCP tools:
 
@@ -49,7 +49,7 @@ one Recipe for a reusable multi-stage workflow. Direct Templates are a typed
 fallback only when no Macro owns the request. Every write resolves its target
 in live REAPER and requires live readback before it is reported as applied.
 
-The release candidate covers the reviewed audio workflows for media placement,
+The `0.1.0` release line covers the reviewed audio workflows for media placement,
 waveform/readback truth, source/item/take normalization, and Remove Silence.
 Remove Silence supports the packaged `Remove Silence...` and `Repeat Remove
 Silence with Last Settings` Actions plus the Macro route, with `all`, `leading`,
@@ -72,9 +72,11 @@ serial, and unsupported or stale targets fail closed with typed recovery.
 
 ## Safety And Limits
 
-OpenReaper does not silently change a user's REAPER configuration, theme,
-license, plugins, source media, or user Recipes. The installer registers only
-OpenReaper-owned entries and preserves unrelated MCP configuration. License,
+OpenReaper does not directly select or copy a user's REAPER theme, license,
+plugins, source media, or user Recipes. It registers only OpenReaper-owned
+entries and preserves unrelated MCP configuration. Normal REAPER startup and
+project open/close may update REAPER's own session/history fields; final
+acceptance records that stock churn separately from product writes. License,
 plugin scan, recovery, upgrade, version, and unknown decision windows remain
 user-mediated and fail closed. Hardware playback and recording require an
 available audio device; offline project, media, render, and Bridge workflows do

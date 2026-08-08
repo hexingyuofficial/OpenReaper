@@ -1,6 +1,6 @@
 # OpenReaper 开发者指南
 
-状态：OpenReaper 0.1.0 候选版本开发者指南。
+状态：OpenReaper 0.1.0 发布版本开发者指南。
 
 本指南面向维护者、worker agent、reviewer、Macro/pack 作者和未来贡献者，说明
 OpenReaper 的架构边界，以及如何在不制造双重真相、隐藏执行路径或无证据支持
@@ -185,7 +185,7 @@ executor 或第二套 Recipe 路径绕过缺失 Macro 或 held mode。
 
 根 `package.json.version` 是唯一手工编辑的产品 SemVer。MCP server metadata、
 package metadata、provenance、Doctor 输出、build id 和 ZIP 文件名都从它派生；
-传入的打包版本必须完全一致，否则 build 失败。候选版本使用 `0.1.0-alpha.N`。
+传入的打包版本必须完全一致，否则 build 失败。预发布版本使用 `0.1.0-alpha.N`。
 只有两平台 exact artifact 都完成 fresh installed acceptance，并通过最终
 source-blind trust review，才能提升为 `0.1.0`。
 

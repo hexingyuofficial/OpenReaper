@@ -1,6 +1,6 @@
 # OpenReaper Agent Start Here
 
-状态：OpenReaper 0.1.0 候选版本的中文 Agent 启动指南。英文
+状态：OpenReaper 0.1.0 发布文档的中文 Agent 启动指南。英文
 `docs/AGENT_START_HERE.md` 是唯一 runtime source；本文是对应的人类可读
 翻译，不参与 MCP projection。
 

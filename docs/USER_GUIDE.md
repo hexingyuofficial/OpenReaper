@@ -1,6 +1,6 @@
 # OpenReaper User Guide
 
-Status: OpenReaper 0.1.0 candidate. Support remains evidence-bound.
+Status: OpenReaper 0.1.0 release documentation. Support remains evidence-bound.
 
 OpenReaper lets you work with a live REAPER project by talking to an agent. You
 do not need to understand Macros, Templates, SQLite, object refs, artifacts, or
@@ -266,7 +266,7 @@ supported.
 
 ## Current Evidence Boundary
 
-The candidate surface contains 15 visible executable Macros and six MCP tools.
+The `0.1.0` surface contains 15 visible executable Macros and six MCP tools.
 Support remains narrower than the names of some Macro families:
 
 - MIDI supports bounded `create_clips`, indexed existing-note edits,

@@ -2,8 +2,8 @@
 
 OpenReaper 是一个以证据为边界的 REAPER MCP 桥接与任务运行时。支持 MCP
 的代理可以检查工程，执行经过审查的 Macro、Template 和 Recipe，从 REAPER
-实时读回验证结果，并保留有界证据。当前候选版本是面向 macOS 和 Windows
-x64 的 `0.1.0-alpha.1`。
+实时读回验证结果，并保留有界证据。`0.1.0` 是面向 macOS 和 Windows x64、
+以证据为边界的发布版本线。
 
 OpenReaper 恰好提供六个面向代理的 MCP 工具：
 
@@ -46,7 +46,7 @@ Windows 11 x64 build 26200 与对应稳定版 REAPER；其他组合仍需证据�
 Template fallback。每次写入都必须在 live REAPER 中解析目标，并在 REAPER
 读回后才能报告为已应用。
 
-候选版本覆盖经过审查的媒体放置、波形/读回事实、source/item/take
+`0.1.0` 发布版本线覆盖经过审查的媒体放置、波形/读回事实、source/item/take
 normalization 和 Remove Silence 流程。Remove Silence 提供软件包内的
 `Remove Silence...`、`Repeat Remove Silence with Last Settings` 两个 Action
 以及 Macro 路径，支持 `all`、`leading`、`trailing`、`edges`、`internal`
@@ -69,11 +69,12 @@ Whole-Recipe Undo。Recipe 串行执行；不支持或过期的目标会 fail cl
 
 ## 安全与限制
 
-OpenReaper 不会静默修改用户的 REAPER 配置、主题、license、插件、源媒体或
+OpenReaper 不会直接选择或复制用户的 REAPER 主题、license、插件、源媒体或
 用户 Recipe。安装器只注册 OpenReaper 明确拥有的条目，并保留无关 MCP 配置。
-License、插件扫描、恢复、升级、版本和未知决策弹窗保持由用户处理并 fail
-closed。硬件播放和录音需要可用音频设备；离线工程、媒体、render 和 Bridge
-流程不需要音频设备。
+REAPER 自身的启动以及工程打开/关闭可能更新它自己的 session/history 字段；
+最终验收会把这些 stock churn 与产品写入分开记录。License、插件扫描、恢复、
+升级、版本和未知决策弹窗保持由用户处理并 fail closed。硬件播放和录音需要可用
+音频设备；离线工程、媒体、render 和 Bridge 流程不需要音频设备。
 
 每个完整且已接受的 Template、Macro、Action 和 Recipe 都受内部重复证据
 `<30000ms` 性能门约束。支持范围只覆盖实测 OS、架构、REAPER 版本、配置

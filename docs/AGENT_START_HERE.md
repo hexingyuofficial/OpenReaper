@@ -1,6 +1,6 @@
 # OpenReaper Agent Start Here
 
-Status: OpenReaper 0.1.0 candidate, unique English runtime startup source.
+Status: OpenReaper 0.1.0 release documentation, unique English runtime startup source.
 
 This document is the only long-form Agent entry for OpenReaper. Runtime MCP
 initialization projects the marked compact section below. Do not invent a second

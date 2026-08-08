@@ -1,6 +1,6 @@
 # OpenReaper 用户指南
 
-状态：OpenReaper 0.1.0 候选版本。所有支持声明仍以证据为准。
+状态：OpenReaper 0.1.0 发布文档。所有支持声明仍以证据为准。
 
 OpenReaper 让你通过和代理对话来操作 live REAPER 工程。你不需要理解
 Macro、Template、SQLite、对象 ref、artifact 或桥接内部。只需描述想要的结果；
@@ -233,7 +233,7 @@ global alias execution 或所有插件都受支持。
 
 ## 当前证据边界
 
-当前候选产品面包含 15 个可见可执行 Macro 和六个 MCP 工具。部分 Macro 家族的
+当前 `0.1.0` 产品面包含 15 个可见可执行 Macro 和六个 MCP 工具。部分 Macro 家族的
 真实支持范围仍比名称窄：
 
 - MIDI 支持有界 `create_clips`、按 index 编辑现有音符、量化和 PPQ CC 插入；不支持

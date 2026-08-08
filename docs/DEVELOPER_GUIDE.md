@@ -1,6 +1,6 @@
 # OpenReaper Developer Guide
 
-Status: OpenReaper 0.1.0 candidate developer guide.
+Status: OpenReaper 0.1.0 release developer guide.
 
 This guide is for maintainers, worker agents, reviewers, macro/pack authors,
 and future contributors. It explains the architecture boundaries and
@@ -337,7 +337,7 @@ missing Macro or held mode.
 The root `package.json.version` is the only hand-edited product SemVer. MCP
 server metadata, package metadata, provenance, Doctor output, build id, and ZIP
 filename derive from it; a caller-supplied packaging version must match exactly
-or the build fails. Candidate versions use `0.1.0-alpha.N`. Promotion to
+or the build fails. Prerelease versions use `0.1.0-alpha.N`. Promotion to
 `0.1.0` requires fresh installed acceptance for both exact platform artifacts
 and the final source-blind trust review.
 
