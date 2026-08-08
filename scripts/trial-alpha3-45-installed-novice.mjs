@@ -57,13 +57,14 @@ const DIRECT_RUN = process.argv[1] && path.resolve(process.argv[1]) === fileURLT
 
 export async function connectInstalledNoviceClient({
   installedWrapper,
+  installedArgs = [],
   clientName = "primary",
   env = process.env,
 } = {}) {
   const client = new Client({ name: `openreaper-alpha345-novice-${clientName}`, version: "1.0.0" });
   const transport = new StdioClientTransport({
     command: installedWrapper,
-    args: [],
+    args: installedArgs,
     cwd: path.dirname(installedWrapper),
     env,
     stderr: "pipe",
@@ -80,6 +81,7 @@ export async function connectInstalledNoviceClient({
 
 export async function runInstalledNoviceTrial({
   installedWrapper,
+  installedArgs = [],
   evidenceRoot,
   connectFactory = connectInstalledNoviceClient,
   draftFactory = createNoviceUserRecipeDraft,
@@ -89,6 +91,7 @@ export async function runInstalledNoviceTrial({
 } = {}) {
   assertAbsolute(installedWrapper, "installedWrapper");
   assertAbsolute(evidenceRoot, "evidenceRoot");
+  assertArgumentVector(installedArgs, "installedArgs");
   await assertExecutableRegularFile(installedWrapper);
   await createFreshDirectory(evidenceRoot);
 
@@ -96,6 +99,7 @@ export async function runInstalledNoviceTrial({
     contract: ALPHA345_NOVICE_CONTRACT,
     ok: false,
     installed_wrapper: installedWrapper,
+    installed_wrapper_args: installedArgs,
     public_tools: null,
     discovery: {
       macro_manual_ids: [],
@@ -169,7 +173,7 @@ export async function runInstalledNoviceTrial({
   const clients = [];
   const trialStarted = performance.now();
   try {
-    const primary = await connectFactory({ installedWrapper, clientName: "primary" });
+    const primary = await connectFactory({ installedWrapper, installedArgs, clientName: "primary" });
     clients.push({ id: "primary", client: primary, closed: false });
     report.final_state.clients_connected += 1;
     await assertPublicSurface(primary, report);
@@ -399,7 +403,7 @@ export async function runInstalledNoviceTrial({
 
     await closeClient(clients, "primary", report);
 
-    const secondary = await connectFactory({ installedWrapper, clientName: "secondary" });
+    const secondary = await connectFactory({ installedWrapper, installedArgs, clientName: "secondary" });
     clients.push({ id: "secondary", client: secondary, closed: false });
     report.final_state.clients_connected += 1;
     await assertPublicSurface(secondary, report);
@@ -867,6 +871,10 @@ function assertAbsolute(value, label) {
   assert(typeof value === "string" && path.isAbsolute(value), `${label} must be an absolute path`);
 }
 
+function assertArgumentVector(value, label) {
+  assert(Array.isArray(value) && value.every((entry) => typeof entry === "string"), `${label} must be an array of strings`);
+}
+
 function assertSameArray(actual, expected, label) {
   assert(sameArray(actual, expected), `${label} mismatch: ${JSON.stringify(actual)}`);
 }
@@ -903,9 +911,12 @@ function parseArgs(argv) {
     const key = argv[index];
     const value = argv[index + 1];
     if (!key?.startsWith("--") || !value || value.startsWith("--")) {
-      throw new Error("usage: --installed-wrapper <absolute> --evidence-root <absolute-fresh>");
+      throw new Error("usage: --installed-wrapper <absolute-command> [--installed-args-json <json-array>] --evidence-root <absolute-fresh>");
     }
     if (key === "--installed-wrapper") options.installedWrapper = value;
+    else if (key === "--installed-args-json") {
+      try { options.installedArgs = JSON.parse(value); } catch { throw new Error("--installed-args-json must be a JSON array of strings"); }
+    }
     else if (key === "--evidence-root") options.evidenceRoot = value;
     else throw new Error(`unknown option: ${key}`);
   }

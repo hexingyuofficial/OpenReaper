@@ -31,6 +31,7 @@ test("fake transport proves manuals, exact-four official recipes, resume, author
 
   const clients = [];
   const requests = [];
+  const connectionArgs = [];
   const store = new Map();
   const existingUserRecipe = {
     recipe_id: "recipe.user.preexisting",
@@ -43,8 +44,10 @@ test("fake transport proves manuals, exact-four official recipes, resume, author
   store.set(identityKey(existingUserRecipe), existingUserRecipe);
   const report = await runInstalledNoviceTrial({
     installedWrapper: wrapper,
+    installedArgs: ["--fixture-entrypoint"],
     evidenceRoot,
-    connectFactory: async ({ clientName }) => {
+    connectFactory: async ({ clientName, installedArgs }) => {
+      connectionArgs.push(installedArgs);
       const client = createMockClient({ clientName, requests, store });
       clients.push(client);
       return client;
@@ -53,6 +56,8 @@ test("fake transport proves manuals, exact-four official recipes, resume, author
 
   assert.equal(report.contract, ALPHA345_NOVICE_CONTRACT);
   assert.equal(report.ok, true, JSON.stringify(report.error));
+  assert.deepEqual(report.installed_wrapper_args, ["--fixture-entrypoint"]);
+  assert.deepEqual(connectionArgs, [["--fixture-entrypoint"], ["--fixture-entrypoint"]]);
   assert.deepEqual(report.public_tools, ALPHA345_NOVICE_EXACT_TOOLS);
   assert.deepEqual(report.discovery.macro_manual_ids, [...ALPHA345_NOVICE_MACRO_IDS]);
   assert.deepEqual(report.discovery.macro_example_ids, [...ALPHA345_NOVICE_MACRO_IDS]);
@@ -178,6 +183,15 @@ test("rejects non-absolute installed wrapper and non-fresh evidence root", async
     /installedWrapper must be an absolute path/,
   );
 
+  await assert.rejects(
+    () => runInstalledNoviceTrial({
+      installedWrapper: process.execPath,
+      installedArgs: "--not-an-array",
+      evidenceRoot: path.join(root, "invalid-args-evidence"),
+    }),
+    /installedArgs must be an array of strings/,
+  );
+
   const wrapper = path.join(root, "openreaper-mcp");
   await writeFile(wrapper, "#!/bin/sh\nexit 0\n", "utf8");
   await chmod(wrapper, 0o755);
@@ -223,6 +237,9 @@ test("statically verifies installed-wrapper-only public-tool truth and no REAPER
   assert.match(source, /createFreshDirectory\(evidenceRoot\)/);
   assert.match(source, /StdioClientTransport/);
   assert.match(source, /command:\s*installedWrapper/);
+  assert.match(source, /args:\s*installedArgs/);
+  assert.match(source, /assertArgumentVector\(installedArgs/);
+  assert.match(source, /installed_wrapper_args/);
   assert.match(source, /function auditPublicRequest/);
   assert.match(source, /no_source_inspection/);
   assert.match(source, /no_reaper_mutation_parallelism/);
