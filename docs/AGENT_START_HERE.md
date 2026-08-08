@@ -194,16 +194,15 @@ Allowed small assists (not product bypass):
 
 - Official `openreaper-start`; success means matching Bridge heartbeat plus a real
   `call_template(template.transport.read_state)` probe already passed.
-- On first use, `openreaper-start` returns `startup-status=needs_user_consent`
-  before opening REAPER. Ask the user to choose safe startup-window assistance
-  `once`, `always`, or `manual`; rerun with the exact returned
-  `--startup-dialog-consent` command and never infer consent. `always` and
-  `manual` persist across upgrades; `once` does not.
-- `manual` disables all OpenReaper dialog clicks but keeps read-only window
-  classification; wait for the user to clear blockers before readiness can pass.
-- Consent covers only the exact Project Notes, `Ignore all missing files`, and
-  exact media-items-offline warning rules. License, recovery, plugin, version,
-  ambiguous, decision-bearing, and unknown dialogs always fail closed.
+- On macOS only, first use returns `startup-status=needs_user_consent` before
+  opening REAPER. Ask the user to choose `once`, `always`, or `manual`; rerun
+  with the exact returned `--startup-dialog-consent` command and never infer
+  consent. `always` and `manual` persist across upgrades; `once` does not.
+- Windows does not automate or classify native REAPER windows. Wait for the
+  user to resolve every startup blocker before readiness can pass.
+- macOS consent covers only the exact Project Notes, `Ignore all missing files`,
+  and exact media-items-offline warning rules. License, recovery, plugin,
+  version, ambiguous, decision-bearing, and unknown dialogs always fail closed.
 - REAPER action `OpenReaper: Start MCP bridge` is only a manual recovery fallback when
   autonomous startup reports that blocker, not a normal startup step.
 

@@ -133,8 +133,9 @@ SQLite candidate refs
 -> 更新 Artifact Store 与 Project SQLite Index
 ```
 
-不支持的 render format/target mode、control field、任意 plugin 和 hardware/device
-routing 必须 fail closed，不能变成 bypass。
+不支持的 render format/target mode、control field、精确 project-file Macro 合同
+之外的任意工程文件操作、任意 plugin 和 hardware/device routing 必须 fail
+closed，不能变成 bypass。
 
 ## 7. 产品 UX 层
 

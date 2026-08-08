@@ -223,8 +223,9 @@ This layer organizes safe, fast work:
 
 `macro.render.targets` and `macro.controls.set` are executable registered
 programs with bounded evidence. Unsupported render formats, target modes,
-control fields, project new/open/create operations, arbitrary plugins, and
-hardware/device routing still fail closed instead of becoming bypass paths.
+control fields, arbitrary filesystem project operations outside the exact
+project-file Macro contract, arbitrary plugins, and hardware/device routing
+still fail closed instead of becoming bypass paths.
 
 Write path:
 

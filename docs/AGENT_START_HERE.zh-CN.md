@@ -107,10 +107,11 @@ REAPER Action id、shell/process、raw SQL 或 UI 自动化绕过产品；不得
 placeholder ref 当成真实目标；不得操作 hardware/device I/O。
 
 使用官方 `openreaper-start`。准备就绪必须同时有匹配 Bridge heartbeat 和真实
-public read probe。首次启动只可在用户选择 `once`、`always` 或 `manual` 后处理
-精确 allowlist 的 Project Notes、missing-files 和 media-offline 安全提示。
-license、recovery、plugin、version、含决策和未知窗口始终 user-mediated 并
-fail closed。
+public read probe。仅 macOS 的首次启动可在用户选择 `once`、`always` 或
+`manual` 后处理精确 allowlist 的 Project Notes、missing-files 和 media-offline
+安全提示。Windows 不自动化或分类原生 REAPER 弹窗，必须由用户处理全部启动
+阻塞。license、recovery、plugin、version、含决策和未知窗口始终 user-mediated
+并 fail closed。
 
 ## 经 Schema 检查的示例
 

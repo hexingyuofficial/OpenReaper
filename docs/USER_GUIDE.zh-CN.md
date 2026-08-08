@@ -108,10 +108,11 @@ REAPER 本身保持可见。手动执行命令时打开的 PowerShell 窗口是�
 不是 OpenReaper 产品界面。验收和自动化 launcher 必须隐藏该宿主，不能隐藏
 REAPER。
 
-首次启动必须选择 `once`、`always` 或 `manual`。只有获得许可后，OpenReaper
-才可以自动关闭精确匹配的 Project Settings / Notes、`Ignore all missing files`
-以及 media-items-offline warning。license、recovery、plugin、version、含决策的
-窗口和未知窗口始终 fail-closed。此启动路径不要求 SWS。
+仅 macOS 的首次启动必须选择 `once`、`always` 或 `manual`。只有获得许可后，
+OpenReaper 才可以自动关闭精确匹配的 Project Settings / Notes、`Ignore all
+missing files` 以及 media-items-offline warning。Windows 不自动化或分类原生
+REAPER 弹窗，必须由用户处理全部启动阻塞。license、recovery、plugin、version、
+含决策的窗口和未知窗口始终 fail-closed。此启动路径不要求 SWS。
 
 ## Project Index 与 live 真相
 
@@ -190,7 +191,9 @@ OpenReaper 不应该要求你为每个小型可撤销步骤逐次授权。好的
 
 工程内部 routing 不等于授权硬件/device I/O。媒体和工程文件路径必须通过各自已接受
 的路径和 managed-root 规则；本指南不承诺任意文件系统访问。
-`macro.project.file` 也不代表 new/open/create-project 已受支持。
+`macro.project.file` 支持 save/save-as、列出已打开工程、用绝对 `.RPP` 路径和
+`overwrite=true` 显式创建已保存的工程页签、在页签中打开已有绝对 `.RPP` 路径，
+以及激活一个精确的已保存工程引用。任意文件系统访问和隐式切换工程仍不受支持。
 
 ## 结果与恢复
 
@@ -248,7 +251,10 @@ global alias execution 或所有插件都受支持。
   raw Action 或 chunk mutation。
 - Render 使用 managed render root 和已接受的 WAV/OGG target mode，不承诺任意输出
   路径、overwrite、外部 encoder 或所有格式。
-- 工程 save/save-as 已接受；工程 new/open/create 仍 held。
+- 工程文件支持 save/save-as、列出已打开工程、用绝对 `.RPP` 路径和
+  `overwrite=true` 显式创建已保存的工程页签、在页签中打开已有绝对 `.RPP`
+  路径，以及激活一个精确的已保存工程引用。任意文件系统访问和隐式切换工程
+  仍不受支持。
 - 硬件/device I/O 仍在产品边界外。
 
 指南、代理或 Pack 的支持声明都应该匹配精确手册和当前证据，而不是未来计划中的

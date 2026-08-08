@@ -11,10 +11,7 @@ param(
     [string] $EvidenceRoot,
     [int] $TimeoutSeconds = 60,
     [switch] $DirectBinary,
-    [switch] $RecoverExisting,
-    [switch] $IgnoreMissingMedia,
-    [ValidateSet("once", "always", "manual")]
-    [string] $StartupDialogConsent
+    [switch] $RecoverExisting
 )
 
 $ErrorActionPreference = "Stop"

@@ -96,8 +96,8 @@ Check whether OpenReaper is healthy.
 For the installed package, the agent should:
 
 1. Run `~/.openreaper/current/bin/openreaper-start`.
-2. On first use, choose whether OpenReaper may handle its exact safe startup
-   windows once, always, or not at all. The agent must ask; it cannot infer this.
+2. On macOS, first choose whether the exact safe startup-window assistance is
+   allowed once, always, or not at all. The agent must ask; it cannot infer this.
 3. Rerun the exact command printed by the helper. `always` and `manual` persist
    across upgrades, while `once` applies only to that launch.
 4. Wait for the autonomous Bridge heartbeat and public read probe to pass.
@@ -118,7 +118,7 @@ PowerShell window opened for a manual command is the operator's terminal, not
 OpenReaper product UI. Acceptance and automation launchers must hide that host
 instead of hiding REAPER.
 
-The three exact choices are:
+On macOS, the three exact choices are:
 
 ```text
 openreaper-start --startup-dialog-consent once
@@ -128,10 +128,11 @@ openreaper-start --startup-dialog-consent manual
 
 `manual` means OpenReaper will not click any startup window. It still checks
 the window state read-only and waits for you to clear every blocker before it
-can report the Bridge ready.
+can report the Bridge ready. Windows does not automate or classify native
+REAPER windows; resolve every Windows startup window yourself before retrying.
 
-Consent covers only Project Settings / Notes, `Ignore all missing files`, and
-the exact media-items-offline warning. License, recovery, plugin, version,
+macOS consent covers only Project Settings / Notes, `Ignore all missing files`,
+and the exact media-items-offline warning. License, recovery, plugin, version,
 ambiguous, decision-bearing, and unknown windows always fail closed, including
 after an `always` choice. The fixed package-local launcher starts the Bridge
 automatically; the `OpenReaper: Start MCP bridge` Action is recovery-only. SWS
@@ -290,7 +291,11 @@ Support remains narrower than the names of some Macro families:
 - Render uses the managed render root and accepted WAV/OGG target modes. It
   does not promise arbitrary output paths, overwrite, external encoders, or
   every format.
-- Project save/save-as is accepted; project new/open/create remains held.
+- Project files support save/save-as, listing open projects, explicit creation
+  of a new saved tab with an absolute `.RPP` path and `overwrite=true`, opening
+  an existing absolute `.RPP` path in a tab, and activating one exact saved
+  project reference. Arbitrary filesystem access and implicit project switching
+  remain outside this boundary.
 - Hardware/device I/O remains outside the product boundary.
 
 When a guide, agent, or pack claims support, the claim should match the exact

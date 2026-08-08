@@ -569,6 +569,20 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
     assert.equal(guidance.safety.public_call_recipe, false);
     assert.equal(guidance.safety.raw_lua_action_shell_or_ui_bypass, false);
   });
+
+  it("keeps Windows startup dialogs user-mediated", () => {
+    const guidance = createOpenReaperAgentStartupGuidance({
+      package_root: "C:/Users/Unicode/AppData/Local/OpenReaper/current",
+      platform: "win32",
+    });
+
+    assert.equal(guidance.startup_dialog_assist.platform_scope, "windows_manual_only");
+    assert.equal(guidance.startup_dialog_assist.requires_first_use_consent, false);
+    assert.deepEqual(guidance.startup_dialog_assist.consent_choices, {});
+    assert.deepEqual(guidance.startup_dialog_assist.auto_dismisses, []);
+    assert.equal(guidance.startup_dialog_assist.policy_file, null);
+    assert.match(guidance.agent_flow[0].agent_action, /Do not classify or dismiss/u);
+  });
 });
 
 function runDialogClassifier(classifier, result, functionName = "startup_dialog_result_is_safe") {
