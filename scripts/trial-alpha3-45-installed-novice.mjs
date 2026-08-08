@@ -121,6 +121,7 @@ export async function runInstalledNoviceTrial({
       identity: null,
       temp_run_ok: false,
       persistent_save_ok: false,
+      persistent_cleanup_ok: false,
       resume_partial_ok: false,
       resume_recovery_ok: false,
       resume_success_ok: false,
@@ -274,7 +275,7 @@ export async function runInstalledNoviceTrial({
         project_identity: projectIdentity,
         bridge_owner: bridgeIdentity.owner,
         bridge_generation: bridgeIdentity.generation,
-        platform: "darwin",
+        platform: process.platform,
       },
     });
     assert(resumeDraft?.contract === "recipe.executable.draft.v1", "resumeDraftFactory must return recipe.executable.draft.v1");
@@ -339,7 +340,7 @@ export async function runInstalledNoviceTrial({
         project_identity: projectIdentity,
         bridge_owner: bridgeIdentity.owner,
         bridge_generation: bridgeIdentity.generation,
-        platform: "darwin",
+        platform: process.platform,
       },
     });
     assert(draft?.contract === "recipe.executable.draft.v1", "draftFactory must return recipe.executable.draft.v1");
@@ -433,6 +434,15 @@ export async function runInstalledNoviceTrial({
     assert(rerun.ok === true, "one public call_recipe run after reconnect failed");
     report.authoring.one_public_run_after_reconnect = true;
     report.authoring.sequence.push("reconnect_one_public_run");
+
+    const persistentDeleted = await callJson(secondary, report, "secondary", "call_recipe", {
+      operation: "delete",
+      ...identity,
+      confirm: true,
+    });
+    assert(persistentDeleted.ok === true && persistentDeleted.deleted === true, "persistent cleanup delete failed");
+    report.authoring.persistent_cleanup_ok = true;
+    report.authoring.sequence.push("persistent_delete");
 
     report.timings.total_duration_ms = Math.round(performance.now() - trialStarted);
     report.call_counts.total = report.calls.length;

@@ -71,6 +71,7 @@ test("fake transport proves manuals, exact-four official recipes, resume, author
   assert.equal(report.exact_expansions.official_recipes_expanded, 4);
   assert.equal(report.authoring.temp_run_ok, true);
   assert.equal(report.authoring.persistent_save_ok, true);
+  assert.equal(report.authoring.persistent_cleanup_ok, true);
   assert.equal(report.authoring.resume_partial_ok, true);
   assert.equal(report.authoring.resume_recovery_ok, true);
   assert.equal(report.authoring.resume_success_ok, true);
@@ -93,7 +94,7 @@ test("fake transport proves manuals, exact-four official recipes, resume, author
   assert.ok(report.call_counts.recipe_ops.save >= 3);
   assert.ok(report.call_counts.recipe_ops.run >= 3);
   assert.ok(report.call_counts.recipe_ops.resume >= 1);
-  assert.ok(report.call_counts.recipe_ops.delete >= 2);
+  assert.ok(report.call_counts.recipe_ops.delete >= 3);
   assert.ok(report.call_counts.recipe_ops.get >= 1);
   assert.ok(report.timings.total_duration_ms >= 0);
   assert.ok(report.response_sizes.total_bytes > 0);
@@ -135,7 +136,7 @@ test("fake transport proves manuals, exact-four official recipes, resume, author
     project_identity: "project:tab:fixture",
     bridge_owner: "owner:fixture",
     bridge_generation: "1",
-    platform: "darwin",
+    platform: process.platform,
   });
 
   const persisted = JSON.parse(await readFile(report.evidence_path, "utf8"));
