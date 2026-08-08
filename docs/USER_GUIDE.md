@@ -112,6 +112,12 @@ powershell.exe -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\OpenReaper\curre
 Windows normal operation does not require Git Bash, Git, WSL, SSH, SWS,
 ReaPack, or third-party plugins. Node.js 20 or newer is required.
 
+During normal agent-assisted startup, the PowerShell launcher, Doctor, and MCP
+hosts run without a visible console window; REAPER itself remains visible. A
+PowerShell window opened for a manual command is the operator's terminal, not
+OpenReaper product UI. Acceptance and automation launchers must hide that host
+instead of hiding REAPER.
+
 The three exact choices are:
 
 ```text

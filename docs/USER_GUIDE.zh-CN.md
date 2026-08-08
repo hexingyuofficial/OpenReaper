@@ -103,6 +103,11 @@ powershell.exe -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\OpenReaper\curre
 Windows 正常运行不依赖 Git Bash、Git、WSL、SSH、SWS、ReaPack 或第三方
 插件；需要 Node.js 20 或更高版本。
 
+正常的代理辅助启动会隐藏 PowerShell launcher、Doctor 和 MCP 宿主窗口，
+REAPER 本身保持可见。手动执行命令时打开的 PowerShell 窗口是操作者终端，
+不是 OpenReaper 产品界面。验收和自动化 launcher 必须隐藏该宿主，不能隐藏
+REAPER。
+
 首次启动必须选择 `once`、`always` 或 `manual`。只有获得许可后，OpenReaper
 才可以自动关闭精确匹配的 Project Settings / Notes、`Ignore all missing files`
 以及 media-items-offline warning。license、recovery、plugin、version、含决策的

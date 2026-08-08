@@ -1,131 +1,99 @@
-# OpenReaper V1 Support Matrix
+# OpenReaper 0.1.0 Support Matrix
 
-OpenReaper support is evidence-bound. A row is supported only when the setup,
-fixture, tool path, evidence, and wording match reviewed records.
+OpenReaper support is evidence-bound. A row is supported only for the listed
+operating system, architecture, REAPER family, product route, and limits.
+Untested combinations are not implied by a nearby supported row.
 
-## Status Values
+## Product Surface
 
-```text
-supported
-candidate
-blocked_fixture
-blocked_platform
-blocked_plugin
-blocked_live_evidence
-unsupported_v1
-not_v1
-```
-
-`supported` means reviewed evidence exists for the declared row. `candidate`
-means the architecture may allow the row, but V1 support wording must not claim
-it yet.
-
-## Supported Rows
-
-| Area | Status | Supported V1 Row | Evidence |
-|---|---|---|---|
-| MCP tool surface | supported | Exactly `ping`, `get_state`, `list_templates`, `list_recipes`, `call_template`. | Tool ABI v1. |
-| Discovery | supported | Compact menu discovery with exact-id expansion for details. | Discovery/Menu Contract v1. |
-| Template catalog | supported | V1 baseline: 126 accepted runtime/recipe template ids. Current Alpha2 catalog: 213 accepted official template ids. | Catalog and runtime checks. |
-| Live bridge structure | supported | Manual, non-spawning file-transport bridge with 213 registered Alpha2 handler rows. Live support remains evidence-bound. | Bridge handler registry and Alpha2 graduation checks. |
-| Template live evidence | supported for declared Alpha2 fixture | Alpha2 213 / 213 accepted template ids have bounded live-smoke evidence on the declared local manual-bridge fixture. | `/Users/Shared/openreaper-alpha2-213-live/alpha2-213-live-final-20260706-184656/reports/alpha2-213-live-graduation-aggregate.json`. |
-| Artifact readback | supported | Canonical artifact refs and bounded `get_state(scope:"artifact")` summary/payload reads. | Artifact State Store and R1 evidence. |
-| Recipe-level live portability | supported for R1 only | `recipe.project.cleanup_fingerprint_report` on local macOS manual bridge. | `/Users/Shared/openreaper-portability-live/layer7-r1-portability-live-20260704-222001`. |
-
-## Platform And REAPER Rows
-
-| Row | Status | Notes |
+| Area | Status | Supported row |
 |---|---|---|
-| Local macOS manual bridge | supported for evidenced rows | Manual bridge evidence exists; Node must not spawn REAPER. |
-| REAPER `7.71/macOS-arm64` manual bridge | supported for template rows with matching evidence | Recorded in manual bridge live evidence. |
-| Other REAPER versions | candidate | Must be recorded and reviewed before support wording claims them. |
-| Windows | candidate | Convenience scripts may exist, but V1 live support is not declared without reviewed evidence. |
-| Linux | candidate | Not a V1 supported row without reviewed evidence. |
-| Remote clone/new-machine portability | candidate | Future stronger evidence tier; not proven by current R1 local clean-source run. |
+| MCP tools | supported | Exactly `ping`, `get_state`, `list_templates`, `list_recipes`, `call_template`, and `call_recipe`. |
+| Discovery | supported | Compact discovery, exact-id expansion, 15 visible executable Macros, and typed direct-Template fallback. |
+| Templates | supported for accepted catalog | 239 accepted official Templates with 91 registered Bridge handler modules; exact modes and schemas remain authoritative. |
+| Recipes | supported | Four official Recipes plus validated user and forked Recipes through the same generic serial runner. |
+| Recipe execution | supported | One `call_recipe`, complete preflight and plan, aggregate readback/evidence, resume/reconnect, and one Whole-Recipe Undo. |
+| REAPER Actions | supported | `Remove Silence...`, `Repeat Remove Silence with Last Settings`, and `OpenReaper: Start MCP bridge` recovery Action. |
+| Evidence | supported | Fresh bounded evidence roots, live REAPER readback, typed mutation truth, and exact package provenance. |
 
-## Recipe Rows
+## Tested Platforms
 
-| Recipe | Lifecycle | V1 Support | Notes |
-|---|---|---|---|
-| `recipe.project.cleanup_fingerprint_report` | draft | supported recipe-level live/local portability claim | Supported path uses `template.project.create_cleanup_report` plus artifact summary/payload readback. |
-| `recipe.project.fast_observation_bundle` | draft | candidate | Alpha3 speed workflow over `template.project.create_observation_bundle`; needs recipe-level transcript/live evidence before support claim. |
-| `recipe.project.map_snapshot_page` | draft | candidate | Alpha3 large-project workflow over `template.project.create_project_map_snapshot`; needs recipe-level transcript/live evidence before support claim. |
-| `recipe.tracks.prepare_recording_track` | draft | candidate | Alpha3 starter recording workflow over create/select/record-arm/list track atoms; does not start transport recording. |
-| `recipe.tracks.add_stock_vocal_cleanup_chain` | draft | candidate | Alpha3 stock Rea plugin starter over selected-track FX chain/add/readback atoms; parameter presets remain future work. |
-| `recipe.items.align_selected_item_onsets` | draft | candidate | Alpha3 starter for two selected items; reads transient/silence evidence, moves selected:1 to the anchor start, and needs a future bridge handler for true onset-offset solving. |
-| `recipe.items.reverse_riser_from_selected_item` | draft | candidate | Alpha3 creative starter over selected item copy/reverse/pitch/playrate/fade/readback atoms; destination placement remains user/agent supplied. |
-| `recipe.analysis.selected_item_cycle_quality_report` | draft | candidate | Fake-smoked only; needs a narrow transcript driver and live evidence before support claim. |
-| `recipe.render.region_wav_render` | draft | candidate | Fake-smoked only; render/write risk needs managed render root and live evidence. |
-| `recipe.render.region_delivery_report` | draft | candidate | Fake-smoked only; consumes render artifacts and needs paired/preseeded evidence. |
-| `recipe.items.layer_report_from_evidence` | draft | candidate | Fixture-backed only; does not prove live role classification. |
-| `recipe.midi.track_phrase_seed` | draft | candidate | Fake-smoked only; write-risk MIDI path needs disposable-project live evidence. |
-
-Alpha2 expanded the official draft recipe packet to twelve first-atoms recipes.
-Alpha3 adds `recipe.project.fast_observation_bundle` and
-`recipe.project.map_snapshot_page`, plus `recipe.tracks.prepare_recording_track`,
-`recipe.tracks.add_stock_vocal_cleanup_chain`, and
-`recipe.items.reverse_riser_from_selected_item`, then
-`recipe.items.align_selected_item_onsets`, bringing the packet to eighteen
-draft recipes. Only
-`recipe.project.cleanup_fingerprint_report` has the V1
-recipe-level live/local portability claim; the others remain draft/static or
-fake-smoked unless later evidence promotes them.
-
-## Unsupported Or Deferred In V1
-
-| Area | Status | Reason |
+| Platform | Status | Tested row |
 |---|---|---|
-| Public `call_recipe` tool | unsupported_v1 | V1 has five tools; agents execute recipes step by step. |
-| User-defined templates | unsupported_v1 | V1 community extension starts at recipes. |
-| Raw Lua execution | unsupported_v1 | Would bypass reviewed template safety. |
-| Raw REAPER action execution as a bypass | unsupported_v1 | Actions require reviewed typed templates/policy. |
-| Shell/process automation | unsupported_v1 | Outside V1 support and safety boundary. |
-| Automatic REAPER launch | unsupported_v1 | V1 supported live path is manual and non-spawning. |
-| Arbitrary plugins | unsupported_v1 | Plugin rows need exact fixture and evidence. |
-| Broad UI automation | not_v1 | UI helpers require future bounded policy. |
-| Hardware/control-surface automation | not_v1 | No V1 evidence row. |
-| Destructive cleanup/apply/delete workflows | not_v1 | Cleanup report is read-only and not apply/delete authority. |
-| Arbitrary projects or media | unsupported_v1 | Support is bound to declared fixtures and typed blockers. |
-| All accepted Alpha2 templates live-tested on arbitrary setups | unsupported_v1 | 213 / 213 is proven only for the declared Alpha2 local manual-bridge fixture and bounded evidence root. |
-| All draft recipes live-supported | unsupported_v1 | Only R1 has recipe-level live/local portability evidence. |
+| macOS | supported | Apple silicon, macOS 26.5.1, REAPER 7.71, normal per-user REAPER configuration. |
+| Windows | supported | Windows 11 x64 build 26200, REAPER 7.78 x64, native Windows PowerShell, standard per-user REAPER resource path. |
+| Windows paths | supported | Drive-letter, spaces, Unicode user/path, explicit custom path, and bounded UNC transport/media paths. |
+| Node.js | required | Node.js 20 or newer. Windows normal operation does not depend on Git Bash, Git, WSL, or SSH. |
+| Other REAPER/OS combinations | untested | Require matching installed evidence before a support claim. |
+| Linux, Windows ARM, Intel macOS | unsupported | No 0.1.0 installed-product support claim. |
 
-## Typed Blocker Vocabulary
+Both supported platforms prove install, Doctor, normal start, Bridge heartbeat,
+public read probe, reconnect after manual REAPER close, update, uninstall, and
+reinstall. Installers preserve unrelated MCP configuration and user-owned
+REAPER state. Windows PowerShell hosts are hidden during normal agent-assisted
+startup; the REAPER application remains visible.
 
-Unsupported setups should return or record typed blockers such as:
+## Audio And Media
 
-- `blocked_platform`
-- `blocked_reaper_version`
-- `blocked_bridge_not_running`
-- `blocked_bridge_owner_mismatch`
-- `blocked_bridge_generation_mismatch`
-- `blocked_fixture_missing`
-- `blocked_artifact_root`
-- `blocked_render_collision`
-- `blocked_plugin_unavailable`
-- `blocked_live_evidence`
-- `unsupported_v1`
+| Capability | Status | Limits and truth boundary |
+|---|---|---|
+| Media placement | supported | Accepted placement modes, Unicode source/Take identity, waveform/readback truth, and separate-Track simultaneous layering. |
+| Render | supported | Accepted WAV/OGG modes under the managed render root with measured non-silent output and source preservation. |
+| Remove Silence | supported | Selected audio Items only; scopes `all`, `leading`, `trailing`, `edges`, and `internal`; threshold, minimum silence, padding, minimum kept audio, and fade controls. |
+| Remove Silence batch | supported | 1-64 exact Items, whole-batch analysis before mutation, one native batch, one Undo, aggregate readback, source/Track/timeline preservation, and no ripple. 65 targets fail closed with zero writes. |
+| Normalize level | supported | `lufs_i`, `rms_i`, `peak`, `true_peak`, `lufs_m_max`, and `lufs_s_max` through REAPER `CalculateNormalization`. |
+| Normalize batch | supported | 1-64 exact Items in one native batch and one Undo. 65 targets fail closed with zero writes. Scope is source/item/take pre-FX, not post-FX. |
+| Audio hardware | outside product boundary | Playback and recording need a configured device. Offline project, Bridge, media, analysis, and render workflows do not. |
 
-Do not turn blocker rows into best-effort behavior during a support run.
+All-silent audio Items are preserved and reported with typed truth. MIDI,
+unsupported source types, stale targets, invalid settings, and oversized
+selections fail closed before mutation.
 
-## Support Wording
+## Official Recipes
 
-Use:
+| Recipe | Status |
+|---|---|
+| `recipe.mix.create_bus_processing` | supported |
+| `recipe.midi.create_instrument_part` | supported |
+| `recipe.media.create_layered_sound_effect_variants` | supported |
+| `recipe.items.create_sound_variations` | supported |
 
-```text
-OpenReaper V1 is an evidence-bound manual-bridge release. Supported recipes run
-through reviewed templates and bounded artifact readback on declared supported
-rows, with unsupported setup or fixture states reported as typed blockers.
-```
+Official, user-authored, forked, and learned Recipes use the same generic
+runner. Official Recipes are not special-cased in the execution kernel.
 
-Do not use:
+## Preservation And Safety
 
-```text
-Works on any OS.
-Supports any REAPER version.
-Works with any project or media.
-Any agent can safely operate REAPER.
-Users can create templates or new automation powers.
-OpenReaper automatically starts REAPER.
-All recipes are live-supported.
-Remote clone/new-machine portability is proven.
-```
+| State | Contract |
+|---|---|
+| REAPER theme and preferences | Preserved. OpenReaper does not select a theme or take over `reaper.ini`. |
+| License and plugin state | Preserved. No macOS license/theme/plugin state is copied to Windows. |
+| User Recipes | Preserved across install, update, uninstall, and reinstall. |
+| Source media and external renders | Never deleted by default; exact acceptance fixtures remain byte-stable. |
+| MCP client configuration | Only exact OpenReaper-owned rows are added, updated, or removed; unrelated rows remain unchanged. |
+| Startup decisions | License, plugin scan, recovery, version/upgrade, and unknown decision windows remain user-mediated and fail closed. |
+| Dependencies | No SWS, ReaPack, third-party plugin, virtual audio device, or third-party runtime dependency. |
+
+Every accepted complete Template, Macro, packaged Action, and Recipe is gated
+by repeated fresh evidence below 30 seconds, including validation, preflight,
+transport, native mutation, aggregate readback, evidence, and Undo closure.
+This is an internal release gate, not a default user-selected deadline.
+
+## Explicit Non-Goals
+
+- Raw Lua, arbitrary REAPER Action, shell, SQL, or UI execution through MCP.
+- Arbitrary third-party FX state cloning or unreviewed plugin semantics.
+- Post-FX normalization, fades-as-normalization, or a custom loudness engine.
+- Project meter control, hardware/device routing, or control-surface automation.
+- Arbitrary output paths, external encoders, or every media format.
+- Automatic handling of license, plugin, recovery, version, or unknown dialogs.
+- Claims for untested operating systems, architectures, REAPER versions, or
+  configurations.
+
+## Typed Blockers
+
+Unsupported or unsafe states return typed blockers such as
+`blocked_platform`, `blocked_reaper_version`, `blocked_bridge_not_running`,
+`blocked_bridge_owner_mismatch`, `blocked_bridge_generation_mismatch`,
+`blocked_fixture_missing`, `blocked_artifact_root`, `blocked_render_collision`,
+`blocked_plugin_unavailable`, and `blocked_live_evidence`. A blocker is not
+converted into best-effort mutation.

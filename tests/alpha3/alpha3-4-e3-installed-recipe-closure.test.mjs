@@ -349,6 +349,7 @@ async function installCurrent(fixture) {
   await mkdir(path.join(sessionRoot, "transport", "results"), { recursive: true });
   await mkdir(path.join(sessionRoot, "artifacts"), { recursive: true });
   await mkdir(path.join(kernelRoot, "recipes", "user"), { recursive: true });
+  await copyFile(path.join(REPO_ROOT, "package.json"), path.join(fixture.currentRoot, "package.json"));
   await copyFile(WRAPPER_SOURCE, wrapper);
   await copyFile(
     path.join(REPO_ROOT, "recipes", "user", ".gitkeep"),
