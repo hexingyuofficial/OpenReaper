@@ -333,11 +333,11 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
     const probeIndex = readiness.indexOf("verify_public_bridge_read || return 1", heartbeatIndex);
     const cleanScanIndex = readiness.indexOf('if [[ "${dialog_result}" != "no_safe_dialog" ]]', decisionIndex);
     assert.equal(readinessStart >= 0 && readinessEnd > readinessStart, true);
-    assert.equal(heartbeatIndex >= 0 && heartbeatIndex < probeIndex && probeIndex < dialogIndex, true);
     assert.equal(dialogIndex < decisionIndex && decisionIndex < cleanScanIndex, true);
-    assert.match(readiness, /if bridge_heartbeat_ready; then[\s\S]+verify_public_bridge_read \|\| return 1[\s\S]+dialog_result="\$\(run_startup_dialog_assist\)"/u);
-    assert.match(readiness, /if startup_dialog_result_requires_manual_clearance "\$\{dialog_result\}"; then\s+sleep 0\.25\s+continue/u);
-    assert.match(readiness, /if startup_dialog_result_is_probe_indeterminate "\$\{dialog_result\}"; then\s+sleep 0\.25\s+continue/u);
+    assert.equal(cleanScanIndex < heartbeatIndex && heartbeatIndex < probeIndex, true);
+    assert.match(readiness, /if ! startup_dialog_result_is_safe "\$\{dialog_result\}"; then\s+echo "\[OpenReaper\] startup-dialog-blocker=\$\{dialog_result\}" >&2\s+return 2/u);
+    assert.doesNotMatch(readiness, /startup_dialog_result_requires_manual_clearance/u);
+    assert.doesNotMatch(readiness, /startup_dialog_result_is_probe_indeterminate/u);
     assert.doesNotMatch(source, /startup_dialog_probe_is_unavailable/u);
 
     const hookStart = source.indexOf("wait_for_startup_hook() {");

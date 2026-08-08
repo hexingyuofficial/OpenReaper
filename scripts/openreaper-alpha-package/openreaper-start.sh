@@ -2576,7 +2576,7 @@ startup_dialog_result_is_probe_indeterminate() {
 
 wait_for_startup_readiness() {
   local max_ticks=$(( START_WAIT_SECONDS * 4 ))
-  local tick dialog_result pending_dialog_blocker=""
+  local tick dialog_result
   if (( max_ticks < 1 )); then
     echo "[OpenReaper] OPENREAPER_START_WAIT_SECONDS must be at least 1 for verified startup." >&2
     return 1
@@ -2584,45 +2584,23 @@ wait_for_startup_readiness() {
   for (( tick = 1; tick <= max_ticks; tick++ )); do
     startup_budget_require_window "bridge_readiness" $(( STARTUP_CLEANUP_RESERVE_MS + 250 )) || return 1
     assert_reaper_process_alive || return 1
-    # A matching heartbeat plus the public read probe is sufficient startup
-    # truth. Accessibility is only consulted while the Bridge is not ready.
-    if bridge_heartbeat_ready; then
-      verify_public_bridge_read || return 1
-      echo "[OpenReaper] bridge-heartbeat=ready owner=${BRIDGE_OWNER} generation=${BRIDGE_GENERATION}"
-      return 0
-    fi
     startup_budget_require_window "bridge_readiness_dialog_inspection" $(( STARTUP_CLEANUP_RESERVE_MS + 1000 )) || return 1
     dialog_result="$(run_startup_dialog_assist)"
     record_dialog_result "${dialog_result}"
-    # Accessibility can finish after the Bridge became healthy. Re-read live
-    # truth before acting on the older dialog snapshot.
+    # A live Bridge cannot override a decision dialog.  Inspect first on every
+    # tick, then accept the heartbeat only after this process has no blocker.
+    if ! startup_dialog_result_is_safe "${dialog_result}"; then
+      echo "[OpenReaper] startup-dialog-blocker=${dialog_result}" >&2
+      return 2
+    fi
+    if [[ "${dialog_result}" != "no_safe_dialog" ]]; then
+      sleep 0.25
+      continue
+    fi
     if bridge_heartbeat_ready; then
       verify_public_bridge_read || return 1
       echo "[OpenReaper] bridge-heartbeat=ready owner=${BRIDGE_OWNER} generation=${BRIDGE_GENERATION}"
       return 0
-    fi
-    if ! startup_dialog_result_is_safe "${dialog_result}"; then
-      if startup_dialog_result_requires_manual_clearance "${dialog_result}"; then
-        sleep 0.25
-        continue
-      fi
-      if startup_dialog_result_is_probe_indeterminate "${dialog_result}"; then
-        sleep 0.25
-        continue
-      fi
-      if startup_dialog_result_allows_transient_observation "${dialog_result}" \
-          && [[ "${pending_dialog_blocker}" != "${dialog_result}" ]]; then
-        pending_dialog_blocker="${dialog_result}"
-        sleep 0.25
-        continue
-      fi
-      echo "[OpenReaper] startup-dialog-blocker=${dialog_result}" >&2
-      return 2
-    fi
-    pending_dialog_blocker=""
-    if [[ "${dialog_result}" != "no_safe_dialog" ]]; then
-      sleep 0.25
-      continue
     fi
     sleep 0.25
   done

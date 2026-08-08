@@ -701,8 +701,16 @@ args = []
   const existing = await readTextIfExists(configPath);
   let next = removeLegacyOpenReaperTomlSections(existing);
   next = upsertTomlSectionTree(next, "mcp_servers.openreaper", openReaperSection);
-  next = removeTomlSectionTree(next, "mcp_servers.vital-agent-mcp");
-  if (vitalAgentIncluded) next = upsertTomlSection(next, "mcp_servers.vital-agent-mcp", vitalAgentSection);
+  if (tomlServerIsManaged(next, "mcp_servers.vital-agent-mcp", isManagedVitalMcpText)) {
+    next = removeTomlSectionTree(next, "mcp_servers.vital-agent-mcp");
+  }
+  if (vitalAgentIncluded) {
+    if (tomlServerIsPresent(next, "mcp_servers.vital-agent-mcp")) {
+      report.warnings.push(`preserved unrelated Codex vital-agent-mcp MCP server at ${configPath}`);
+    } else {
+      next = upsertTomlSection(next, "mcp_servers.vital-agent-mcp", vitalAgentSection);
+    }
+  }
   await writeFile(configPath, next, "utf8");
   report.changed.push(`registered Codex MCP server openreaper${vitalAgentIncluded ? " and optional vital-agent-mcp" : " only"} at ${configPath}`);
 }
@@ -736,7 +744,7 @@ async function upsertJsonMcpServer(configPath, label) {
     }
   }
   parsed.mcpServers = parsed.mcpServers && typeof parsed.mcpServers === "object" ? parsed.mcpServers : {};
-  if (parsed.mcpServers.streetlight) {
+  if (isLegacyOpenReaperJsonServer(parsed.mcpServers.streetlight)) {
     delete parsed.mcpServers.streetlight;
     report.changed.push(`removed legacy Streetlight MCP server from ${label} config at ${configPath}`);
   }
@@ -753,12 +761,18 @@ async function upsertJsonMcpServer(configPath, label) {
       OPENREAPER_LIVE_BRIDGE_GENERATION: "1",
     },
   };
-  delete parsed.mcpServers["vital-agent-mcp"];
+  if (isManagedVitalMcpServer(parsed.mcpServers["vital-agent-mcp"])) {
+    delete parsed.mcpServers["vital-agent-mcp"];
+  }
   if (vitalAgentIncluded) {
-    parsed.mcpServers["vital-agent-mcp"] = {
-      command: vitalAgentMcpCommand,
-      args: [],
-    };
+    if (parsed.mcpServers["vital-agent-mcp"]) {
+      report.warnings.push(`preserved unrelated ${label} vital-agent-mcp MCP server at ${configPath}`);
+    } else {
+      parsed.mcpServers["vital-agent-mcp"] = {
+        command: vitalAgentMcpCommand,
+        args: [],
+      };
+    }
   }
   await writeFile(configPath, `${JSON.stringify(parsed, null, 2)}\n`, "utf8");
   report.changed.push(`registered ${label} MCP server openreaper${vitalAgentIncluded ? " and optional vital-agent-mcp" : " only"} at ${configPath}`);
@@ -1204,11 +1218,6 @@ function tomlPathStartsWith(path, sectionName) {
 function removeLegacyOpenReaperTomlSections(existing) {
   return rewriteTomlSectionsPreservingBytes(existing, (section) => {
     const body = existing.slice(section.start, section.end);
-    if (tomlPathEquals(section.path, "mcp_servers.streetlight")) {
-      report.changed.push("removed legacy Codex MCP server streetlight");
-      return true;
-    }
-    if (tomlPathEquals(section.path, "mcp_servers.streetlight.env")) return true;
     if (tomlPathEquals(section.path, "mcp_servers.openreaper") && isLegacyOpenReaperTomlSection(body)) {
       report.changed.push("removed stale Codex MCP server openreaper that pointed at the legacy Streetlight kernel");
       return true;
@@ -1219,6 +1228,28 @@ function removeLegacyOpenReaperTomlSections(existing) {
     }
     return false;
   });
+}
+
+function tomlServerIsPresent(existing, sectionName) {
+  return tomlSectionSpans(existing).some((section) => tomlPathEquals(section.path, sectionName));
+}
+
+function tomlServerIsManaged(existing, sectionName, isManagedText) {
+  return tomlSectionSpans(existing).some((section) =>
+    tomlPathEquals(section.path, sectionName) && isManagedText(existing.slice(section.start, section.end)),
+  );
+}
+
+function isLegacyOpenReaperJsonServer(server) {
+  return server !== null && typeof server === "object" && isLegacyOpenReaperTomlSection(JSON.stringify(server));
+}
+
+function isManagedVitalMcpServer(server) {
+  return server !== null && typeof server === "object" && isManagedVitalMcpText(JSON.stringify(server));
+}
+
+function isManagedVitalMcpText(text) {
+  return /(?:[\\/]|\\\\)+\.openreaper(?:[\\/]|\\\\)+[\s\S]*vital-agent-mcp/i.test(text);
 }
 
 function readIniValue(source, sectionName, keyName) {

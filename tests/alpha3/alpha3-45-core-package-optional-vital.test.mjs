@@ -11,6 +11,7 @@ const execFileAsync = promisify(execFile);
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const packageBuilder = path.join(repoRoot, "scripts", "package-openreaper-alpha.mjs");
 const installerSource = path.join(repoRoot, "scripts", "openreaper-alpha-package", "install-openreaper.mjs");
+const uninstallerSource = path.join(repoRoot, "scripts", "openreaper-alpha-package", "uninstall-openreaper.mjs");
 const bridgeLauncherSource = path.join(repoRoot, "scripts", "openreaper-alpha-package", "openreaper-start-mcp-bridge.lua");
 
 test("package CLI defaults to core and requires explicit --with-vital", async () => {
@@ -57,6 +58,45 @@ test("core installer removes stale Vital registration while optional mode preser
   }
 });
 
+test("installer and uninstaller retain unrelated Streetlight and Vital MCP registrations", async () => {
+  const fixture = await createInstallerFixture({ withVital: true });
+  const unrelatedToml = `[mcp_servers.streetlight]\ncommand = "/usr/local/bin/streetlight"\nargs = ["serve"]\n\n[mcp_servers.vital-agent-mcp]\ncommand = "/usr/local/bin/vital-agent-mcp"\nargs = ["serve"]\n`;
+  const unrelatedJson = {
+    mcpServers: {
+      streetlight: { command: "/usr/local/bin/streetlight", args: ["serve"] },
+      "vital-agent-mcp": { command: "/usr/local/bin/vital-agent-mcp", args: ["serve"] },
+    },
+  };
+  try {
+    await writeFile(path.join(fixture.home, ".codex", "config.toml"), unrelatedToml, "utf8");
+    await writeFile(path.join(fixture.home, ".cursor", "mcp.json"), `${JSON.stringify(unrelatedJson)}\n`, "utf8");
+    await writeFile(path.join(fixture.home, "Library", "Application Support", "Claude", "claude_desktop_config.json"), `${JSON.stringify(unrelatedJson)}\n`, "utf8");
+    await execFileAsync(process.execPath, [fixture.installer, "--install-root", fixture.installRoot, "--skip-startup-hook"], {
+      env: { ...process.env, HOME: fixture.home },
+    });
+
+    const codexAfterInstall = await readFile(path.join(fixture.home, ".codex", "config.toml"), "utf8");
+    const cursorAfterInstall = JSON.parse(await readFile(path.join(fixture.home, ".cursor", "mcp.json"), "utf8"));
+    assert.match(codexAfterInstall, /\[mcp_servers\.streetlight\][\s\S]*\/usr\/local\/bin\/streetlight/u);
+    assert.match(codexAfterInstall, /\[mcp_servers\.vital-agent-mcp\][\s\S]*\/usr\/local\/bin\/vital-agent-mcp/u);
+    assert.equal(cursorAfterInstall.mcpServers.streetlight.command, "/usr/local/bin/streetlight");
+    assert.equal(cursorAfterInstall.mcpServers["vital-agent-mcp"].command, "/usr/local/bin/vital-agent-mcp");
+
+    await execFileAsync(process.execPath, [fixture.uninstaller, "--install-root", fixture.installRoot, "--skip-startup-hook"], {
+      env: { ...process.env, HOME: fixture.home },
+    });
+    const codexAfterUninstall = await readFile(path.join(fixture.home, ".codex", "config.toml"), "utf8");
+    const cursorAfterUninstall = JSON.parse(await readFile(path.join(fixture.home, ".cursor", "mcp.json"), "utf8"));
+    assert.match(codexAfterUninstall, /\[mcp_servers\.streetlight\][\s\S]*\/usr\/local\/bin\/streetlight/u);
+    assert.match(codexAfterUninstall, /\[mcp_servers\.vital-agent-mcp\][\s\S]*\/usr\/local\/bin\/vital-agent-mcp/u);
+    assert.equal(cursorAfterUninstall.mcpServers.streetlight.command, "/usr/local/bin/streetlight");
+    assert.equal(cursorAfterUninstall.mcpServers["vital-agent-mcp"].command, "/usr/local/bin/vital-agent-mcp");
+    assert.equal("openreaper" in cursorAfterUninstall.mcpServers, false);
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
 async function createInstallerFixture({ withVital }) {
   const root = await mkdtemp(path.join(os.tmpdir(), "openreaper-alpha345-core-package-"));
   const home = path.join(root, "home");
@@ -70,6 +110,7 @@ async function createInstallerFixture({ withVital }) {
   await mkdir(path.join(home, ".cursor"), { recursive: true });
   await mkdir(path.join(home, "Library", "Application Support", "Claude"), { recursive: true });
   await cp(installerSource, installer);
+  await cp(uninstallerSource, path.join(packageRoot, "installer", "uninstall-openreaper.mjs"));
   await cp(bridgeLauncherSource, path.join(packageRoot, "bin", "openreaper-start-mcp-bridge.lua"));
 
   for (const name of ["openreaper-mcp", "openreaper-start", "openreaper-doctor"]) {
@@ -93,7 +134,7 @@ async function createInstallerFixture({ withVital }) {
   const jsonConfig = { mcpServers: { "vital-agent-mcp": { command: staleVital, args: [] } } };
   await writeFile(path.join(home, ".cursor", "mcp.json"), `${JSON.stringify(jsonConfig)}\n`, "utf8");
   await writeFile(path.join(home, "Library", "Application Support", "Claude", "claude_desktop_config.json"), `${JSON.stringify(jsonConfig)}\n`, "utf8");
-  return { root, home, packageRoot, installer, installRoot };
+  return { root, home, packageRoot, installer, uninstaller: path.join(packageRoot, "installer", "uninstall-openreaper.mjs"), installRoot };
 }
 
 async function writeExecutable(file, body) {

@@ -102,6 +102,60 @@ function Get-RunningReaperProcesses {
     )
 }
 
+function Get-OpenReaperStartupWindowGate([int] $ProcessId) {
+    try {
+        if (-not ("OpenReaperNativeWindowProbe" -as [type])) {
+            Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+using System.Text;
+
+public static class OpenReaperNativeWindowProbe {
+    private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+    [DllImport("user32.dll")] private static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
+    [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr hWnd);
+    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int maxCount);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetClassName(IntPtr hWnd, StringBuilder text, int maxCount);
+
+    public static string[] VisibleTopLevelWindows(int targetProcessId) {
+        var windows = new List<string>();
+        EnumWindows((hWnd, lParam) => {
+            uint processId;
+            GetWindowThreadProcessId(hWnd, out processId);
+            if (processId != (uint)targetProcessId || !IsWindowVisible(hWnd)) return true;
+            var title = new StringBuilder(1024);
+            var className = new StringBuilder(256);
+            GetWindowText(hWnd, title, title.Capacity);
+            GetClassName(hWnd, className, className.Capacity);
+            windows.Add(className.ToString() + "\u001f" + title.ToString());
+            return true;
+        }, IntPtr.Zero);
+        return windows.ToArray();
+    }
+}
+'@ | Out-Null
+        }
+        $windows = @([OpenReaperNativeWindowProbe]::VisibleTopLevelWindows($ProcessId) | ForEach-Object {
+            $parts = $_ -split [char]0x1f, 2
+            [pscustomobject]@{ class_name = $parts[0]; title = if ($parts.Count -gt 1) { $parts[1] } else { "" } }
+        })
+    } catch {
+        return [pscustomobject]@{ state = "blocked"; detail = "window_inspection_failed:$($_.Exception.GetType().Name)" }
+    }
+    if ($windows.Count -eq 0) {
+        return [pscustomobject]@{ state = "pending"; detail = "no_visible_reaper_window" }
+    }
+    $mainWindows = @($windows | Where-Object { $_.class_name -eq "REAPERwnd" })
+    $unexpected = @($windows | Where-Object { $_.class_name -ne "REAPERwnd" })
+    if ($mainWindows.Count -ne 1 -or $unexpected.Count -ne 0) {
+        $observed = ($windows | ForEach-Object { "class=$($_.class_name);title=$($_.title)" }) -join " | "
+        return [pscustomobject]@{ state = "blocked"; detail = "dialog_or_unknown_window:$observed" }
+    }
+    return [pscustomobject]@{ state = "safe"; detail = "reaper_main_window_only" }
+}
+
 Assert-AbsolutePath $InstallRoot "-InstallRoot"
 Assert-AbsolutePath $SessionRoot "-SessionRoot"
 Assert-AbsolutePath $ReaperResourceRoot "-ReaperResourceRoot"
@@ -220,14 +274,25 @@ function Test-HeartbeatReady {
 }
 
 $deadline = [DateTime]::UtcNow.AddSeconds([Math]::Max(5, $TimeoutSeconds))
+$lastWindowGate = $null
 while ([DateTime]::UtcNow -lt $deadline) {
     if ($process.HasExited) { Fail "REAPER exited before Bridge readiness. pid=$($process.Id); log=$logPath" }
+    $windowGate = Get-OpenReaperStartupWindowGate $process.Id
+    if ($windowGate.state -eq "blocked") {
+        Fail "REAPER startup dialog blocker ($($windowGate.detail)); preserve the dialog for user-mediated resolution and retry. log=$logPath"
+    }
+    if ($windowGate.state -eq "pending") {
+        $lastWindowGate = $windowGate.detail
+        Start-Sleep -Milliseconds 250
+        continue
+    }
     if (Test-HeartbeatReady) { break }
     Start-Sleep -Milliseconds 250
 }
 if (-not (Test-HeartbeatReady)) {
     $stage = if (Test-Path -LiteralPath $startupStatusPath -PathType Leaf) { (Get-Content -LiteralPath $startupStatusPath -Raw).Trim() } else { "missing" }
-    Fail "Bridge heartbeat did not become ready for owner=$BridgeOwner generation=$BridgeGeneration; startup_status=$stage; log=$logPath"
+    $windowDetail = if ($lastWindowGate) { "; window_gate=$lastWindowGate" } else { "" }
+    Fail "Bridge heartbeat did not become ready for owner=$BridgeOwner generation=$BridgeGeneration; startup_status=$stage$windowDetail; log=$logPath"
 }
 
 $doctorArgs = @("--wait-bridge=5")

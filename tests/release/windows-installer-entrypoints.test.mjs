@@ -86,6 +86,13 @@ test("Windows start omits an empty Start-Process argument list", () => {
       < startPs1.indexOf("& powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $doctorScript"),
     "Windows start must bind its bounded cold-smoke timeout before invoking packaged Doctor",
   );
+  assert.match(startPs1, /function Get-OpenReaperStartupWindowGate/u);
+  assert.match(startPs1, /OpenReaperNativeWindowProbe/u);
+  assert.ok(
+    startPs1.indexOf("$windowGate = Get-OpenReaperStartupWindowGate $process.Id")
+      < startPs1.indexOf("if (Test-HeartbeatReady) { break }"),
+    "Windows start must inspect visible REAPER windows before accepting heartbeat readiness",
+  );
 });
 
 test("Windows MCP wrapper binds the shared Recipe store and session roots", () => {
@@ -122,6 +129,11 @@ test("macOS start keeps user configuration as the default and isolates only expl
   assert.match(startSh, /echo "\[OpenReaper\] reaper-config-mode=user_default"/u);
   assert.match(startSh, /does not select or write a theme/u);
   assert.match(startSh, /cannot be combined with a REAPER -cfgfile argument/u);
+  assert.ok(
+    startSh.indexOf('dialog_result="$(run_startup_dialog_assist)"')
+      < startSh.indexOf("if bridge_heartbeat_ready; then"),
+    "macOS start must inspect startup dialogs before accepting heartbeat readiness",
+  );
 });
 
 test("Windows Doctor matches escaped package paths in TOML and JSON configs", () => {

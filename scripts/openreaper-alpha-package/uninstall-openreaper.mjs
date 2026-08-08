@@ -483,11 +483,11 @@ async function removeCodexSection() {
   const configPath = path.join(home, ".codex", "config.toml");
   const existing = await readTextIfExists(configPath);
   if (existing === "") return;
-  let next = removeTomlSectionTree(existing, "mcp_servers.vital-agent-mcp");
+  let next = removeManagedTomlSectionTree(existing, "mcp_servers.vital-agent-mcp", isManagedVitalMcpText);
   next = removeTomlSectionTree(next, "mcp_servers.openreaper");
   if (next !== existing) {
     await writeFile(configPath, next, "utf8");
-    report.changed.push(`removed Codex openreaper and vital-agent-mcp MCP config from ${configPath}`);
+    report.changed.push(`removed owned Codex OpenReaper MCP config from ${configPath}`);
   }
 }
 
@@ -501,13 +501,13 @@ async function removeJsonServer(configPath, label) {
       delete parsed.mcpServers.openreaper;
       changed = true;
     }
-    if (parsed.mcpServers?.["vital-agent-mcp"]) {
+    if (isManagedVitalMcpServer(parsed.mcpServers?.["vital-agent-mcp"])) {
       delete parsed.mcpServers["vital-agent-mcp"];
       changed = true;
     }
     if (changed) {
       await writeFile(configPath, `${JSON.stringify(parsed, null, 2)}\n`, "utf8");
-      report.changed.push(`removed ${label} openreaper and vital-agent-mcp MCP config from ${configPath}`);
+      report.changed.push(`removed owned ${label} OpenReaper MCP config from ${configPath}`);
     }
   } catch {
     report.warnings.push(`Skipped ${label} config because it is not valid JSON: ${configPath}`);
@@ -555,6 +555,13 @@ function removeTomlSectionTree(existing, sectionName) {
     cursor = section.end;
   }
   return `${next}${existing.slice(cursor)}`;
+}
+
+function removeManagedTomlSectionTree(existing, sectionName, isManagedText) {
+  const sections = tomlSectionSpans(existing);
+  const root = sections.find((section) => tomlPathEquals(section.path, sectionName));
+  if (!root || !isManagedText(existing.slice(root.start, root.end))) return existing;
+  return removeTomlSectionTree(existing, sectionName);
 }
 
 function coalesceTomlSectionMatches(existing, matches) {
@@ -736,6 +743,19 @@ function skipTomlWhitespace(line, cursor) {
 function tomlPathStartsWith(path, sectionName) {
   const expected = sectionName.split(".");
   return path.length >= expected.length && expected.every((part, index) => path[index] === part);
+}
+
+function tomlPathEquals(path, sectionName) {
+  const expected = sectionName.split(".");
+  return path.length === expected.length && path.every((part, index) => part === expected[index]);
+}
+
+function isManagedVitalMcpServer(server) {
+  return server !== null && typeof server === "object" && isManagedVitalMcpText(JSON.stringify(server));
+}
+
+function isManagedVitalMcpText(text) {
+  return /(?:[\\/]|\\\\)+\.openreaper(?:[\\/]|\\\\)+[\s\S]*vital-agent-mcp/i.test(text);
 }
 
 async function readTextIfExists(filePath) {

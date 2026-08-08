@@ -199,7 +199,8 @@ describe("Alpha3.2-B2 managed render root", () => {
       "[mcp_servers.openreaper.experimental]",
       "enabled = true",
       "",
-      "[mcp_servers.vital-agent-mcp.env]",
+      "[mcp_servers.vital-agent-mcp]",
+      "command = '/Users/test/.openreaper/current/bin/vital-agent-mcp'",
       "STALE = 'owned'",
       "",
       "[user]",
@@ -1433,18 +1434,16 @@ describe("Alpha3.2-B2 managed render root", () => {
     const functionEnd = source.indexOf("\n}\n\ntrap 'launchservices_cleanup_on_exit'", functionStart);
     assert.ok(functionStart >= 0 && functionEnd > functionStart, "startup readiness function must remain inspectable");
     const readinessSource = source.slice(functionStart, functionEnd);
-    const heartbeatCheck = readinessSource.indexOf("if bridge_heartbeat_ready; then");
-    const publicProbe = readinessSource.indexOf("verify_public_bridge_read || return 1", heartbeatCheck);
     const dialogCheck = readinessSource.indexOf('dialog_result="$(run_startup_dialog_assist)"');
-    const heartbeatRecheck = readinessSource.indexOf("if bridge_heartbeat_ready; then", dialogCheck);
     const blocker = readinessSource.indexOf("startup-dialog-blocker=", dialogCheck);
-    assert.ok(heartbeatCheck >= 0, "readiness must check the matching Bridge heartbeat");
+    const heartbeatCheck = readinessSource.indexOf("if bridge_heartbeat_ready; then", dialogCheck);
+    const publicProbe = readinessSource.indexOf("verify_public_bridge_read || return 1", heartbeatCheck);
+    assert.ok(dialogCheck >= 0, "readiness must inspect startup dialogs");
+    assert.ok(blocker > dialogCheck, "dialog blockers must be reported after inspection");
+    assert.ok(heartbeatCheck > dialogCheck, "readiness must accept heartbeat only after dialog inspection");
     assert.ok(publicProbe > heartbeatCheck, "matching Bridge readiness must include a real public read probe");
-    assert.ok(dialogCheck > publicProbe, "Accessibility must not override successful Bridge readiness");
-    assert.ok(heartbeatRecheck > dialogCheck, "readiness must recheck Bridge truth after a bounded Accessibility scan");
-    assert.ok(blocker > heartbeatRecheck, "an older dialog snapshot must not override Bridge truth published during the scan");
     assert.match(readinessSource, /if ! startup_dialog_result_is_safe "\$\{dialog_result\}"; then[\s\S]+startup-dialog-blocker=/u);
-    assert.match(readinessSource, /pending_dialog_blocker/u);
+    assert.doesNotMatch(readinessSource, /pending_dialog_blocker/u);
 
     const hookStart = source.indexOf("wait_for_startup_hook() {");
     const hookEnd = source.indexOf("\n}\n\nverify_public_bridge_read()", hookStart);
