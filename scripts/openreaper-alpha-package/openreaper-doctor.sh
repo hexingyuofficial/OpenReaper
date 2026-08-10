@@ -1119,7 +1119,7 @@ function doctorSmokeTimeoutMs() {
     return Math.min(120_000, Math.max(1_000, Number(configured)));
   }
   return Math.max(
-    10_000,
+    30_000,
     (cli.wait_bridge_seconds ?? 0) * 1_000 + alpha3_2B3ReadProbeTimeoutMs(process.env) + 5_000,
   );
 }

@@ -951,6 +951,7 @@ describe("Alpha3.2-B3 runtime / doctor live readiness", () => {
     assert.match(packageCommandSmoke, /rm\(root, \{ recursive: true, force: true \}\)/);
     assert.match(doctorSource, /error_message: boundedErrorMessage\(error\)/);
     assert.match(doctorSource, /function boundedErrorMessage\(error\)/);
+    assert.match(doctorSource, /return Math\.max\(\s*30_000,/u);
   });
 
   it("treats host-exported empty optional OpenReaper values as absent without discarding non-empty overrides", { timeout: 30_000 }, async () => {
