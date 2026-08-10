@@ -115,6 +115,11 @@ describe("Layer 4D.2 REAPER-side live bridge script", () => {
     assert.match(sourceModules["90-file-transport-loop.lua"], /next_heartbeat_at = current_time \+ HEARTBEAT_INTERVAL_SECONDS/);
     assert.match(sourceModules["90-file-transport-loop.lua"], /heartbeat refresh failed/);
     assert.match(sourceModules["90-file-transport-loop.lua"], /startup heartbeat failed/);
+    assert.doesNotMatch(
+      sourceModules["90-file-transport-loop.lua"],
+      /started manual bridge loop/,
+      "successful Bridge startup must not open REAPER's ReaScript console",
+    );
     assert.match(sourceModules["90-file-transport-loop.lua"], /reaper\.defer\(bridge_loop\)/);
     assert.match(sourceModules["90-file-transport-loop.lua"], /active_continuation_runner/);
     assert.match(sourceModules["90-file-transport-loop.lua"], /openreaper\.bridge\.internal_continuation\.v1/);

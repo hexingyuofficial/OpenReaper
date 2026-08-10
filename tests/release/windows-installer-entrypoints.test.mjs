@@ -93,6 +93,11 @@ test("Windows start omits an empty Start-Process argument list", () => {
       < startPs1.indexOf("if (Test-HeartbeatReady) { break }"),
     "Windows start must inspect visible REAPER windows before accepting heartbeat readiness",
   );
+  assert.match(startPs1, /\$unexpected = @\(\$windows \| Where-Object \{ \$_\.class_name -ne "REAPERwnd" \}\)/u);
+  assert.match(startPs1, /preserve the dialog and ask the user to resolve it/u);
+  assert.match(startPs1, /rerun openreaper-start\.ps1 -RecoverExisting/u);
+  assert.match(startPs1, /current REAPER PID and Bridge generation were preserved/u);
+  assert.doesNotMatch(startPs1, /SendMessage|PostMessage|CloseMainWindow|Kill\(/u);
 });
 
 test("Windows MCP wrapper binds the shared Recipe store and session roots", () => {

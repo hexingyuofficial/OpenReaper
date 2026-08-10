@@ -279,7 +279,7 @@ while ([DateTime]::UtcNow -lt $deadline) {
     if ($process.HasExited) { Fail "REAPER exited before Bridge readiness. pid=$($process.Id); log=$logPath" }
     $windowGate = Get-OpenReaperStartupWindowGate $process.Id
     if ($windowGate.state -eq "blocked") {
-        Fail "REAPER startup dialog blocker ($($windowGate.detail)); preserve the dialog for user-mediated resolution and retry. log=$logPath"
+        Fail "REAPER startup dialog blocker ($($windowGate.detail)); preserve the dialog and ask the user to resolve it. Then rerun openreaper-start.ps1 -RecoverExisting; the current REAPER PID and Bridge generation were preserved. log=$logPath"
     }
     if ($windowGate.state -eq "pending") {
         $lastWindowGate = $windowGate.detail

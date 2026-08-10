@@ -385,6 +385,5 @@ else
     log("startup heartbeat failed: " .. tostring(heartbeat_error))
   end
   next_heartbeat_at = monotonic_time() + HEARTBEAT_INTERVAL_SECONDS
-  log("started manual bridge loop at " .. TRANSPORT_DIR .. " owner=" .. ACTIVE_OWNER .. " generation=" .. tostring(ACTIVE_GENERATION))
   bridge_loop()
 end
