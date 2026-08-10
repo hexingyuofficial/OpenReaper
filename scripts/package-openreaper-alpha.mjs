@@ -3673,11 +3673,11 @@ async function smokePackagedInstallerManagedRenderRoot(installerPath) {
       env: { ...process.env, HOME: home },
       timeoutMs: 5_000,
     });
-    if (startAfterReinstall.code !== 3 || !startAfterReinstall.stderr.includes("startup-status=needs_user_consent")) {
-      throw new Error(`packaged reinstall did not require fresh startup consent: ${startAfterReinstall.stderr || startAfterReinstall.stdout}`);
+    if (startAfterReinstall.code === 3 || startAfterReinstall.stderr.includes("startup-status=needs_user_consent")) {
+      throw new Error(`packaged reinstall retained the removed startup-consent gate: ${startAfterReinstall.stderr || startAfterReinstall.stdout}`);
     }
-    if (await fileExists(fakeReaperStarted)) {
-      throw new Error("packaged reinstall started REAPER before obtaining fresh startup consent.");
+    if (!(await fileExists(fakeReaperStarted))) {
+      throw new Error("packaged reinstall did not launch REAPER after removing the obsolete startup-consent policy.");
     }
     return {
       ok: true,
@@ -3688,11 +3688,11 @@ async function smokePackagedInstallerManagedRenderRoot(installerPath) {
       installed_provenance_read_only: true,
       codex_config_byte_roundtrip: true,
       invalid_record_rejected_before_replacement: true,
-      consent_lifecycle: {
-        uninstall_removed_consent: true,
+      legacy_startup_policy_lifecycle: {
+        uninstall_removed_obsolete_policy: true,
         user_recipe_preserved: true,
-        reinstall_requires_fresh_consent: true,
-        reaper_not_started: true,
+        reinstall_has_no_consent_gate: true,
+        reaper_launch_attempted: true,
       },
       atomic_backup_container: /\.openreaper-install-backup-/.test(upgradeReport.recovery?.previous_install_backup ?? ""),
       safety_flags: ["--skip-startup-hook"],
