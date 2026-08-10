@@ -2718,7 +2718,13 @@ async function smokePackagedOpenReaperStartHelper() {
     if (!text.includes("call_template(template.transport.read_state)") && !text.includes("public read probe")) {
       throw new Error(`${label} must explain the public read probe used to verify startup readiness.`);
     }
-    if (!text.includes("never clicks") || !text.includes("STARTUP_USER_ACTION_REQUIRED") || !text.includes("--recover-existing")) {
+    const hasNarrativeWindowContract = text.includes("never clicks")
+      && text.includes("STARTUP_USER_ACTION_REQUIRED")
+      && text.includes("--recover-existing");
+    const hasStructuredWindowContract = text.includes('mode: "user_mediated_read_only"')
+      && text.includes("auto_dismisses: []")
+      && text.includes("--recover-existing");
+    if (!hasNarrativeWindowContract && !hasStructuredWindowContract) {
       throw new Error(`${label} must explain read-only startup-window handling and preserved-session recovery.`);
     }
     if (!text.includes("manual recovery fallback") && !text.includes("manual_recovery_fallback")) {
