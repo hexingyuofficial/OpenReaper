@@ -45,7 +45,7 @@ function Fail([string] $Message) {
 }
 
 function Require-UserAction([string] $Message) {
-    Write-Error "[OpenReaper] $Message"
+    Write-Error "[OpenReaper] $Message" -ErrorAction Continue
     exit 75
 }
 

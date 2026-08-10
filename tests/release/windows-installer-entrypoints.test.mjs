@@ -105,7 +105,7 @@ test("Windows start omits an empty Start-Process argument list", () => {
   assert.match(startPs1, /preserve the dialog and ask the user to resolve it/u);
   assert.match(startPs1, /rerun openreaper-start\.ps1 -RecoverExisting/u);
   assert.match(startPs1, /current REAPER PID and Bridge generation were preserved/u);
-  assert.match(startPs1, /function Require-UserAction\(\[string\] \$Message\) \{\s+Write-Error "\[OpenReaper\] \$Message"\s+exit 75\s+\}/u);
+  assert.match(startPs1, /function Require-UserAction\(\[string\] \$Message\) \{\s+Write-Error "\[OpenReaper\] \$Message" -ErrorAction Continue\s+exit 75\s+\}/u);
   assert.match(startPs1, /if \(\$windowGate\.state -eq "blocked"\) \{\s+Require-UserAction /u);
   assert.doesNotMatch(startPs1, /if \(\$windowGate\.state -eq "blocked"\) \{\s+Fail /u);
   assert.doesNotMatch(startPs1, /SendMessage|PostMessage|CloseMainWindow|Kill\(/u);
