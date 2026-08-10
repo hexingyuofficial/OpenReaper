@@ -94,6 +94,14 @@ test("Windows start omits an empty Start-Process argument list", () => {
     "Windows start must inspect visible REAPER windows before accepting heartbeat readiness",
   );
   assert.match(startPs1, /\$unexpected = @\(\$windows \| Where-Object \{ \$_\.class_name -ne "REAPERwnd" \}\)/u);
+  assert.match(startPs1, /\$stockSplash = @\(\$windows \| Where-Object \{ \$_\.class_name -ceq "REAPERsplash" -and \$_\.title -ceq "REAPER" \}\)/u);
+  assert.match(startPs1, /if \(\$windows\.Count -eq 1 -and \$stockSplash\.Count -eq 1\)/u);
+  assert.match(startPs1, /state = "pending"; detail = "stock_reaper_splash"/u);
+  assert.ok(
+    startPs1.indexOf('detail = "stock_reaper_splash"')
+      < startPs1.indexOf('$mainWindows = @($windows | Where-Object { $_.class_name -eq "REAPERwnd" })'),
+    "Windows start may wait through only the exact stock splash before enforcing the normal-main-window gate",
+  );
   assert.match(startPs1, /preserve the dialog and ask the user to resolve it/u);
   assert.match(startPs1, /rerun openreaper-start\.ps1 -RecoverExisting/u);
   assert.match(startPs1, /current REAPER PID and Bridge generation were preserved/u);

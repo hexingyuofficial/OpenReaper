@@ -147,6 +147,10 @@ public static class OpenReaperNativeWindowProbe {
     if ($windows.Count -eq 0) {
         return [pscustomobject]@{ state = "pending"; detail = "no_visible_reaper_window" }
     }
+    $stockSplash = @($windows | Where-Object { $_.class_name -ceq "REAPERsplash" -and $_.title -ceq "REAPER" })
+    if ($windows.Count -eq 1 -and $stockSplash.Count -eq 1) {
+        return [pscustomobject]@{ state = "pending"; detail = "stock_reaper_splash" }
+    }
     $mainWindows = @($windows | Where-Object { $_.class_name -eq "REAPERwnd" })
     $unexpected = @($windows | Where-Object { $_.class_name -ne "REAPERwnd" })
     if ($mainWindows.Count -ne 1 -or $unexpected.Count -ne 0) {
