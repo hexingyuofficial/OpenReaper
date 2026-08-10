@@ -2976,7 +2976,6 @@ print -rn -- "exited" > ${shellQuote(fakeExitedPath)}
     result = await runCaptured(fixtureStart, [
       "--reaper-binary",
       fakeBinary,
-      "--no-startup-dialog-assist",
       ...args,
     ], {
       cwd: fixtureRoot,
@@ -3038,7 +3037,6 @@ async function runFakeStartExpectFailure({ startPath, fixtureRoot, capturePath, 
     result = await runCaptured(startPath, [
       "--reaper-binary",
       fakeBinary,
-      "--no-startup-dialog-assist",
       ...args,
     ], {
       cwd: fixtureRoot,
@@ -3199,7 +3197,6 @@ print -rn -- "exited" > ${shellQuote(fakeExitedPath)}
       fakeApp,
       "--render-root",
       selectedRoot,
-      "--no-startup-dialog-assist",
     ], {
       cwd: lsRoot,
       env: {
