@@ -44,6 +44,11 @@ function Fail([string] $Message) {
     exit 2
 }
 
+function Require-UserAction([string] $Message) {
+    Write-Error "[OpenReaper] $Message"
+    exit 75
+}
+
 function Quote-ProcessArgument([string] $Value) {
     if ($Value -notmatch '[\s"]') { return $Value }
     return '"' + $Value.Replace('"', '\"') + '"'
@@ -283,7 +288,7 @@ while ([DateTime]::UtcNow -lt $deadline) {
     if ($process.HasExited) { Fail "REAPER exited before Bridge readiness. pid=$($process.Id); log=$logPath" }
     $windowGate = Get-OpenReaperStartupWindowGate $process.Id
     if ($windowGate.state -eq "blocked") {
-        Fail "REAPER startup dialog blocker ($($windowGate.detail)); preserve the dialog and ask the user to resolve it. Then rerun openreaper-start.ps1 -RecoverExisting; the current REAPER PID and Bridge generation were preserved. log=$logPath"
+        Require-UserAction "REAPER startup dialog blocker ($($windowGate.detail)); preserve the dialog and ask the user to resolve it. Then rerun openreaper-start.ps1 -RecoverExisting; the current REAPER PID and Bridge generation were preserved. log=$logPath"
     }
     if ($windowGate.state -eq "pending") {
         $lastWindowGate = $windowGate.detail
