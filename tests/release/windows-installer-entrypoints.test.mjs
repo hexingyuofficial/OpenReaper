@@ -130,7 +130,7 @@ test("macOS start keeps user configuration as the default and isolates only expl
   assert.match(startSh, /does not select or write a theme/u);
   assert.match(startSh, /cannot be combined with a REAPER -cfgfile argument/u);
   assert.ok(
-    startSh.indexOf('dialog_result="$(run_startup_dialog_assist)"')
+    startSh.indexOf('dialog_result="$(run_startup_dialog_observer)"')
       < startSh.indexOf("if bridge_heartbeat_ready; then"),
     "macOS start must inspect startup dialogs before accepting heartbeat readiness",
   );

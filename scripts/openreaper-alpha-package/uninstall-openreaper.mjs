@@ -137,13 +137,13 @@ async function removeStartupDialogConsent() {
   if (!status) return;
   if (status.isDirectory()) {
     report.startup_dialog_consent.status = "unsafe_directory_preserved";
-    report.warnings.push(`startup dialog consent path is a directory and was not recursively removed: ${startupDialogConsentPath}`);
+    report.warnings.push(`legacy startup-dialog policy path is a directory and was not recursively removed: ${startupDialogConsentPath}`);
     return;
   }
   await rm(startupDialogConsentPath, { force: true });
   report.startup_dialog_consent.removed = true;
   report.startup_dialog_consent.status = status.isSymbolicLink() ? "symlink_removed_without_following" : "removed";
-  report.changed.push(`removed startup dialog consent so reinstall asks again: ${startupDialogConsentPath}`);
+  report.changed.push(`removed obsolete OpenReaper startup-dialog policy file: ${startupDialogConsentPath}`);
 }
 
 async function preserveDefaultRenderOutputs() {

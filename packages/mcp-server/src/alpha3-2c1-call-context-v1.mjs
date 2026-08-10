@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import {
   parseAlpha3_2B3ExpectedIdentity,
 } from "./alpha3-2b3-runtime-doctor-readiness-v1.mjs";
@@ -31,6 +32,7 @@ export class Alpha3_2C1CallContextError extends Error {
 export function createAlpha3_2C1CallContextManager(options = {}) {
   const env = options.env ?? process.env;
   const identity = normalizeInstalledIdentity(env);
+  const identityScope = new AsyncLocalStorage();
   const now = typeof options.now === "function" ? options.now : () => new Date();
   const sessionIdFactory = typeof options.sessionIdFactory === "function"
     ? options.sessionIdFactory
@@ -54,8 +56,12 @@ export function createAlpha3_2C1CallContextManager(options = {}) {
     requestSequence = 0;
   }
 
-  function allocate(contextHint) {
-    const hint = normalizeContextHint(contextHint, identity);
+  function allocate(contextHint, identityOverride) {
+    const effectiveIdentity = normalizeAuthoritativeIdentity(
+      identityOverride ?? identityScope.getStore() ?? identity,
+      identity.owner,
+    );
+    const hint = normalizeContextHint(contextHint, effectiveIdentity);
     if (requestSequence >= ALPHA3_2C1_MAX_REQUEST_SEQUENCE) rotateSession();
 
     // Allocation is deliberately synchronous. The stdio handler calls this before
@@ -67,8 +73,8 @@ export function createAlpha3_2C1CallContextManager(options = {}) {
     return Object.freeze({
       client_id: hint.client_id ?? ALPHA3_2C1_DEFAULT_CLIENT_ID,
       session_id: sessionId,
-      expected_owner: identity.owner,
-      expected_generation: identity.generation,
+      expected_owner: effectiveIdentity.owner,
+      expected_generation: effectiveIdentity.generation,
       created_at: createdAt,
       request_sequence: sequence,
     });
@@ -78,6 +84,14 @@ export function createAlpha3_2C1CallContextManager(options = {}) {
     contract: ALPHA3_2C1_CALL_CONTEXT_CONTRACT,
     identity: Object.freeze({ ...identity }),
     allocate,
+    currentIdentity() {
+      return identityScope.getStore() ?? identity;
+    },
+    runWithIdentity(authoritativeIdentity, callback) {
+      if (typeof callback !== "function") throw new TypeError("call context identity scope requires a callback");
+      const effectiveIdentity = normalizeAuthoritativeIdentity(authoritativeIdentity, identity.owner);
+      return identityScope.run(effectiveIdentity, callback);
+    },
     snapshot() {
       return Object.freeze({
         session_index: sessionIndex,
@@ -86,6 +100,34 @@ export function createAlpha3_2C1CallContextManager(options = {}) {
       });
     },
   });
+}
+
+function normalizeAuthoritativeIdentity(value, installedOwner) {
+  if (!isPlainObject(value)) {
+    throw new Alpha3_2C1CallContextError(
+      "CALL_TEMPLATE_BRIDGE_IDENTITY_INVALID",
+      "Authoritative Bridge identity must be an object.",
+    );
+  }
+  const owner = normalizeTextHint(value.owner, "authoritative bridge owner", {
+    code: "CALL_TEMPLATE_BRIDGE_IDENTITY_INVALID",
+  });
+  if (owner !== installedOwner) {
+    throw new Alpha3_2C1CallContextError(
+      "CALL_TEMPLATE_BRIDGE_OWNER_MISMATCH",
+      "Observed Bridge owner does not match the installed OpenReaper owner.",
+      { installed: installedOwner, observed: owner },
+    );
+  }
+  const generation = normalizeGenerationHint(value.generation);
+  if (generation < 1) {
+    throw new Alpha3_2C1CallContextError(
+      "CALL_TEMPLATE_BRIDGE_IDENTITY_INVALID",
+      "Authoritative Bridge generation must be a positive safe integer.",
+      { field: "generation" },
+    );
+  }
+  return Object.freeze({ owner, generation });
 }
 
 function normalizeInstalledIdentity(env) {

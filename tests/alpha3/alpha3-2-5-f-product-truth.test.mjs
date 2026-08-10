@@ -147,8 +147,8 @@ describe("Alpha3.2.5-F product truth", () => {
       await mkdir(path.dirname(bridgePath), { recursive: true });
       const productStartSource = await readFile(path.join(root, "scripts", "openreaper-alpha-package", "openreaper-start.sh"), "utf8");
       const fixtureStartSource = productStartSource.replace(
-        /run_startup_dialog_assist\(\) \{[\s\S]*?\n\}\n\nstartup_dialog_result_is_safe\(\) \{/u,
-        'run_startup_dialog_assist() {\n  echo "no_safe_dialog"\n}\n\nstartup_dialog_result_is_safe() {',
+        /run_startup_dialog_observer\(\) \{[\s\S]*?\n\}\n\nstartup_dialog_result_is_safe\(\) \{/u,
+        'run_startup_dialog_observer() {\n  echo "no_safe_dialog"\n}\n\nstartup_dialog_result_is_safe() {',
       );
       assert.notEqual(fixtureStartSource, productStartSource);
       await writeFile(startPath, fixtureStartSource, "utf8");
@@ -195,7 +195,6 @@ sleep 0.5
         "--render-root", freshRender,
         "--bridge-owner", "fresh-owner",
         "--bridge-generation", "9",
-        "--no-startup-dialog-assist",
       ], {
         cwd: fixture,
         env: { ...process.env, ...polluted, OPENREAPER_START_WAIT_SECONDS: "1" },

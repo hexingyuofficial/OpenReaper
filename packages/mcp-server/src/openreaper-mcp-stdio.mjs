@@ -25,7 +25,10 @@ import {
 import { createDiscoveryCatalog } from "./discovery-menu-v1.mjs";
 import { createGetStateArtifactRuntime } from "./get-state-runtime-v1.mjs";
 import { createAudioBatchArtifactWriter } from "./audio-batch-artifact-writer-v1.mjs";
-import { createLiveBridgeExecutorFromEnv } from "./live-bridge-executor-v1.mjs";
+import {
+  createLiveBridgeExecutorFromEnv,
+  LIVE_BRIDGE_LIVENESS_STATUS,
+} from "./live-bridge-executor-v1.mjs";
 import {
   createOpenReaperAgentStartupGuidance,
 } from "./openreaper-agent-startup-guidance-v1.mjs";
@@ -86,10 +89,11 @@ export const CALL_RECIPE_STAGE_DISPATCH_TIMEOUT_MS = 300_000;
 async function main() {
   const callContext = createAlpha3_2C1CallContextManager({ env: process.env });
   const liveBridge = createLiveBridgeExecutorFromEnv(process.env);
-  const projectIndexRuntime = await openConfiguredProjectIndexRuntime({
+  const projectIndexBinding = await createConfiguredProjectIndexBinding({
     env: process.env,
     callContext,
   });
+  const projectIndexRuntime = projectIndexBinding?.runtime ?? null;
   const artifactRuntime = process.env.OPENREAPER_ARTIFACT_ROOT
     ? createGetStateArtifactRuntime({ artifactRoot: process.env.OPENREAPER_ARTIFACT_ROOT })
     : null;
@@ -150,11 +154,34 @@ async function main() {
     `Check whether the OpenReaper MCP server is loaded and whether a live bridge is configured. ${AGENT_START_HERE_HINT}`,
     {},
     async () => {
-      const runtimeReadiness = await composeAlpha3_2B3RuntimeDoctorReadiness({
-        liveBridge,
-        env: process.env,
-      });
-      return jsonToolResult({
+      let authoritativeIdentity;
+      try {
+        authoritativeIdentity = await resolveAuthoritativeBridgeIdentity({ callContext, liveBridge });
+        await projectIndexBinding?.activate(authoritativeIdentity);
+      } catch (error) {
+        if (!(error instanceof Alpha3_2C1CallContextError)) throw error;
+        return jsonToolResult({
+          ok: false,
+          contract: "openreaper.ping.v1",
+          error: {
+            source: "stdio_context",
+            code: error.code,
+            message: error.message,
+            recoverable: true,
+            details: error.details,
+          },
+        }, true);
+      }
+      return callContext.runWithIdentity(authoritativeIdentity, async () => {
+        const runtimeReadiness = await composeAlpha3_2B3RuntimeDoctorReadiness({
+          liveBridge,
+          env: {
+            ...process.env,
+            OPENREAPER_LIVE_BRIDGE_OWNER: authoritativeIdentity.owner,
+            OPENREAPER_LIVE_BRIDGE_GENERATION: String(authoritativeIdentity.generation),
+          },
+        });
+        return jsonToolResult({
         ok: true,
         product: "OpenReaper",
         kernel: KERNEL,
@@ -162,6 +189,7 @@ async function main() {
         tools: [...TOOL_SURFACE],
         live_bridge_configured: liveBridge.configured,
         live_bridge: runtimeReadiness.bridge,
+        authoritative_bridge_identity: authoritativeIdentity,
         runtime_readiness: runtimeReadiness,
         project_index: projectIndexRuntime?.status?.() ?? {
           ok: false,
@@ -181,6 +209,7 @@ async function main() {
             first_round: OPENREAPER_AGENT_FIRST_ROUND_FLOW,
           },
         },
+        });
       });
     },
   );
@@ -272,16 +301,20 @@ async function main() {
       deadline_ms: z.number().int().positive().max(EXECUTION_DEADLINE_MAX_MS).optional(),
     },
     async (request, extra) => {
-      let normalized;
       try {
-        const context = callContext.allocate(request?.context);
-        normalized = normalizeCallTemplateToolRequest(request ?? {}, context);
+        const called = await callTemplateWithAuthoritativeIdentity({
+          request: request ?? {},
+          signal: extra?.signal,
+          callContext,
+          runtime,
+          liveBridge,
+          projectIndexBinding,
+        });
+        return jsonToolResult(called, !called?.ok && isHardToolError(called));
       } catch (error) {
         if (!(error instanceof Alpha3_2C1CallContextError)) throw error;
         return jsonToolResult(callContextErrorResult(request, error), true);
       }
-      const called = await runtime.call_template(normalized, { signal: extra?.signal });
-      return jsonToolResult(called, !called?.ok && isHardToolError(called));
     },
   );
 
@@ -367,7 +400,17 @@ async function main() {
           },
         }, true);
       }
-      const result = await boundCallRecipeRuntime.call_recipe(request ?? {}, { signal: extra?.signal });
+      const liveOperation = request?.operation === "run" || request?.operation === "resume";
+      const authoritativeIdentity = liveOperation
+        ? await resolveAuthoritativeBridgeIdentity({ callContext, liveBridge })
+        : null;
+      if (authoritativeIdentity) await projectIndexBinding?.activate(authoritativeIdentity);
+      const result = liveOperation
+        ? await callContext.runWithIdentity(
+            authoritativeIdentity,
+            () => boundCallRecipeRuntime.call_recipe(request ?? {}, { signal: extra?.signal }),
+          )
+        : await boundCallRecipeRuntime.call_recipe(request ?? {}, { signal: extra?.signal });
       return jsonToolResult(result, result?.ok === false);
     },
   );
@@ -375,11 +418,11 @@ async function main() {
   const transport = new StdioServerTransport();
   const previousOnClose = transport.onclose;
   transport.onclose = () => {
-    try { projectIndexRuntime?.close?.(); } catch {}
+    try { projectIndexBinding?.close?.(); } catch {}
     previousOnClose?.();
   };
   process.once("beforeExit", () => {
-    try { projectIndexRuntime?.close?.(); } catch {}
+    try { projectIndexBinding?.close?.(); } catch {}
   });
   await server.connect(transport);
   process.stderr.write("[openreaper-mcp] stdio server ready\n");
@@ -481,13 +524,83 @@ function compactExactMacroGuide(guide) {
 }
 
 
-async function openConfiguredProjectIndexRuntime({ env, callContext }) {
+export async function createConfiguredProjectIndexBinding({
+  env,
+  callContext,
+  openRuntime = openConfiguredProjectIndexRuntime,
+}) {
   const stateRoot = env.OPENREAPER_PROJECT_INDEX_STATE_ROOT;
   if (typeof stateRoot !== "string" || stateRoot === "") return null;
-  const generationText = env.OPENREAPER_LIVE_BRIDGE_GENERATION;
-  const generation = typeof generationText === "string" && /^(?:0|[1-9][0-9]*)$/u.test(generationText)
-    ? Number(generationText)
-    : null;
+  const initialIdentity = callContext.identity;
+  const initial = await openRuntime({
+    env,
+    identity: initialIdentity,
+    logicalSessionFallback: callContext?.contract,
+  });
+  if (initial?.ok !== true || !initial.adapter) {
+    return Object.freeze({
+      runtime: initial,
+      activate: async () => initial,
+      close: (input = {}) => initial?.close?.(input),
+    });
+  }
+
+  const runtimes = new Map([[bridgeIdentityKey(initialIdentity), initial]]);
+  const opening = new Map();
+  let closed = false;
+  const runtimeForCurrentScope = () => {
+    const identity = callContext.currentIdentity();
+    const runtime = runtimes.get(bridgeIdentityKey(identity));
+    if (!runtime) throw new Error(`Project Index generation ${identity.generation} was not activated for this call.`);
+    return runtime;
+  };
+  const adapterProxy = createIdentityScopedDelegate(() => runtimeForCurrentScope().adapter);
+  const runtimeProxy = createIdentityScopedDelegate(runtimeForCurrentScope, {
+    adapter: adapterProxy,
+  });
+
+  return Object.freeze({
+    runtime: runtimeProxy,
+    async activate(identity) {
+      if (closed) throw new Error("Project Index generation binding is closed.");
+      const key = bridgeIdentityKey(identity);
+      if (runtimes.has(key)) return runtimes.get(key);
+      if (!opening.has(key)) {
+        opening.set(key, (async () => {
+          const candidate = await openRuntime({
+            env,
+            identity,
+            logicalSessionFallback: callContext?.contract,
+          });
+          if (candidate?.ok !== true || !candidate.adapter) {
+            try { candidate?.close?.(); } catch {}
+            const error = new Alpha3_2C1CallContextError(
+              "CALL_TEMPLATE_PROJECT_INDEX_GENERATION_ACTIVATION_FAILED",
+              "The Project Index could not bind to the authoritative Bridge generation.",
+              { owner: identity.owner, generation: identity.generation },
+            );
+            throw error;
+          }
+          runtimes.set(key, candidate);
+          return candidate;
+        })().finally(() => opening.delete(key)));
+      }
+      return opening.get(key);
+    },
+    close(input = {}) {
+      closed = true;
+      const statuses = [];
+      for (const runtime of new Set(runtimes.values())) {
+        try { statuses.push(runtime.close?.(input)); } catch {}
+      }
+      runtimes.clear();
+      return statuses;
+    },
+  });
+}
+
+async function openConfiguredProjectIndexRuntime({ env, identity, logicalSessionFallback }) {
+  const stateRoot = env.OPENREAPER_PROJECT_INDEX_STATE_ROOT;
   const projectPath = typeof env.OPENREAPER_CURRENT_PROJECT_PATH === "string" && env.OPENREAPER_CURRENT_PROJECT_PATH
     ? env.OPENREAPER_CURRENT_PROJECT_PATH
     : undefined;
@@ -500,17 +613,62 @@ async function openConfiguredProjectIndexRuntime({ env, callContext }) {
     stateRoot,
     projectPath,
     projectRef,
-    bridgeOwner: env.OPENREAPER_LIVE_BRIDGE_OWNER,
-    bridgeGeneration: generation,
+    bridgeOwner: identity.owner,
+    bridgeGeneration: identity.generation,
     logicalSessionKey: env.OPENREAPER_PROJECT_INDEX_LOGICAL_SESSION_KEY
       ?? env.OPENREAPER_MCP_PACKAGE_ROOT
-      ?? callContext?.contract
+      ?? logicalSessionFallback
       ?? "openreaper-stdio",
     reservedRoots: [
       env.OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR,
       env.OPENREAPER_ARTIFACT_ROOT,
       env.OPENREAPER_LIVE_SMOKE_RENDER_ROOT,
     ].filter((value) => typeof value === "string" && value !== ""),
+  });
+}
+
+function bridgeIdentityKey(identity) {
+  if (
+    !identity
+    || typeof identity.owner !== "string"
+    || identity.owner === ""
+    || !Number.isSafeInteger(identity.generation)
+    || identity.generation < 1
+  ) {
+    throw new Alpha3_2C1CallContextError(
+      "CALL_TEMPLATE_BRIDGE_IDENTITY_INVALID",
+      "A valid authoritative Bridge identity is required for Project Index activation.",
+    );
+  }
+  return `${identity.owner}\u0000${identity.generation}`;
+}
+
+function createIdentityScopedDelegate(resolveTarget, overrides = {}) {
+  const methodCache = new Map();
+  const hasOverride = (property) => Object.prototype.hasOwnProperty.call(overrides, property);
+  return new Proxy({}, {
+    get(_target, property) {
+      if (hasOverride(property)) return overrides[property];
+      const value = resolveTarget()?.[property];
+      if (typeof value !== "function") return value;
+      if (!methodCache.has(property)) {
+        methodCache.set(property, (...args) => {
+          const current = resolveTarget();
+          return current[property](...args);
+        });
+      }
+      return methodCache.get(property);
+    },
+    has(_target, property) {
+      return hasOverride(property) || property in resolveTarget();
+    },
+    ownKeys() {
+      return [...new Set([...Reflect.ownKeys(resolveTarget()), ...Reflect.ownKeys(overrides)])];
+    },
+    getOwnPropertyDescriptor(_target, property) {
+      if (!hasOverride(property) && !(property in resolveTarget())) return undefined;
+      return { configurable: true, enumerable: true };
+    },
   });
 }
 
@@ -522,6 +680,81 @@ function normalizeCallTemplateToolRequest(request, context) {
     input: request.input ?? request.params ?? {},
     context,
   };
+}
+
+export async function resolveAuthoritativeBridgeIdentity({ callContext, liveBridge }) {
+  const installed = callContext?.identity;
+  if (!installed || liveBridge?.configured !== true || typeof liveBridge?.executor?.probeLiveness !== "function") {
+    return installed;
+  }
+  const probe = await liveBridge.executor.probeLiveness({ expectedOwner: installed.owner });
+  if (probe?.status === LIVE_BRIDGE_LIVENESS_STATUS.OWNER_MISMATCH) {
+    throw new Alpha3_2C1CallContextError(
+      "CALL_TEMPLATE_BRIDGE_OWNER_MISMATCH",
+      "The live Bridge owner does not match this OpenReaper installation.",
+      { expected: installed.owner, observed: probe?.heartbeat?.observed?.active_owner ?? null },
+    );
+  }
+  const observed = probe?.heartbeat?.observed;
+  if (
+    probe?.status === LIVE_BRIDGE_LIVENESS_STATUS.READY
+    && observed?.active_owner === installed.owner
+    && Number.isSafeInteger(observed?.active_generation)
+    && observed.active_generation >= 1
+  ) {
+    return Object.freeze({ owner: observed.active_owner, generation: observed.active_generation });
+  }
+  return installed;
+}
+
+export async function callTemplateWithAuthoritativeIdentity({ request, signal, callContext, runtime, liveBridge, projectIndexBinding = null }) {
+  let attempt = 0;
+  while (attempt < 2) {
+    const identity = await resolveAuthoritativeBridgeIdentity({ callContext, liveBridge });
+    await projectIndexBinding?.activate(identity);
+    const called = await callContext.runWithIdentity(identity, async () => {
+      const context = callContext.allocate(request?.context);
+      const normalized = normalizeCallTemplateToolRequest(request ?? {}, context);
+      return runtime.call_template(normalized, { signal });
+    });
+    if (attempt === 0 && isZeroWriteGenerationMismatch(called)) {
+      attempt += 1;
+      continue;
+    }
+    return called;
+  }
+  throw new Error("unreachable authoritative Bridge retry state");
+}
+
+export function isZeroWriteGenerationMismatch(value) {
+  const seen = new Set();
+  return visit(value);
+
+  function visit(current) {
+    if (!current || typeof current !== "object" || seen.has(current)) return false;
+    seen.add(current);
+    const children = Object.values(current);
+    const directMismatch = children.includes("bridge_generation_mismatch");
+    const directZeroWrite = current.zero_write === true;
+    if (directMismatch && contains(current, (key, child) => key === "zero_write" && child === true)) return true;
+    if (directZeroWrite && contains(current, (_key, child) => child === "bridge_generation_mismatch")) return true;
+    return children.some((child) => visit(child));
+  }
+
+  function contains(root, predicate) {
+    const pending = [root];
+    const visited = new Set();
+    while (pending.length > 0) {
+      const current = pending.pop();
+      if (!current || typeof current !== "object" || visited.has(current)) continue;
+      visited.add(current);
+      for (const [key, child] of Object.entries(current)) {
+        if (predicate(key, child)) return true;
+        if (child && typeof child === "object") pending.push(child);
+      }
+    }
+    return false;
+  }
 }
 
 function callContextErrorResult(request, error) {

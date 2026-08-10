@@ -30,7 +30,49 @@ EFFECTIVE_OFFICIAL_EXECUTABLE_RECIPE_ROOT="${INSTALL_ROOT}/session/executable-re
 EFFECTIVE_OFFICIAL_EXECUTABLE_RECIPE_PARENT="${EFFECTIVE_OFFICIAL_EXECUTABLE_RECIPE_ROOT:h}"
 EFFECTIVE_BRIDGE_SCRIPT_PATH="${OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH:-${SERVER_ROOT}/reaper/bridge/openreaper-live-bridge.lua}"
 EFFECTIVE_BRIDGE_OWNER="${OPENREAPER_LIVE_BRIDGE_OWNER:-openreaper-alpha}"
-EFFECTIVE_BRIDGE_GENERATION="${OPENREAPER_LIVE_BRIDGE_GENERATION:-1}"
+EFFECTIVE_BRIDGE_GENERATION="${OPENREAPER_LIVE_BRIDGE_GENERATION:-}"
+
+resolve_current_bridge_generation() {
+  node --input-type=module - "${EFFECTIVE_TRANSPORT_DIR}" "${INSTALL_ROOT}/session" "${EFFECTIVE_BRIDGE_OWNER}" <<'NODE'
+import { lstat, readFile } from "node:fs/promises";
+import path from "node:path";
+
+const [transportDir, sessionRoot, owner] = process.argv.slice(2);
+const candidates = [
+  {
+    path: path.join(transportDir, "openreaper-bridge-liveness-v1.json"),
+    read(value) {
+      return value?.contract === "openreaper.bridge_liveness.v1" && value?.active_owner === owner
+        ? value.active_generation
+        : null;
+    },
+  },
+  {
+    path: path.join(sessionRoot, "bridge-generation-v1.json"),
+    read(value) {
+      return value?.contract === "openreaper.bridge_generation.v1" ? value.generation : null;
+    },
+  },
+];
+for (const candidate of candidates) {
+  try {
+    const entry = await lstat(candidate.path);
+    if (entry.isSymbolicLink() || !entry.isFile() || entry.size < 2 || entry.size > 2048) continue;
+    const generation = candidate.read(JSON.parse(await readFile(candidate.path, "utf8")));
+    if (Number.isSafeInteger(generation) && generation >= 1) {
+      process.stdout.write(String(generation));
+      break;
+    }
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+}
+NODE
+}
+
+if [[ -z "${EFFECTIVE_BRIDGE_GENERATION}" ]]; then
+  EFFECTIVE_BRIDGE_GENERATION="$(resolve_current_bridge_generation)"
+fi
 
 if [[ "${EFFECTIVE_EXECUTABLE_RECIPE_ROOT}" != /* || "${EFFECTIVE_EXECUTABLE_RECIPE_ROOT:A}" == / || -L "${EFFECTIVE_EXECUTABLE_RECIPE_ROOT}" || ( -e "${EFFECTIVE_EXECUTABLE_RECIPE_ROOT}" && ! -d "${EFFECTIVE_EXECUTABLE_RECIPE_ROOT}" ) ]]; then
   print -u2 -- "[OpenReaper] executable recipe root must be an absolute non-symlink directory"
@@ -243,7 +285,11 @@ export OPENREAPER_ARTIFACT_ROOT="${EFFECTIVE_ARTIFACT_ROOT}"
 export OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT="${EFFECTIVE_LIVE_SMOKE_ARTIFACT_ROOT}"
 export OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH="${EFFECTIVE_BRIDGE_SCRIPT_PATH}"
 export OPENREAPER_LIVE_BRIDGE_OWNER="${EFFECTIVE_BRIDGE_OWNER}"
-export OPENREAPER_LIVE_BRIDGE_GENERATION="${EFFECTIVE_BRIDGE_GENERATION}"
+if [[ -n "${EFFECTIVE_BRIDGE_GENERATION}" ]]; then
+  export OPENREAPER_LIVE_BRIDGE_GENERATION="${EFFECTIVE_BRIDGE_GENERATION}"
+else
+  unset OPENREAPER_LIVE_BRIDGE_GENERATION 2>/dev/null || true
+fi
 mkdir -p -- "${EFFECTIVE_EXECUTABLE_RECIPE_ROOT}"
 if [[ -L "${EFFECTIVE_EXECUTABLE_RECIPE_ROOT}" || ! -d "${EFFECTIVE_EXECUTABLE_RECIPE_ROOT}" ]]; then
   print -u2 -- "[OpenReaper] executable recipe root could not be safely prepared"

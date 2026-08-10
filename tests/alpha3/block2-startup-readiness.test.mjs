@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
@@ -39,67 +39,33 @@ const BRIDGE_LAUNCHER = path.join(REPO_ROOT, "scripts/openreaper-alpha-package/o
 const STARTUP_ASSISTANT = path.join(REPO_ROOT, "packages/mcp-server/src/alpha3-d1-startup-assistant-v1.mjs");
 
 describe("Alpha3 Block2 startup and connection readiness", () => {
-  it("requires an explicit first-use choice and persists only always or manual", () => {
-    const root = mkdtempSync(path.join(os.tmpdir(), "openreaper-start-consent-"));
+  it("ships no startup-window automation and rejects every legacy automation switch", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "openreaper-start-read-only-"));
     const startPath = path.join(root, "current", "bin", "openreaper-start");
     const policyPath = path.join(root, "data", "startup-dialog-consent");
-    const missingReaperApp = path.join(root, "MissingREAPER.app");
     mkdirSync(path.dirname(startPath), { recursive: true });
     copyFileSync(START_HELPER, startPath);
     copyFileSync(BRIDGE_LAUNCHER, path.join(path.dirname(startPath), "openreaper-start-mcp-bridge.lua"));
     chmodSync(startPath, 0o755);
     try {
-      const first = spawnSync(startPath, [], { encoding: "utf8" });
-      assert.equal(first.status, 3);
-      assert.match(first.stderr, /startup-status=needs_user_consent/u);
-      assert.match(first.stderr, /once, always, or handle windows themselves/u);
-
-      const internalOnly = spawnSync(startPath, ["--startup-dialog-consent", "manual_once"], { encoding: "utf8" });
-      assert.equal(internalOnly.status, 2);
-      assert.match(internalOnly.stderr, /must be once, always, or manual/u);
-
-      const always = spawnSync(startPath, ["--startup-dialog-consent", "always", "--reaper-app", missingReaperApp], { encoding: "utf8" });
-      assert.equal(always.status, 2);
-      assert.equal(readFileSync(policyPath, "utf8"), "always\n");
-      assert.equal(statSync(policyPath).mode & 0o777, 0o600);
-
-      const reused = spawnSync(startPath, ["--reaper-app", missingReaperApp], { encoding: "utf8" });
-      assert.equal(reused.status, 2);
-      assert.doesNotMatch(reused.stderr, /startup-dialog-consent=required/u);
-
-      const manual = spawnSync(startPath, ["--startup-dialog-consent=manual", "--reaper-app", missingReaperApp], { encoding: "utf8" });
-      assert.equal(manual.status, 2);
-      assert.equal(readFileSync(policyPath, "utf8"), "manual\n");
-
-      const once = spawnSync(startPath, ["--startup-dialog-consent", "once", "--reaper-app", missingReaperApp], { encoding: "utf8" });
-      assert.equal(once.status, 2);
-      assert.equal(readFileSync(policyPath, "utf8"), "manual\n");
-
-      rmSync(path.dirname(policyPath), { recursive: true, force: true });
-      const redirectedData = path.join(root, "redirected-data");
-      mkdirSync(redirectedData);
-      writeFileSync(path.join(redirectedData, "startup-dialog-consent"), "always\n");
-      symlinkSync(redirectedData, path.dirname(policyPath));
-      const redirectedRead = spawnSync(startPath, ["--reaper-app", missingReaperApp], { encoding: "utf8" });
-      assert.equal(redirectedRead.status, 1);
-      assert.match(redirectedRead.stderr, /consent directory must be a real directory/u);
-
-      const redirectedWrite = spawnSync(startPath, ["--startup-dialog-consent", "always", "--reaper-app", missingReaperApp], { encoding: "utf8" });
-      assert.equal(redirectedWrite.status, 1);
-      assert.match(redirectedWrite.stderr, /consent directory must be a real directory/u);
-      assert.equal(readFileSync(path.join(redirectedData, "startup-dialog-consent"), "utf8"), "always\n");
-
-      rmSync(path.dirname(policyPath), { force: true });
-      mkdirSync(policyPath, { recursive: true });
-      const directoryDestination = spawnSync(startPath, ["--startup-dialog-consent", "always", "--reaper-app", missingReaperApp], { encoding: "utf8" });
-      assert.equal(directoryDestination.status, 1);
-      assert.match(directoryDestination.stderr, /consent path must be a regular non-symlink file/u);
-      assert.equal(statSync(policyPath).isDirectory(), true);
+      for (const args of [
+        ["--startup-dialog-consent", "once"],
+        ["--startup-dialog-consent=always"],
+        ["--no-startup-dialog-assist"],
+        ["--no-dialog-assist"],
+        ["--ignore-missing-media"],
+      ]) {
+        const rejected = spawnSync(startPath, args, { encoding: "utf8" });
+        assert.equal(rejected.status, 2, args.join(" "));
+        assert.match(rejected.stderr, /startup-window automation was removed from the customer product/u);
+      }
+      assert.equal(existsSync(policyPath), false);
 
       const source = readFileSync(startPath, "utf8");
-      assert.match(source, /constants\.O_EXCL \| constants\.O_NOFOLLOW/u);
-      assert.match(source, /randomBytes\(16\)/u);
-      assert.doesNotMatch(source, /\.tmp\.\$\$/u);
+      assert.doesNotMatch(source, /clickUniqueExactButton|click matchingElement|startup-status=needs_user_consent/u);
+      assert.match(source, /OpenReaper never clicks or closes REAPER windows/u);
+      assert.match(source, /STARTUP_USER_ACTION_REQUIRED/u);
+      assert.match(source, /--recover-existing/u);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -114,12 +80,12 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
     copyFileSync(START_HELPER, startPath);
     chmodSync(startPath, 0o755);
     try {
-      const missing = spawnSync(startPath, ["--startup-dialog-consent", "once"], { encoding: "utf8" });
+      const missing = spawnSync(startPath, [], { encoding: "utf8" });
       assert.equal(missing.status, 2);
       assert.match(missing.stderr, /trusted Bridge launcher must be a regular non-symlink package file/u);
 
       mkdirSync(launcherPath);
-      const directory = spawnSync(startPath, ["--startup-dialog-consent", "once"], { encoding: "utf8" });
+      const directory = spawnSync(startPath, [], { encoding: "utf8" });
       assert.equal(directory.status, 2);
       assert.match(directory.stderr, /regular non-symlink package file/u);
       rmSync(launcherPath, { recursive: true, force: true });
@@ -127,19 +93,19 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
       const outsideLauncher = path.join(root, "outside.lua");
       writeFileSync(outsideLauncher, "-- outside fixture\n", "utf8");
       symlinkSync(outsideLauncher, launcherPath);
-      const linked = spawnSync(startPath, ["--startup-dialog-consent", "once"], { encoding: "utf8" });
+      const linked = spawnSync(startPath, [], { encoding: "utf8" });
       assert.equal(linked.status, 2);
       assert.match(linked.stderr, /regular non-symlink package file/u);
 
       rmSync(launcherPath, { force: true });
       copyFileSync(BRIDGE_LAUNCHER, launcherPath);
       chmodSync(launcherPath, 0o000);
-      const unreadable = spawnSync(startPath, ["--startup-dialog-consent", "once"], { encoding: "utf8" });
+      const unreadable = spawnSync(startPath, [], { encoding: "utf8" });
       assert.equal(unreadable.status, 2);
       assert.match(unreadable.stderr, /trusted Bridge launcher is not readable/u);
       chmodSync(launcherPath, 0o444);
 
-      const untrustedScript = spawnSync(startPath, ["--startup-dialog-consent", "once", path.join(root, "untrusted.lua")], { encoding: "utf8" });
+      const untrustedScript = spawnSync(startPath, [path.join(root, "untrusted.lua")], { encoding: "utf8" });
       assert.equal(untrustedScript.status, 2);
       assert.match(untrustedScript.stderr, /refusing an untrusted command-line ReaScript argument/u);
 
@@ -170,7 +136,7 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
     assert.match(source, /if expected_launcher and expected_launcher ~= "" then/u);
   });
 
-  it("keeps missing-media dialog automation consent-bound and exact", () => {
+  it("classifies startup windows read-only and preserves the session for recovery", () => {
     const source = readFileSync(START_HELPER, "utf8");
     assert.match(source, /--recover-existing/u);
     assert.match(source, /verified_existing_reaper_pid\(\)/u);
@@ -182,13 +148,9 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
     assert.match(source, /if windowTitle is "Project Load Warning" then/u);
     assert.match(source, /my uiTextAreaContains\(reaperWindow, "in an off-line state", "filenames should be preserved"\)/u);
     assert.doesNotMatch(source, /combinedText|uiTextContains\(reaperWindow/u);
-    assert.doesNotMatch(source, /windowTitle is "Project Load Warning" or my uiElementNamed/u);
-    assert.match(source, /allowMissingMedia and isOfflineMediaWarning and my exactUiElementCount\(reaperWindow, "OK", "AXButton"\) is 1/u);
-    assert.match(source, /dismissed_missing_media_offline_warning:choice=OK/u);
-    assert.match(source, /return "blocked_user_decision:title=Project Load Warning"/u);
-    assert.match(source, /my exactUiElementCount\(reaperWindow, "Ignore all missing files", "AXButton"\) is 1/u);
-    assert.match(source, /my clickUniqueExactButton\(reaperWindow, "Ignore all missing files"\)/u);
-    assert.match(source, /set matchingElement to missing value[\s\S]+set matchCount to 0[\s\S]+if matchCount is not 1 then error "exact button is not unique"[\s\S]+click matchingElement/u);
+    assert.doesNotMatch(source, /clickUniqueExactButton|click matchingElement|perform action/u);
+    assert.match(source, /return "blocked_missing_media:choice=Ignore all missing files"/u);
+    assert.match(source, /return "blocked_missing_media_offline_warning:choice=OK"/u);
     assert.match(source, /set windowSubrole to subrole of reaperWindow as text/u);
     const windowClassificationIndex = source.lastIndexOf('set windowSubrole to ""');
     const deepTreeScanIndex = source.indexOf("set hasIgnoreMissingFiles to false");
@@ -200,7 +162,7 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
     assert.match(source, /if windowSubrole is not "AXWindow" and windowSubrole is not "AXStandardWindow" and windowSubrole is not "" then\s+return "blocked_unknown_dialog:title="/u);
     assert.match(source, /STARTUP_DIALOG_TIMEOUT_SECONDS="\$\{OPENREAPER_STARTUP_DIALOG_TIMEOUT_SECONDS:-15\}"/u);
     assert.match(source, /perl -e 'my \$seconds = shift @ARGV; alarm \$seconds; exec @ARGV or die/u);
-    assert.match(source, /"\$\{dialog_timeout_seconds\}"[\s\\]+\/usr\/bin\/osascript - "\$\{STARTUP_DIALOG_ASSIST\}" "\$\{IGNORE_MISSING_MEDIA\}" "\$\{reaper_pid\}"/u);
+    assert.match(source, /"\$\{dialog_timeout_seconds\}"[\s\\]+\/usr\/bin\/osascript - "\$\{reaper_pid\}"/u);
     assert.match(source, /blocked_dialog_inspection_timeout:seconds=/u);
     assert.match(source, /blocked_dialog_inspection_failed:status=/u);
     const directLaunchStart = source.indexOf('nohup "${REAPER_BIN}"');
@@ -212,7 +174,7 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
         < directLaunchSource.indexOf("wait_for_startup_hook"),
       "dialog classification must receive the direct launch PID",
     );
-    assert.match(source, /set launchedPid to item 3 of argv as integer/u);
+    assert.match(source, /set launchedPid to item 1 of argv as integer/u);
     assert.match(source, /every process whose unix id is launchedPid/u);
     assert.match(source, /if \(count of matchingProcesses\) is not 1 then return "blocked_reaper_identity:pid="/u);
     assert.doesNotMatch(source, /tell process "REAPER"/u);
@@ -220,9 +182,12 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
     assert.match(source, /set isProjectNotesWindow to my isExactProjectNotesWindow\(reaperWindow\)/u);
     assert.doesNotMatch(source, /if my uiElementNamed\(reaperWindow, "Notes"\) then set isProjectNotesWindow to true/u);
     assert.doesNotMatch(source, /if my uiElementNamed\(reaperWindow, "Show notes on project load"\) then set isProjectNotesWindow to true/u);
-    assert.match(source, /if not allowSafeActions then return "blocked_manual_dialog:title=Project Settings"/u);
+    assert.match(source, /return "blocked_manual_dialog:title=Project Settings"/u);
     assert.match(source, /blocked_dialog_classification:title=/u);
-    assert.doesNotMatch(source, /echo "disabled"/u);
+    assert.match(source, /startup-status=user_action_required/u);
+    assert.match(source, /blocker-code=STARTUP_USER_ACTION_REQUIRED/u);
+    assert.match(source, /STARTUP_PRESERVE_REAPER=true/u);
+    assert.match(source, /current REAPER PID and Bridge generation were preserved/u);
   });
 
   it("gives the startup public read probe a bounded slow-path window", () => {
@@ -287,7 +252,7 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
     assert.match(source, /manual recovery fallback/u);
   });
 
-  it("fails closed for every dialog-assist result outside the exact safe allowlist", () => {
+  it("fails closed for every observed window except the empty safe result", () => {
     const source = readFileSync(START_HELPER, "utf8");
     const functionStart = source.indexOf("startup_dialog_result_is_safe() {");
     const functionEnd = source.indexOf("\n}\n\nrecord_dialog_result()", functionStart);
@@ -295,16 +260,14 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
     assert.notEqual(functionEnd, -1);
     const classifier = source.slice(functionStart, functionEnd + 2);
 
-    for (const result of [
-      "no_safe_dialog",
-      "dismissed_project_notes",
-      "dismissed_missing_media:choice=Ignore all missing files",
-      "dismissed_missing_media_offline_warning:choice=OK",
-    ]) {
+    for (const result of ["no_safe_dialog"]) {
       assert.equal(runDialogClassifier(classifier, result), 0, result);
     }
 
     for (const result of [
+      "dismissed_project_notes",
+      "dismissed_missing_media:choice=Ignore all missing files",
+      "dismissed_missing_media_offline_warning:choice=OK",
       "unavailable",
       "blocked_dialog_inspection_timeout:seconds=5",
       "blocked_dialog_inspection_failed:status=1",
@@ -327,15 +290,13 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
     const readinessStart = source.indexOf("wait_for_startup_readiness() {");
     const readinessEnd = source.indexOf("\n}\n\ntrap 'launchservices_cleanup_on_exit'", readinessStart);
     const readiness = source.slice(readinessStart, readinessEnd);
-    const dialogIndex = readiness.indexOf('dialog_result="$(run_startup_dialog_assist)"');
+    const dialogIndex = readiness.indexOf('dialog_result="$(run_startup_dialog_observer)"');
     const decisionIndex = readiness.indexOf("if ! startup_dialog_result_is_safe \"${dialog_result}\"; then");
     const heartbeatIndex = readiness.indexOf("if bridge_heartbeat_ready; then");
     const probeIndex = readiness.indexOf("verify_public_bridge_read || return 1", heartbeatIndex);
-    const cleanScanIndex = readiness.indexOf('if [[ "${dialog_result}" != "no_safe_dialog" ]]', decisionIndex);
     assert.equal(readinessStart >= 0 && readinessEnd > readinessStart, true);
-    assert.equal(dialogIndex < decisionIndex && decisionIndex < cleanScanIndex, true);
-    assert.equal(cleanScanIndex < heartbeatIndex && heartbeatIndex < probeIndex, true);
-    assert.match(readiness, /if ! startup_dialog_result_is_safe "\$\{dialog_result\}"; then\s+echo "\[OpenReaper\] startup-dialog-blocker=\$\{dialog_result\}" >&2\s+return 2/u);
+    assert.equal(dialogIndex < decisionIndex && decisionIndex < heartbeatIndex && heartbeatIndex < probeIndex, true);
+    assert.match(readiness, /if ! startup_dialog_result_is_safe "\$\{dialog_result\}"; then[\s\S]+report_startup_user_action_required "\$\{dialog_result\}"\s+return 75/u);
     assert.doesNotMatch(readiness, /startup_dialog_result_requires_manual_clearance/u);
     assert.doesNotMatch(readiness, /startup_dialog_result_is_probe_indeterminate/u);
     assert.doesNotMatch(source, /startup_dialog_probe_is_unavailable/u);
@@ -343,30 +304,14 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
     const hookStart = source.indexOf("wait_for_startup_hook() {");
     const hookEnd = source.indexOf("\n}\n\nverify_public_bridge_read()", hookStart);
     const hook = source.slice(hookStart, hookEnd);
-    assert.equal(hook.indexOf("if startup_status_stage_ready; then") < hook.indexOf('dialog_result="$(run_startup_dialog_assist)"'), true);
-    assert.match(hook, /if startup_dialog_result_requires_manual_clearance "\$\{dialog_result\}"; then\s+sleep 0\.25\s+continue/u);
-    assert.match(hook, /if startup_dialog_result_is_probe_indeterminate "\$\{dialog_result\}"; then\s+sleep 0\.25\s+continue/u);
-    assert.match(source, /startup_dialog_result_requires_manual_clearance\(\) \{[\s\S]+if \[\[ "\$\{STARTUP_DIALOG_ASSIST\}" != "false" \]\]; then[\s\S]+blocked_user_decision:\*[\s\S]+blocked_unknown_dialog:\*/u);
-    assert.match(source, /startup_dialog_result_is_probe_indeterminate\(\) \{[\s\S]+blocked_dialog_classification:\*\|blocked_dialog_inspection_timeout:\*\|blocked_dialog_inspection_failed:\*/u);
-    const indeterminateStart = source.indexOf("startup_dialog_result_is_probe_indeterminate() {");
-    const indeterminateEnd = source.indexOf("\n}\n\nwait_for_startup_readiness()", indeterminateStart);
-    const indeterminate = source.slice(indeterminateStart, indeterminateEnd + 2);
-    assert.doesNotMatch(indeterminate, /blocked_unknown_dialog|blocked_user_decision|blocked_missing_media/u);
-    for (const result of [
-      "blocked_dialog_classification:title=Scanning VST plugins...:error=invalid index",
-      "blocked_dialog_inspection_timeout:seconds=15",
-      "blocked_dialog_inspection_failed:status=1",
-    ]) {
-      assert.equal(runDialogClassifier(indeterminate, result, "startup_dialog_result_is_probe_indeterminate"), 0, result);
-    }
-    for (const result of [
-      "blocked_unknown_dialog:title=Unexpected",
-      "blocked_user_decision:title=Project Load Warning",
-      "blocked_missing_media:choice=Ignore all missing files",
-      "unavailable",
-    ]) {
-      assert.equal(runDialogClassifier(indeterminate, result, "startup_dialog_result_is_probe_indeterminate"), 1, result);
-    }
+    const hookDialogIndex = hook.indexOf('dialog_result="$(run_startup_dialog_observer)"');
+    const hookDecisionIndex = hook.indexOf("if ! startup_dialog_result_is_safe \"${dialog_result}\"; then", hookDialogIndex);
+    const hookStageIndex = hook.indexOf("if startup_status_stage_ready; then", hookDecisionIndex);
+    assert.equal(hookDialogIndex >= 0 && hookDialogIndex < hookDecisionIndex && hookDecisionIndex < hookStageIndex, true);
+    assert.match(hook, /report_startup_user_action_required "\$\{dialog_result\}"\s+return 75/u);
+    assert.doesNotMatch(source, /startup_dialog_result_requires_manual_clearance|startup_dialog_result_allows_transient_observation|startup_dialog_result_is_probe_indeterminate/u);
+    assert.match(source, /terminate_process_group\(\$child, \$cleanup_ms\) if \$exit_code != 0 && \$exit_code != 75/u);
+    assert.match(source, /if \(\( original_status == 75 \)\); then\s+STARTUP_PRESERVE_REAPER=true/u);
   });
 
   it("summarizes startup readiness without opening REAPER or spawning processes", () => {
@@ -493,18 +438,14 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
     assert.equal(expandedProductSurface.agent_startup_guidance_snapshot.bridge_action.verification_probe, "call_template(template.transport.read_state)");
     assert.deepEqual(
       expandedProductSurface.agent_startup_guidance_snapshot.startup_dialog_assist.auto_dismisses,
-      ["project_settings_notes_show_notes_on_project_load"],
+      [],
     );
-    assert.equal(expandedProductSurface.agent_startup_guidance_snapshot.startup_dialog_assist.requires_first_use_consent, true);
-    assert.match(expandedProductSurface.agent_startup_guidance_snapshot.startup_dialog_assist.manual_behavior, /Never click/u);
-    assert.deepEqual(expandedProductSurface.agent_startup_guidance_snapshot.startup_dialog_assist.consent_choices, {
-      once: "--startup-dialog-consent once",
-      always: "--startup-dialog-consent always",
-      manual: "--startup-dialog-consent manual",
-    });
+    assert.equal(expandedProductSurface.agent_startup_guidance_snapshot.startup_dialog_assist.requires_first_use_consent, false);
+    assert.match(expandedProductSurface.agent_startup_guidance_snapshot.startup_dialog_assist.manual_behavior, /never click/iu);
+    assert.deepEqual(expandedProductSurface.agent_startup_guidance_snapshot.startup_dialog_assist.consent_choices, {});
     assert.deepEqual(
       expandedProductSurface.agent_startup_guidance_snapshot.startup_dialog_assist.does_not_dismiss,
-      ["missing_media_without_consent", "license_or_evaluation", "recovery", "plugin_or_fx", "version_notice", "unknown_reaper_window"],
+      ["all_native_reaper_windows"],
     );
     assert.equal(expandedProductSurface.agent_startup_guidance_snapshot.startup_lifetime.starts_reaper_with_openreaper_env, true);
     assert.equal(expandedProductSurface.agent_startup_guidance_snapshot.startup_lifetime.waits_for_reaper_process, true);
@@ -545,14 +486,14 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
     assert.equal(guidance.bridge_action.command_line_reascript_bridge, true);
     assert.equal(guidance.bridge_action.reconnect_after_action, true);
     assert.equal(guidance.bridge_action.verification_probe, "call_template(template.transport.read_state)");
-    assert.deepEqual(guidance.startup_dialog_assist.auto_dismisses, ["project_settings_notes_show_notes_on_project_load"]);
-    assert.equal(guidance.startup_dialog_assist.requires_first_use_consent, true);
-    assert.deepEqual(guidance.startup_dialog_assist.persistent_choices, ["always", "manual"]);
+    assert.deepEqual(guidance.startup_dialog_assist.auto_dismisses, []);
+    assert.equal(guidance.startup_dialog_assist.requires_first_use_consent, false);
+    assert.deepEqual(guidance.startup_dialog_assist.persistent_choices, []);
     assert.match(guidance.startup_dialog_assist.manual_behavior, /Never click/u);
-    assert.equal(guidance.startup_dialog_assist.policy_file, "/tmp/OpenReaper-alpha/../data/startup-dialog-consent");
+    assert.equal(guidance.startup_dialog_assist.policy_file, null);
     assert.deepEqual(
       guidance.startup_dialog_assist.does_not_dismiss,
-      ["missing_media_without_consent", "license_or_evaluation", "recovery", "plugin_or_fx", "version_notice", "unknown_reaper_window"],
+      ["all_native_reaper_windows"],
     );
     assert.equal(guidance.startup_lifetime.starts_reaper_with_openreaper_env, true);
     assert.equal(guidance.startup_lifetime.waits_for_reaper_process, true);
@@ -562,7 +503,7 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
     assert.match(guidance.agent_flow.map((step) => step.agent_action).join("\n"), /OpenReaper: Start MCP bridge/);
     assert.match(guidance.agent_flow.map((step) => step.agent_action).join("\n"), /manual recovery fallback/);
     assert.match(guidance.agent_flow.map((step) => step.agent_action).join("\n"), /public read probe/);
-    assert.match(guidance.agent_flow.map((step) => step.agent_action).join("\n"), /Do not auto-dismiss/);
+    assert.match(guidance.agent_flow.map((step) => step.agent_action).join("\n"), /never clicks or closes REAPER windows/u);
     assert.match(guidance.agent_flow.map((step) => step.agent_action).join("\n"), /reconnect/);
     assert.equal(guidance.safety.added_tools, 0);
     assert.equal(guidance.safety.hidden_executor, false);
@@ -576,12 +517,12 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
       platform: "win32",
     });
 
-    assert.equal(guidance.startup_dialog_assist.platform_scope, "windows_manual_only");
+    assert.equal(guidance.startup_dialog_assist.platform_scope, "windows_read_only");
     assert.equal(guidance.startup_dialog_assist.requires_first_use_consent, false);
     assert.deepEqual(guidance.startup_dialog_assist.consent_choices, {});
     assert.deepEqual(guidance.startup_dialog_assist.auto_dismisses, []);
     assert.equal(guidance.startup_dialog_assist.policy_file, null);
-    assert.match(guidance.agent_flow[0].agent_action, /Do not classify or dismiss/u);
+    assert.match(guidance.agent_flow[0].agent_action, /Do not dismiss native REAPER windows/u);
   });
 });
 

@@ -87,19 +87,30 @@ $env:OPENREAPER_LIVE_BRIDGE_OWNER = if ($env:OPENREAPER_LIVE_BRIDGE_OWNER) {
 } else {
     "openreaper-alpha"
 }
-$generationRecord = Join-Path $sessionRoot "bridge-generation-v1.json"
-if (-not $env:OPENREAPER_LIVE_BRIDGE_GENERATION -and (Test-Path -LiteralPath $generationRecord -PathType Leaf)) {
-    try {
-        $generation = Get-Content -LiteralPath $generationRecord -Raw | ConvertFrom-Json
-        if ($generation.contract -eq "openreaper.bridge_generation.v1" -and [int64]$generation.generation -ge 1) {
-            $env:OPENREAPER_LIVE_BRIDGE_GENERATION = [string][int64]$generation.generation
-        }
-    } catch {
-        throw "Bridge generation record could not be read safely: $($_.Exception.Message)"
-    }
-}
+$generationCandidates = @(
+    @{ Path = (Join-Path $transportRoot "openreaper-bridge-liveness-v1.json"); Contract = "openreaper.bridge_liveness.v1"; Field = "active_generation"; OwnerField = "active_owner" },
+    @{ Path = (Join-Path $sessionRoot "bridge-generation-v1.json"); Contract = "openreaper.bridge_generation.v1"; Field = "generation"; OwnerField = $null }
+)
 if (-not $env:OPENREAPER_LIVE_BRIDGE_GENERATION) {
-    $env:OPENREAPER_LIVE_BRIDGE_GENERATION = "1"
+    foreach ($candidate in $generationCandidates) {
+        if (-not (Test-Path -LiteralPath $candidate.Path -PathType Leaf)) { continue }
+        try {
+            $item = Get-Item -LiteralPath $candidate.Path -Force
+            if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or $item.Length -gt 2048) {
+                throw "generation source must be a bounded regular non-reparse-point file"
+            }
+            $record = Get-Content -LiteralPath $candidate.Path -Raw | ConvertFrom-Json
+            if ($record.contract -ne $candidate.Contract) { continue }
+            if ($candidate.OwnerField -and [string]$record.($candidate.OwnerField) -ne $env:OPENREAPER_LIVE_BRIDGE_OWNER) { continue }
+            $generation = [int64]$record.($candidate.Field)
+            if ($generation -ge 1) {
+                $env:OPENREAPER_LIVE_BRIDGE_GENERATION = [string]$generation
+                break
+            }
+        } catch {
+            throw "Bridge generation source could not be read safely: $($_.Exception.Message)"
+        }
+    }
 }
 if (-not $env:OPENREAPER_EXECUTABLE_RECIPE_RISK_GRANTS_JSON) {
     $env:OPENREAPER_EXECUTABLE_RECIPE_RISK_GRANTS_JSON = '["read","write","destructive"]'

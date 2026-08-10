@@ -41,8 +41,8 @@ it("reuses a verified healthy PID, isolates the Doctor from caller cwd, and trut
     await mkdir(renderRoot, { recursive: true });
     await writeFile(startPath, (await readFile(START_SOURCE, "utf8"))
       .replace(
-        /run_startup_dialog_assist\(\) \{[\s\S]*?\n\}\n\nstartup_dialog_result_is_safe\(\) \{/u,
-        "run_startup_dialog_assist() {\n  echo \"no_safe_dialog\"\n}\n\nstartup_dialog_result_is_safe() {",
+        /run_startup_dialog_observer\(\) \{[\s\S]*?\n\}\n\nstartup_dialog_result_is_safe\(\) \{/u,
+        "run_startup_dialog_observer() {\n  echo \"no_safe_dialog\"\n}\n\nstartup_dialog_result_is_safe() {",
       ),
       "utf8");
     await copyFile(BRIDGE_LAUNCHER_SOURCE, path.join(packageRoot, "bin", "openreaper-start-mcp-bridge.lua"));
@@ -88,7 +88,6 @@ export async function inspectAlpha3_2B3ReaperProcess({ sessionRoot }) {
       "--reaper-binary", fakeReaper,
       "--session-root", sessionRoot,
       "--render-root", renderRoot,
-      "--no-startup-dialog-assist",
       "--recover-existing",
     ];
     // Keep the healthy-Bridge fixture fresh across slow CI/macOS process setup.
@@ -244,7 +243,10 @@ exit 0
         assert.equal(error.code, 1);
         assert.match(error.stderr, /startup-status=blocked_startup_budget_exhausted/u);
         assert.match(error.stderr, /blocker-code=STARTUP_BUDGET_EXHAUSTED/u);
-        assert.match(error.stderr, /startup-budget-stage=public_bridge_read/u);
+        assert.match(
+          error.stderr,
+          /startup-budget-stage=(?:bridge_readiness_dialog_inspection|public_bridge_read)/u,
+        );
         return true;
       },
     );
@@ -383,8 +385,8 @@ it("reaps a newly launched REAPER after an early public-read failure in direct a
         // a wider bound than the product's native /bin/launchctl cleanup.
         .replace("STARTUP_LAUNCHCTL_CLEANUP_TIMEOUT_MS=300", "STARTUP_LAUNCHCTL_CLEANUP_TIMEOUT_MS=1000")
         .replace(
-          /run_startup_dialog_assist\(\) \{[\s\S]*?\n\}\n\nstartup_dialog_result_is_safe\(\) \{/u,
-          "run_startup_dialog_assist() {\n  echo \"no_safe_dialog\"\n}\n\nstartup_dialog_result_is_safe() {",
+          /run_startup_dialog_observer\(\) \{[\s\S]*?\n\}\n\nstartup_dialog_result_is_safe\(\) \{/u,
+          "run_startup_dialog_observer() {\n  echo \"no_safe_dialog\"\n}\n\nstartup_dialog_result_is_safe() {",
         )
         .replace(
           'capture_startup_reaper_identity() {\n  local candidate_pid="$1"',
@@ -508,7 +510,7 @@ const reaperArgs = args.slice(5);
       const args = mode === "launchservices"
         ? ["--reaper-app", fakeApp]
         : ["--direct-binary", "--reaper-binary", fakeReaper];
-      args.push("--session-root", sessionRoot, "--render-root", renderRoot, "--no-startup-dialog-assist");
+      args.push("--session-root", sessionRoot, "--render-root", renderRoot);
       await assert.rejects(
         execFileAsync(startPath, args, {
           cwd: root,

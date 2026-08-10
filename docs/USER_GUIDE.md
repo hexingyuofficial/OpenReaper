@@ -96,11 +96,11 @@ Check whether OpenReaper is healthy.
 For the installed package, the agent should:
 
 1. Run `~/.openreaper/current/bin/openreaper-start`.
-2. On macOS, first choose whether the exact safe startup-window assistance is
-   allowed once, always, or not at all. The agent must ask; it cannot infer this.
-3. Rerun the exact command printed by the helper. `always` and `manual` persist
-   across upgrades, while `once` applies only to that launch.
-4. Wait for the autonomous Bridge heartbeat and public read probe to pass.
+2. Wait for the Bridge heartbeat and public read probe to pass.
+3. If the helper reports `STARTUP_USER_ACTION_REQUIRED`, ask the user to resolve
+   the visible REAPER window; never click or close it automatically.
+4. Rerun `openreaper-start --recover-existing` so the same REAPER PID and Bridge
+   generation are reused instead of starting a duplicate instance.
 5. Reconnect the MCP server named `openreaper` if its prior session was stale.
 
 On Windows, the equivalent native PowerShell command is:
@@ -118,25 +118,13 @@ PowerShell window opened for a manual command is the operator's terminal, not
 OpenReaper product UI. Acceptance and automation launchers must hide that host
 instead of hiding REAPER.
 
-On macOS, the three exact choices are:
-
-```text
-openreaper-start --startup-dialog-consent once
-openreaper-start --startup-dialog-consent always
-openreaper-start --startup-dialog-consent manual
-```
-
-`manual` means OpenReaper will not click any startup window. It still checks
-the window state read-only and waits for you to clear every blocker before it
-can report the Bridge ready. Windows does not automate or classify native
-REAPER windows; resolve every Windows startup window yourself before retrying.
-
-macOS consent covers only Project Settings / Notes, `Ignore all missing files`,
-and the exact media-items-offline warning. License, recovery, plugin, version,
-ambiguous, decision-bearing, and unknown windows always fail closed, including
-after an `always` choice. The fixed package-local launcher starts the Bridge
-automatically; the `OpenReaper: Start MCP bridge` Action is recovery-only. SWS
-is not required.
+OpenReaper never clicks or closes REAPER startup windows on macOS or Windows.
+It observes them read-only. A blocking window returns
+`STARTUP_USER_ACTION_REQUIRED` while preserving the exact REAPER PID and Bridge
+generation. Resolve the visible window, then rerun
+`openreaper-start --recover-existing`; do not start a duplicate REAPER. The
+fixed package-local launcher starts the Bridge automatically; the
+`OpenReaper: Start MCP bridge` Action is recovery-only. SWS is not required.
 
 ## Project Index And Live Truth
 

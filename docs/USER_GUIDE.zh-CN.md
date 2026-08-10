@@ -108,11 +108,11 @@ REAPER 本身保持可见。手动执行命令时打开的 PowerShell 窗口是�
 不是 OpenReaper 产品界面。验收和自动化 launcher 必须隐藏该宿主，不能隐藏
 REAPER。
 
-仅 macOS 的首次启动必须选择 `once`、`always` 或 `manual`。只有获得许可后，
-OpenReaper 才可以自动关闭精确匹配的 Project Settings / Notes、`Ignore all
-missing files` 以及 media-items-offline warning。Windows 不自动化或分类原生
-REAPER 弹窗，必须由用户处理全部启动阻塞。license、recovery、plugin、version、
-含决策的窗口和未知窗口始终 fail-closed。此启动路径不要求 SWS。
+macOS 和 Windows 的启动弹窗都只做只读观察。OpenReaper 不会点击或关闭任何
+REAPER 弹窗。遇到阻塞时返回 `STARTUP_USER_ACTION_REQUIRED`，并保留准确的
+REAPER PID 和 Bridge generation；请用户处理可见弹窗后重新运行
+`openreaper-start --recover-existing`，不要启动第二个 REAPER。此启动路径不要求
+SWS。
 
 ## Project Index 与 live 真相
 

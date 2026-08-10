@@ -54,7 +54,7 @@ if [[ "${OPENREAPER_STARTUP_SUPERVISOR_ID:-}" != "${PPID}:$$" ]]; then
       my $waited = waitpid($child, WNOHANG);
       if ($waited == $child) {
         my $exit_code = exit_from_wait_status($?);
-        terminate_process_group($child, $cleanup_ms) if $exit_code != 0;
+        terminate_process_group($child, $cleanup_ms) if $exit_code != 0 && $exit_code != 75;
         exit $exit_code;
       }
       if ($forward_signal ne "") {
@@ -132,12 +132,8 @@ STARTUP_DOCTOR_SMOKE_MAX_MS=22000
 STARTUP_DOCTOR_READ_MAX_MS=15000
 STARTUP_DOCTOR_OVERHEAD_MS=1000
 STARTUP_DIALOG_TIMEOUT_SECONDS="${OPENREAPER_STARTUP_DIALOG_TIMEOUT_SECONDS:-15}"
-STARTUP_DIALOG_ASSIST=true
-IGNORE_MISSING_MEDIA=false
-STARTUP_DIALOG_CONSENT=""
-STARTUP_DIALOG_CONSENT_EXPLICIT=false
 RECOVER_EXISTING=false
-STARTUP_DIALOG_POLICY_FILE="${INSTALL_ROOT:h}/data/startup-dialog-consent"
+STARTUP_PRESERVE_REAPER=false
 LAUNCHCTL_BIN="/bin/launchctl"
 LAUNCHSERVICES_BIN="/usr/bin/osascript"
 STARTUP_PROCESS_QUERY_TIMEOUT_MS=750
@@ -207,28 +203,6 @@ require_option_value() {
     echo "[OpenReaper] ${option_name} requires a non-empty value" >&2
     exit 2
   fi
-}
-
-set_startup_dialog_consent_internal() {
-  local value="$1"
-  if [[ "${STARTUP_DIALOG_CONSENT_EXPLICIT}" == "true" && "${STARTUP_DIALOG_CONSENT}" != "${value}" ]]; then
-    echo "[OpenReaper] conflicting startup dialog consent options" >&2
-    exit 2
-  fi
-  STARTUP_DIALOG_CONSENT="${value}"
-  STARTUP_DIALOG_CONSENT_EXPLICIT=true
-}
-
-set_startup_dialog_consent() {
-  local value="$1"
-  case "${value}" in
-    once|always|manual) ;;
-    *)
-      echo "[OpenReaper] --startup-dialog-consent must be once, always, or manual" >&2
-      exit 2
-      ;;
-  esac
-  set_startup_dialog_consent_internal "${value}"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -319,22 +293,9 @@ while [[ $# -gt 0 ]]; do
       BRIDGE_GENERATION_EXPLICIT=true
       shift 2
       ;;
-    --startup-dialog-consent=*)
-      set_startup_dialog_consent "${1#*=}"
-      shift
-      ;;
-    --startup-dialog-consent)
-      require_option_value "$1" "$#" "${2-}"
-      set_startup_dialog_consent "$2"
-      shift 2
-      ;;
-    --no-startup-dialog-assist|--no-dialog-assist)
-      set_startup_dialog_consent_internal manual_once
-      shift
-      ;;
-    --ignore-missing-media)
-      set_startup_dialog_consent once
-      shift
+    --startup-dialog-consent|--startup-dialog-consent=*|--no-startup-dialog-assist|--no-dialog-assist|--ignore-missing-media)
+      echo "[OpenReaper] startup-window automation was removed from the customer product; resolve visible REAPER windows manually." >&2
+      exit 2
       ;;
     --recover-existing|--reuse-existing-session)
       RECOVER_EXISTING=true
@@ -389,21 +350,11 @@ same REAPER PID and verify an already-running Bridge; it cannot restart a
 stopped Bridge. This mode cannot select a new project or pass arbitrary REAPER
 arguments.
 
-Before the first assisted launch, choose one startup-dialog policy:
-  --startup-dialog-consent once    Assist this launch only; do not save consent.
-  --startup-dialog-consent always  Assist now and save consent for later launches.
-  --startup-dialog-consent manual  Save that the user will handle startup windows.
-With no saved policy or explicit choice, the helper asks the agent to obtain the
-user's choice and exits before starting REAPER. Saved choices live outside the
-replaceable install tree and survive upgrades.
-Manual means OpenReaper never clicks startup windows. It still inspects them
-read-only and cannot report ready until the user clears every blocking window.
-
-Consent applies only to the exact Project Settings / Notes, missing-media Ignore,
-and exact media-items-offline warning rules. License/evaluation, recovery,
-plugin, version, decision-bearing, ambiguous, and unknown dialogs always fail
-closed. --ignore-missing-media remains a one-launch compatibility alias for
-"once"; --no-startup-dialog-assist remains a one-launch manual/debug override.
+OpenReaper never clicks or closes REAPER windows. It observes startup windows
+read-only. When a visible window blocks startup, the helper reports
+STARTUP_USER_ACTION_REQUIRED and preserves the exact REAPER PID and generation
+so the user can resolve it and the agent can reconnect without starting a
+duplicate instance.
 HELP
       exit 0
       ;;
@@ -457,176 +408,6 @@ if [[ "${REAPER_RESOURCE_ROOT_EXPLICIT}" == "true" ]]; then
       exit 2
     fi
   done
-fi
-
-persist_startup_dialog_consent() {
-  local value="$1"
-  node --input-type=module - "${STARTUP_DIALOG_POLICY_FILE}" "${value}" <<'NODE'
-import { constants } from "node:fs";
-import { lstat, mkdir, open, realpath, rename, unlink } from "node:fs/promises";
-import { randomBytes } from "node:crypto";
-import path from "node:path";
-
-const [policyPathInput, value] = process.argv.slice(2);
-const policyPath = path.resolve(policyPathInput);
-const policyDir = path.dirname(policyPath);
-const policyRoot = path.dirname(policyDir);
-
-function fail(message) {
-  process.stderr.write(`[OpenReaper] ${message}\n`);
-  process.exitCode = 1;
-}
-
-async function assertPlainDirectory(candidate, label) {
-  const entry = await lstat(candidate);
-  if (entry.isSymbolicLink() || !entry.isDirectory()) throw new Error(`${label} must be a real directory: ${candidate}`);
-  return entry;
-}
-
-let tempPath = "";
-try {
-  await assertPlainDirectory(policyRoot, "startup dialog consent root");
-  await mkdir(policyDir, { mode: 0o700 }).catch((error) => {
-    if (error?.code !== "EEXIST") throw error;
-  });
-  const beforeDir = await assertPlainDirectory(policyDir, "startup dialog consent directory");
-  const [canonicalRoot, canonicalDir] = await Promise.all([realpath(policyRoot), realpath(policyDir)]);
-  if (canonicalDir !== path.join(canonicalRoot, path.basename(policyDir))) {
-    throw new Error(`startup dialog consent directory must not traverse a symlink: ${policyDir}`);
-  }
-  const existing = await lstat(policyPath).catch((error) => error?.code === "ENOENT" ? null : Promise.reject(error));
-  if (existing && (existing.isSymbolicLink() || !existing.isFile())) {
-    throw new Error(`startup dialog consent path must be a regular non-symlink file: ${policyPath}`);
-  }
-
-  tempPath = `${policyPath}.tmp.${randomBytes(16).toString("hex")}`;
-  const handle = await open(
-    tempPath,
-    constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
-    0o600,
-  );
-  try {
-    await handle.writeFile(`${value}\n`, "utf8");
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-
-  const afterDir = await assertPlainDirectory(policyDir, "startup dialog consent directory");
-  if (beforeDir.dev !== afterDir.dev || beforeDir.ino !== afterDir.ino || await realpath(policyDir) !== canonicalDir) {
-    throw new Error(`startup dialog consent directory changed during write: ${policyDir}`);
-  }
-  const destination = await lstat(policyPath).catch((error) => error?.code === "ENOENT" ? null : Promise.reject(error));
-  if (destination && (destination.isSymbolicLink() || !destination.isFile())) {
-    throw new Error(`startup dialog consent destination changed to an unsafe path: ${policyPath}`);
-  }
-  await rename(tempPath, policyPath);
-  tempPath = "";
-} catch (error) {
-  if (tempPath) await unlink(tempPath).catch(() => {});
-  fail(error?.message ?? String(error));
-}
-NODE
-}
-
-read_startup_dialog_consent() {
-  node --input-type=module - "${STARTUP_DIALOG_POLICY_FILE}" <<'NODE'
-import { constants } from "node:fs";
-import { lstat, open, realpath } from "node:fs/promises";
-import path from "node:path";
-
-const policyPath = path.resolve(process.argv[2]);
-const policyDir = path.dirname(policyPath);
-const policyRoot = path.dirname(policyDir);
-try {
-  const rootEntry = await lstat(policyRoot);
-  if (rootEntry.isSymbolicLink() || !rootEntry.isDirectory()) throw new Error(`startup dialog consent root must be a real directory: ${policyRoot}`);
-  const dirEntry = await lstat(policyDir);
-  if (dirEntry.isSymbolicLink() || !dirEntry.isDirectory()) throw new Error(`startup dialog consent directory must be a real directory: ${policyDir}`);
-  const [canonicalRoot, canonicalDir] = await Promise.all([realpath(policyRoot), realpath(policyDir)]);
-  if (canonicalDir !== path.join(canonicalRoot, path.basename(policyDir))) throw new Error(`startup dialog consent directory must not traverse a symlink: ${policyDir}`);
-  const pathEntry = await lstat(policyPath);
-  if (pathEntry.isSymbolicLink() || !pathEntry.isFile()) throw new Error(`startup dialog consent path must be a regular non-symlink file: ${policyPath}`);
-  const handle = await open(policyPath, constants.O_RDONLY | constants.O_NOFOLLOW);
-  try {
-    const handleEntry = await handle.stat();
-    if (!handleEntry.isFile() || handleEntry.dev !== pathEntry.dev || handleEntry.ino !== pathEntry.ino) throw new Error(`startup dialog consent file changed during read: ${policyPath}`);
-    process.stdout.write(await handle.readFile("utf8"));
-  } finally {
-    await handle.close();
-  }
-} catch (error) {
-  if (error?.code === "ENOENT") process.exit(3);
-  process.stderr.write(`[OpenReaper] ${error?.message ?? String(error)}\n`);
-  process.exit(1);
-}
-NODE
-}
-
-resolve_startup_dialog_consent() {
-  local stored=""
-  if [[ "${STARTUP_DIALOG_CONSENT_EXPLICIT}" != "true" ]]; then
-    if stored="$(read_startup_dialog_consent)"; then
-      case "${stored}" in
-        always|manual) STARTUP_DIALOG_CONSENT="${stored}" ;;
-        *)
-          echo "[OpenReaper] invalid saved startup dialog consent; choose once, always, or manual again" >&2
-          return 1
-          ;;
-      esac
-    else
-      local read_status=$?
-      if (( read_status != 3 )); then
-        return 1
-      fi
-      echo "[OpenReaper] startup-status=needs_user_consent" >&2
-      echo "[OpenReaper] startup-dialog-consent=required" >&2
-      echo "[OpenReaper] Ask the user: allow safe startup-window assistance once, always, or handle windows themselves?" >&2
-      echo "[OpenReaper] once: openreaper-start --startup-dialog-consent once" >&2
-      echo "[OpenReaper] always: openreaper-start --startup-dialog-consent always" >&2
-      echo "[OpenReaper] manual: openreaper-start --startup-dialog-consent manual" >&2
-      return 3
-    fi
-  fi
-
-  case "${STARTUP_DIALOG_CONSENT}" in
-    once)
-      STARTUP_DIALOG_ASSIST=true
-      IGNORE_MISSING_MEDIA=true
-      ;;
-    always)
-      STARTUP_DIALOG_ASSIST=true
-      IGNORE_MISSING_MEDIA=true
-      if [[ "${STARTUP_DIALOG_CONSENT_EXPLICIT}" == "true" ]]; then
-        persist_startup_dialog_consent always || return 1
-      fi
-      ;;
-    manual)
-      STARTUP_DIALOG_ASSIST=false
-      IGNORE_MISSING_MEDIA=false
-      if [[ "${STARTUP_DIALOG_CONSENT_EXPLICIT}" == "true" ]]; then
-        persist_startup_dialog_consent manual || return 1
-      fi
-      ;;
-    manual_once)
-      STARTUP_DIALOG_ASSIST=false
-      IGNORE_MISSING_MEDIA=false
-      ;;
-    *)
-      echo "[OpenReaper] unresolved startup dialog consent" >&2
-      return 1
-      ;;
-  esac
-}
-
-if resolve_startup_dialog_consent; then
-  :
-else
-  consent_status=$?
-  if (( consent_status == 3 )); then
-    exit 3
-  fi
-  exit 1
 fi
 
 if [[ -z "${TRANSPORT_DIR}" ]]; then
@@ -1116,8 +897,7 @@ else
 fi
 echo "[OpenReaper] bridge-action-fallback=OpenReaper: Start MCP bridge"
 echo "[OpenReaper] bridge-status=starting_automatically"
-echo "[OpenReaper] startup-dialog-consent=${STARTUP_DIALOG_CONSENT};policy=${STARTUP_DIALOG_POLICY_FILE}"
-echo "[OpenReaper] startup-dialog-assist=exact_safe_allowlist;missing_media_consent=${IGNORE_MISSING_MEDIA}"
+echo "[OpenReaper] startup-dialog-policy=user_mediated_read_only"
 echo "[OpenReaper] startup-dialog-timeout-seconds=${STARTUP_DIALOG_TIMEOUT_SECONDS}"
 echo "[OpenReaper] startup-budget-ms=${STARTUP_BUDGET_MS}"
 
@@ -1271,9 +1051,11 @@ JXA
       exit 1
     fi
     echo "${reaper_pid}" > "${PID_FILE}"
-    if ! wait_for_startup_hook "${reaper_pid}"; then
+    startup_hook_status=0
+    wait_for_startup_hook "${reaper_pid}" || startup_hook_status=$?
+    if (( startup_hook_status != 0 )); then
       echo "[OpenReaper] REAPER startup hook did not publish a valid startup stage before LaunchServices restoration." >&2
-      exit 1
+      exit "${startup_hook_status}"
     fi
     if ! restore_launchservices_env; then
       echo "[OpenReaper] LaunchServices environment restoration failed; startup is not successful." >&2
@@ -1295,9 +1077,11 @@ JXA
     fi
     disown "${reaper_pid}" 2>/dev/null || true
     echo "${reaper_pid}" > "${PID_FILE}"
-    if ! wait_for_startup_hook "${reaper_pid}"; then
+    startup_hook_status=0
+    wait_for_startup_hook "${reaper_pid}" || startup_hook_status=$?
+    if (( startup_hook_status != 0 )); then
       echo "[OpenReaper] direct REAPER startup hook did not publish a valid startup stage." >&2
-      exit 1
+      exit "${startup_hook_status}"
     fi
   fi
   echo "${reaper_pid}" > "${PID_FILE}"
@@ -1864,7 +1648,8 @@ discover_owned_startup_reaper_pid() {
 }
 
 cleanup_failed_startup_reaper() {
-  if [[ "${STARTUP_LAUNCH_ATTEMPTED}" != "true" || "${STARTUP_LAUNCH_ACCEPTED}" == "true" ]]; then
+  if [[ "${STARTUP_LAUNCH_ATTEMPTED}" != "true" || "${STARTUP_LAUNCH_ACCEPTED}" == "true" \
+      || "${STARTUP_PRESERVE_REAPER}" == "true" ]]; then
     return 0
   fi
   if [[ -n "${STARTUP_LAUNCHED_REAPER_PID}" && -z "${STARTUP_LAUNCHED_REAPER_IDENTITY}" ]] \
@@ -1917,6 +1702,9 @@ cleanup_failed_startup_reaper() {
 launchservices_cleanup_on_exit() {
   local original_status=$?
   trap - EXIT
+  if (( original_status == 75 )); then
+    STARTUP_PRESERVE_REAPER=true
+  fi
   if (( original_status != 0 )); then
     cleanup_failed_startup_reaper || true
   fi
@@ -2036,61 +1824,56 @@ wait_for_startup_hook() {
   local max_ticks=$(( START_WAIT_SECONDS * 4 ))
   local tick dialog_result pending_dialog_blocker=""
   for (( tick = 1; tick <= max_ticks; tick++ )); do
-    startup_budget_require_window "startup_hook" $(( STARTUP_CLEANUP_RESERVE_MS + 250 )) || return 1
+    if ! startup_budget_require_window "startup_hook" $(( STARTUP_CLEANUP_RESERVE_MS + 250 )); then
+      if [[ -n "${pending_dialog_blocker}" ]]; then
+        report_startup_user_action_required "${pending_dialog_blocker}"
+        return 75
+      fi
+      return 1
+    fi
     if ! kill -0 "${reaper_pid}" 2>/dev/null; then
       echo "[OpenReaper] REAPER exited before its startup hook published a stage. pid=${reaper_pid}" >&2
       return 1
     fi
-    # The startup hook is authoritative once it has published a valid stage.
-    # Do not let a slow or stale Accessibility query turn that success into a
-    # startup failure.
-    if startup_status_stage_ready; then
-      return 0
+    if ! startup_budget_require_window "startup_hook_dialog_inspection" $(( STARTUP_CLEANUP_RESERVE_MS + 1000 )); then
+      if [[ -n "${pending_dialog_blocker}" ]]; then
+        report_startup_user_action_required "${pending_dialog_blocker}"
+        return 75
+      fi
+      return 1
     fi
-    startup_budget_require_window "startup_hook_dialog_inspection" $(( STARTUP_CLEANUP_RESERVE_MS + 1000 )) || return 1
     # A project-load dialog can prevent REAPER from reaching the package launcher.
     # Reuse the exact safe classifier while LaunchServices still carries the
     # session environment; unknown and decision-bearing dialogs stay blocked.
-    dialog_result="$(run_startup_dialog_assist)"
+    dialog_result="$(run_startup_dialog_observer)"
     record_dialog_result "${dialog_result}"
-    # The hook can publish while a bounded AX query is in flight. Its stage is
-    # newer startup truth than the dialog snapshot returned by that query.
-    if startup_status_stage_ready; then
-      return 0
-    fi
+    # A published hook stage does not override a visible decision window. The
+    # read-only observer runs first so startup cannot report ready while a user
+    # choice is still blocking REAPER.
     if ! startup_dialog_result_is_safe "${dialog_result}"; then
-      if startup_dialog_result_requires_manual_clearance "${dialog_result}"; then
-        sleep 0.25
-        continue
-      fi
-      # Accessibility can lose a window while REAPER is replacing transient
-      # startup UI (for example, a VST scan window). That is not permission to
-      # click or classify the window. Keep waiting for authoritative startup
-      # truth within the existing bounded startup window.
-      if startup_dialog_result_is_probe_indeterminate "${dialog_result}"; then
-        sleep 0.25
-        continue
-      fi
-      # Never click an unknown or decision-bearing dialog. Require one stable
-      # repeat before failing so a transient window or an explicit external
-      # user dismissal cannot race the startup hook by a few milliseconds.
-      if startup_dialog_result_allows_transient_observation "${dialog_result}" \
-          && [[ "${pending_dialog_blocker}" != "${dialog_result}" ]]; then
+      # Require one stable repeat so a transient window replacement or a user
+      # dismissal cannot race the hook by a few milliseconds. Once stable,
+      # return the typed user-action result promptly, before the outer deadline
+      # can terminate the preserved REAPER process group.
+      if [[ "${pending_dialog_blocker}" != "${dialog_result}" ]]; then
         pending_dialog_blocker="${dialog_result}"
         sleep 0.25
         continue
       fi
-      echo "[OpenReaper] startup-dialog-blocker=${dialog_result}" >&2
-      return 2
+      report_startup_user_action_required "${dialog_result}"
+      return 75
     fi
     pending_dialog_blocker=""
-    if [[ "${dialog_result}" != "no_safe_dialog" ]]; then
-      sleep 0.25
-      continue
+    if startup_status_stage_ready; then
+      return 0
     fi
     sleep 0.25
   done
   startup_status_summary
+  if [[ -n "${pending_dialog_blocker}" ]]; then
+    report_startup_user_action_required "${pending_dialog_blocker}"
+    return 75
+  fi
   return 1
 }
 
@@ -2329,7 +2112,7 @@ NODE
   export OPENREAPER_LIVE_BRIDGE_GENERATION="${BRIDGE_GENERATION}"
 }
 
-run_startup_dialog_assist() {
+run_startup_dialog_observer() {
   if [[ "$(uname -s)" != "Darwin" || ! -x "/usr/bin/osascript" ]]; then
     echo "unavailable"
     return 0
@@ -2348,7 +2131,7 @@ run_startup_dialog_assist() {
   fi
   if assist_result="$(/usr/bin/perl -e 'my $seconds = shift @ARGV; alarm $seconds; exec @ARGV or die "exec failed: $!"' \
       "${dialog_timeout_seconds}" \
-      /usr/bin/osascript - "${STARTUP_DIALOG_ASSIST}" "${IGNORE_MISSING_MEDIA}" "${reaper_pid}" <<'APPLESCRIPT' 2>> "${START_LOG}"
+      /usr/bin/osascript - "${reaper_pid}" <<'APPLESCRIPT' 2>> "${START_LOG}"
 on exactUiElementCount(theWindow, targetName, targetRole)
   tell application "System Events"
     set matchCount to 0
@@ -2389,29 +2172,6 @@ on isExactProjectNotesWindow(theWindow)
   return false
 end isExactProjectNotesWindow
 
-on clickUniqueExactButton(theWindow, targetName)
-  tell application "System Events"
-    try
-      -- Safe buttons used by the startup allowlist are direct dialog
-      -- children. Avoid a second unbounded AX-tree traversal after the
-      -- classifier has already identified the exact dialog.
-      set uiElements to every button of theWindow whose name is targetName
-      set matchingElement to missing value
-      set matchCount to 0
-      repeat with uiElement in uiElements
-        set matchCount to matchCount + 1
-        set matchingElement to uiElement
-      end repeat
-      if matchCount is not 1 then error "exact button is not unique"
-      click matchingElement
-      return true
-    on error errorMessage
-      error errorMessage
-    end try
-  end tell
-  error "exact button disappeared before click"
-end clickUniqueExactButton
-
 on uiTextAreaContains(theWindow, firstNeedle, secondNeedle)
   tell application "System Events"
     try
@@ -2423,9 +2183,7 @@ on uiTextAreaContains(theWindow, firstNeedle, secondNeedle)
 end uiTextAreaContains
 
 on run argv
-set allowSafeActions to (item 1 of argv is "true")
-set allowMissingMedia to (item 2 of argv is "true")
-set launchedPid to item 3 of argv as integer
+set launchedPid to item 1 of argv as integer
 tell application "System Events"
   set matchingProcesses to every process whose unix id is launchedPid
   if (count of matchingProcesses) is not 1 then return "blocked_reaper_identity:pid=" & launchedPid
@@ -2442,13 +2200,7 @@ tell application "System Events"
         -- Notes tab name. Inspect the exact safe markers in one tree pass.
         set isProjectNotesWindow to my isExactProjectNotesWindow(reaperWindow)
         if isProjectNotesWindow then
-          if not allowSafeActions then return "blocked_manual_dialog:title=Project Settings"
-          try
-            my clickUniqueExactButton(reaperWindow, "OK")
-            return "dismissed_project_notes"
-          on error errorMessage
-            return "project_notes_seen_not_dismissed:" & errorMessage
-          end try
+          return "blocked_manual_dialog:title=Project Settings"
         end if
         return "project_settings_seen_but_not_notes"
       end if
@@ -2472,26 +2224,11 @@ tell application "System Events"
           if my exactUiElementCount(reaperWindow, "Ignore all missing files", "AXButton") is 1 then set hasIgnoreMissingFiles to true
         end try
         if hasIgnoreMissingFiles then
-          if allowMissingMedia then
-            try
-              my clickUniqueExactButton(reaperWindow, "Ignore all missing files")
-              return "dismissed_missing_media:choice=Ignore all missing files"
-            on error errorMessage
-              return "blocked_missing_media:choice=Ignore all missing files:error=" & errorMessage
-            end try
-          end if
           return "blocked_missing_media:choice=Ignore all missing files"
         end if
         if windowTitle is "Project Load Warning" then
           set isOfflineMediaWarning to my uiTextAreaContains(reaperWindow, "in an off-line state", "filenames should be preserved")
-          if allowMissingMedia and isOfflineMediaWarning and my exactUiElementCount(reaperWindow, "OK", "AXButton") is 1 then
-            try
-              my clickUniqueExactButton(reaperWindow, "OK")
-              return "dismissed_missing_media_offline_warning:choice=OK"
-            on error errorMessage
-              return "blocked_missing_media_offline_warning:choice=OK:error=" & errorMessage
-            end try
-          end if
+          if isOfflineMediaWarning and my exactUiElementCount(reaperWindow, "OK", "AXButton") is 1 then return "blocked_missing_media_offline_warning:choice=OK"
           return "blocked_user_decision:title=Project Load Warning"
         end if
         if windowSubrole is "AXDialog" or windowSubrole is "AXSheet" then
@@ -2532,7 +2269,7 @@ APPLESCRIPT
 
 startup_dialog_result_is_safe() {
   case "$1" in
-    no_safe_dialog|dismissed_project_notes|dismissed_missing_media:choice=Ignore\ all\ missing\ files|dismissed_missing_media_offline_warning:choice=OK)
+    no_safe_dialog)
       return 0
       ;;
   esac
@@ -2544,59 +2281,52 @@ record_dialog_result() {
   echo "[OpenReaper] dialog-event timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ") project=${PROJECT_PATH:-none} result=${result}" >> "${START_LOG}"
 }
 
-startup_dialog_result_requires_manual_clearance() {
-  if [[ "${STARTUP_DIALOG_ASSIST}" != "false" ]]; then
-    return 1
-  fi
-  case "$1" in
-    blocked_manual_dialog:*|project_notes_seen_not_dismissed:*|project_settings_seen_but_not_notes|blocked_missing_media:*|blocked_missing_media_offline_warning:*|blocked_user_decision:*|blocked_unknown_dialog:*)
-      return 0
-      ;;
-  esac
-  return 1
-}
-
-startup_dialog_result_allows_transient_observation() {
-  case "$1" in
-    blocked_unknown_dialog:*|blocked_user_decision:*|project_settings_seen_but_not_notes)
-      return 0
-      ;;
-  esac
-  return 1
-}
-
-startup_dialog_result_is_probe_indeterminate() {
-  case "$1" in
-    blocked_dialog_classification:*|blocked_dialog_inspection_timeout:*|blocked_dialog_inspection_failed:*)
-      return 0
-      ;;
-  esac
-  return 1
+report_startup_user_action_required() {
+  local dialog_result="$1"
+  STARTUP_PRESERVE_REAPER=true
+  echo "[OpenReaper] startup-status=user_action_required" >&2
+  echo "[OpenReaper] blocker-code=STARTUP_USER_ACTION_REQUIRED" >&2
+  echo "[OpenReaper] startup-dialog-blocker=${dialog_result}" >&2
+  echo "[OpenReaper] recovery=Resolve the visible REAPER window, then rerun openreaper-start --recover-existing. The current REAPER PID and Bridge generation were preserved." >&2
 }
 
 wait_for_startup_readiness() {
   local max_ticks=$(( START_WAIT_SECONDS * 4 ))
-  local tick dialog_result
+  local tick dialog_result pending_dialog_blocker=""
   if (( max_ticks < 1 )); then
     echo "[OpenReaper] OPENREAPER_START_WAIT_SECONDS must be at least 1 for verified startup." >&2
     return 1
   fi
   for (( tick = 1; tick <= max_ticks; tick++ )); do
-    startup_budget_require_window "bridge_readiness" $(( STARTUP_CLEANUP_RESERVE_MS + 250 )) || return 1
+    if ! startup_budget_require_window "bridge_readiness" $(( STARTUP_CLEANUP_RESERVE_MS + 250 )); then
+      if [[ -n "${pending_dialog_blocker}" ]]; then
+        report_startup_user_action_required "${pending_dialog_blocker}"
+        return 75
+      fi
+      return 1
+    fi
     assert_reaper_process_alive || return 1
-    startup_budget_require_window "bridge_readiness_dialog_inspection" $(( STARTUP_CLEANUP_RESERVE_MS + 1000 )) || return 1
-    dialog_result="$(run_startup_dialog_assist)"
+    if ! startup_budget_require_window "bridge_readiness_dialog_inspection" $(( STARTUP_CLEANUP_RESERVE_MS + 1000 )); then
+      if [[ -n "${pending_dialog_blocker}" ]]; then
+        report_startup_user_action_required "${pending_dialog_blocker}"
+        return 75
+      fi
+      return 1
+    fi
+    dialog_result="$(run_startup_dialog_observer)"
     record_dialog_result "${dialog_result}"
     # A live Bridge cannot override a decision dialog.  Inspect first on every
     # tick, then accept the heartbeat only after this process has no blocker.
     if ! startup_dialog_result_is_safe "${dialog_result}"; then
-      echo "[OpenReaper] startup-dialog-blocker=${dialog_result}" >&2
-      return 2
+      if [[ "${pending_dialog_blocker}" != "${dialog_result}" ]]; then
+        pending_dialog_blocker="${dialog_result}"
+        sleep 0.25
+        continue
+      fi
+      report_startup_user_action_required "${dialog_result}"
+      return 75
     fi
-    if [[ "${dialog_result}" != "no_safe_dialog" ]]; then
-      sleep 0.25
-      continue
-    fi
+    pending_dialog_blocker=""
     if bridge_heartbeat_ready; then
       verify_public_bridge_read || return 1
       echo "[OpenReaper] bridge-heartbeat=ready owner=${BRIDGE_OWNER} generation=${BRIDGE_GENERATION}"
@@ -2605,6 +2335,10 @@ wait_for_startup_readiness() {
     sleep 0.25
   done
   startup_status_summary
+  if [[ -n "${pending_dialog_blocker}" ]]; then
+    report_startup_user_action_required "${pending_dialog_blocker}"
+    return 75
+  fi
   if [[ "${RECOVER_EXISTING}" == "true" ]]; then
     echo "[OpenReaper] startup-status=blocked_same_instance_bridge_not_ready" >&2
     echo "[OpenReaper] blocker-code=SAME_INSTANCE_BRIDGE_ACTION_REQUIRED" >&2

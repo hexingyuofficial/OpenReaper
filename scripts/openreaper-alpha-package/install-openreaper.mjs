@@ -170,14 +170,15 @@ const report = {
     legacy_backup_path: null,
   },
   startup_dialog_assist: {
-    requires_first_use_consent: true,
-    consent_choices: ["once", "always", "manual"],
-    persistent_policy_file: path.join(path.dirname(installRoot), "data", "startup-dialog-consent"),
-    manual_behavior: "no_clicks_read_only_classification_wait_for_user_to_clear_blockers",
-    auto_dismisses: ["Project Settings / Notes show notes on project load"],
-    auto_dismisses_with_consent: ["Project Settings / Notes show notes on project load", "Ignore all missing files", "exact media-items-offline warning"],
-    explicit_per_launch_consent: { missing_media: "--ignore-missing-media" },
-    does_not_dismiss: ["missing media without consent", "license/evaluation", "recovery", "plugin/FX", "version", "unknown REAPER windows"],
+    mode: "user_mediated_read_only",
+    requires_first_use_consent: false,
+    consent_choices: [],
+    persistent_policy_file: null,
+    manual_behavior: "read_only_observation_preserve_pid_and_generation_wait_for_user",
+    auto_dismisses: [],
+    auto_dismisses_with_consent: [],
+    explicit_per_launch_consent: {},
+    does_not_dismiss: ["all native REAPER windows"],
   },
   transport_dir: transportDir,
   artifact_root: artifactRoot,
@@ -893,12 +894,11 @@ Startup lifetime: openreaper-start launches REAPER detached from the agent
 shell, waits for the REAPER process to stay alive, and returns the pid/log
 path for recovery.
 
-Startup window assist: on first use, the Agent must ask for once, always, or
-manual. Once/always may handle only exact Project Settings / Notes,
-Ignore all missing files, and the exact media-offline warning. Manual never
-clicks; it only checks read-only and waits for the user to clear blockers.
-License/evaluation, recovery, plugin/FX, version, ambiguous, decision-bearing,
-and unknown windows always fail closed.
+Startup windows are observed read-only. OpenReaper never clicks or closes them.
+Any blocking window returns STARTUP_USER_ACTION_REQUIRED while preserving the
+same REAPER PID and Bridge generation. Ask the user to resolve the visible
+window, then rerun openreaper-start --recover-existing; do not start a duplicate
+REAPER instance.
 
 openreaper-start passes the project and extra arguments to REAPER, and the
 installed conditional Scripts/__startup.lua hook starts the Bridge only when

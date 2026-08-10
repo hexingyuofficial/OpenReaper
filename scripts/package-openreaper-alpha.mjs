@@ -585,15 +585,11 @@ On macOS, LaunchServices is the default activation path. In a headless or
 locked development session, --direct-binary explicitly skips LaunchServices;
 the startup hook, heartbeat, and public read probe gates remain mandatory.
 
-Startup dialogs: before the first assisted launch, openreaper-start asks the
-agent to obtain one explicit user choice: safe assistance once, always, or
-manual handling. Use --startup-dialog-consent once|always|manual. The always
-and manual choices persist outside the replaceable install tree. Consent covers
-only exact Project Settings / Notes, missing-media Ignore, and media-offline warning rules;
-license/evaluation, recovery, plugin, version, ambiguous, and unknown windows
-always fail closed.
-Manual mode never clicks startup windows; it inspects read-only and waits for
-the user to clear every blocker before readiness can pass.
+Startup dialogs: OpenReaper never clicks or closes REAPER windows in the
+customer product. It observes startup windows read-only. A blocking window
+returns STARTUP_USER_ACTION_REQUIRED while preserving the exact REAPER PID and
+Bridge generation. Resolve the visible window, then rerun openreaper-start
+--recover-existing; do not start a duplicate REAPER.
 Each System Events inspection is bounded by
 OPENREAPER_STARTUP_DIALOG_TIMEOUT_SECONDS (default 15 seconds); timeout or
 inspection failure is a typed blocker and never a ready result.
@@ -2647,14 +2643,12 @@ async function smokePackagedOpenReaperStartHelper() {
     "reaper-log=",
     "bridge-action-fallback=OpenReaper: Start MCP bridge",
     "bridge-status=starting_automatically",
-    "startup-dialog-assist=exact_safe_allowlist",
+    "startup-dialog-policy=user_mediated_read_only",
     "Project Settings / Notes",
     "Show notes on project load",
-    "--ignore-missing-media",
-    "--startup-dialog-consent",
-    "startup-status=needs_user_consent",
-    "startup-dialog-consent=required",
-    "startup-dialog-consent must be once, always, or manual",
+    "STARTUP_USER_ACTION_REQUIRED",
+    "STARTUP_PRESERVE_REAPER",
+    "run_startup_dialog_observer",
     "blocked_unknown_dialog",
     "wait_for_startup_readiness()",
     "bridge-read-probe=passed",
@@ -2724,8 +2718,8 @@ async function smokePackagedOpenReaperStartHelper() {
     if (!text.includes("call_template(template.transport.read_state)") && !text.includes("public read probe")) {
       throw new Error(`${label} must explain the public read probe used to verify startup readiness.`);
     }
-    if (!text.includes("Project Settings") || !text.includes("Notes") || !text.includes("license/evaluation")) {
-      throw new Error(`${label} must explain the narrow Project Notes assist and user-choice blocker windows.`);
+    if (!text.includes("never clicks") || !text.includes("STARTUP_USER_ACTION_REQUIRED") || !text.includes("--recover-existing")) {
+      throw new Error(`${label} must explain read-only startup-window handling and preserved-session recovery.`);
     }
     if (!text.includes("manual recovery fallback") && !text.includes("manual_recovery_fallback")) {
       throw new Error(`${label} must keep the REAPER Action as a manual recovery fallback.`);
@@ -2746,9 +2740,9 @@ async function smokePackagedOpenReaperStartHelper() {
       throw new Error(`${label} must not promise automatic version-notification dismissal.`);
     }
   }
-  for (const required of ["--startup-dialog-consent once", "--startup-dialog-consent always", "--startup-dialog-consent manual", "always fail closed"]) {
+  for (const required of ["never clicks", "STARTUP_USER_ACTION_REQUIRED", "--recover-existing"]) {
     if (!userGuideSource.includes(required)) {
-      throw new Error(`packaged user guide missing startup consent truth: ${required}`);
+      throw new Error(`packaged user guide missing read-only startup-window truth: ${required}`);
     }
   }
   for (const required of [
@@ -2778,7 +2772,7 @@ async function smokePackagedOpenReaperStartHelper() {
     bridge_action_required: false,
     bridge_action_name: "OpenReaper: Start MCP bridge",
     agent_should_try_to_run_action: false,
-    startup_dialog_assist: "first_use_once_always_manual_exact_safe_allowlist",
+    startup_dialog_assist: "user_mediated_read_only_preserve_session",
     connection_probe: "call_template(template.transport.read_state)",
     user_fallback: "Actions search Run",
     command_line_reascript_bridge: true,
@@ -3018,13 +3012,13 @@ print -rn -- "exited" > ${shellQuote(fakeExitedPath)}
 }
 
 function withPackageFixtureCleanDialogInspection(source) {
-  const replacement = `run_startup_dialog_assist() {
+  const replacement = `run_startup_dialog_observer() {
   echo "no_safe_dialog"
 }
 
 startup_dialog_result_is_safe() {`;
   const patched = source.replace(
-    /run_startup_dialog_assist\(\) \{[\s\S]*?\n\}\n\nstartup_dialog_result_is_safe\(\) \{/u,
+    /run_startup_dialog_observer\(\) \{[\s\S]*?\n\}\n\nstartup_dialog_result_is_safe\(\) \{/u,
     replacement,
   );
   if (patched === source) {
@@ -4144,21 +4138,14 @@ function assertAgentStartupGuidance(guidance, { label, expectedPackageRoot }) {
   if (guidance.bridge_action?.verification_probe !== "call_template(template.transport.read_state)") {
     throw new Error(`${label} must name the bridge connection verification probe`);
   }
-  if (!guidance.startup_dialog_assist?.auto_dismisses?.includes("project_settings_notes_show_notes_on_project_load")) {
-    throw new Error(`${label} must limit automatic startup dialog assist to Project Settings / Notes`);
+  if (guidance.startup_dialog_assist?.requires_first_use_consent !== false) {
+    throw new Error(`${label} must not require startup dialog consent`);
   }
-  if (guidance.startup_dialog_assist?.requires_first_use_consent !== true) {
-    throw new Error(`${label} must require the user's first-use startup dialog consent`);
+  if (Object.keys(guidance.startup_dialog_assist?.consent_choices ?? {}).length !== 0 || guidance.startup_dialog_assist?.auto_dismisses?.length !== 0) {
+    throw new Error(`${label} must expose no customer startup dialog automation`);
   }
-  for (const [choice, flag] of Object.entries({ once: "--startup-dialog-consent once", always: "--startup-dialog-consent always", manual: "--startup-dialog-consent manual" })) {
-    if (guidance.startup_dialog_assist?.consent_choices?.[choice] !== flag) {
-      throw new Error(`${label} missing exact startup dialog consent choice ${choice}`);
-    }
-  }
-  for (const blocker of ["missing_media_without_consent", "license_or_evaluation", "recovery", "plugin_or_fx", "version_notice", "unknown_reaper_window"]) {
-    if (!guidance.startup_dialog_assist?.does_not_dismiss?.includes(blocker)) {
-      throw new Error(`${label} must not auto-dismiss ${blocker}`);
-    }
+  if (!guidance.startup_dialog_assist?.does_not_dismiss?.includes("all_native_reaper_windows")) {
+    throw new Error(`${label} must declare all native REAPER windows user-mediated`);
   }
   if (guidance.safety?.added_tools !== 0 || guidance.safety?.hidden_executor !== false) {
     throw new Error(`${label} expanded the tool surface or hid an executor`);

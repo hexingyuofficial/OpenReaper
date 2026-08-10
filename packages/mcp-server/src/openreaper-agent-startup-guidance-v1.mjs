@@ -31,7 +31,7 @@ export const OPENREAPER_AGENT_STARTUP_GUIDANCE_SUMMARY = deepFreeze({
     normal_reaper_launch_supported: false,
     only_openreaper_startup_supported: true,
     startup_lifetime_action: "openreaper-start launches REAPER with the OpenReaper bridge environment and returns only after a matching heartbeat and bounded public read probe pass.",
-    startup_dialog_assist: "macOS only: on first use, ask the user whether exact safe startup-window assistance is allowed once, always, or should remain manual. Windows native REAPER windows are always user-mediated. Unknown and decision-bearing dialogs always fail closed on every platform.",
+    startup_dialog_assist: "macOS and Windows: OpenReaper observes REAPER startup windows read-only and never clicks or closes them. A blocking window returns STARTUP_USER_ACTION_REQUIRED while preserving the REAPER PID and Bridge generation.",
     bridge_start_action: `openreaper-start passes the project and extra arguments to REAPER; the installed conditional Scripts/__startup.lua hook starts the Bridge only for an OpenReaper launch. The REAPER action "${OPENREAPER_BRIDGE_ACTION_NAME}" is a manual recovery fallback.`,
     connection_verification: "openreaper-start performs call_template(template.transport.read_state) before reporting startup-status=ready.",
   },
@@ -54,19 +54,15 @@ export const OPENREAPER_AGENT_STARTUP_GUIDANCE_SUMMARY = deepFreeze({
     command_line_reascript_bridge: true,
   },
   startup_dialog_assist: {
-    requires_first_use_consent: true,
-    consent_choices: {
-      once: "--startup-dialog-consent once",
-      always: "--startup-dialog-consent always",
-      manual: "--startup-dialog-consent manual",
-    },
-    persistent_choices: ["always", "manual"],
-    manual_behavior: "Never click startup windows; inspect read-only and wait for the user to clear every blocker before readiness.",
-    auto_dismisses: ["project_settings_notes_show_notes_on_project_load"],
-    auto_dismisses_with_consent: ["project_settings_notes_show_notes_on_project_load", "missing_media_ignore_all", "missing_media_offline_warning_ok"],
-    explicit_per_launch_consent: { missing_media: "--ignore-missing-media" },
-    does_not_dismiss: ["missing_media_without_consent", "license_or_evaluation", "recovery", "plugin_or_fx", "version_notice", "unknown_reaper_window"],
-    agent_recovery: "Resolve the typed dialog blocker. Use the installed Bridge Action only when autonomous startup reports that recovery fallback.",
+    requires_first_use_consent: false,
+    consent_choices: {},
+    persistent_choices: [],
+    manual_behavior: "Observe all REAPER windows read-only; never click or close them. Preserve the REAPER PID and Bridge generation while the user resolves a blocker.",
+    auto_dismisses: [],
+    auto_dismisses_with_consent: [],
+    explicit_per_launch_consent: {},
+    does_not_dismiss: ["all_native_reaper_windows"],
+    agent_recovery: "Resolve the visible REAPER blocker, then rerun openreaper-start --recover-existing. Do not start another REAPER.",
   },
   summary_function: "createOpenReaperAgentStartupGuidance",
 });
@@ -76,50 +72,31 @@ export function createOpenReaperAgentStartupGuidance(input = {}) {
   const platform = input.platform ?? process.platform;
   const isWindows = platform === "win32";
   const currentPackageStart = packageRoot ? `${packageRoot}/bin/openreaper-start` : null;
-  const startupDialogAssist = isWindows
-    ? {
-      platform_scope: "windows_manual_only",
-      requires_first_use_consent: false,
-      consent_choices: {},
-      persistent_choices: [],
-      policy_file: null,
-      manual_behavior: "Do not classify or dismiss native REAPER windows. The user resolves every startup blocker before readiness can pass.",
-      auto_dismisses: [],
-      auto_dismisses_with_consent: [],
-      explicit_per_launch_consent: {},
-      does_not_dismiss: ["all_native_reaper_windows"],
-      disable_flag: null,
-      if_not_connected: "Do not classify or dismiss native REAPER windows. Ask the user to resolve the visible blocker, then rerun openreaper-start.",
-    }
-    : {
-      platform_scope: "macos_consent_allowlist",
-      requires_first_use_consent: true,
-      consent_choices: {
-        once: "--startup-dialog-consent once",
-        always: "--startup-dialog-consent always",
-        manual: "--startup-dialog-consent manual",
-      },
-      persistent_choices: ["always", "manual"],
-      policy_file: packageRoot ? `${packageRoot}/../data/startup-dialog-consent` : "~/.openreaper/data/startup-dialog-consent",
-      manual_behavior: "Never click startup windows; inspect read-only and wait for the user to clear every blocker before readiness.",
-      auto_dismisses: ["project_settings_notes_show_notes_on_project_load"],
-      auto_dismisses_with_consent: ["project_settings_notes_show_notes_on_project_load", "missing_media_ignore_all", "missing_media_offline_warning_ok"],
-      explicit_per_launch_consent: { missing_media: "--ignore-missing-media" },
-      does_not_dismiss: ["missing_media_without_consent", "license_or_evaluation", "recovery", "plugin_or_fx", "version_notice", "unknown_reaper_window"],
-      disable_flag: "--no-startup-dialog-assist",
-      if_not_connected: "Resolve the typed dialog blocker, then rerun openreaper-start. Use the Bridge Action only when reported as the manual recovery fallback.",
-    };
+  const startupDialogAssist = {
+    platform_scope: isWindows ? "windows_read_only" : "macos_read_only",
+    requires_first_use_consent: false,
+    consent_choices: {},
+    persistent_choices: [],
+    policy_file: null,
+    manual_behavior: "Observe REAPER windows read-only. Never click or close them. Preserve the REAPER PID and Bridge generation while the user resolves any blocker.",
+    auto_dismisses: [],
+    auto_dismisses_with_consent: [],
+    explicit_per_launch_consent: {},
+    does_not_dismiss: ["all_native_reaper_windows"],
+    disable_flag: null,
+    if_not_connected: "Resolve the visible REAPER blocker, then rerun openreaper-start --recover-existing. The helper preserves the existing session and does not start a duplicate REAPER.",
+  };
   const startupDialogFlow = isWindows
     ? {
       id: "resolve_windows_startup_dialog",
       when: "REAPER shows any native window during Windows startup.",
-      agent_action: "Do not classify or dismiss native REAPER windows. Ask the user to resolve the visible blocker, then rerun the OpenReaper startup helper.",
+      agent_action: "Do not dismiss native REAPER windows. Ask the user to resolve the visible blocker, then reconnect to the preserved OpenReaper session.",
       command: null,
     }
     : {
-      id: "choose_startup_dialog_consent",
-      when: "openreaper-start reports startup-status=needs_user_consent.",
-      agent_action: "Ask the user to choose safe startup-window assistance once, always, or manual handling. Rerun with the exact returned command; never infer consent.",
+      id: "resolve_startup_dialog",
+      when: "openreaper-start reports blocker-code=STARTUP_USER_ACTION_REQUIRED.",
+      agent_action: "Stop and ask the user to resolve the visible REAPER window. Then rerun openreaper-start --recover-existing; do not start another REAPER.",
       command: null,
     };
 
@@ -170,7 +147,7 @@ export function createOpenReaperAgentStartupGuidance(input = {}) {
       {
         id: "recover_startup_dialog",
         when: "REAPER shows a license/evaluation, recovery, plugin, version, project warning, or other user-choice dialog.",
-        agent_action: "Do not auto-dismiss it unless it is in the exact consent-bound safe allowlist. License, recovery, plugin, version, ambiguous, and unknown dialogs remain blockers even under always consent.",
+        agent_action: "Stop and ask the user to resolve it. OpenReaper never clicks or closes REAPER windows in the customer product.",
         command: null,
       },
     ],

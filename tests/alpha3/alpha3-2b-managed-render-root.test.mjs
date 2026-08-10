@@ -1428,54 +1428,40 @@ describe("Alpha3.2-B2 managed render root", () => {
     await harness.assertLockRemoved();
   });
 
-  it("accepts matching Bridge readiness before and after a bounded dialog scan", async () => {
+  it("inspects startup dialogs before accepting matching Bridge readiness", async () => {
     const source = await readFile(START_SOURCE, "utf8");
     const functionStart = source.indexOf("wait_for_startup_readiness() {");
     const functionEnd = source.indexOf("\n}\n\ntrap 'launchservices_cleanup_on_exit'", functionStart);
     assert.ok(functionStart >= 0 && functionEnd > functionStart, "startup readiness function must remain inspectable");
     const readinessSource = source.slice(functionStart, functionEnd);
-    const dialogCheck = readinessSource.indexOf('dialog_result="$(run_startup_dialog_assist)"');
-    const blocker = readinessSource.indexOf("startup-dialog-blocker=", dialogCheck);
+    const dialogCheck = readinessSource.indexOf('dialog_result="$(run_startup_dialog_observer)"');
+    const blocker = readinessSource.indexOf('report_startup_user_action_required "${dialog_result}"', dialogCheck);
     const heartbeatCheck = readinessSource.indexOf("if bridge_heartbeat_ready; then", dialogCheck);
     const publicProbe = readinessSource.indexOf("verify_public_bridge_read || return 1", heartbeatCheck);
     assert.ok(dialogCheck >= 0, "readiness must inspect startup dialogs");
     assert.ok(blocker > dialogCheck, "dialog blockers must be reported after inspection");
     assert.ok(heartbeatCheck > dialogCheck, "readiness must accept heartbeat only after dialog inspection");
     assert.ok(publicProbe > heartbeatCheck, "matching Bridge readiness must include a real public read probe");
-    assert.match(readinessSource, /if ! startup_dialog_result_is_safe "\$\{dialog_result\}"; then[\s\S]+startup-dialog-blocker=/u);
-    assert.doesNotMatch(readinessSource, /pending_dialog_blocker/u);
+    assert.match(readinessSource, /if ! startup_dialog_result_is_safe "\$\{dialog_result\}"; then[\s\S]+pending_dialog_blocker/u);
+    assert.match(readinessSource, /pending_dialog_blocker[\s\S]+sleep 0\.25[\s\S]+report_startup_user_action_required/u);
+    assert.match(source, /startup-dialog-blocker=\$\{dialog_result\}/u);
 
     const hookStart = source.indexOf("wait_for_startup_hook() {");
     const hookEnd = source.indexOf("\n}\n\nverify_public_bridge_read()", hookStart);
     const hookSource = source.slice(hookStart, hookEnd);
-    const hookDialogCheck = hookSource.indexOf('dialog_result="$(run_startup_dialog_assist)"');
+    const hookDialogCheck = hookSource.indexOf('dialog_result="$(run_startup_dialog_observer)"');
     const stageRecheck = hookSource.indexOf("if startup_status_stage_ready; then", hookDialogCheck);
-    const hookBlocker = hookSource.indexOf("startup-dialog-blocker=", hookDialogCheck);
-    assert.ok(stageRecheck > hookDialogCheck, "startup-hook wait must recheck the stage after Accessibility returns");
-    assert.ok(hookBlocker > stageRecheck, "a stale dialog result must not override a stage published during the scan");
-    assert.match(source, /blocked_unknown_dialog:\*\|blocked_user_decision:\*\|project_settings_seen_but_not_notes/u);
-    const transientStart = source.indexOf("startup_dialog_result_allows_transient_observation() {");
-    const transientEnd = source.indexOf("\n}\n\nstartup_dialog_result_is_probe_indeterminate()", transientStart);
-    assert.ok(
-      transientStart >= 0 && transientEnd > transientStart,
-      "transient startup-dialog classifier must remain inspectable",
-    );
-    assert.doesNotMatch(
-      source.slice(transientStart, transientEnd),
-      /blocked_dialog_inspection_timeout/u,
-      "an AX timeout must never be classified as a transient decision-bearing dialog",
-    );
-    const indeterminateStart = source.indexOf("startup_dialog_result_is_probe_indeterminate() {");
-    const indeterminateEnd = source.indexOf("\n}\n\nwait_for_startup_readiness()", indeterminateStart);
-    assert.ok(
-      indeterminateStart >= 0 && indeterminateEnd > indeterminateStart,
-      "indeterminate startup-dialog classifier must remain inspectable",
-    );
-    assert.match(
-      source.slice(indeterminateStart, indeterminateEnd),
-      /blocked_dialog_classification:\*\|blocked_dialog_inspection_timeout:\*\|blocked_dialog_inspection_failed:\*/u,
-      "bounded AX probe failures must remain indeterminate until live startup truth succeeds or the startup deadline fails closed",
-    );
+    const hookBlocker = hookSource.indexOf('report_startup_user_action_required "${dialog_result}"', hookDialogCheck);
+    assert.ok(hookBlocker > hookDialogCheck, "startup-hook wait must report a stable dialog blocker");
+    assert.ok(stageRecheck > hookDialogCheck, "startup-hook wait must recheck the stage after dialog inspection");
+    assert.ok(stageRecheck > hookBlocker, "startup-hook wait must accept a stage only after blocker handling");
+    assert.match(source, /blocked_unknown_dialog:title=/u);
+    assert.match(source, /blocked_user_decision:title=/u);
+    const safeStart = source.indexOf("startup_dialog_result_is_safe() {");
+    const safeEnd = source.indexOf("\n}\n\nrecord_dialog_result()", safeStart);
+    assert.ok(safeStart >= 0 && safeEnd > safeStart, "startup dialog safety classifier must remain inspectable");
+    assert.match(source.slice(safeStart, safeEnd), /no_safe_dialog\)/u);
+    assert.doesNotMatch(source.slice(safeStart, safeEnd), /click|perform action|dismiss/u);
   });
 
   it("serializes staggered LaunchServices starts with one stable installed-scope lock", async () => {
@@ -2035,7 +2021,7 @@ print -rn -- "exited" > ${shellQuote(fakeExitedPath)}
   await chmod(fakeBinary, 0o755);
   const env = { ...process.env, HOME: fixture.home, OPENREAPER_START_WAIT_SECONDS: "1" };
   if (staleRoot !== null) env[RENDER_ENV] = staleRoot;
-  const result = await runCaptured(fixture.startPath, ["--reaper-binary", fakeBinary, "--no-startup-dialog-assist", ...extraArgs], {
+  const result = await runCaptured(fixture.startPath, ["--reaper-binary", fakeBinary, ...extraArgs], {
     cwd: fixture.root,
     env,
   });
@@ -2190,7 +2176,7 @@ print -rn -- "exited" > "$exited_path"
   await Promise.all([startPath, doctorPath, unamePath, fakeBinary, launchctlPath, openPath].map((file) => chmod(file, 0o755)));
 
   let fakeRunSequence = 0;
-  const commandArgs = (extraArgs) => ["--reaper-app", fakeApp, "--no-startup-dialog-assist", ...extraArgs];
+  const commandArgs = (extraArgs) => ["--reaper-app", fakeApp, ...extraArgs];
   const commandEnv = (waitSeconds, state) => ({
     ...process.env,
     HOME: home,
@@ -2418,12 +2404,12 @@ print -rn -- "exited" > "$exited_path"
 }
 
 function withFixtureCleanDialogInspection(source) {
-  const replacement = `run_startup_dialog_assist() {
+  const replacement = `run_startup_dialog_observer() {
   echo "no_safe_dialog"
 }
 
 startup_dialog_result_is_safe() {`;
-  const patched = source.replace(/run_startup_dialog_assist\(\) \{[\s\S]*?\n\}\n\nstartup_dialog_result_is_safe\(\) \{/u, replacement);
+  const patched = source.replace(/run_startup_dialog_observer\(\) \{[\s\S]*?\n\}\n\nstartup_dialog_result_is_safe\(\) \{/u, replacement);
   assert.notEqual(patched, source, "fixture must replace only its copied dialog inspector");
   return patched;
 }

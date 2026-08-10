@@ -18,8 +18,15 @@ import {
   createCallTemplateRuntime,
 } from "../../packages/mcp-server/src/call-template-runtime-v1.mjs";
 import {
+  callTemplateWithAuthoritativeIdentity,
+  createConfiguredProjectIndexBinding,
+  isZeroWriteGenerationMismatch,
+  resolveAuthoritativeBridgeIdentity,
+} from "../../packages/mcp-server/src/openreaper-mcp-stdio.mjs";
+import {
   LIVE_BRIDGE_HEARTBEAT_FILENAME,
   LIVE_BRIDGE_LIVENESS_CONTRACT,
+  LIVE_BRIDGE_LIVENESS_STATUS,
 } from "../../packages/mcp-server/src/live-bridge-executor-v1.mjs";
 
 const STDIO_SERVER = "packages/mcp-server/src/openreaper-mcp-stdio.mjs";
@@ -39,14 +46,18 @@ function parseToolJson(response) {
   return JSON.parse(text);
 }
 
-async function respondToNextBridgeRequest(transportDir, bridge) {
+async function respondToNextBridgeRequest(transportDir, bridge, options = {}) {
   const requestsDir = path.join(transportDir, "requests");
   for (let attempt = 0; attempt < 400; attempt += 1) {
     const files = (await readdir(requestsDir)).filter((file) => file.endsWith(".json"));
-    if (files.length > 0) {
-      const request = JSON.parse(await readFile(path.join(requestsDir, files[0]), "utf8"));
+    for (const file of files) {
+      const request = JSON.parse(await readFile(path.join(requestsDir, file), "utf8"));
+      if (
+        Number.isSafeInteger(options.expectedGeneration)
+        && request?.bridge?.expected_generation !== options.expectedGeneration
+      ) continue;
       const result = bridge.dispatch(request);
-      await writeFile(path.join(transportDir, "results", files[0]), `${JSON.stringify(result)}\n`, "utf8");
+      await writeFile(path.join(transportDir, "results", file), `${JSON.stringify(result)}\n`, "utf8");
       return request;
     }
     await new Promise((resolve) => setTimeout(resolve, 5));
@@ -157,6 +168,258 @@ describe("Alpha3.2-C1 server-managed call context", () => {
     );
   });
 
+  it("keeps concurrent authoritative generation scopes isolated and restores the installed identity", async () => {
+    const manager = deterministicManager({
+      env: {
+        OPENREAPER_LIVE_BRIDGE_OWNER: "installed-owner",
+        OPENREAPER_LIVE_BRIDGE_GENERATION: "1",
+      },
+    });
+    let releaseSeven;
+    const sevenGate = new Promise((resolve) => { releaseSeven = resolve; });
+    const seven = manager.runWithIdentity({ owner: "installed-owner", generation: 7 }, async () => {
+      await sevenGate;
+      return manager.allocate();
+    });
+    const eight = manager.runWithIdentity({ owner: "installed-owner", generation: 8 }, async () => {
+      const context = manager.allocate();
+      releaseSeven();
+      return context;
+    });
+    const [sevenContext, eightContext] = await Promise.all([seven, eight]);
+
+    assert.equal(sevenContext.expected_generation, 7);
+    assert.equal(eightContext.expected_generation, 8);
+    assert.notEqual(sevenContext.request_sequence, eightContext.request_sequence);
+    assert.equal(manager.allocate().expected_generation, 1);
+  });
+
+  it("binds Project Index state and adapters to each authoritative generation", async () => {
+    const manager = deterministicManager({
+      env: {
+        OPENREAPER_LIVE_BRIDGE_OWNER: "installed-owner",
+        OPENREAPER_LIVE_BRIDGE_GENERATION: "1",
+      },
+    });
+    const opened = [];
+    const closed = [];
+    let releaseSeven;
+    const sevenGate = new Promise((resolve) => { releaseSeven = resolve; });
+    const openRuntime = async ({ identity }) => {
+      opened.push(identity.generation);
+      if (identity.generation === 7) await sevenGate;
+      return {
+        ok: true,
+        generation: identity.generation,
+        adapter: {
+          generation: identity.generation,
+          read() { return this.generation; },
+        },
+        status() { return { generation: this.generation }; },
+        close() { closed.push(this.generation); },
+      };
+    };
+    const binding = await createConfiguredProjectIndexBinding({
+      env: { OPENREAPER_PROJECT_INDEX_STATE_ROOT: "/test/index" },
+      callContext: manager,
+      openRuntime,
+    });
+
+    assert.equal(binding.runtime.status().generation, 1);
+    assert.equal(binding.runtime.adapter.read(), 1);
+    assert.equal(binding.runtime.adapter, binding.runtime.adapter);
+
+    const firstSeven = binding.activate({ owner: "installed-owner", generation: 7 });
+    const secondSeven = binding.activate({ owner: "installed-owner", generation: 7 });
+    await Promise.resolve();
+    assert.deepEqual(opened, [1, 7]);
+    releaseSeven();
+    assert.equal(await firstSeven, await secondSeven);
+    await binding.activate({ owner: "installed-owner", generation: 8 });
+
+    let releaseScopedSeven;
+    const scopedSevenGate = new Promise((resolve) => { releaseScopedSeven = resolve; });
+    const seven = manager.runWithIdentity({ owner: "installed-owner", generation: 7 }, async () => {
+      await scopedSevenGate;
+      return {
+        runtime: binding.runtime.status().generation,
+        adapter: binding.runtime.adapter.read(),
+      };
+    });
+    const eight = manager.runWithIdentity({ owner: "installed-owner", generation: 8 }, async () => {
+      const result = {
+        runtime: binding.runtime.status().generation,
+        adapter: binding.runtime.adapter.read(),
+      };
+      releaseScopedSeven();
+      return result;
+    });
+    assert.deepEqual(await Promise.all([seven, eight]), [
+      { runtime: 7, adapter: 7 },
+      { runtime: 8, adapter: 8 },
+    ]);
+    assert.equal(binding.runtime.status().generation, 1);
+    assert.equal(binding.runtime.adapter.read(), 1);
+
+    binding.close();
+    assert.deepEqual(closed.sort((a, b) => a - b), [1, 7, 8]);
+    await assert.rejects(
+      binding.activate({ owner: "installed-owner", generation: 9 }),
+      /binding is closed/u,
+    );
+  });
+
+  it("fails closed when a fresh Project Index generation cannot activate", async () => {
+    const manager = deterministicManager({
+      env: {
+        OPENREAPER_LIVE_BRIDGE_OWNER: "installed-owner",
+        OPENREAPER_LIVE_BRIDGE_GENERATION: "1",
+      },
+    });
+    const binding = await createConfiguredProjectIndexBinding({
+      env: { OPENREAPER_PROJECT_INDEX_STATE_ROOT: "/test/index" },
+      callContext: manager,
+      openRuntime: async ({ identity }) => identity.generation === 1
+        ? { ok: true, adapter: {}, close() {} }
+        : { ok: false, close() {} },
+    });
+
+    await assert.rejects(
+      binding.activate({ owner: "installed-owner", generation: 2 }),
+      (error) => error instanceof Alpha3_2C1CallContextError
+        && error.code === "CALL_TEMPLATE_PROJECT_INDEX_GENERATION_ACTIVATION_FAILED",
+    );
+    assert.throws(
+      () => manager.runWithIdentity(
+        { owner: "installed-owner", generation: 2 },
+        () => binding.runtime.adapter.missing,
+      ),
+      /was not activated/u,
+    );
+  });
+
+  it("adopts each fresh heartbeat generation instead of retaining the MCP process startup value", async () => {
+    const manager = deterministicManager({
+      env: {
+        OPENREAPER_LIVE_BRIDGE_OWNER: "installed-owner",
+        OPENREAPER_LIVE_BRIDGE_GENERATION: "1",
+      },
+    });
+    let generation = 7;
+    const seen = [];
+    const liveBridge = {
+      configured: true,
+      executor: {
+        async probeLiveness(options) {
+          assert.deepEqual(options, { expectedOwner: "installed-owner" });
+          return readyProbe("installed-owner", generation);
+        },
+      },
+    };
+    const runtime = {
+      async call_template(request) {
+        seen.push(request.context.expected_generation);
+        return { ok: true, generation: request.context.expected_generation };
+      },
+    };
+
+    const first = await callTemplateWithAuthoritativeIdentity({ request: { id: "template.transport.read_state" }, callContext: manager, runtime, liveBridge });
+    generation = 8;
+    const second = await callTemplateWithAuthoritativeIdentity({ request: { id: "template.transport.read_state" }, callContext: manager, runtime, liveBridge });
+
+    assert.equal(first.generation, 7);
+    assert.equal(second.generation, 8);
+    assert.deepEqual(seen, [7, 8]);
+  });
+
+  it("retries a generation mismatch once only when the complete result proves zero-write", async () => {
+    const manager = deterministicManager({
+      env: {
+        OPENREAPER_LIVE_BRIDGE_OWNER: "installed-owner",
+        OPENREAPER_LIVE_BRIDGE_GENERATION: "1",
+      },
+    });
+    const probedGenerations = [7, 8];
+    const seen = [];
+    const liveBridge = {
+      configured: true,
+      executor: {
+        async probeLiveness() {
+          return readyProbe("installed-owner", probedGenerations.shift() ?? 8);
+        },
+      },
+    };
+    const runtime = {
+      async call_template(request) {
+        seen.push({ generation: request.context.expected_generation, sequence: request.context.request_sequence });
+        if (seen.length === 1) return generationMismatchResult(true);
+        return { ok: true, generation: request.context.expected_generation };
+      },
+    };
+
+    const result = await callTemplateWithAuthoritativeIdentity({ request: { id: "template.transport.read_state" }, callContext: manager, runtime, liveBridge });
+    assert.equal(result.ok, true);
+    assert.equal(result.generation, 8);
+    assert.deepEqual(seen.map((entry) => entry.generation), [7, 8]);
+    assert.notEqual(seen[0].sequence, seen[1].sequence);
+
+    for (const rejected of [
+      generationMismatchResult(false),
+      { ok: false, error: { code: "BRIDGE_TIMEOUT", details: { outcome: "unknown", zero_write: false } } },
+      { ok: false, error: { code: "BRIDGE_TIMEOUT", details: { outcome: "unknown", zero_write: true } } },
+    ]) {
+      let calls = 0;
+      const single = await callTemplateWithAuthoritativeIdentity({
+        request: { id: "template.transport.read_state" },
+        callContext: manager,
+        liveBridge: { configured: true, executor: { probeLiveness: async () => readyProbe("installed-owner", 9) } },
+        runtime: { call_template: async () => { calls += 1; return rejected; } },
+      });
+      assert.equal(single, rejected);
+      assert.equal(calls, 1);
+    }
+
+    let boundedCalls = 0;
+    const stillMismatched = await callTemplateWithAuthoritativeIdentity({
+      request: { id: "template.transport.read_state" },
+      callContext: manager,
+      liveBridge: { configured: true, executor: { probeLiveness: async () => readyProbe("installed-owner", 10 + boundedCalls) } },
+      runtime: { call_template: async () => { boundedCalls += 1; return generationMismatchResult(true); } },
+    });
+    assert.equal(stillMismatched.ok, false);
+    assert.equal(boundedCalls, 2);
+  });
+
+  it("fails closed on owner drift and never treats unrelated zero-write truth as a generation retry", async () => {
+    const manager = deterministicManager({
+      env: {
+        OPENREAPER_LIVE_BRIDGE_OWNER: "installed-owner",
+        OPENREAPER_LIVE_BRIDGE_GENERATION: "1",
+      },
+    });
+    await assert.rejects(
+      resolveAuthoritativeBridgeIdentity({
+        callContext: manager,
+        liveBridge: {
+          configured: true,
+          executor: {
+            probeLiveness: async () => ({
+              status: LIVE_BRIDGE_LIVENESS_STATUS.OWNER_MISMATCH,
+              heartbeat: { observed: { active_owner: "other-owner", active_generation: 9 } },
+            }),
+          },
+        },
+      }),
+      (error) => error instanceof Alpha3_2C1CallContextError
+        && error.code === "CALL_TEMPLATE_BRIDGE_OWNER_MISMATCH",
+    );
+    assert.equal(isZeroWriteGenerationMismatch({
+      ok: false,
+      error: { code: "bridge_generation_mismatch" },
+      unrelated: { zero_write: true },
+    }), false);
+  });
+
   it("supports omitted context through the actual stdio server and preserves exactly six tools", async () => {
     const fixtureRoot = await mkdtemp(path.join(tmpdir(), "openreaper-alpha32c1-stdio-"));
     const transportDir = path.join(fixtureRoot, "transport");
@@ -223,6 +486,25 @@ describe("Alpha3.2-C1 server-managed call context", () => {
       assert.match(observedRequest.client.session_id, /^openreaper-mcp-1-/u);
       assert.match(observedRequest.id, /^cmd_.*_001_[a-f0-9]{6}$/u);
 
+      await writeFile(path.join(transportDir, LIVE_BRIDGE_HEARTBEAT_FILENAME), `${JSON.stringify({
+        active_generation: 2,
+        active_owner: "openreaper-alpha",
+        contract: LIVE_BRIDGE_LIVENESS_CONTRACT,
+        interval_ms: 500,
+        refreshed_at_unix_s: Math.floor(Date.now() / 1_000),
+        sequence: 2,
+      })}\n`, "utf8");
+      const rotatedBridge = new FakeFoundationBridge({ owner: "openreaper-alpha", generation: 2 });
+      const rotatedResponsePromise = client.callTool({
+        name: "call_template",
+        arguments: { id: "template.transport.read_state", input: {} },
+      });
+      const rotatedRequestPromise = respondToNextBridgeRequest(transportDir, rotatedBridge, { expectedGeneration: 2 });
+      const [rotatedResponse, rotatedRequest] = await Promise.all([rotatedResponsePromise, rotatedRequestPromise]);
+      const rotatedResult = parseToolJson(rotatedResponse);
+      assert.equal(rotatedResult.ok, true, JSON.stringify(rotatedResult));
+      assert.equal(rotatedRequest.bridge.expected_generation, 2);
+
       const response = await client.callTool({
         name: "call_template",
         arguments: { id: "macro.index_status", input: {} },
@@ -245,6 +527,20 @@ describe("Alpha3.2-C1 server-managed call context", () => {
       const conflict = parseToolJson(conflictResponse);
       assert.equal(conflictResponse.isError, true);
       assert.equal(conflict.error.code, "CALL_TEMPLATE_BRIDGE_IDENTITY_CONFLICT");
+
+      await writeFile(path.join(transportDir, LIVE_BRIDGE_HEARTBEAT_FILENAME), `${JSON.stringify({
+        active_generation: 3,
+        active_owner: "foreign-owner",
+        contract: LIVE_BRIDGE_LIVENESS_CONTRACT,
+        interval_ms: 500,
+        refreshed_at_unix_s: Math.floor(Date.now() / 1_000),
+        sequence: 3,
+      })}\n`, "utf8");
+      const driftResponse = await client.callTool({ name: "ping", arguments: {} });
+      const drift = parseToolJson(driftResponse);
+      assert.equal(driftResponse.isError, true);
+      assert.equal(drift.ok, false);
+      assert.equal(drift.error.code, "CALL_TEMPLATE_BRIDGE_OWNER_MISMATCH");
     } finally {
       await client.close();
       await rm(fixtureRoot, { recursive: true, force: true });
@@ -270,3 +566,20 @@ describe("Alpha3.2-C1 server-managed call context", () => {
     assert.match(stderr, /CALL_TEMPLATE_BRIDGE_IDENTITY_ENV_INVALID|OPENREAPER_LIVE_BRIDGE_OWNER is invalid/u);
   });
 });
+
+function readyProbe(owner, generation) {
+  return {
+    status: LIVE_BRIDGE_LIVENESS_STATUS.READY,
+    heartbeat: { observed: { active_owner: owner, active_generation: generation } },
+  };
+}
+
+function generationMismatchResult(zeroWrite) {
+  return {
+    ok: false,
+    error: {
+      code: "bridge_generation_mismatch",
+      details: { outcome: "failed", zero_write: zeroWrite },
+    },
+  };
+}
