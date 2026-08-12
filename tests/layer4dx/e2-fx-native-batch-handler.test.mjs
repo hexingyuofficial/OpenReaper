@@ -226,6 +226,8 @@ describe("E2 FX native assignment batch", () => {
     assert.match(source, /TrackFX_SetNamedConfigParm/);
     assert.match(extracted, /BANDTYPE/);
     assert.match(extracted, /BANDENABLED/);
+    assert.match(extracted, /type_raw = type_raw or JSON_NULL/);
+    assert.match(extracted, /enabled_raw = enabled_raw or JSON_NULL/);
     assert.doesNotMatch(extracted, /Main_OnCommand|SetParamNormalized|reaper\.ini|SWS|ReaPack/u);
     assert.doesNotMatch(extracted, /request\.params\.(?:key|named_config|parmname)/u);
     assert.ok(extracted.indexOf("e2_fx_reaeq_validate_request(request") < extracted.indexOf("local mutation_started"));
@@ -243,14 +245,54 @@ describe("E2 FX native assignment batch", () => {
       assert(e2_fx_reaeq_identity_allowed("VST: ReaEQ (Cockos)"))
       assert(e2_fx_reaeq_identity_allowed("VST3:ReaEQ (Cockos)"))
       assert(e2_fx_reaeq_identity_allowed("AU: ReaEQ (Cockos)"))
+      assert(e2_fx_reaeq_identity_allowed("/Applications/REAPER.app/Contents/Plugins/FX/reaeq.vst.dylib<1919247729"))
+      assert(e2_fx_reaeq_identity_allowed([[C:\Program Files\REAPER (x64)\Plugins\FX\reaeq.vst.dll<1919247729]]))
+      assert(e2_fx_reaeq_identity_allowed([[C:\Program Files\REAPER (x64)\Plugins\FX\reaeq.dll<1919247729]]))
       assert(not e2_fx_reaeq_identity_allowed("VST3:OtherEQ (Cockos)"))
-      assert(E2_FX_REAEQ_TYPE_VALUES.high_pass == 0)
-      assert(E2_FX_REAEQ_TYPE_VALUES.low_shelf == 1)
-      assert(E2_FX_REAEQ_TYPE_VALUES.band == 2)
-      assert(E2_FX_REAEQ_TYPE_VALUES.notch == 3)
-      assert(E2_FX_REAEQ_TYPE_VALUES.high_shelf == 4)
-      assert(E2_FX_REAEQ_TYPE_VALUES.low_pass == 5)
-      assert(E2_FX_REAEQ_TYPE_VALUES.arbitrary == nil)
+      assert(not e2_fx_reaeq_identity_allowed("/tmp/reaeq.vst.dylib<1"))
+      assert(not e2_fx_reaeq_identity_allowed("/tmp/not-reaeq.vst.dylib<1919247729"))
+      assert(E2_FX_REAEQ_WRITE_TYPE_VALUES.high_pass == 0)
+      assert(E2_FX_REAEQ_WRITE_TYPE_VALUES.low_shelf == 1)
+      assert(E2_FX_REAEQ_WRITE_TYPE_VALUES.band == 2)
+      assert(E2_FX_REAEQ_WRITE_TYPE_VALUES.notch == 3)
+      assert(E2_FX_REAEQ_WRITE_TYPE_VALUES.high_shelf == 4)
+      assert(E2_FX_REAEQ_WRITE_TYPE_VALUES.low_pass == 5)
+      assert(E2_FX_REAEQ_READ_TYPE_NAMES[0] == "low_shelf")
+      assert(E2_FX_REAEQ_READ_TYPE_NAMES[1] == "high_shelf")
+      assert(E2_FX_REAEQ_READ_TYPE_NAMES[3] == "low_pass")
+      assert(E2_FX_REAEQ_READ_TYPE_NAMES[4] == "high_pass")
+      assert(E2_FX_REAEQ_READ_TYPE_NAMES[6] == "notch")
+      assert(E2_FX_REAEQ_READ_TYPE_NAMES[8] == "band")
+      assert(E2_FX_REAEQ_READ_TYPE_NAMES[2] == nil)
+      assert(E2_FX_REAEQ_READ_TYPE_NAMES[5] == nil)
+      assert(E2_FX_REAEQ_READ_TYPE_NAMES[7] == nil)
+      assert(E2_FX_REAEQ_WRITE_TYPE_VALUES.arbitrary == nil)
+    `);
+  });
+
+  it("accepts only exact ReaEQ semantic idents with an optional matching native index prefix", () => {
+    const source = readFileSync(new URL("../../reaper/bridge/src/handlers/fx/e2_fx_l1_read_route.lua", import.meta.url), "utf8");
+    const start = source.indexOf("local function e2_fx_reaeq_expected_ident");
+    const end = source.indexOf("\nlocal function e2_fx_reaeq_inventory", start);
+    assert.ok(start >= 0 && end > start);
+    const extracted = source.slice(start, end);
+    runLua(String.raw`
+      local E2_FX_REAEQ_IDENT_TOKENS = {
+        high_pass = "High_Pass",
+        low_shelf = "Low_Shelf",
+        band = "Band",
+        notch = "Notch",
+        high_shelf = "High_Shelf",
+        low_pass = "Low_Pass",
+      }
+      ${extracted}
+      local expected = e2_fx_reaeq_expected_ident(1, "frequency_hz", "low_shelf")
+      assert(expected == "_Freq_Low_Shelf")
+      assert(e2_fx_reaeq_ident_matches(0, "_Freq_Low_Shelf", expected))
+      assert(e2_fx_reaeq_ident_matches(0, "0:_Freq_Low_Shelf", expected))
+      assert(not e2_fx_reaeq_ident_matches(0, "1:_Freq_Low_Shelf", expected))
+      assert(not e2_fx_reaeq_ident_matches(0, "0:_Freq_High_Pass", expected))
+      assert(not e2_fx_reaeq_ident_matches(0, "prefix:_Freq_Low_Shelf", expected))
     `);
   });
 });

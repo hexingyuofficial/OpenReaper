@@ -156,6 +156,11 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
     const deepTreeScanIndex = source.indexOf("set hasIgnoreMissingFiles to false");
     assert.ok(windowClassificationIndex >= 0 && deepTreeScanIndex > windowClassificationIndex, "window subrole must be classified before deep accessibility scans");
     assert.match(source, /set isPotentialDialog to windowSubrole is "AXDialog" or windowSubrole is "AXSheet" or windowTitle is "Project Load Warning"/u);
+    assert.match(source, /on isExactReaScriptRunStatusWindow\(theWindow, hasRunningReaScriptMainWindow\)[\s\S]+windowTitle is "Window" and windowRole is "AXWindow" and windowSubrole is "AXDialog" and windowWidth > 0 and windowWidth is less than or equal to 96 and windowHeight > 0 and windowHeight is less than or equal to 48 and windowButtonCount is 1[\s\S]+end isExactReaScriptRunStatusWindow/u);
+    assert.match(source, /if \(subrole of candidateWindow as text\) is "AXStandardWindow" and \(name of candidateWindow as text\) contains "\[ReaScript: Run\]" then[\s\S]+set hasRunningReaScriptMainWindow to true/u);
+    assert.match(source, /set isReaScriptRunStatusWindow to isPotentialDialog and my isExactReaScriptRunStatusWindow\(reaperWindow, hasRunningReaScriptMainWindow\)[\s\S]+set sawReaScriptRunStatusWindow to true[\s\S]+set isPotentialDialog to false/u);
+    assert.match(source, /if not isPotentialDialog and not isReaScriptRunStatusWindow then/u);
+    assert.match(source, /if sawReaScriptRunStatusWindow then return "ignored_reascript_run_status_window"/u);
     assert.match(source, /if isPotentialDialog then/u);
     assert.match(source, /if windowSubrole is "AXDialog" or windowSubrole is "AXSheet" then/u);
     assert.match(source, /if windowSubrole is "AXDialog" or windowSubrole is "AXSheet" then\s+if windowTitle contains "Evaluation"/u);
@@ -260,7 +265,7 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
     assert.notEqual(functionEnd, -1);
     const classifier = source.slice(functionStart, functionEnd + 2);
 
-    for (const result of ["no_safe_dialog"]) {
+    for (const result of ["no_safe_dialog", "ignored_reascript_run_status_window"]) {
       assert.equal(runDialogClassifier(classifier, result), 0, result);
     }
 

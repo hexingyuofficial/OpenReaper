@@ -14899,7 +14899,7 @@ local function e2_fx_parameter_assignments_batch(request)
 end
 
 local E2_FX_REAEQ_BAND_MAX = 4
-local E2_FX_REAEQ_TYPE_VALUES = {
+local E2_FX_REAEQ_WRITE_TYPE_VALUES = {
   high_pass = 0,
   low_shelf = 1,
   band = 2,
@@ -14907,13 +14907,13 @@ local E2_FX_REAEQ_TYPE_VALUES = {
   high_shelf = 4,
   low_pass = 5,
 }
-local E2_FX_REAEQ_TYPE_NAMES = {
-  [0] = "high_pass",
-  [1] = "low_shelf",
-  [2] = "band",
-  [3] = "notch",
-  [4] = "high_shelf",
-  [5] = "low_pass",
+local E2_FX_REAEQ_READ_TYPE_NAMES = {
+  [0] = "low_shelf",
+  [1] = "high_shelf",
+  [3] = "low_pass",
+  [4] = "high_pass",
+  [6] = "notch",
+  [8] = "band",
 }
 local E2_FX_REAEQ_IDENT_TOKENS = {
   high_pass = "High_Pass",
@@ -14927,7 +14927,19 @@ local E2_FX_REAEQ_IDENT_TOKENS = {
 local function e2_fx_reaeq_error(code, message, details)
   details = details or {}
   if details.zero_write == nil then details.zero_write = true end
-  return e2_fx_batch_error(code, message, details)
+  local public_code = code
+  if code:match("^FX_REAEQ_") then
+    local public_codes = {
+      FX_REAEQ_IDENTITY_MISMATCH = "FX_NOT_FOUND",
+      FX_REAEQ_INVENTORY_INVALID = "FX_PARAMETER_NOT_FOUND",
+      FX_REAEQ_PARAMETER_IDENTITY_MISMATCH = "FX_PARAMETER_INVALID",
+      FX_REAEQ_TOPOLOGY_UNAVAILABLE = "FX_PARAMETER_NOT_FOUND",
+      FX_REAEQ_TARGET_UNAVAILABLE = "PARAMS_INVALID",
+    }
+    public_code = public_codes[code] or "PARAMS_INVALID"
+    details.blocker = details.blocker or code
+  end
+  return e2_fx_batch_error(public_code, message, details)
 end
 
 local function e2_fx_reaeq_identity(owner_kind, owner, slot_index)
@@ -14936,11 +14948,15 @@ end
 
 local function e2_fx_reaeq_identity_allowed(identity)
   if type(identity) ~= "string" then return false end
-  local normalized = identity:lower():gsub("%s+", " "):gsub(": ", ":")
+  local normalized = identity:lower():gsub("\\", "/"):gsub("%s+", " "):gsub(": ", ":")
+  local basename = normalized:match("([^/]+)$") or normalized
   return normalized == "vst:reaeq (cockos)"
     or normalized == "vst3:reaeq (cockos)"
     or normalized == "au:reaeq (cockos)"
     or normalized == "reaeq (cockos)"
+    or basename == "reaeq.vst.dylib<1919247729"
+    or basename == "reaeq.vst.dll<1919247729"
+    or basename == "reaeq.dll<1919247729"
 end
 
 local function e2_fx_reaeq_band_key(prefix, band)
@@ -14951,12 +14967,12 @@ local function e2_fx_reaeq_read_topology(owner_kind, owner, slot_index, band)
   local type_raw = e2_fx_named_config_get(owner_kind, owner, slot_index, e2_fx_reaeq_band_key("BANDTYPE", band))
   local enabled_raw = e2_fx_named_config_get(owner_kind, owner, slot_index, e2_fx_reaeq_band_key("BANDENABLED", band))
   local type_value = tonumber(type_raw)
-  if not E2_FX_REAEQ_TYPE_NAMES[type_value] or (enabled_raw ~= "0" and enabled_raw ~= "1") then
-    return nil
+  if not E2_FX_REAEQ_READ_TYPE_NAMES[type_value] or (enabled_raw ~= "0" and enabled_raw ~= "1") then
+    return nil, { type_raw = type_raw or JSON_NULL, enabled_raw = enabled_raw or JSON_NULL }
   end
   return {
     band = band,
-    type = E2_FX_REAEQ_TYPE_NAMES[type_value],
+    type = E2_FX_REAEQ_READ_TYPE_NAMES[type_value],
     type_value = type_value,
     enabled = enabled_raw == "1",
   }
@@ -14966,6 +14982,11 @@ local function e2_fx_reaeq_expected_ident(band, field, band_type)
   local prefix = field == "frequency_hz" and "_Freq_" or field == "gain_db" and "_Gain_" or "_BW_"
   local suffix = band == 1 and "" or "_" .. tostring(band)
   return prefix .. E2_FX_REAEQ_IDENT_TOKENS[band_type] .. suffix
+end
+
+local function e2_fx_reaeq_ident_matches(param_index, live_ident, expected_ident)
+  if type(live_ident) ~= "string" or type(expected_ident) ~= "string" then return false end
+  return live_ident == expected_ident or live_ident == tostring(param_index) .. ":" .. expected_ident
 end
 
 local function e2_fx_reaeq_inventory(owner_kind, owner, slot_index)
@@ -15069,20 +15090,27 @@ local function e2_fx_reaeq_validate_request(request, owner_kind, owner, slot_ind
     return e2_fx_reaeq_error("FX_REAEQ_INVENTORY_INVALID", "ReaEQ did not expose a complete stable parameter inventory.", { parameter_count = parameter_count })
   end
   local topology = json_array({})
+  local unavailable_topology = json_array({})
   for band = 1, E2_FX_REAEQ_BAND_MAX do
-    local current = e2_fx_reaeq_read_topology(owner_kind, owner, slot_index, band)
+    local current, topology_details = e2_fx_reaeq_read_topology(owner_kind, owner, slot_index, band)
     if not current then
-      return e2_fx_reaeq_error("FX_REAEQ_TOPOLOGY_UNAVAILABLE", "ReaEQ did not expose the complete first-four-band topology.", { band = band })
-    end
-    topology[#topology + 1] = current
-    for field_offset, field in ipairs({ "frequency_hz", "gain_db", "bandwidth_oct" }) do
-      local param_index = (band - 1) * 3 + field_offset - 1
-      local live_ident = inventory[param_index + 1].param_ident
-      local expected_ident = e2_fx_reaeq_expected_ident(band, field, current.type)
-      if live_ident ~= expected_ident then
-        return e2_fx_reaeq_error("FX_REAEQ_PARAMETER_IDENTITY_MISMATCH", "ReaEQ first-four-band parameter identity does not match live topology.", { band = band, field = field, param_index = param_index, expected_param_ident = expected_ident, live_param_ident = live_ident })
+      topology_details = topology_details or {}
+      topology_details.band = band
+      unavailable_topology[#unavailable_topology + 1] = topology_details
+    else
+      topology[#topology + 1] = current
+      for field_offset, field in ipairs({ "frequency_hz", "gain_db", "bandwidth_oct" }) do
+        local param_index = (band - 1) * 3 + field_offset - 1
+        local live_ident = inventory[param_index + 1].param_ident
+        local expected_ident = e2_fx_reaeq_expected_ident(band, field, current.type)
+        if not e2_fx_reaeq_ident_matches(param_index, live_ident, expected_ident) then
+          return e2_fx_reaeq_error("FX_REAEQ_PARAMETER_IDENTITY_MISMATCH", "ReaEQ first-four-band parameter identity does not match live topology.", { band = band, field = field, param_index = param_index, expected_param_ident = expected_ident, live_param_ident = live_ident })
+        end
       end
     end
+  end
+  if #unavailable_topology > 0 then
+    return e2_fx_reaeq_error("FX_REAEQ_TOPOLOGY_UNAVAILABLE", "ReaEQ did not expose the complete first-four-band topology.", { unavailable_topology = unavailable_topology })
   end
 
   local seen = {}
@@ -15100,7 +15128,7 @@ local function e2_fx_reaeq_validate_request(request, owner_kind, owner, slot_ind
       return e2_fx_reaeq_error("FX_REAEQ_BAND_INDEX_INVALID", "ReaEQ band must be a unique integer from 1 through 4.", { row_index = row_index })
     end
     seen[band] = true
-    if row.type ~= nil and not E2_FX_REAEQ_TYPE_VALUES[row.type] then
+    if row.type ~= nil and E2_FX_REAEQ_WRITE_TYPE_VALUES[row.type] == nil then
       return e2_fx_reaeq_error("FX_REAEQ_BAND_TYPE_INVALID", "ReaEQ band type is not approved.", { row_index = row_index })
     end
     if row.enabled ~= nil and type(row.enabled) ~= "boolean" then
@@ -15158,7 +15186,7 @@ local function e2_fx_set_reaeq_bands(request)
     if item.row.type ~= nil then
       mutation_attempted = true
       batch_timings.native_mutation_count = batch_timings.native_mutation_count + 1
-      if not e2_fx_named_config_set(owner_kind, owner, slot_index, e2_fx_reaeq_band_key("BANDTYPE", item.band), tostring(E2_FX_REAEQ_TYPE_VALUES[item.target_type])) then
+      if not e2_fx_named_config_set(owner_kind, owner, slot_index, e2_fx_reaeq_band_key("BANDTYPE", item.band), tostring(E2_FX_REAEQ_WRITE_TYPE_VALUES[item.target_type])) then
         return e2_fx_reaeq_error("COMMAND_FAILED", "REAPER rejected a ReaEQ BANDTYPE setter.", { band = item.band, mutation_attempted = true, zero_write = false })
       end
     end
@@ -15202,7 +15230,7 @@ local function e2_fx_set_reaeq_bands(request)
       local target = item.targets[target_index]
       local live = inventory[target.param_index + 1]
       local observed = e2_fx_reaeq_parse_formatted(target.field, live.formatted_value)
-      if live.param_ident ~= target.expected_param_ident or not observed or math.abs(observed - target.requested_value) > target.tolerance then
+      if not e2_fx_reaeq_ident_matches(target.param_index, live.param_ident, target.expected_param_ident) or not observed or math.abs(observed - target.requested_value) > target.tolerance then
         return e2_fx_reaeq_error("VERIFY_FAILED", "ReaEQ exact parameter identity or value readback does not match the requested band row.", { band = item.band, field = target.field, expected_param_ident = target.expected_param_ident, live_param_ident = live.param_ident, requested_value = target.requested_value, observed_value = observed or JSON_NULL, mutation_attempted = mutation_attempted, zero_write = false })
       end
       values[target.field] = { requested_value = target.requested_value, observed_value = observed, formatted_value = live.formatted_value, normalized_value = live.normalized_value, param_index = target.param_index, param_ident = live.param_ident, tolerance = target.tolerance }

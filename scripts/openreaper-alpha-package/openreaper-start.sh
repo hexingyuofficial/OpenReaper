@@ -2182,6 +2182,23 @@ on uiTextAreaContains(theWindow, firstNeedle, secondNeedle)
   return false
 end uiTextAreaContains
 
+on isExactReaScriptRunStatusWindow(theWindow, hasRunningReaScriptMainWindow)
+  if not hasRunningReaScriptMainWindow then return false
+  tell application "System Events"
+    try
+      set windowTitle to name of theWindow as text
+      set windowRole to role of theWindow as text
+      set windowSubrole to subrole of theWindow as text
+      set windowSize to size of theWindow
+      set windowWidth to item 1 of windowSize as integer
+      set windowHeight to item 2 of windowSize as integer
+      set windowButtonCount to count of buttons of theWindow
+      return windowTitle is "Window" and windowRole is "AXWindow" and windowSubrole is "AXDialog" and windowWidth > 0 and windowWidth is less than or equal to 96 and windowHeight > 0 and windowHeight is less than or equal to 48 and windowButtonCount is 1
+    end try
+  end tell
+  return false
+end isExactReaScriptRunStatusWindow
+
 on run argv
 set launchedPid to item 1 of argv as integer
 tell application "System Events"
@@ -2190,6 +2207,16 @@ tell application "System Events"
   set launchedProcess to item 1 of matchingProcesses
   if name of launchedProcess is not "REAPER" then return "blocked_reaper_identity:pid=" & launchedPid
   tell launchedProcess
+    set hasRunningReaScriptMainWindow to false
+    set sawReaScriptRunStatusWindow to false
+    repeat with candidateWindow in windows
+      try
+        if (subrole of candidateWindow as text) is "AXStandardWindow" and (name of candidateWindow as text) contains "[ReaScript: Run]" then
+          set hasRunningReaScriptMainWindow to true
+          exit repeat
+        end if
+      end try
+    end repeat
     repeat with reaperWindow in windows
       set windowTitle to ""
       try
@@ -2211,7 +2238,14 @@ tell application "System Events"
         return "blocked_dialog_classification:title=" & windowTitle & ":error=" & errorMessage
       end try
       set isPotentialDialog to windowSubrole is "AXDialog" or windowSubrole is "AXSheet" or windowTitle is "Project Load Warning"
-      if not isPotentialDialog then
+      set isReaScriptRunStatusWindow to isPotentialDialog and my isExactReaScriptRunStatusWindow(reaperWindow, hasRunningReaScriptMainWindow)
+      if isReaScriptRunStatusWindow then
+        -- REAPER exposes its running ReaScript as a tiny AXDialog. It is a
+        -- status surface, not a user decision, and remains open and untouched.
+        set sawReaScriptRunStatusWindow to true
+        set isPotentialDialog to false
+      end if
+      if not isPotentialDialog and not isReaScriptRunStatusWindow then
         if windowSubrole is not "AXWindow" and windowSubrole is not "AXStandardWindow" and windowSubrole is not "" then
           return "blocked_unknown_dialog:title=" & windowTitle
         end if
@@ -2239,6 +2273,7 @@ tell application "System Events"
         end if
       end if
     end repeat
+    if sawReaScriptRunStatusWindow then return "ignored_reascript_run_status_window"
   end tell
 end tell
 return "no_safe_dialog"
@@ -2269,7 +2304,7 @@ APPLESCRIPT
 
 startup_dialog_result_is_safe() {
   case "$1" in
-    no_safe_dialog)
+    no_safe_dialog|ignored_reascript_run_status_window)
       return 0
       ;;
   esac
