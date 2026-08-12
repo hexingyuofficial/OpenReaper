@@ -39,22 +39,20 @@ local function d6_tempo_bounded_bpm(value)
 end
 
 local function d6_tempo_time_sig_num(value)
-  local number = math.floor(tonumber(value) or 4)
-  if number < 1 then
-    return 4
-  end
-  if number > 32 then
-    return 32
-  end
+  if value == nil then return 4 end
+  local number = tonumber(value)
+  if type(number) ~= "number" or number ~= math.floor(number) or number < 1 or number > 32 then return nil end
   return number
 end
 
 local function d6_tempo_time_sig_denom(value)
-  local number = math.floor(tonumber(value) or 4)
+  if value == nil then return 4 end
+  local number = tonumber(value)
+  if type(number) ~= "number" or number ~= math.floor(number) then return nil end
   if number == 1 or number == 2 or number == 4 or number == 8 or number == 16 or number == 32 then
     return number
   end
-  return 4
+  return nil
 end
 
 local function d6_tempo_effective_at(project, position_seconds)
@@ -149,7 +147,7 @@ local function d6_tempo_marker_readback_by_index(project, marker_index)
   end
   return {
     marker_index = marker_index,
-    position_seconds = first_number(timepos) or position_seconds,
+    position_seconds = first_number(timepos) or 0,
     bpm = first_number(bpm) or 0,
     time_sig_num = math.floor(first_number(timesig_num) or 0),
     time_sig_denom = math.floor(first_number(timesig_denom) or 0),
@@ -201,8 +199,19 @@ local function d6_tempo_set_marker(request)
   end
   local numerator = d6_tempo_time_sig_num(request.params.time_signature_numerator)
   local denominator = d6_tempo_time_sig_denom(request.params.time_signature_denominator)
-  local linear_tempo = request.params.linear_tempo == true
+  if not numerator or not denominator then
+    return d6_tempo_error("TIME_SIGNATURE_INVALID", "Tempo marker time signature requires numerator 1-32 and denominator 1, 2, 4, 8, 16, or 32.", {
+      time_signature_numerator = request.params.time_signature_numerator,
+      time_signature_denominator = request.params.time_signature_denominator,
+      zero_write = true,
+    })
+  end
   local marker_index = d6_tempo_marker_index_at(project, position_seconds)
+  local existing_marker = d6_tempo_marker_readback_by_index(project, marker_index)
+  local linear_tempo = request.params.linear_tempo
+  if type(linear_tempo) ~= "boolean" then
+    linear_tempo = existing_marker and existing_marker.linear_tempo == true or false
+  end
   local count_before = d6_tempo_marker_count(project)
   local ok, retval
   if marker_index < 0 then
@@ -244,18 +253,31 @@ local function d6_tempo_set_marker(request)
     end
   end
   local readback = d6_tempo_marker_readback(project, position_seconds, marker_index)
-  if not readback then
+  if not readback
+    or math.abs((readback.position_seconds or 0) - position_seconds) >= 0.000001
+    or math.abs(readback.bpm - bpm) >= 0.01
+    or readback.time_sig_num ~= numerator
+    or readback.time_sig_denom ~= denominator then
     readback = d6_tempo_marker_readback_by_values(project, position_seconds, bpm, numerator, denominator)
   end
-  local updated = readback and math.abs(readback.bpm - bpm) < 0.01
+  local updated = readback
+    and math.abs((readback.position_seconds or 0) - position_seconds) < 0.000001
+    and math.abs(readback.bpm - bpm) < 0.01
+    and readback.time_sig_num == numerator
+    and readback.time_sig_denom == denominator
+    and readback.linear_tempo == linear_tempo
   if not updated then
-    return d6_tempo_error("READBACK_MISMATCH", "Tempo marker write did not read back the requested BPM.", {
+    return d6_tempo_error("READBACK_MISMATCH", "Tempo marker write did not read back the requested position, BPM, and time signature.", {
       position_seconds = position_seconds,
       marker_index = marker_index,
       requested_bpm = bpm,
+      requested_time_sig_num = numerator,
+      requested_time_sig_denom = denominator,
       readback_bpm = readback and readback.bpm or JSON_NULL,
       time_sig_num = readback and readback.time_sig_num or JSON_NULL,
       time_sig_denom = readback and readback.time_sig_denom or JSON_NULL,
+      requested_linear_tempo = linear_tempo,
+      readback_linear_tempo = readback and readback.linear_tempo or JSON_NULL,
     }, false)
   end
   return d6_tempo_summary(request, {

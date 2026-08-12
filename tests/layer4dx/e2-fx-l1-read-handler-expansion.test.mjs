@@ -44,8 +44,9 @@ const E2_FX_B1_WRITE_IDS = Object.freeze([
   "template.fx.add_take_fx",
   "template.fx.set_fx_bypass",
   "template.fx.set_fx_parameter_normalized",
-  "template.fx.set_parameter_assignments_batch",
-  "template.fx.reorder_fx",
+      "template.fx.set_parameter_assignments_batch",
+      "template.fx.set_reaeq_bands",
+      "template.fx.reorder_fx",
 ]);
 
 describe("E2-FX-L1 FX read live handler expansion", () => {

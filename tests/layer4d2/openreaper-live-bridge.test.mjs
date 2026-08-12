@@ -97,12 +97,27 @@ describe("Layer 4D.2 REAPER-side live bridge script", () => {
     assert.doesNotMatch(sourceModules["40-route-pack-handlers.lua"], /template_count = 119/);
     assert.match(sourceModules["40-route-pack-handlers.lua"], /^  open_required_undo_block\(request, key\)$/m);
     assert.match(sourceModules["40-route-pack-handlers.lua"], /^  close_required_undo_block\(request, key\)$/m);
+    const undoOpenIndex = sourceModules["40-route-pack-handlers.lua"].indexOf("  open_required_undo_block(request, key)");
+    const requiredUndoGuardIndex = sourceModules["40-route-pack-handlers.lua"].indexOf(
+      "      and required_undo_capability(request, key)",
+      undoOpenIndex,
+    );
+    const handlerDispatchIndex = sourceModules["40-route-pack-handlers.lua"].indexOf(
+      "  local ok, summary, handler_failure, artifacts, jobs, refs = pcall(operation.handler",
+      requiredUndoGuardIndex,
+    );
+    assert.ok(
+      undoOpenIndex >= 0 && requiredUndoGuardIndex > undoOpenIndex && handlerDispatchIndex > requiredUndoGuardIndex,
+      "every required-Undo mutation must fail closed between Undo open and handler dispatch",
+    );
+    assert.match(sourceModules["40-route-pack-handlers.lua"], /if phase_may_mutate\n\s+and not selection_only_no_content_undo\n\s+and required_undo_capability\(request, key\)/);
+    assert.doesNotMatch(sourceModules["40-route-pack-handlers.lua"], /if \(e3_media_write_capability or d15_source_relink\)/);
     assert.doesNotMatch(sourceModules["40-route-pack-handlers.lua"], /^  open_required_undo_block\(request, operation_key\)$/m);
     assert.doesNotMatch(sourceModules["40-route-pack-handlers.lua"], /^  close_required_undo_block\(request, operation_key\)$/m);
     assert.doesNotMatch(sourceModules["40-route-pack-handlers.lua"], /local TRANSPORT_DIR = non_empty\(os\.getenv\(TRANSPORT_ENV\)\)/);
     assert.match(
       readFileSync(new URL("../../reaper/bridge/src/handlers/core/read_template_catalog_summary.lua", import.meta.url), "utf8"),
-      /template_count = 239/,
+      /template_count = 241/,
     );
     assert.match(sourceModules["90-file-transport-loop.lua"], /reaper\.EnumerateFiles\(REQUESTS_DIR, index\)/);
     assert.match(sourceModules["90-file-transport-loop.lua"], /local completed_request_files = \{\}/);
@@ -2643,7 +2658,14 @@ local function e4_item_route_capability() return nil end
 local function e5_routing_write_capability() return nil end
 local function e5_automation_write_capability() return nil end
 local function e2_fx_b1_write_capability() return nil end
-local function d6_project_tempo_write_capability() return nil end
+local function d6_project_tempo_write_capability(request, operation_key)
+  if operation_key == "run_command:template.execute"
+      and is_object(request and request.pack)
+      and request.pack.capability == "project.set_bpm" then
+    return { pack = "project", risk = "write" }
+  end
+  return nil
+end
 local function d9_tracks_mixer_write_capability() return nil end
 local function d11_project_marker_region_capability() return nil end
 local function d12_transport_safe_capability() return nil end
@@ -2666,7 +2688,12 @@ local E4_ITEM_ROUTE_HANDLERS = {}
 local E5_ROUTING_WRITE_HANDLERS = {}
 local E5_AUTOMATION_WRITE_HANDLERS = {}
 local E2_FX_B1_WRITE_HANDLERS = {}
-local D6_PROJECT_TEMPO_WRITE_HANDLERS = {}
+local D6_PROJECT_TEMPO_WRITE_HANDLERS = {
+  ["project.set_bpm"] = function()
+    record_mutation("project.set_bpm")
+    return { capability = "project.set_bpm", readback_status = "passed" }
+  end,
+}
 local D9_TRACKS_MIXER_WRITE_HANDLERS = {}
 local D11_PROJECT_MARKER_REGION_HANDLERS = {}
 local D12_TRANSPORT_SAFE_HANDLERS = {}
@@ -3894,7 +3921,7 @@ assert(string.find(posix_terminal, "legal-backslash-name/clip.wav", 1, true) ~= 
 `);
   });
 
-  it("fails E3 required Undo begin closed before mutation when both begin APIs fail", () => {
+  it("fails required Undo begin closed before mutation and pairs one successful begin/end", () => {
     runActualProductE3MediaCompositionLua(`
 local path = "/tmp/openreaper-e3-undo-fail.wav"
 existing_files[path] = true
@@ -3927,6 +3954,70 @@ for _, capability in ipairs({
   assert(open_undo_handle == nil, capability)
 end
 force_undo_begin_fail = false
+
+-- A non-E3 required-Undo capability proves this is the generic dispatch gate,
+-- not the former media-only special case.
+undo_begins, undo_ends, mutation_calls = {}, {}, {}
+force_undo_begin_fail = true
+local generic_fail = abi_base(
+  "cmd_required_undo_generic_fail",
+  "run_command",
+  "template.execute",
+  "project",
+  "project.set_bpm",
+  "write"
+)
+generic_fail.params = { bpm = 120 }
+generic_fail.undo = { mode = "required", label = "OpenReaper generic required Undo" }
+local generic_fail_terminal = dispatch_request(generic_fail, generic_fail.id, nil, { started_at = now_iso() })
+assert(string.find(generic_fail_terminal, "required_undo_begin_failed", 1, true) ~= nil, generic_fail_terminal)
+assert(string.find(generic_fail_terminal, '"zero_write":true', 1, true) ~= nil, generic_fail_terminal)
+assert(#mutation_calls == 0, "non-E3 handler entered after required Undo begin failure")
+assert(#undo_ends == 0, "failed required Undo begin must not end a block")
+force_undo_begin_fail = false
+
+-- The same generic guard must leave the normal path with exactly one paired
+-- block around the handler mutation.
+undo_begins, undo_ends, mutation_calls = {}, {}, {}
+open_undo_handle = nil
+media_project.items = {}
+local success_req = make_e3_write_request(
+  "cmd_required_undo_success",
+  "media.import_file_to_track",
+  path,
+  { position_seconds = 0 }
+)
+local success_terminal = dispatch_request(success_req, success_req.id, nil, { started_at = now_iso() })
+assert(type(success_terminal) == "string" and string.find(success_terminal, '"ok":true', 1, true) ~= nil, success_terminal)
+assert(#mutation_calls > 0, "successful handler must mutate")
+assert(#undo_begins == 1, "successful required Undo begin count=" .. tostring(#undo_begins))
+assert(#undo_ends == 1, "successful required Undo end count=" .. tostring(#undo_ends))
+assert(undo_begins[1].project == undo_ends[1].project, "required Undo project mismatch")
+assert(
+  (undo_begins[1].api == "Undo_BeginBlock2" and undo_ends[1].api == "Undo_EndBlock2")
+    or (undo_begins[1].api == "Undo_BeginBlock" and undo_ends[1].api == "Undo_EndBlock"),
+  "required Undo API pair mismatch"
+)
+assert(open_undo_handle == nil, "successful required Undo block must close")
+
+undo_begins, undo_ends, mutation_calls = {}, {}, {}
+local generic_success = abi_base(
+  "cmd_required_undo_generic_success",
+  "run_command",
+  "template.execute",
+  "project",
+  "project.set_bpm",
+  "write"
+)
+generic_success.params = { bpm = 120 }
+generic_success.undo = { mode = "required", label = "OpenReaper generic required Undo" }
+local generic_success_terminal = dispatch_request(generic_success, generic_success.id, nil, { started_at = now_iso() })
+assert(string.find(generic_success_terminal, '"ok":true', 1, true) ~= nil, generic_success_terminal)
+assert(#mutation_calls == 1 and mutation_calls[1] == "project.set_bpm", "non-E3 successful mutation count")
+assert(#undo_begins == 1, "non-E3 required Undo begin count=" .. tostring(#undo_begins))
+assert(#undo_ends == 1, "non-E3 required Undo end count=" .. tostring(#undo_ends))
+assert(undo_begins[1].project == undo_ends[1].project, "non-E3 required Undo project mismatch")
+assert(open_undo_handle == nil, "non-E3 required Undo block must close")
 `);
   });
 

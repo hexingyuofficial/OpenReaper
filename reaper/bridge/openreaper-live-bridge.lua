@@ -1,5 +1,5 @@
 -- OpenReaper generated live bridge.
--- Handler registry: reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json (239 registered template handler row(s); 0 legacy_monolith row(s); 239 extracted handler row(s); 91 handler module file(s)).
+-- Handler registry: reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json (241 registered template handler row(s); 0 legacy_monolith row(s); 241 extracted handler row(s); 91 handler module file(s)).
 
 -- OpenReaper 4D.x minimal live bridge loop.
 -- Manual REAPER-side script: polls file transport requests and writes
@@ -1630,6 +1630,7 @@ local D12_TRANSPORT_SAFE_CAPABILITIES = {
 
 local D13_ITEMS_CORE_WRITE_CAPABILITIES = {
   ["items.set_item_volume"] = { pack = "items", risk = "write" },
+  ["items.set_exact_selection"] = { pack = "items", risk = "write" },
   ["items.set_item_take_controls_batch"] = { pack = "items", risk = "write" },
   ["items.set_take_volume"] = { pack = "items", risk = "write" },
   ["items.set_take_pan"] = { pack = "items", risk = "write" },
@@ -1726,6 +1727,7 @@ local E2_FX_B1_WRITE_CAPABILITIES = {
   ["fx.set_bypass"] = { pack = "fx", risk = "write" },
   ["fx.set_parameter_normalized"] = { pack = "fx", risk = "write" },
   ["fx.set_parameter_assignments_batch"] = { pack = "fx", risk = "write" },
+  ["fx.set_reaeq_bands"] = { pack = "fx", risk = "write" },
   ["fx.set_preset_by_name"] = { pack = "fx", risk = "write" },
   ["fx.set_preset_by_index"] = { pack = "fx", risk = "write" },
   ["fx.reorder"] = { pack = "fx", risk = "write" },
@@ -2881,14 +2883,14 @@ __openreaper_register_handler_module("core/read_template_catalog_summary.lua", f
 -- Extracted Wave 1A handler: template.core.read_template_catalog_summary.
 
 local READ_TEMPLATE_CATALOG_SUMMARY_COUNTS = {
-  template_count = 239,
+  template_count = 241,
   by_pack = {
     actions = 8,
     analysis = 7,
     automation = 23,
     core = 3,
-    fx = 18,
-    items = 36,
+    fx = 19,
+    items = 37,
     media = 8,
     midi = 14,
     project = 33,
@@ -2902,10 +2904,10 @@ local READ_TEMPLATE_CATALOG_SUMMARY_COUNTS = {
     destructive = 15,
     read = 82,
     safe = 13,
-    write = 129,
+    write = 131,
   },
   by_lifecycle = {
-    experimental = 239,
+    experimental = 241,
   },
   by_entity_kind = {
     action = 4,
@@ -2925,10 +2927,11 @@ local READ_TEMPLATE_CATALOG_SUMMARY_COUNTS = {
     fx = 6,
     fx_chain = 3,
     fx_param = 4,
+    fx_reaeq_profile = 1,
     ["fx_param.envelope_mapping"] = 1,
     grid = 2,
     hardware_output = 4,
-    item = 22,
+    item = 23,
     item_layer_report = 1,
     last_result = 1,
     loop_candidates = 1,
@@ -2991,14 +2994,14 @@ local READ_TEMPLATE_CATALOG_SUMMARY_COUNTS = {
 }
 
 local READ_TEMPLATE_CATALOG_SUMMARY_LIVE_HANDLER_COUNTS = {
-  template_count = 239,
+  template_count = 241,
   by_pack = {
     actions = 8,
     analysis = 7,
     automation = 23,
     core = 3,
-    fx = 18,
-    items = 36,
+    fx = 19,
+    items = 37,
     media = 8,
     midi = 14,
     project = 33,
@@ -4749,22 +4752,20 @@ local function d6_tempo_bounded_bpm(value)
 end
 
 local function d6_tempo_time_sig_num(value)
-  local number = math.floor(tonumber(value) or 4)
-  if number < 1 then
-    return 4
-  end
-  if number > 32 then
-    return 32
-  end
+  if value == nil then return 4 end
+  local number = tonumber(value)
+  if type(number) ~= "number" or number ~= math.floor(number) or number < 1 or number > 32 then return nil end
   return number
 end
 
 local function d6_tempo_time_sig_denom(value)
-  local number = math.floor(tonumber(value) or 4)
+  if value == nil then return 4 end
+  local number = tonumber(value)
+  if type(number) ~= "number" or number ~= math.floor(number) then return nil end
   if number == 1 or number == 2 or number == 4 or number == 8 or number == 16 or number == 32 then
     return number
   end
-  return 4
+  return nil
 end
 
 local function d6_tempo_effective_at(project, position_seconds)
@@ -4859,7 +4860,7 @@ local function d6_tempo_marker_readback_by_index(project, marker_index)
   end
   return {
     marker_index = marker_index,
-    position_seconds = first_number(timepos) or position_seconds,
+    position_seconds = first_number(timepos) or 0,
     bpm = first_number(bpm) or 0,
     time_sig_num = math.floor(first_number(timesig_num) or 0),
     time_sig_denom = math.floor(first_number(timesig_denom) or 0),
@@ -4911,8 +4912,19 @@ local function d6_tempo_set_marker(request)
   end
   local numerator = d6_tempo_time_sig_num(request.params.time_signature_numerator)
   local denominator = d6_tempo_time_sig_denom(request.params.time_signature_denominator)
-  local linear_tempo = request.params.linear_tempo == true
+  if not numerator or not denominator then
+    return d6_tempo_error("TIME_SIGNATURE_INVALID", "Tempo marker time signature requires numerator 1-32 and denominator 1, 2, 4, 8, 16, or 32.", {
+      time_signature_numerator = request.params.time_signature_numerator,
+      time_signature_denominator = request.params.time_signature_denominator,
+      zero_write = true,
+    })
+  end
   local marker_index = d6_tempo_marker_index_at(project, position_seconds)
+  local existing_marker = d6_tempo_marker_readback_by_index(project, marker_index)
+  local linear_tempo = request.params.linear_tempo
+  if type(linear_tempo) ~= "boolean" then
+    linear_tempo = existing_marker and existing_marker.linear_tempo == true or false
+  end
   local count_before = d6_tempo_marker_count(project)
   local ok, retval
   if marker_index < 0 then
@@ -4954,18 +4966,31 @@ local function d6_tempo_set_marker(request)
     end
   end
   local readback = d6_tempo_marker_readback(project, position_seconds, marker_index)
-  if not readback then
+  if not readback
+    or math.abs((readback.position_seconds or 0) - position_seconds) >= 0.000001
+    or math.abs(readback.bpm - bpm) >= 0.01
+    or readback.time_sig_num ~= numerator
+    or readback.time_sig_denom ~= denominator then
     readback = d6_tempo_marker_readback_by_values(project, position_seconds, bpm, numerator, denominator)
   end
-  local updated = readback and math.abs(readback.bpm - bpm) < 0.01
+  local updated = readback
+    and math.abs((readback.position_seconds or 0) - position_seconds) < 0.000001
+    and math.abs(readback.bpm - bpm) < 0.01
+    and readback.time_sig_num == numerator
+    and readback.time_sig_denom == denominator
+    and readback.linear_tempo == linear_tempo
   if not updated then
-    return d6_tempo_error("READBACK_MISMATCH", "Tempo marker write did not read back the requested BPM.", {
+    return d6_tempo_error("READBACK_MISMATCH", "Tempo marker write did not read back the requested position, BPM, and time signature.", {
       position_seconds = position_seconds,
       marker_index = marker_index,
       requested_bpm = bpm,
+      requested_time_sig_num = numerator,
+      requested_time_sig_denom = denominator,
       readback_bpm = readback and readback.bpm or JSON_NULL,
       time_sig_num = readback and readback.time_sig_num or JSON_NULL,
       time_sig_denom = readback and readback.time_sig_denom or JSON_NULL,
+      requested_linear_tempo = linear_tempo,
+      readback_linear_tempo = readback and readback.linear_tempo or JSON_NULL,
     }, false)
   end
   return d6_tempo_summary(request, {
@@ -7554,6 +7579,151 @@ local function d13_items_list_selected_items(request)
   }, nil, nil, nil, refs
 end
 
+local function d13_items_set_exact_selection(request)
+  local params = is_object(request.params) and request.params or {}
+  local mode = params.mode
+  local tokens = is_json_array(params.item_refs) and params.item_refs or nil
+  if mode ~= "replace" and mode ~= "add" and mode ~= "remove" then
+    return d13_items_error("PARAMS_INVALID", "Exact Item selection mode must be replace, add, or remove.", { zero_write = true })
+  end
+  if not tokens or #tokens < 1 or #tokens > 64 then
+    return d13_items_error("SELECTION_LIMIT_EXCEEDED", "Exact Item selection requires 1-64 canonical Item GUID refs.", {
+      requested_count = tokens and #tokens or 0,
+      maximum = 64,
+      zero_write = true,
+    })
+  end
+  local requested, requested_lookup = {}, {}
+  for index = 1, #tokens do
+    local token = tokens[index]
+    local guid = is_string(token) and token:match("^item:guid:(.+)$") or nil
+    if not guid or guid == "" or requested_lookup[token] then
+      return d13_items_error("REF_INVALID", "Exact Item selection accepts unique canonical item:guid refs only.", {
+        target_order = index,
+        item_ref = tostring(token),
+        zero_write = true,
+      })
+    end
+    local item = d13_items_find_item_by_guid(guid)
+    if not item then
+      return d13_items_error("ITEM_NOT_FOUND", "Exact Item selection could not resolve every requested GUID.", {
+        target_order = index,
+        item_ref = token,
+        zero_write = true,
+      })
+    end
+    requested[#requested + 1] = { item = item, item_ref = token }
+    requested_lookup[token] = true
+  end
+  local ok_count, raw_count = call_reaper("CountMediaItems", 0)
+  local count = ok_count and math.floor(first_number(raw_count) or -1) or -1
+  if count < 0 then
+    return d13_items_error("COMMAND_FAILED", "Exact Item selection could not enumerate the complete project Item set.", { zero_write = true }, false)
+  end
+  local all = {}
+  local expected = {}
+  for index = 0, count - 1 do
+    local ok_item, item = call_reaper("GetMediaItem", 0, index)
+    local item_ref = item and d13_items_item_ref_string(item) or nil
+    local ok_selected, selected = item and call_reaper("IsMediaItemSelected", item) or false, false
+    if item then ok_selected, selected = call_reaper("IsMediaItemSelected", item) end
+    if not ok_item or not item or not item_ref or not item_ref:match("^item:guid:") or not ok_selected then
+      return d13_items_error("COMMAND_FAILED", "Exact Item selection could not freeze complete selection truth.", {
+        item_index = index,
+        zero_write = true,
+      }, false)
+    end
+    local should_select
+    if mode == "replace" then should_select = requested_lookup[item_ref] == true
+    elseif mode == "add" then should_select = selected == true or requested_lookup[item_ref] == true
+    else should_select = selected == true and requested_lookup[item_ref] ~= true end
+    all[#all + 1] = { item = item, item_ref = item_ref, before = selected == true, after = should_select }
+    if should_select then expected[#expected + 1] = item_ref end
+  end
+  if #expected > 64 then
+    return d13_items_error("SELECTION_LIMIT_EXCEEDED", "The compiled final selection exceeds 64 Items; zero_write=true.", {
+      selected_count = #expected,
+      maximum = 64,
+      zero_write = true,
+    })
+  end
+  local function restore_selection()
+    local restored = true
+    for index = 1, #all do
+      local row = all[index]
+      local ok_restore, accepted = call_reaper("SetMediaItemSelected", row.item, row.before)
+      if not ok_restore or accepted == false then restored = false end
+    end
+    for index = 1, #all do
+      local row = all[index]
+      local ok_selected, selected = call_reaper("IsMediaItemSelected", row.item)
+      if not ok_selected or (selected == true) ~= row.before then restored = false end
+    end
+    call_reaper("UpdateArrange")
+    return restored
+  end
+  local function fail_after_mutation(code, message, details)
+    details = type(details) == "table" and details or {}
+    details.rollback_status = restore_selection() and "restored" or "restore_failed"
+    details.zero_write = details.rollback_status == "restored"
+    return d13_items_error(code, message, details, false)
+  end
+  local changed_count = 0
+  for index = 1, #all do
+    local row = all[index]
+    if row.before ~= row.after then
+      local ok_set, accepted = call_reaper("SetMediaItemSelected", row.item, row.after)
+      if not ok_set or accepted == false then
+        return fail_after_mutation("COMMAND_FAILED", "REAPER rejected an exact Item selection mutation; the prior selection was restored when possible.", {
+          item_ref = row.item_ref,
+        })
+      end
+      changed_count = changed_count + 1
+    end
+  end
+  call_reaper("UpdateArrange")
+  local selected_refs = json_array({})
+  local output_refs = json_array({})
+  local expected_lookup = {}
+  for index = 1, #expected do expected_lookup[expected[index]] = true end
+  local ok_selected_count, raw_selected_count = call_reaper("CountSelectedMediaItems", 0)
+  local selected_count = ok_selected_count and math.floor(first_number(raw_selected_count) or -1) or -1
+  if selected_count < 0 or selected_count ~= #expected then
+    return fail_after_mutation("VERIFY_FAILED", "Exact Item selection count readback did not match the compiled set; the prior selection was restored when possible.", {
+      expected_count = #expected,
+      observed_count = selected_count,
+    })
+  end
+  for index = 0, selected_count - 1 do
+    local ok_item, item = call_reaper("GetSelectedMediaItem", 0, index)
+    local ref = item and d13_items_item_ref_string(item) or nil
+    if not ok_item or not ref or not expected_lookup[ref] then
+      return fail_after_mutation("VERIFY_FAILED", "Exact Item selection aggregate readback did not match the compiled set; the prior selection was restored when possible.", {
+        target_order = index + 1,
+        observed_item_ref = ref,
+      })
+    end
+    expected_lookup[ref] = nil
+    selected_refs[#selected_refs + 1] = ref
+    output_refs[#output_refs + 1] = d13_items_item_object_ref(item)
+  end
+  for ref in pairs(expected_lookup) do
+    return fail_after_mutation("VERIFY_FAILED", "Exact Item selection aggregate readback omitted a compiled Item; the prior selection was restored when possible.", {
+      expected_item_ref = ref,
+    })
+  end
+  table.sort(selected_refs)
+  return {
+    mode = mode,
+    requested_item_refs = tokens,
+    selected_item_refs = selected_refs,
+    selected_count = selected_count,
+    changed_count = changed_count,
+    readback_status = "passed",
+    zero_write = false,
+  }, nil, json_array({}), json_array({}), output_refs
+end
+
 local function d13_items_list_items_on_track(request)
   local track, failure = d13_items_track_from_request_refs(request)
   if not track then
@@ -8581,7 +8751,7 @@ local function d13_items_set_stretch_marker_fade_size(request)
   return d13_items_set_take_value(request, "F_STRETCHFADESIZE", fade_size_ms / 1000)
 end
 return {
-  exports = { d13_items_list_selected_items = d13_items_list_selected_items, d13_items_list_items_on_track = d13_items_list_items_on_track, d13_items_set_item_volume = d13_items_set_item_volume, d13_items_set_item_take_controls_batch = d13_items_set_item_take_controls_batch, d13_items_set_take_volume = d13_items_set_take_volume, d13_items_set_take_pan = d13_items_set_take_pan, d13_items_rename_take = d13_items_rename_take, d13_items_set_loop_source = d13_items_set_loop_source, d13_items_set_mute = d13_items_set_mute, d13_items_set_lock = d13_items_set_lock, d13_items_set_play_all_takes = d13_items_set_play_all_takes, d13_items_set_take_start_in_source = d13_items_set_take_start_in_source, d13_items_set_channel_mode = d13_items_set_channel_mode, d13_items_set_pitch_shift_mode = d13_items_set_pitch_shift_mode, d13_items_set_stretch_marker_fade_size = d13_items_set_stretch_marker_fade_size, d13_items_set_reverse = d13_items_set_reverse },
+  exports = { d13_items_list_selected_items = d13_items_list_selected_items, d13_items_set_exact_selection = d13_items_set_exact_selection, d13_items_list_items_on_track = d13_items_list_items_on_track, d13_items_set_item_volume = d13_items_set_item_volume, d13_items_set_item_take_controls_batch = d13_items_set_item_take_controls_batch, d13_items_set_take_volume = d13_items_set_take_volume, d13_items_set_take_pan = d13_items_set_take_pan, d13_items_rename_take = d13_items_rename_take, d13_items_set_loop_source = d13_items_set_loop_source, d13_items_set_mute = d13_items_set_mute, d13_items_set_lock = d13_items_set_lock, d13_items_set_play_all_takes = d13_items_set_play_all_takes, d13_items_set_take_start_in_source = d13_items_set_take_start_in_source, d13_items_set_channel_mode = d13_items_set_channel_mode, d13_items_set_pitch_shift_mode = d13_items_set_pitch_shift_mode, d13_items_set_stretch_marker_fade_size = d13_items_set_stretch_marker_fade_size, d13_items_set_reverse = d13_items_set_reverse },
   shared = {  },
 }
 end)
@@ -12104,6 +12274,147 @@ local function d27_batch_ref_object(ref)
   return d27_split_object_ref("item", ref)
 end
 
+local function d27_batch_item_position(item)
+  local ok_position, position = call_reaper("GetMediaItemInfo_Value", item, "D_POSITION")
+  local ok_length, length = call_reaper("GetMediaItemInfo_Value", item, "D_LENGTH")
+  position = ok_position and d27_analysis_number(first_number(position)) or nil
+  length = ok_length and d27_analysis_number(first_number(length)) or nil
+  if position == nil or length == nil or length <= 0 then return nil end
+  return position, length
+end
+
+local function d27_batch_owner_track(context)
+  local ok_track, track = call_reaper("GetMediaItemTrack", context.item)
+  if not ok_track or not track then ok_track, track = call_reaper("GetMediaItem_Track", context.item) end
+  if not ok_track or not track then return nil end
+  local ref = d27_split_track_ref(track)
+  if not ref then return nil end
+  return track, ref
+end
+
+local function d27_batch_expand_adjacent(targets, params)
+  local direction = params.adjacent_audio
+  if direction == nil then return targets, nil end
+  if direction ~= "left" and direction ~= "right" and direction ~= "both" then
+    return d27_batch_fail("PARAMS_INVALID", "adjacent_audio must be left, right, or both; zero_write=true.", {
+      zero_write = true,
+    })
+  end
+  if params.target ~= "exact" or #targets ~= 1 then
+    return d27_batch_fail("ADJACENT_ANCHOR_REQUIRED", "adjacent_audio requires exactly one canonical exact Item anchor; zero_write=true.", {
+      target_count = #targets,
+      zero_write = true,
+    })
+  end
+  local anchor = targets[1]
+  local owner_track = d27_batch_owner_track({ item = anchor.item })
+  if not owner_track then
+    return d27_batch_fail("TRACK_NOT_FOUND", "Adjacent audio expansion could not prove the anchor owner Track; zero_write=true.", {
+      item_ref = anchor.item_ref,
+      zero_write = true,
+    })
+  end
+  local ok_count, raw_count = call_reaper("CountTrackMediaItems", owner_track)
+  local count = ok_count and math.floor(first_number(raw_count) or -1) or -1
+  if count < 1 then
+    return d27_batch_fail("ADJACENT_ITEM_NOT_FOUND", "Adjacent audio expansion found no owner-Track Item inventory; zero_write=true.", {
+      item_ref = anchor.item_ref,
+      zero_write = true,
+    })
+  end
+  local rows = {}
+  local anchor_index = nil
+  for index = 0, count - 1 do
+    local ok_item, item = call_reaper("GetTrackMediaItem", owner_track, index)
+    local item_ref, guid
+    local position, length
+    if item then
+      item_ref, guid = d27_split_item_ref(item)
+      position, length = d27_batch_item_position(item)
+    end
+    if not ok_item or not item or not item_ref or position == nil then
+      return d27_batch_fail("ADJACENT_INVENTORY_INCOMPLETE", "Adjacent audio expansion could not freeze the complete owner-Track Item inventory; zero_write=true.", {
+        item_index = index,
+        zero_write = true,
+      })
+    end
+    rows[#rows + 1] = {
+      item = item,
+      item_ref = item_ref,
+      guid = guid,
+      position = position,
+      length = length,
+    }
+  end
+  table.sort(rows, function(left, right)
+    if left.position == right.position then
+      if left.length == right.length then return left.item_ref < right.item_ref end
+      return left.length < right.length
+    end
+    return left.position < right.position
+  end)
+  for index = 1, #rows do
+    if rows[index].item_ref == anchor.item_ref then anchor_index = index break end
+  end
+  if not anchor_index then
+    return d27_batch_fail("ITEM_NOT_FOUND", "Adjacent audio anchor disappeared while freezing the owner Track; zero_write=true.", {
+      item_ref = anchor.item_ref,
+      zero_write = true,
+    })
+  end
+  local tolerance = 0.000001
+  local anchor_row = rows[anchor_index]
+  local anchor_end = anchor_row.position + anchor_row.length
+  for index = 1, #rows do
+    if index ~= anchor_index then
+      local row = rows[index]
+      local row_end = row.position + row.length
+      if row.position < anchor_end - tolerance and row_end > anchor_row.position + tolerance then
+        return d27_batch_fail("ADJACENT_OVERLAP_AMBIGUOUS", "Adjacent audio expansion rejects overlapping owner-Track Items; zero_write=true.", {
+          item_ref = anchor.item_ref,
+          overlapping_item_ref = row.item_ref,
+          zero_write = true,
+        })
+      end
+    end
+  end
+  local expanded = {}
+  local function append_neighbor(index, side)
+    local row = rows[index]
+    if not row then
+      return d27_batch_fail("ADJACENT_ITEM_NOT_FOUND", "The requested immediate " .. side .. " audio neighbor does not exist; zero_write=true.", {
+        item_ref = anchor.item_ref,
+        side = side,
+        zero_write = true,
+      })
+    end
+    expanded[#expanded + 1] = {
+      item = row.item,
+      item_ref = row.item_ref,
+      guid = row.guid,
+      target_order = #expanded + 1,
+      adjacency = side,
+    }
+    return nil
+  end
+  if direction == "left" or direction == "both" then
+    local _, failure = append_neighbor(anchor_index - 1, "left")
+    if failure then return nil, failure end
+  end
+  expanded[#expanded + 1] = {
+    item = anchor.item,
+    item_ref = anchor.item_ref,
+    guid = anchor.guid,
+    target_order = #expanded + 1,
+    adjacency = "anchor",
+  }
+  if direction == "right" or direction == "both" then
+    local _, failure = append_neighbor(anchor_index + 1, "right")
+    if failure then return nil, failure end
+  end
+  return expanded, nil
+end
+
 local function d27_batch_targets(request, params)
   local target = params.target
   local tokens = is_json_array(params.target_refs) and params.target_refs or nil
@@ -12233,8 +12544,12 @@ local function d27_batch_ranges(scan, context, params)
     for index = 1, #scan.silence_segments do
       local segment = scan.silence_segments[index]
       if d27_batch_scope_matches(scope, segment, context.item_length, tolerance) then
-        local start_seconds = math.max(0, segment.start_seconds + (keep_before_ms / 1000))
-        local end_seconds = math.min(context.item_length, segment.end_seconds - (keep_after_ms / 1000))
+        local touches_start = segment.start_seconds <= tolerance
+        local touches_end = segment.end_seconds >= context.item_length - tolerance
+        local start_seconds = touches_start and 0
+          or math.max(0, segment.start_seconds + (keep_before_ms / 1000))
+        local end_seconds = touches_end and context.item_length
+          or math.min(context.item_length, segment.end_seconds - (keep_after_ms / 1000))
         if end_seconds > start_seconds + tolerance then
           ranges[#ranges + 1] = {
             start_seconds = start_seconds,
@@ -12248,16 +12563,15 @@ local function d27_batch_ranges(scan, context, params)
   end
   table.sort(ranges, function(left, right) return left.start_seconds < right.start_seconds end)
   local filtered = {}
-  local cursor = 0
+  local minimum_kept_seconds = min_kept_ms / 1000
   for index = 1, #ranges do
     local range = ranges[index]
-    local previous_audio = range.start_seconds - cursor
-    local next_audio = context.item_length - range.end_seconds
-    if previous_audio <= tolerance or previous_audio >= (min_kept_ms / 1000) - tolerance then
-      if next_audio <= tolerance or next_audio >= (min_kept_ms / 1000) - tolerance then
-        filtered[#filtered + 1] = range
-        cursor = range.end_seconds
-      end
+    local previous_range = filtered[#filtered]
+    local internal_audio = previous_range and range.start_seconds - previous_range.end_seconds or nil
+    if not previous_range
+        or internal_audio <= tolerance
+        or internal_audio >= minimum_kept_seconds - tolerance then
+      filtered[#filtered + 1] = range
     end
   end
   return filtered, nil, all_silent
@@ -12275,10 +12589,11 @@ local function d27_batch_checksum_plan(rows, params, operation)
     tostring(params.fade_ms or 5),
     tostring(params.normalization_metric or ""),
     tostring(params.normalization_target or ""),
+    tostring(params.adjacent_audio or ""),
   }
   for index = 1, #rows do
     local row = rows[index]
-    parts[#parts + 1] = table.concat({ row.item_ref, row.context.item_position, row.context.item_length }, ":")
+    parts[#parts + 1] = table.concat({ row.item_ref, row.context.item_position, row.context.item_length, row.adjacency or "direct" }, ":")
     for _, segment in ipairs(row.scan and row.scan.silence_segments or {}) do
       parts[#parts + 1] = table.concat({ segment.start_seconds, segment.end_seconds }, ",")
     end
@@ -12288,15 +12603,6 @@ local function d27_batch_checksum_plan(rows, params, operation)
     if row.normalization then parts[#parts + 1] = tostring(row.normalization.adjustment) end
   end
   return "alpha33_silence_batch:" .. d27_batch_checksum(table.concat(parts, "|"))
-end
-
-local function d27_batch_owner_track(context)
-  local ok_track, track = call_reaper("GetMediaItemTrack", context.item)
-  if not ok_track or not track then ok_track, track = call_reaper("GetMediaItem_Track", context.item) end
-  if not ok_track or not track then return nil end
-  local ref = d27_split_track_ref(track)
-  if not ref then return nil end
-  return track, ref
 end
 
 local function d27_batch_fragments(context, boundaries)
@@ -12372,11 +12678,38 @@ local function d27_batch_apply_silence(row, params, counters)
     if not ok_delete or deleted_ok ~= true then return nil, d27_analysis_error("COMMAND_FAILED", "REAPER rejected a planned silence fragment deletion.", { item_ref = fragment.item_ref }) end
     counters.native_mutation_count = counters.native_mutation_count + 1
   end
-  for _, fragment in ipairs(kept) do
-    if fade_seconds > 0 then
-      call_reaper("SetMediaItemInfo_Value", fragment.item, "D_FADEINLEN", math.min(fade_seconds, math.max(0, fragment.end_seconds - fragment.start_seconds) / 2))
-      call_reaper("SetMediaItemInfo_Value", fragment.item, "D_FADEOUTLEN", math.min(fade_seconds, math.max(0, fragment.end_seconds - fragment.start_seconds) / 2))
+  local function set_verified_fade(fragment, field, value)
+    local bounded = math.min(value, math.max(0, fragment.end_seconds - fragment.start_seconds) / 2)
+    local ok_set, accepted = call_reaper("SetMediaItemInfo_Value", fragment.item, field, bounded)
+    if not ok_set or accepted == false then
+      return d27_analysis_error("COMMAND_FAILED", "REAPER rejected a planned Item fade update.", {
+        item_ref = fragment.item_ref,
+        field = field,
+      })
     end
+    local ok_read, observed = call_reaper("GetMediaItemInfo_Value", fragment.item, field)
+    observed = ok_read and d27_analysis_number(first_number(observed)) or nil
+    if observed == nil or math.abs(observed - bounded) > 0.000001 then
+      return d27_analysis_error("VERIFY_FAILED", "A planned Item fade did not read back exactly.", {
+        item_ref = fragment.item_ref,
+        field = field,
+        expected = bounded,
+        observed = observed or JSON_NULL,
+      })
+    end
+    return nil
+  end
+  for _, fragment in ipairs(kept) do
+    local preserves_original_start = fragment.start_seconds <= tolerance
+    local preserves_original_end = fragment.end_seconds >= row.context.item_length - tolerance
+    local fade_failure = set_verified_fade(fragment, "D_FADEINLEN", preserves_original_start and row.context.fade_in_length or fade_seconds)
+    if fade_failure then return nil, fade_failure end
+    fade_failure = set_verified_fade(fragment, "D_FADEOUTLEN", preserves_original_end and row.context.fade_out_length or fade_seconds)
+    if fade_failure then return nil, fade_failure end
+    fade_failure = set_verified_fade(fragment, "D_FADEINLEN_AUTO", preserves_original_start and row.context.auto_fade_in_length or -1)
+    if fade_failure then return nil, fade_failure end
+    fade_failure = set_verified_fade(fragment, "D_FADEOUTLEN_AUTO", preserves_original_end and row.context.auto_fade_out_length or -1)
+    if fade_failure then return nil, fade_failure end
   end
   call_reaper("UpdateArrange")
   local remaining = 0
@@ -12756,6 +13089,9 @@ alpha33_silence_batch = function(request)
   end
   local targets, target_failure = d27_batch_targets(request, params)
   if not targets then return nil, target_failure end
+  local expanded_targets, adjacent_failure = d27_batch_expand_adjacent(targets, params)
+  if not expanded_targets then return nil, adjacent_failure end
+  targets = expanded_targets
 
   local preflight_started = os.clock()
   local rows = {}
@@ -12803,9 +13139,21 @@ alpha33_silence_batch = function(request)
       context = context,
       owner_track = owner_track,
       owner_track_ref = owner_track_ref,
+      adjacency = target.adjacency,
       source_range = source_range,
     }
     if operation == "remove_silence" then
+      local fade_fields = {
+        fade_in_length = "D_FADEINLEN",
+        fade_out_length = "D_FADEOUTLEN",
+        auto_fade_in_length = "D_FADEINLEN_AUTO",
+        auto_fade_out_length = "D_FADEOUTLEN_AUTO",
+      }
+      for context_field, native_field in pairs(fade_fields) do
+        local value, fade_failure = d27_analysis_api_number("GetMediaItemInfo_Value", context.item, native_field)
+        if value == nil then return d27_batch_preflight_failure(fade_failure) end
+        context[context_field] = value
+      end
       context.params.silence_threshold_dbfs = silence_threshold_dbfs
       context.params.min_silence_ms = min_silence_ms
       local range, range_failure = d27_analysis_limited_range(context, D27_MAX_ANALYSIS_SECONDS)
@@ -12898,6 +13246,7 @@ alpha33_silence_batch = function(request)
         result.deleted_item_refs = nil
       end
       result.target_order = index
+      result.adjacency = rows[index].adjacency
       result.plan_hash = plan_hash
       aggregate_readback[#aggregate_readback + 1] = result
     end
@@ -12907,6 +13256,7 @@ alpha33_silence_batch = function(request)
         target_order = index,
         item_ref = rows[index].item_ref,
         owner_track_ref = rows[index].owner_track_ref,
+        adjacency = rows[index].adjacency,
         status = rows[index].all_silent and "ALL_SILENT_RETAINED" or "PLANNED",
         changed = false,
         source_media_deleted = false,
@@ -12927,6 +13277,7 @@ alpha33_silence_batch = function(request)
     operation = operation,
     target_scope = params.target or (#targets > 0 and (is_json_array(params.target_refs) and #params.target_refs > 0 and "exact" or "selected") or "selected"),
     target_count = #targets,
+    adjacent_audio = params.adjacent_audio,
     returned_target_count = #aggregate_readback,
     plan_hash = plan_hash,
     aggregate_readback = aggregate_readback,
@@ -13947,6 +14298,27 @@ local function e2_fx_set_param_normalized(owner_kind, owner, slot_index, param_i
   return call_reaper("TrackFX_SetParamNormalized", owner, slot_index, param_index, value) == true
 end
 
+local function e2_fx_set_param_value(owner_kind, owner, slot_index, param_index, value)
+  local api = owner_kind == "take" and "TakeFX_SetParam" or "TrackFX_SetParam"
+  local ok, accepted = call_reaper(api, owner, slot_index, param_index, value)
+  return ok and accepted == true
+end
+
+local function e2_fx_named_config_get(owner_kind, owner, slot_index, key)
+  local api = owner_kind == "take" and "TakeFX_GetNamedConfigParm" or "TrackFX_GetNamedConfigParm"
+  local ok, accepted, value = call_reaper(api, owner, slot_index, key)
+  if not ok or accepted ~= true or type(value) ~= "string" then
+    return nil
+  end
+  return bounded_string(value, 160)
+end
+
+local function e2_fx_named_config_set(owner_kind, owner, slot_index, key, value)
+  local api = owner_kind == "take" and "TakeFX_SetNamedConfigParm" or "TrackFX_SetNamedConfigParm"
+  local ok, accepted = call_reaper(api, owner, slot_index, key, value)
+  return ok and accepted == true
+end
+
 local function e2_fx_get_preset(owner_kind, owner, slot_index)
   local ok, _, name
   if owner_kind == "take" then
@@ -14526,6 +14898,324 @@ local function e2_fx_parameter_assignments_batch(request)
   return e2_fx_write_summary(request, { rows = result_rows, mutation_attempted = true, batch_timings = batch_timings }), nil, json_array({}), json_array({}), refs
 end
 
+local E2_FX_REAEQ_BAND_MAX = 4
+local E2_FX_REAEQ_TYPE_VALUES = {
+  high_pass = 0,
+  low_shelf = 1,
+  band = 2,
+  notch = 3,
+  high_shelf = 4,
+  low_pass = 5,
+}
+local E2_FX_REAEQ_TYPE_NAMES = {
+  [0] = "high_pass",
+  [1] = "low_shelf",
+  [2] = "band",
+  [3] = "notch",
+  [4] = "high_shelf",
+  [5] = "low_pass",
+}
+local E2_FX_REAEQ_IDENT_TOKENS = {
+  high_pass = "High_Pass",
+  low_shelf = "Low_Shelf",
+  band = "Band",
+  notch = "Notch",
+  high_shelf = "High_Shelf",
+  low_pass = "Low_Pass",
+}
+
+local function e2_fx_reaeq_error(code, message, details)
+  details = details or {}
+  if details.zero_write == nil then details.zero_write = true end
+  return e2_fx_batch_error(code, message, details)
+end
+
+local function e2_fx_reaeq_identity(owner_kind, owner, slot_index)
+  return e2_fx_named_config_get(owner_kind, owner, slot_index, "fx_ident")
+end
+
+local function e2_fx_reaeq_identity_allowed(identity)
+  if type(identity) ~= "string" then return false end
+  local normalized = identity:lower():gsub("%s+", " "):gsub(": ", ":")
+  return normalized == "vst:reaeq (cockos)"
+    or normalized == "vst3:reaeq (cockos)"
+    or normalized == "au:reaeq (cockos)"
+    or normalized == "reaeq (cockos)"
+end
+
+local function e2_fx_reaeq_band_key(prefix, band)
+  return prefix .. tostring(band - 1)
+end
+
+local function e2_fx_reaeq_read_topology(owner_kind, owner, slot_index, band)
+  local type_raw = e2_fx_named_config_get(owner_kind, owner, slot_index, e2_fx_reaeq_band_key("BANDTYPE", band))
+  local enabled_raw = e2_fx_named_config_get(owner_kind, owner, slot_index, e2_fx_reaeq_band_key("BANDENABLED", band))
+  local type_value = tonumber(type_raw)
+  if not E2_FX_REAEQ_TYPE_NAMES[type_value] or (enabled_raw ~= "0" and enabled_raw ~= "1") then
+    return nil
+  end
+  return {
+    band = band,
+    type = E2_FX_REAEQ_TYPE_NAMES[type_value],
+    type_value = type_value,
+    enabled = enabled_raw == "1",
+  }
+end
+
+local function e2_fx_reaeq_expected_ident(band, field, band_type)
+  local prefix = field == "frequency_hz" and "_Freq_" or field == "gain_db" and "_Gain_" or "_BW_"
+  local suffix = band == 1 and "" or "_" .. tostring(band)
+  return prefix .. E2_FX_REAEQ_IDENT_TOKENS[band_type] .. suffix
+end
+
+local function e2_fx_reaeq_inventory(owner_kind, owner, slot_index)
+  local parameter_count = e2_fx_read_param_count(owner_kind, owner, slot_index)
+  if parameter_count < E2_FX_REAEQ_BAND_MAX * 3 then return nil, parameter_count end
+  local rows = json_array({})
+  for param_index = 0, parameter_count - 1 do
+    local ident = e2_fx_read_param_ident(owner_kind, owner, slot_index, param_index)
+    if not ident then return nil, parameter_count end
+    local values = e2_fx_read_param_value(owner_kind, owner, slot_index, param_index)
+    rows[#rows + 1] = {
+      param_index = param_index,
+      param_ident = ident,
+      name = e2_fx_read_param_name(owner_kind, owner, slot_index, param_index),
+      value = values.value,
+      min_value = values.min_value,
+      max_value = values.max_value,
+      normalized_value = e2_fx_read_param_normalized(owner_kind, owner, slot_index, param_index),
+      formatted_value = e2_fx_read_param_formatted(owner_kind, owner, slot_index, param_index),
+    }
+  end
+  return rows, parameter_count
+end
+
+local function e2_fx_reaeq_parse_formatted(field, formatted)
+  if type(formatted) ~= "string" then return nil end
+  local normalized = formatted:lower():gsub(",", ".")
+  local number_text = normalized:match("[-+]?%d+%.?%d*")
+  local value = tonumber(number_text)
+  if not value then return nil end
+  if field == "frequency_hz" and normalized:find("khz", 1, true) then value = value * 1000 end
+  return value
+end
+
+local function e2_fx_reaeq_target_tolerance(field, target)
+  if field == "frequency_hz" then return math.max(0.5, math.abs(target) * 0.0025) end
+  if field == "gain_db" then return 0.02 end
+  return 0.02
+end
+
+local function e2_fx_reaeq_compile_target(owner_kind, owner, slot_index, param_index, field, target)
+  local low_formatted = e2_fx_format_param_normalized(owner_kind, owner, slot_index, param_index, 0)
+  local high_formatted = e2_fx_format_param_normalized(owner_kind, owner, slot_index, param_index, 1)
+  local low_value = e2_fx_reaeq_parse_formatted(field, low_formatted)
+  local high_value = e2_fx_reaeq_parse_formatted(field, high_formatted)
+  if not low_value or not high_value or low_value == high_value then return nil end
+  local minimum = math.min(low_value, high_value)
+  local maximum = math.max(low_value, high_value)
+  local tolerance = e2_fx_reaeq_target_tolerance(field, target)
+  if target < minimum - tolerance or target > maximum + tolerance then return nil end
+  local ascending = high_value > low_value
+  local best_normalized = 0
+  local best_value = low_value
+  local best_formatted = low_formatted
+  local left = 0
+  local right = 1
+  for _ = 1, 48 do
+    local middle = (left + right) / 2
+    local formatted = e2_fx_format_param_normalized(owner_kind, owner, slot_index, param_index, middle)
+    local observed = e2_fx_reaeq_parse_formatted(field, formatted)
+    if not observed then return nil end
+    if math.abs(observed - target) < math.abs(best_value - target) then
+      best_normalized = middle
+      best_value = observed
+      best_formatted = formatted
+    end
+    if (ascending and observed < target) or (not ascending and observed > target) then
+      left = middle
+    else
+      right = middle
+    end
+  end
+  if math.abs(best_value - target) > tolerance then return nil end
+  local values = e2_fx_read_param_value(owner_kind, owner, slot_index, param_index)
+  local native_value = values.min_value + best_normalized * (values.max_value - values.min_value)
+  return {
+    normalized_value = best_normalized,
+    native_value = native_value,
+    requested_value = target,
+    native_formatted_value = best_formatted,
+    native_formatted_numeric = best_value,
+    tolerance = tolerance,
+  }
+end
+
+local function e2_fx_reaeq_validate_request(request, owner_kind, owner, slot_index)
+  local params = request.params or {}
+  local bands = params.bands
+  if type(params.dry_run) ~= "boolean" then
+    return e2_fx_reaeq_error("PARAMS_INVALID", "ReaEQ band batch dry_run must be boolean.")
+  end
+  if not is_json_array(bands) or #bands < 1 or #bands > E2_FX_REAEQ_BAND_MAX then
+    return e2_fx_reaeq_error("FX_REAEQ_BANDS_INVALID", "ReaEQ band batch accepts 1-4 rows.")
+  end
+  local identity = e2_fx_reaeq_identity(owner_kind, owner, slot_index)
+  if not e2_fx_reaeq_identity_allowed(identity) then
+    return e2_fx_reaeq_error("FX_REAEQ_IDENTITY_MISMATCH", "The exact live FX is not an approved Cockos ReaEQ instance.", { plugin_identity = identity or JSON_NULL })
+  end
+  local inventory, parameter_count = e2_fx_reaeq_inventory(owner_kind, owner, slot_index)
+  if not inventory then
+    return e2_fx_reaeq_error("FX_REAEQ_INVENTORY_INVALID", "ReaEQ did not expose a complete stable parameter inventory.", { parameter_count = parameter_count })
+  end
+  local topology = json_array({})
+  for band = 1, E2_FX_REAEQ_BAND_MAX do
+    local current = e2_fx_reaeq_read_topology(owner_kind, owner, slot_index, band)
+    if not current then
+      return e2_fx_reaeq_error("FX_REAEQ_TOPOLOGY_UNAVAILABLE", "ReaEQ did not expose the complete first-four-band topology.", { band = band })
+    end
+    topology[#topology + 1] = current
+    for field_offset, field in ipairs({ "frequency_hz", "gain_db", "bandwidth_oct" }) do
+      local param_index = (band - 1) * 3 + field_offset - 1
+      local live_ident = inventory[param_index + 1].param_ident
+      local expected_ident = e2_fx_reaeq_expected_ident(band, field, current.type)
+      if live_ident ~= expected_ident then
+        return e2_fx_reaeq_error("FX_REAEQ_PARAMETER_IDENTITY_MISMATCH", "ReaEQ first-four-band parameter identity does not match live topology.", { band = band, field = field, param_index = param_index, expected_param_ident = expected_ident, live_param_ident = live_ident })
+      end
+    end
+  end
+
+  local seen = {}
+  local prepared = {}
+  for row_index = 1, #bands do
+    local row = bands[row_index]
+    if not is_object(row) then return e2_fx_reaeq_error("FX_REAEQ_BAND_ROW_INVALID", "ReaEQ band rows must be objects.", { row_index = row_index }) end
+    for key in pairs(row) do
+      if key ~= "band" and key ~= "type" and key ~= "enabled" and key ~= "frequency_hz" and key ~= "gain_db" and key ~= "bandwidth_oct" then
+        return e2_fx_reaeq_error("FX_REAEQ_BAND_ROW_INVALID", "ReaEQ band row contains an unsupported field.", { row_index = row_index, field = key })
+      end
+    end
+    local band = tonumber(row.band)
+    if not band or band < 1 or band > E2_FX_REAEQ_BAND_MAX or band ~= math.floor(band) or seen[band] then
+      return e2_fx_reaeq_error("FX_REAEQ_BAND_INDEX_INVALID", "ReaEQ band must be a unique integer from 1 through 4.", { row_index = row_index })
+    end
+    seen[band] = true
+    if row.type ~= nil and not E2_FX_REAEQ_TYPE_VALUES[row.type] then
+      return e2_fx_reaeq_error("FX_REAEQ_BAND_TYPE_INVALID", "ReaEQ band type is not approved.", { row_index = row_index })
+    end
+    if row.enabled ~= nil and type(row.enabled) ~= "boolean" then
+      return e2_fx_reaeq_error("FX_REAEQ_BAND_ENABLED_INVALID", "ReaEQ band enabled must be boolean.", { row_index = row_index })
+    end
+    local target_type = row.type or topology[band].type
+    local item = { row = row, band = band, target_type = target_type, targets = {} }
+    for field_offset, field in ipairs({ "frequency_hz", "gain_db", "bandwidth_oct" }) do
+      if row[field] ~= nil then
+        local target = tonumber(row[field])
+        local bounds = field == "frequency_hz" and { 10, 30000 } or field == "gain_db" and { -60, 60 } or { 0.01, 8 }
+        if not e2_fx_batch_finite(target) or target < bounds[1] or target > bounds[2] then
+          return e2_fx_reaeq_error("FX_REAEQ_BAND_VALUE_INVALID", "ReaEQ band value is outside the bounded public range.", { row_index = row_index, field = field })
+        end
+        local param_index = (band - 1) * 3 + field_offset - 1
+        local compiled = e2_fx_reaeq_compile_target(owner_kind, owner, slot_index, param_index, field, target)
+        if not compiled then
+          return e2_fx_reaeq_error("FX_REAEQ_TARGET_UNAVAILABLE", "REAPER native formatting could not compile the requested ReaEQ value.", { row_index = row_index, band = band, field = field, requested_value = target })
+        end
+        compiled.field = field
+        compiled.param_index = param_index
+        compiled.preflight_param_ident = inventory[param_index + 1].param_ident
+        compiled.expected_param_ident = e2_fx_reaeq_expected_ident(band, field, target_type)
+        item.targets[#item.targets + 1] = compiled
+      end
+    end
+    prepared[#prepared + 1] = item
+  end
+  return { prepared = prepared, identity = identity, inventory = inventory, parameter_count = parameter_count, topology = topology }
+end
+
+local function e2_fx_set_reaeq_bands(request)
+  local owner_kind, owner, slot_index = e2_fx_read_fx_from_request_refs(request)
+  if not owner then return e2_fx_reaeq_error("FX_REF_NOT_FOUND", "ReaEQ band batch requires one resolvable exact FX ref.") end
+  local count = e2_fx_read_count(owner_kind, owner)
+  if slot_index < 0 or slot_index >= count then return e2_fx_reaeq_error("FX_SLOT_NOT_FOUND", "ReaEQ band batch slot is outside the exact owner FX chain.", { slot_index = slot_index, fx_count = count }) end
+  local preflight_started = os.clock()
+  local plan, failure = e2_fx_reaeq_validate_request(request, owner_kind, owner, slot_index)
+  if not plan then return nil, failure end
+  local batch_timings = { preflight_ms = (os.clock() - preflight_started) * 1000, mutation_ms = 0, readback_ms = 0, transport_ms = 0, rows = #plan.prepared, runner = "e2_reaeq_native_profile_batch", native_mutation_count = 0, native_readback_count = 0 }
+  local _, fx_ref = e2_fx_read_fx_summary(owner_kind, owner, slot_index)
+  if request.params.dry_run == true then
+    local rows = json_array({})
+    for index = 1, #plan.prepared do
+      local item = plan.prepared[index]
+      rows[#rows + 1] = { band = item.band, type = item.target_type, enabled = item.row.enabled == nil and plan.topology[item.band].enabled or item.row.enabled, targets = item.targets, readback_status = "preflight_passed" }
+    end
+    return e2_fx_read_summary(request, { fx_ref = fx_ref.ref, plugin_identity = plan.identity, owner_kind = owner_kind, slot_index = slot_index, topology = plan.topology, parameter_inventory = plan.inventory, rows = rows, mutation_attempted = false, batch_timings = batch_timings }), nil, json_array({}), json_array({}), e2_fx_read_refs(fx_ref)
+  end
+
+  local mutation_started = os.clock()
+  local mutation_attempted = false
+  for index = 1, #plan.prepared do
+    local item = plan.prepared[index]
+    if item.row.type ~= nil then
+      mutation_attempted = true
+      batch_timings.native_mutation_count = batch_timings.native_mutation_count + 1
+      if not e2_fx_named_config_set(owner_kind, owner, slot_index, e2_fx_reaeq_band_key("BANDTYPE", item.band), tostring(E2_FX_REAEQ_TYPE_VALUES[item.target_type])) then
+        return e2_fx_reaeq_error("COMMAND_FAILED", "REAPER rejected a ReaEQ BANDTYPE setter.", { band = item.band, mutation_attempted = true, zero_write = false })
+      end
+    end
+    if item.row.enabled ~= nil then
+      mutation_attempted = true
+      batch_timings.native_mutation_count = batch_timings.native_mutation_count + 1
+      if not e2_fx_named_config_set(owner_kind, owner, slot_index, e2_fx_reaeq_band_key("BANDENABLED", item.band), item.row.enabled and "1" or "0") then
+        return e2_fx_reaeq_error("COMMAND_FAILED", "REAPER rejected a ReaEQ BANDENABLED setter.", { band = item.band, mutation_attempted = true, zero_write = false })
+      end
+    end
+    for target_index = 1, #item.targets do
+      local target = item.targets[target_index]
+      mutation_attempted = true
+      batch_timings.native_mutation_count = batch_timings.native_mutation_count + 1
+      if not e2_fx_set_param_value(owner_kind, owner, slot_index, target.param_index, target.native_value) then
+        return e2_fx_reaeq_error("COMMAND_FAILED", "REAPER rejected an exact ReaEQ parameter setter.", { band = item.band, field = target.field, mutation_attempted = true, zero_write = false })
+      end
+    end
+  end
+  batch_timings.mutation_ms = (os.clock() - mutation_started) * 1000
+
+  local readback_started = os.clock()
+  local topology = json_array({})
+  for band = 1, E2_FX_REAEQ_BAND_MAX do
+    local current = e2_fx_reaeq_read_topology(owner_kind, owner, slot_index, band)
+    if not current then return e2_fx_reaeq_error("VERIFY_FAILED", "ReaEQ topology aggregate readback failed.", { band = band, mutation_attempted = mutation_attempted, zero_write = false }) end
+    topology[#topology + 1] = current
+  end
+  local inventory, parameter_count = e2_fx_reaeq_inventory(owner_kind, owner, slot_index)
+  if not inventory or parameter_count ~= plan.parameter_count then
+    return e2_fx_reaeq_error("VERIFY_FAILED", "ReaEQ parameter inventory changed or became incomplete after mutation.", { mutation_attempted = mutation_attempted, zero_write = false })
+  end
+  local rows = json_array({})
+  for index = 1, #plan.prepared do
+    local item = plan.prepared[index]
+    if topology[item.band].type ~= item.target_type or (item.row.enabled ~= nil and topology[item.band].enabled ~= item.row.enabled) then
+      return e2_fx_reaeq_error("VERIFY_FAILED", "ReaEQ named topology readback does not match the requested band row.", { band = item.band, mutation_attempted = mutation_attempted, zero_write = false })
+    end
+    local values = {}
+    for target_index = 1, #item.targets do
+      local target = item.targets[target_index]
+      local live = inventory[target.param_index + 1]
+      local observed = e2_fx_reaeq_parse_formatted(target.field, live.formatted_value)
+      if live.param_ident ~= target.expected_param_ident or not observed or math.abs(observed - target.requested_value) > target.tolerance then
+        return e2_fx_reaeq_error("VERIFY_FAILED", "ReaEQ exact parameter identity or value readback does not match the requested band row.", { band = item.band, field = target.field, expected_param_ident = target.expected_param_ident, live_param_ident = live.param_ident, requested_value = target.requested_value, observed_value = observed or JSON_NULL, mutation_attempted = mutation_attempted, zero_write = false })
+      end
+      values[target.field] = { requested_value = target.requested_value, observed_value = observed, formatted_value = live.formatted_value, normalized_value = live.normalized_value, param_index = target.param_index, param_ident = live.param_ident, tolerance = target.tolerance }
+      batch_timings.native_readback_count = batch_timings.native_readback_count + 1
+    end
+    rows[#rows + 1] = { band = item.band, type = topology[item.band].type, enabled = topology[item.band].enabled, values = values, readback_status = "aggregate_passed" }
+  end
+  local identity = e2_fx_reaeq_identity(owner_kind, owner, slot_index)
+  if identity ~= plan.identity then return e2_fx_reaeq_error("VERIFY_FAILED", "ReaEQ plugin identity changed during mutation.", { mutation_attempted = mutation_attempted, zero_write = false }) end
+  batch_timings.readback_ms = (os.clock() - readback_started) * 1000
+  return e2_fx_write_summary(request, { fx_ref = fx_ref.ref, plugin_identity = identity, owner_kind = owner_kind, slot_index = slot_index, topology = topology, parameter_inventory = inventory, rows = rows, mutation_attempted = mutation_attempted, batch_timings = batch_timings }), nil, json_array({}), json_array({}), e2_fx_read_refs(fx_ref)
+end
+
 local function reorder_fx(request)
   local owner_kind, owner, slot_index = e2_fx_read_fx_from_request_refs(request)
   if not owner then
@@ -14713,7 +15403,7 @@ local function parameter_to_envelope_mapping(request)
   return summary, nil, json_array({}), json_array({}), e2_fx_read_refs(fx_ref, envelope_ref)
 end
 return {
-  exports = { read_video_processor_code = read_video_processor_code, resolve_fx_ref = resolve_fx_ref, list_track_fx_chain = list_track_fx_chain, list_take_fx_chain = list_take_fx_chain, read_fx_summary = read_fx_summary, list_fx_parameters = list_fx_parameters, read_fx_parameter = read_fx_parameter, parameter_to_envelope_mapping = parameter_to_envelope_mapping, add_track_fx = add_track_fx, add_take_fx = add_take_fx, set_fx_bypass = set_fx_bypass, set_fx_parameter_normalized = set_fx_parameter_normalized, e2_fx_parameter_assignments_batch = e2_fx_parameter_assignments_batch, set_fx_preset_by_name = set_fx_preset_by_name, set_fx_preset_by_index = set_fx_preset_by_index, reorder_fx = reorder_fx, search_installed_fx = search_installed_fx },
+  exports = { read_video_processor_code = read_video_processor_code, resolve_fx_ref = resolve_fx_ref, list_track_fx_chain = list_track_fx_chain, list_take_fx_chain = list_take_fx_chain, read_fx_summary = read_fx_summary, list_fx_parameters = list_fx_parameters, read_fx_parameter = read_fx_parameter, parameter_to_envelope_mapping = parameter_to_envelope_mapping, add_track_fx = add_track_fx, add_take_fx = add_take_fx, set_fx_bypass = set_fx_bypass, set_fx_parameter_normalized = set_fx_parameter_normalized, e2_fx_parameter_assignments_batch = e2_fx_parameter_assignments_batch, e2_fx_set_reaeq_bands = e2_fx_set_reaeq_bands, set_fx_preset_by_name = set_fx_preset_by_name, set_fx_preset_by_index = set_fx_preset_by_index, reorder_fx = reorder_fx, search_installed_fx = search_installed_fx },
   shared = {  },
 }
 end)
@@ -37857,6 +38547,7 @@ local E2_FX_B1_WRITE_HANDLERS = {
   ["fx.set_bypass"] = OPENREAPER_HANDLER_EXPORTS.set_fx_bypass,
   ["fx.set_parameter_normalized"] = OPENREAPER_HANDLER_EXPORTS.set_fx_parameter_normalized,
   ["fx.set_parameter_assignments_batch"] = OPENREAPER_HANDLER_EXPORTS.e2_fx_parameter_assignments_batch,
+  ["fx.set_reaeq_bands"] = OPENREAPER_HANDLER_EXPORTS.e2_fx_set_reaeq_bands,
   ["fx.set_preset_by_name"] = OPENREAPER_HANDLER_EXPORTS.set_fx_preset_by_name,
   ["fx.set_preset_by_index"] = OPENREAPER_HANDLER_EXPORTS.set_fx_preset_by_index,
   ["fx.reorder"] = OPENREAPER_HANDLER_EXPORTS.reorder_fx,
@@ -37898,6 +38589,7 @@ local D12_TRANSPORT_SAFE_HANDLERS = {
 }
 
 local D13_ITEMS_CORE_WRITE_HANDLERS = {
+  ["items.set_exact_selection"] = OPENREAPER_HANDLER_EXPORTS.d13_items_set_exact_selection,
   ["items.set_item_volume"] = OPENREAPER_HANDLER_EXPORTS.d13_items_set_item_volume,
   ["items.set_item_take_controls_batch"] = OPENREAPER_HANDLER_EXPORTS.d13_items_set_item_take_controls_batch,
   ["items.set_take_volume"] = OPENREAPER_HANDLER_EXPORTS.d13_items_set_take_volume,
@@ -39036,13 +39728,17 @@ local function dispatch_request(request, fallback_id, resume_continuation, runti
       },
     })
   end
-  -- Media source writes must not enter the handler when both Undo_BeginBlock2
-  -- and fallback Undo_BeginBlock failed (zero-write fail-closed before mutation).
-  if (e3_media_write_capability or d15_source_relink)
-      and phase_may_mutate
+  -- Every required-Undo mutation must stop before its handler when both
+  -- Undo_BeginBlock2 and fallback Undo_BeginBlock failed. Preflight/read-only
+  -- phases and the selection-only no-content phase do not require a block.
+  if phase_may_mutate
+      and not selection_only_no_content_undo
+      and required_undo_capability(request, key)
+      and is_object(request.undo)
+      and request.undo.mode == "required"
       and request.__openreaper_undo_block_open ~= true then
     request.__openreaper_undo_phase = nil
-    return bridge_error_envelope(request, "COMMAND_FAILED", "Required Undo block could not be opened before media source mutation.", {
+    return bridge_error_envelope(request, "COMMAND_FAILED", "Required Undo block could not be opened before mutation.", {
       recoverable = true,
       started_at = started_at,
       details = {

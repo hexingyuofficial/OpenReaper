@@ -57,7 +57,7 @@ export const ALPHA3_C5_OFFICIAL_MACRO_ENTRY_KIND = "official_macro";
 const PROJECT_CONTROL_DEFINITION = deepFreeze({
   id: ALPHA3_2_5_C_CONTROLS_SET_MACRO_ID,
   user_label: "Set project controls",
-  task_intents: ["set project BPM", "change project tempo", "set project grid", "enable or disable project snap"],
+  task_intents: ["set project BPM", "change project tempo", "change project time signature", "set project grid", "enable or disable project snap"],
   scope: "project",
   refs: [],
   freshness_requires: ["project_tempo"],
@@ -69,6 +69,8 @@ const PROJECT_CONTROL_DEFINITION = deepFreeze({
   },
   fields: [
     field("bpm", "number", "template.project.set_bpm", "bpm", { min: 20, max: 400, unit: "bpm" }),
+    field("time_signature_numerator", "integer", "template.project.set_tempo_marker", "time_signature_numerator", { min: 1, max: 32, paired_with: "time_signature_denominator" }),
+    field("time_signature_denominator", "integer", "template.project.set_tempo_marker", "time_signature_denominator", { values: [1, 2, 4, 8, 16, 32], paired_with: "time_signature_numerator" }),
     field("grid_division", "string", "template.project.set_grid", "division"),
     field("grid_swing", "number", "template.project.set_grid", "swing", { min: 0, max: 1 }),
     field("snap_enabled", "boolean", "template.project.set_snap", "enabled"),
@@ -618,12 +620,12 @@ function officialControlsSetDiscoveryItem(options = {}) {
   return deepFreeze({
     id: ALPHA3_2_5_C_CONTROLS_SET_MACRO_ID,
     title: "Set project controls",
-    summary: "Set bounded project BPM, grid, snap, track, item, take, transport, or send controls through one registered executable Macro with live target resolution and readback.",
+    summary: "Set bounded project BPM, time signature, grid, snap, track, item, take, transport, or send controls through one registered executable Macro with live target resolution and readback.",
     pack: "core",
     lifecycle: "experimental",
     risk: "write",
     entity_kind: "macro.controls.set",
-    tags: ["macro", "controls", "project", "bpm", "grid", "snap", "track", "item", "take", "transport", "send", "executable"],
+    tags: ["macro", "controls", "project", "bpm", "time_signature", "grid", "snap", "track", "item", "take", "transport", "send", "executable"],
     kind: ALPHA3_C5_OFFICIAL_MACRO_ENTRY_KIND,
     action_kind: "macro",
     macro_kind: "generic_control",
@@ -631,7 +633,7 @@ function officialControlsSetDiscoveryItem(options = {}) {
     execution_shape: "registered_macro_program",
     user_label: "Set project controls",
     task_intents: [
-      "set project BPM tempo grid or snap",
+      "set project BPM tempo time signature grid or snap",
       "set track controls",
       "set item controls",
       "set take controls",
@@ -849,8 +851,15 @@ function planTemplateRequest({ macro, templateId, fields, suppliedFields, refs }
 
   const input = {};
   for (const fieldDef of fields) input[fieldDef.template_input] = suppliedFields[fieldDef.name];
+  if (templateId === "template.project.set_tempo_marker") {
+    input.position_seconds = 0;
+    if (hasOwn(suppliedFields, "bpm")) input.bpm = suppliedFields.bpm;
+  }
   const requiredInputs = fields[0].template_required_inputs ?? [];
-  const missingInputs = requiredInputs.filter((name) => !Object.prototype.hasOwnProperty.call(input, name));
+  const missingInputs = requiredInputs.filter((name) =>
+    !Object.prototype.hasOwnProperty.call(input, name)
+      && !(templateId === "template.project.set_tempo_marker" && name === "bpm")
+  );
   if (missingInputs.length > 0) {
     return {
       requests: [],
@@ -965,6 +974,33 @@ function normalizeControlFields(targetKind, fields) {
       ok: false,
       fields: normalized,
       blockers: [blocker("bpm", "CONTROL_BPM_INVALID", "Project BPM must be a finite number between 20 and 400.")],
+    };
+  }
+  const hasTimeSigNumerator = hasOwn(normalized, "time_signature_numerator");
+  const hasTimeSigDenominator = hasOwn(normalized, "time_signature_denominator");
+  if (hasTimeSigNumerator !== hasTimeSigDenominator) {
+    return {
+      ok: false,
+      fields: normalized,
+      blockers: [blocker(
+        hasTimeSigNumerator ? "time_signature_denominator" : "time_signature_numerator",
+        "CONTROL_TIME_SIGNATURE_PAIR_REQUIRED",
+        "Project time signature requires both time_signature_numerator and time_signature_denominator.",
+      )],
+    };
+  }
+  if (hasTimeSigNumerator && (!Number.isSafeInteger(normalized.time_signature_numerator) || normalized.time_signature_numerator < 1 || normalized.time_signature_numerator > 32)) {
+    return {
+      ok: false,
+      fields: normalized,
+      blockers: [blocker("time_signature_numerator", "CONTROL_TIME_SIGNATURE_NUMERATOR_INVALID", "Project time-signature numerator must be an integer from 1 through 32.")],
+    };
+  }
+  if (hasTimeSigDenominator && ![1, 2, 4, 8, 16, 32].includes(normalized.time_signature_denominator)) {
+    return {
+      ok: false,
+      fields: normalized,
+      blockers: [blocker("time_signature_denominator", "CONTROL_TIME_SIGNATURE_DENOMINATOR_INVALID", "Project time-signature denominator must be one of 1, 2, 4, 8, 16, or 32.")],
     };
   }
   if (hasOwn(normalized, "grid_division")) {

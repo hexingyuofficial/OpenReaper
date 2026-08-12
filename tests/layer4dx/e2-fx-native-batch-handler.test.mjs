@@ -213,4 +213,44 @@ describe("E2 FX native assignment batch", () => {
       assert(ref_map == nil and type(failure) == "table" and failure.code == "FX_REF_INVALID")
     `);
   });
+
+  it("keeps the ReaEQ profile strict, owner-generic, and named-config bounded", () => {
+    const source = readFileSync(new URL("../../reaper/bridge/src/handlers/fx/e2_fx_l1_read_route.lua", import.meta.url), "utf8");
+    const start = source.indexOf("local E2_FX_REAEQ_BAND_MAX");
+    const end = source.indexOf("\nlocal function reorder_fx", start);
+    assert.ok(start >= 0 && end > start);
+    const extracted = source.slice(start, end);
+    assert.match(source, /TakeFX_SetParam/);
+    assert.match(source, /TrackFX_SetParam/);
+    assert.match(source, /TakeFX_SetNamedConfigParm/);
+    assert.match(source, /TrackFX_SetNamedConfigParm/);
+    assert.match(extracted, /BANDTYPE/);
+    assert.match(extracted, /BANDENABLED/);
+    assert.doesNotMatch(extracted, /Main_OnCommand|SetParamNormalized|reaper\.ini|SWS|ReaPack/u);
+    assert.doesNotMatch(extracted, /request\.params\.(?:key|named_config|parmname)/u);
+    assert.ok(extracted.indexOf("e2_fx_reaeq_validate_request(request") < extracted.indexOf("local mutation_started"));
+  });
+
+  it("maps only approved Cockos ReaEQ identities and the six public topologies", () => {
+    const source = readFileSync(new URL("../../reaper/bridge/src/handlers/fx/e2_fx_l1_read_route.lua", import.meta.url), "utf8");
+    const start = source.indexOf("local E2_FX_REAEQ_BAND_MAX");
+    const end = source.indexOf("\nlocal function e2_fx_reaeq_band_key", start);
+    assert.ok(start >= 0 && end > start);
+    const extracted = source.slice(start, end);
+    runLua(String.raw`
+      ${extracted}
+      assert(E2_FX_REAEQ_BAND_MAX == 4)
+      assert(e2_fx_reaeq_identity_allowed("VST: ReaEQ (Cockos)"))
+      assert(e2_fx_reaeq_identity_allowed("VST3:ReaEQ (Cockos)"))
+      assert(e2_fx_reaeq_identity_allowed("AU: ReaEQ (Cockos)"))
+      assert(not e2_fx_reaeq_identity_allowed("VST3:OtherEQ (Cockos)"))
+      assert(E2_FX_REAEQ_TYPE_VALUES.high_pass == 0)
+      assert(E2_FX_REAEQ_TYPE_VALUES.low_shelf == 1)
+      assert(E2_FX_REAEQ_TYPE_VALUES.band == 2)
+      assert(E2_FX_REAEQ_TYPE_VALUES.notch == 3)
+      assert(E2_FX_REAEQ_TYPE_VALUES.high_shelf == 4)
+      assert(E2_FX_REAEQ_TYPE_VALUES.low_pass == 5)
+      assert(E2_FX_REAEQ_TYPE_VALUES.arbitrary == nil)
+    `);
+  });
 });

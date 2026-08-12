@@ -1413,6 +1413,147 @@ local function d27_batch_ref_object(ref)
   return d27_split_object_ref("item", ref)
 end
 
+local function d27_batch_item_position(item)
+  local ok_position, position = call_reaper("GetMediaItemInfo_Value", item, "D_POSITION")
+  local ok_length, length = call_reaper("GetMediaItemInfo_Value", item, "D_LENGTH")
+  position = ok_position and d27_analysis_number(first_number(position)) or nil
+  length = ok_length and d27_analysis_number(first_number(length)) or nil
+  if position == nil or length == nil or length <= 0 then return nil end
+  return position, length
+end
+
+local function d27_batch_owner_track(context)
+  local ok_track, track = call_reaper("GetMediaItemTrack", context.item)
+  if not ok_track or not track then ok_track, track = call_reaper("GetMediaItem_Track", context.item) end
+  if not ok_track or not track then return nil end
+  local ref = d27_split_track_ref(track)
+  if not ref then return nil end
+  return track, ref
+end
+
+local function d27_batch_expand_adjacent(targets, params)
+  local direction = params.adjacent_audio
+  if direction == nil then return targets, nil end
+  if direction ~= "left" and direction ~= "right" and direction ~= "both" then
+    return d27_batch_fail("PARAMS_INVALID", "adjacent_audio must be left, right, or both; zero_write=true.", {
+      zero_write = true,
+    })
+  end
+  if params.target ~= "exact" or #targets ~= 1 then
+    return d27_batch_fail("ADJACENT_ANCHOR_REQUIRED", "adjacent_audio requires exactly one canonical exact Item anchor; zero_write=true.", {
+      target_count = #targets,
+      zero_write = true,
+    })
+  end
+  local anchor = targets[1]
+  local owner_track = d27_batch_owner_track({ item = anchor.item })
+  if not owner_track then
+    return d27_batch_fail("TRACK_NOT_FOUND", "Adjacent audio expansion could not prove the anchor owner Track; zero_write=true.", {
+      item_ref = anchor.item_ref,
+      zero_write = true,
+    })
+  end
+  local ok_count, raw_count = call_reaper("CountTrackMediaItems", owner_track)
+  local count = ok_count and math.floor(first_number(raw_count) or -1) or -1
+  if count < 1 then
+    return d27_batch_fail("ADJACENT_ITEM_NOT_FOUND", "Adjacent audio expansion found no owner-Track Item inventory; zero_write=true.", {
+      item_ref = anchor.item_ref,
+      zero_write = true,
+    })
+  end
+  local rows = {}
+  local anchor_index = nil
+  for index = 0, count - 1 do
+    local ok_item, item = call_reaper("GetTrackMediaItem", owner_track, index)
+    local item_ref, guid
+    local position, length
+    if item then
+      item_ref, guid = d27_split_item_ref(item)
+      position, length = d27_batch_item_position(item)
+    end
+    if not ok_item or not item or not item_ref or position == nil then
+      return d27_batch_fail("ADJACENT_INVENTORY_INCOMPLETE", "Adjacent audio expansion could not freeze the complete owner-Track Item inventory; zero_write=true.", {
+        item_index = index,
+        zero_write = true,
+      })
+    end
+    rows[#rows + 1] = {
+      item = item,
+      item_ref = item_ref,
+      guid = guid,
+      position = position,
+      length = length,
+    }
+  end
+  table.sort(rows, function(left, right)
+    if left.position == right.position then
+      if left.length == right.length then return left.item_ref < right.item_ref end
+      return left.length < right.length
+    end
+    return left.position < right.position
+  end)
+  for index = 1, #rows do
+    if rows[index].item_ref == anchor.item_ref then anchor_index = index break end
+  end
+  if not anchor_index then
+    return d27_batch_fail("ITEM_NOT_FOUND", "Adjacent audio anchor disappeared while freezing the owner Track; zero_write=true.", {
+      item_ref = anchor.item_ref,
+      zero_write = true,
+    })
+  end
+  local tolerance = 0.000001
+  local anchor_row = rows[anchor_index]
+  local anchor_end = anchor_row.position + anchor_row.length
+  for index = 1, #rows do
+    if index ~= anchor_index then
+      local row = rows[index]
+      local row_end = row.position + row.length
+      if row.position < anchor_end - tolerance and row_end > anchor_row.position + tolerance then
+        return d27_batch_fail("ADJACENT_OVERLAP_AMBIGUOUS", "Adjacent audio expansion rejects overlapping owner-Track Items; zero_write=true.", {
+          item_ref = anchor.item_ref,
+          overlapping_item_ref = row.item_ref,
+          zero_write = true,
+        })
+      end
+    end
+  end
+  local expanded = {}
+  local function append_neighbor(index, side)
+    local row = rows[index]
+    if not row then
+      return d27_batch_fail("ADJACENT_ITEM_NOT_FOUND", "The requested immediate " .. side .. " audio neighbor does not exist; zero_write=true.", {
+        item_ref = anchor.item_ref,
+        side = side,
+        zero_write = true,
+      })
+    end
+    expanded[#expanded + 1] = {
+      item = row.item,
+      item_ref = row.item_ref,
+      guid = row.guid,
+      target_order = #expanded + 1,
+      adjacency = side,
+    }
+    return nil
+  end
+  if direction == "left" or direction == "both" then
+    local _, failure = append_neighbor(anchor_index - 1, "left")
+    if failure then return nil, failure end
+  end
+  expanded[#expanded + 1] = {
+    item = anchor.item,
+    item_ref = anchor.item_ref,
+    guid = anchor.guid,
+    target_order = #expanded + 1,
+    adjacency = "anchor",
+  }
+  if direction == "right" or direction == "both" then
+    local _, failure = append_neighbor(anchor_index + 1, "right")
+    if failure then return nil, failure end
+  end
+  return expanded, nil
+end
+
 local function d27_batch_targets(request, params)
   local target = params.target
   local tokens = is_json_array(params.target_refs) and params.target_refs or nil
@@ -1542,8 +1683,12 @@ local function d27_batch_ranges(scan, context, params)
     for index = 1, #scan.silence_segments do
       local segment = scan.silence_segments[index]
       if d27_batch_scope_matches(scope, segment, context.item_length, tolerance) then
-        local start_seconds = math.max(0, segment.start_seconds + (keep_before_ms / 1000))
-        local end_seconds = math.min(context.item_length, segment.end_seconds - (keep_after_ms / 1000))
+        local touches_start = segment.start_seconds <= tolerance
+        local touches_end = segment.end_seconds >= context.item_length - tolerance
+        local start_seconds = touches_start and 0
+          or math.max(0, segment.start_seconds + (keep_before_ms / 1000))
+        local end_seconds = touches_end and context.item_length
+          or math.min(context.item_length, segment.end_seconds - (keep_after_ms / 1000))
         if end_seconds > start_seconds + tolerance then
           ranges[#ranges + 1] = {
             start_seconds = start_seconds,
@@ -1557,16 +1702,15 @@ local function d27_batch_ranges(scan, context, params)
   end
   table.sort(ranges, function(left, right) return left.start_seconds < right.start_seconds end)
   local filtered = {}
-  local cursor = 0
+  local minimum_kept_seconds = min_kept_ms / 1000
   for index = 1, #ranges do
     local range = ranges[index]
-    local previous_audio = range.start_seconds - cursor
-    local next_audio = context.item_length - range.end_seconds
-    if previous_audio <= tolerance or previous_audio >= (min_kept_ms / 1000) - tolerance then
-      if next_audio <= tolerance or next_audio >= (min_kept_ms / 1000) - tolerance then
-        filtered[#filtered + 1] = range
-        cursor = range.end_seconds
-      end
+    local previous_range = filtered[#filtered]
+    local internal_audio = previous_range and range.start_seconds - previous_range.end_seconds or nil
+    if not previous_range
+        or internal_audio <= tolerance
+        or internal_audio >= minimum_kept_seconds - tolerance then
+      filtered[#filtered + 1] = range
     end
   end
   return filtered, nil, all_silent
@@ -1584,10 +1728,11 @@ local function d27_batch_checksum_plan(rows, params, operation)
     tostring(params.fade_ms or 5),
     tostring(params.normalization_metric or ""),
     tostring(params.normalization_target or ""),
+    tostring(params.adjacent_audio or ""),
   }
   for index = 1, #rows do
     local row = rows[index]
-    parts[#parts + 1] = table.concat({ row.item_ref, row.context.item_position, row.context.item_length }, ":")
+    parts[#parts + 1] = table.concat({ row.item_ref, row.context.item_position, row.context.item_length, row.adjacency or "direct" }, ":")
     for _, segment in ipairs(row.scan and row.scan.silence_segments or {}) do
       parts[#parts + 1] = table.concat({ segment.start_seconds, segment.end_seconds }, ",")
     end
@@ -1597,15 +1742,6 @@ local function d27_batch_checksum_plan(rows, params, operation)
     if row.normalization then parts[#parts + 1] = tostring(row.normalization.adjustment) end
   end
   return "alpha33_silence_batch:" .. d27_batch_checksum(table.concat(parts, "|"))
-end
-
-local function d27_batch_owner_track(context)
-  local ok_track, track = call_reaper("GetMediaItemTrack", context.item)
-  if not ok_track or not track then ok_track, track = call_reaper("GetMediaItem_Track", context.item) end
-  if not ok_track or not track then return nil end
-  local ref = d27_split_track_ref(track)
-  if not ref then return nil end
-  return track, ref
 end
 
 local function d27_batch_fragments(context, boundaries)
@@ -1681,11 +1817,38 @@ local function d27_batch_apply_silence(row, params, counters)
     if not ok_delete or deleted_ok ~= true then return nil, d27_analysis_error("COMMAND_FAILED", "REAPER rejected a planned silence fragment deletion.", { item_ref = fragment.item_ref }) end
     counters.native_mutation_count = counters.native_mutation_count + 1
   end
-  for _, fragment in ipairs(kept) do
-    if fade_seconds > 0 then
-      call_reaper("SetMediaItemInfo_Value", fragment.item, "D_FADEINLEN", math.min(fade_seconds, math.max(0, fragment.end_seconds - fragment.start_seconds) / 2))
-      call_reaper("SetMediaItemInfo_Value", fragment.item, "D_FADEOUTLEN", math.min(fade_seconds, math.max(0, fragment.end_seconds - fragment.start_seconds) / 2))
+  local function set_verified_fade(fragment, field, value)
+    local bounded = math.min(value, math.max(0, fragment.end_seconds - fragment.start_seconds) / 2)
+    local ok_set, accepted = call_reaper("SetMediaItemInfo_Value", fragment.item, field, bounded)
+    if not ok_set or accepted == false then
+      return d27_analysis_error("COMMAND_FAILED", "REAPER rejected a planned Item fade update.", {
+        item_ref = fragment.item_ref,
+        field = field,
+      })
     end
+    local ok_read, observed = call_reaper("GetMediaItemInfo_Value", fragment.item, field)
+    observed = ok_read and d27_analysis_number(first_number(observed)) or nil
+    if observed == nil or math.abs(observed - bounded) > 0.000001 then
+      return d27_analysis_error("VERIFY_FAILED", "A planned Item fade did not read back exactly.", {
+        item_ref = fragment.item_ref,
+        field = field,
+        expected = bounded,
+        observed = observed or JSON_NULL,
+      })
+    end
+    return nil
+  end
+  for _, fragment in ipairs(kept) do
+    local preserves_original_start = fragment.start_seconds <= tolerance
+    local preserves_original_end = fragment.end_seconds >= row.context.item_length - tolerance
+    local fade_failure = set_verified_fade(fragment, "D_FADEINLEN", preserves_original_start and row.context.fade_in_length or fade_seconds)
+    if fade_failure then return nil, fade_failure end
+    fade_failure = set_verified_fade(fragment, "D_FADEOUTLEN", preserves_original_end and row.context.fade_out_length or fade_seconds)
+    if fade_failure then return nil, fade_failure end
+    fade_failure = set_verified_fade(fragment, "D_FADEINLEN_AUTO", preserves_original_start and row.context.auto_fade_in_length or -1)
+    if fade_failure then return nil, fade_failure end
+    fade_failure = set_verified_fade(fragment, "D_FADEOUTLEN_AUTO", preserves_original_end and row.context.auto_fade_out_length or -1)
+    if fade_failure then return nil, fade_failure end
   end
   call_reaper("UpdateArrange")
   local remaining = 0
@@ -2065,6 +2228,9 @@ alpha33_silence_batch = function(request)
   end
   local targets, target_failure = d27_batch_targets(request, params)
   if not targets then return nil, target_failure end
+  local expanded_targets, adjacent_failure = d27_batch_expand_adjacent(targets, params)
+  if not expanded_targets then return nil, adjacent_failure end
+  targets = expanded_targets
 
   local preflight_started = os.clock()
   local rows = {}
@@ -2112,9 +2278,21 @@ alpha33_silence_batch = function(request)
       context = context,
       owner_track = owner_track,
       owner_track_ref = owner_track_ref,
+      adjacency = target.adjacency,
       source_range = source_range,
     }
     if operation == "remove_silence" then
+      local fade_fields = {
+        fade_in_length = "D_FADEINLEN",
+        fade_out_length = "D_FADEOUTLEN",
+        auto_fade_in_length = "D_FADEINLEN_AUTO",
+        auto_fade_out_length = "D_FADEOUTLEN_AUTO",
+      }
+      for context_field, native_field in pairs(fade_fields) do
+        local value, fade_failure = d27_analysis_api_number("GetMediaItemInfo_Value", context.item, native_field)
+        if value == nil then return d27_batch_preflight_failure(fade_failure) end
+        context[context_field] = value
+      end
       context.params.silence_threshold_dbfs = silence_threshold_dbfs
       context.params.min_silence_ms = min_silence_ms
       local range, range_failure = d27_analysis_limited_range(context, D27_MAX_ANALYSIS_SECONDS)
@@ -2207,6 +2385,7 @@ alpha33_silence_batch = function(request)
         result.deleted_item_refs = nil
       end
       result.target_order = index
+      result.adjacency = rows[index].adjacency
       result.plan_hash = plan_hash
       aggregate_readback[#aggregate_readback + 1] = result
     end
@@ -2216,6 +2395,7 @@ alpha33_silence_batch = function(request)
         target_order = index,
         item_ref = rows[index].item_ref,
         owner_track_ref = rows[index].owner_track_ref,
+        adjacency = rows[index].adjacency,
         status = rows[index].all_silent and "ALL_SILENT_RETAINED" or "PLANNED",
         changed = false,
         source_media_deleted = false,
@@ -2236,6 +2416,7 @@ alpha33_silence_batch = function(request)
     operation = operation,
     target_scope = params.target or (#targets > 0 and (is_json_array(params.target_refs) and #params.target_refs > 0 and "exact" or "selected") or "selected"),
     target_count = #targets,
+    adjacent_audio = params.adjacent_audio,
     returned_target_count = #aggregate_readback,
     plan_hash = plan_hash,
     aggregate_readback = aggregate_readback,

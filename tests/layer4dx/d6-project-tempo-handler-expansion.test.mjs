@@ -47,6 +47,9 @@ describe("D6 project tempo/grid live handler expansion", () => {
     assert.match(HANDLER_SOURCE, /AddTempoTimeSigMarker/);
     assert.match(HANDLER_SOURCE, /SetTempoTimeSigMarker/);
     assert.match(HANDLER_SOURCE, /GetTempoTimeSigMarker/);
+    assert.match(HANDLER_SOURCE, /readback\.time_sig_num == numerator/);
+    assert.match(HANDLER_SOURCE, /readback\.time_sig_denom == denominator/);
+    assert.match(HANDLER_SOURCE, /TIME_SIGNATURE_INVALID/);
     assert.match(HANDLER_SOURCE, /Master_GetTempo|TimeMap_GetTimeSigAtTime/);
     assert.doesNotMatch(HANDLER_SOURCE, /\b(?:Main_OnCommand|Main_OnCommandEx|os\.execute|io\.popen|loadstring)\b/);
   });

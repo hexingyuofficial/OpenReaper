@@ -37,6 +37,7 @@ const ALLOWLIST = Object.freeze([
   "template.fx.read_fx_summary",
   "template.fx.list_fx_parameters",
   "template.fx.read_fx_parameter",
+  "template.fx.set_reaeq_bands",
   "template.fx.add_track_fx",
   "template.fx.add_take_fx",
   "template.fx.set_fx_bypass",

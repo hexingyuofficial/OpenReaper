@@ -61,6 +61,7 @@ const RESOLVE_MIDI_TAKE_ID = "template.midi.resolve_midi_take_ref";
 const LIST_FX_PARAMETERS_ID = "template.fx.list_fx_parameters";
 const SET_FX_PARAMETER_ID = "template.fx.set_fx_parameter_normalized";
 const READ_FX_PARAMETER_ID = "template.fx.read_fx_parameter";
+const SET_REAEQ_BANDS_ID = "template.fx.set_reaeq_bands";
 
 const CONTROL_INPUT_FIELDS = new Set(["target_kind", "fields", "selector", "changes", "dry_run"]);
 const CONTROL_BATCH_ROW_FIELDS = new Set(["id", "target_kind", "fields", "selector", "refs"]);
@@ -68,7 +69,7 @@ const CONTROL_BATCH_MAX_ROWS = 8;
 const STOCK_INPUT_FIELDS = new Set([
   "plugin", "plugin_id", "plugin_name", "controls", "starter_action",
   "action_parameters", "control_overrides", "parameter_metadata", "selector", "dry_run",
-  "mode", "changes",
+  "mode", "changes", "bands",
 ]);
 const CONTROL_TARGET_KINDS = ALPHA3_2_5_C_CONTROL_TARGET_KINDS;
 const SQLITE_IDENTITY_FIELDS = Object.freeze([
@@ -97,6 +98,7 @@ const STOCK_TEMPLATE_IDS = Object.freeze([
   LIST_FX_PARAMETERS_ID,
   SET_FX_PARAMETER_ID,
   READ_FX_PARAMETER_ID,
+  SET_REAEQ_BANDS_ID,
 ]);
 
 const RUNTIME_CAPABILITIES = Object.freeze([
@@ -282,7 +284,7 @@ async function executeControlsSet({
         executeAtomic,
         request,
         state,
-        child,
+        child: materializeProjectTimeSignatureChild(child, target.projectTempo),
         idempotencyKey: childIdempotencyKey(request.idempotency_key, index),
       });
       collectExecution(state, execution);
@@ -646,6 +648,20 @@ async function executeStockPluginControls({
       normalized: normalizedMode,
     });
   }
+  if (normalizedMode.mode === "reaeq_bands") {
+    return executeReaEqBands({
+      request,
+      executeAtomic,
+      projectIndexRuntime,
+      catalog,
+      now,
+      entry,
+      startedAt,
+      stages,
+      state,
+      normalized: normalizedMode,
+    });
+  }
   const requestValidation = validateMacroProgramRequest({
     macro_id: request.id,
     input,
@@ -943,6 +959,133 @@ async function executeStockPluginControls({
         index_update: compactObject(state.indexUpdate),
         outcome: outcomeEvidence(state),
       },
+    });
+  }
+}
+
+async function executeReaEqBands({
+  request,
+  executeAtomic,
+  projectIndexRuntime,
+  catalog,
+  now,
+  entry,
+  startedAt,
+  stages,
+  state,
+  normalized,
+}) {
+  if (typeof executeAtomic !== "function") {
+    return failureEnvelope({
+      entry, request, startedAt, now, stages, state,
+      status: "blocked",
+      code: "STOCK_PLUGIN_LIVE_EXECUTOR_UNAVAILABLE",
+      message: "macro.fx.set_controls reaeq_bands needs the managed OpenReaper atomic route.",
+    });
+  }
+  const selected = await resolveFxTarget({
+    refs: normalizeNamedRefs(request.refs),
+    selector: normalized.selector ?? request.input?.selector,
+    plugin: { id: "reaeq" },
+    request,
+    executeAtomic,
+    projectIndexRuntime,
+    catalog,
+    now,
+    stages,
+    state,
+  });
+  if (!selected.ok) {
+    return failureEnvelope({
+      entry, request, startedAt, now, stages, state,
+      status: "blocked",
+      code: selected.blockers[0]?.code ?? "STOCK_PLUGIN_TARGET_BLOCKED",
+      message: selected.blockers[0]?.message ?? "The ReaEQ target could not be resolved.",
+      blockers: selected.blockers,
+      data: { mode: "reaeq_bands" },
+    });
+  }
+
+  try {
+    pushStage(stages, "stock-plugin-live-resolve", "live_ref_resolve", "completed", "Live-resolved one exact owner-scoped FX target before the ReaEQ batch preflight.", state.evidenceRefs);
+    const execution = await runAtomic({
+      executeAtomic,
+      request,
+      state,
+      child: {
+        id: SET_REAEQ_BANDS_ID,
+        input: { bands: normalized.bands, dry_run: normalized.dry_run },
+        refs: { fx_ref: selected.fxRef },
+        budget: ALPHA3_E1_STOCK_PLUGIN_PARAMETER_READBACK_BUDGET,
+      },
+    });
+    collectExecution(state, execution);
+    const readback = executionReadback(execution);
+    if (!readback || readback.fx_ref !== selected.fxRef || readback.plugin_identity === undefined
+        || readback.owner_kind === undefined || !Array.isArray(readback.rows)
+        || readback.rows.length !== normalized.bands.length
+        || readback.mutation_attempted !== !normalized.dry_run) {
+      throw coded("FX_REAEQ_AGGREGATE_READBACK_INVALID", "The ReaEQ batch returned incomplete aggregate identity, topology, or value truth.");
+    }
+
+    const changeStatus = normalized.dry_run ? "planned" : "applied";
+    state.changes = readback.rows.map((row) => ({
+      id: `band_${row.band}`,
+      status: changeStatus,
+      fx_ref: selected.fxRef,
+      band: row.band,
+      mutation: { status: normalized.dry_run ? "skipped" : "completed" },
+      live_readback: { status: normalized.dry_run ? "preflight_passed" : "passed" },
+      index_maintenance: { status: "not_run", scopes: [] },
+    }));
+    pushStage(stages, "stock-plugin-execute", "runtime_execute", normalized.dry_run ? "skipped" : "completed", normalized.dry_run ? "ReaEQ dry_run completed with zero writes." : "Executed one native ReaEQ band batch.", executionEvidenceRefs(execution));
+    pushStage(stages, "stock-plugin-verify", "verify", normalized.dry_run ? "completed" : "completed", "Received one aggregate ReaEQ identity, topology, exact-parameter, and value readback.", executionEvidenceRefs(execution));
+
+    let invalidation = null;
+    if (!normalized.dry_run) {
+      invalidation = invalidateKnownScopes(projectIndexRuntime, ["fx"], now);
+      state.indexUpdate = invalidation;
+      applyIndexMaintenanceToChanges(state.changes, invalidation?.ok === false ? "failed" : (invalidation ? "completed" : "skipped"), invalidation);
+      if (invalidation) state.sqlite = sqliteEvidence(projectIndexRuntime, { used: true, freshness: "stale" });
+    }
+    pushStage(
+      stages,
+      "stock-plugin-index-update",
+      "index_update",
+      invalidation?.ok === false ? "failed" : (!normalized.dry_run && invalidation ? "completed" : "skipped"),
+      normalized.dry_run ? "No FX index change during dry_run." : (invalidation ? "Invalidated FX Project Index scope once after the ReaEQ batch." : "No configured Project Index runtime required invalidation."),
+    );
+    pushStage(stages, "stock-plugin-result", "result_project", "completed", "Projected the typed ReaEQ band profile and aggregate native readback.");
+    if (invalidation?.ok === false) {
+      return failureEnvelope({
+        entry, request, startedAt, now, stages, state,
+        status: "partial_failure",
+        code: invalidation.blockers?.[0]?.code ?? "FX_REAEQ_INDEX_INVALIDATION_FAILED",
+        message: invalidation.blockers?.[0]?.message ?? "ReaEQ mutation passed but the FX index could not be invalidated.",
+        data: { mode: "reaeq_bands", ...readback, index_update: compactObject(invalidation), outcome: outcomeEvidence(state) },
+      });
+    }
+    return successEnvelope({
+      entry, request, startedAt, now, stages, state,
+      status: normalized.dry_run ? "dry_run_completed" : "completed",
+      summary: normalized.dry_run
+        ? `Validated ${readback.rows.length} ReaEQ band row(s) without mutation.`
+        : `Applied and verified ${readback.rows.length} ReaEQ band row(s) in one native batch.`,
+      data: { mode: "reaeq_bands", ...readback, index_update: compactObject(invalidation), outcome: outcomeEvidence(state) },
+    });
+  } catch (error) {
+    const mutationUnknown = error?.details?.mutation_outcome === "unknown" || error?.details?.mutation_attempted === true;
+    if (mutationUnknown) {
+      const invalidation = invalidateKnownScopes(projectIndexRuntime, ["fx"], now);
+      state.indexUpdate = invalidation;
+    }
+    return failureEnvelope({
+      entry, request, startedAt, now, stages, state,
+      status: mutationUnknown ? "partial_failure" : "failed",
+      code: error.code ?? "FX_REAEQ_BANDS_FAILED",
+      message: error.message ?? "ReaEQ band execution failed.",
+      blockers: error.blockers,
+      data: { mode: "reaeq_bands", fx_ref: selected.fxRef, outcome: outcomeEvidence(state) },
     });
   }
 }
@@ -1425,7 +1568,7 @@ async function resolveControlTarget(options) {
     }
     pushStage(options.stages, "controls-select-target", "selector_resolve", "completed", "Read the active project tempo target.", executionEvidenceRefs(execution));
     pushStage(options.stages, "controls-live-resolve", "live_ref_resolve", "completed", "Project controls target the active project without an object ref.", executionEvidenceRefs(execution));
-    return { ok: true, refs: {}, sqliteUsed: false };
+    return { ok: true, refs: {}, sqliteUsed: false, projectTempo: projectTempoReadback(readback) };
   }
   if (targetKind === "transport") {
     const execution = await runAtomic({
@@ -1809,6 +1952,8 @@ function pluginIdentityMatches(pluginMap, liveName) {
 const CONTROL_BATCH_READBACK_PATHS = Object.freeze({
   project: Object.freeze({
     bpm: ["bpm"],
+    time_signature_numerator: ["time_sig_num"],
+    time_signature_denominator: ["time_sig_denom"],
   }),
   track: Object.freeze({
     volume: ["volume"],
@@ -2034,7 +2179,29 @@ function controlReadbackTarget(targetKind, targetRefs, readback) {
 
 function projectTempoReadback(readback) {
   const rows = Array.isArray(readback?.effective) ? readback.effective : [];
-  return rows.find((row) => row?.time_seconds === 0 && typeof row?.bpm === "number" && Number.isFinite(row.bpm)) ?? null;
+  const effective = rows.find((row) => row?.time_seconds === 0 && typeof row?.bpm === "number" && Number.isFinite(row.bpm));
+  if (!effective) return null;
+  const markers = Array.isArray(readback?.tempo_markers) ? readback.tempo_markers : [];
+  const markerAtZero = markers.find((row) => row?.time_seconds === 0);
+  return {
+    ...effective,
+    ...(markerAtZero ? { linear_tempo: markerAtZero.linear_tempo === true } : {}),
+  };
+}
+
+function materializeProjectTimeSignatureChild(child, projectTempo) {
+  if (child?.id !== "template.project.set_tempo_marker" || child?.input?.bpm !== undefined) return child;
+  if (typeof projectTempo?.bpm !== "number" || !Number.isFinite(projectTempo.bpm)) {
+    throw coded("CONTROL_PROJECT_TEMPO_UNAVAILABLE", "The current project BPM is required to change only the time signature.");
+  }
+  return {
+    ...child,
+    input: {
+      ...child.input,
+      bpm: projectTempo.bpm,
+      ...(typeof projectTempo.linear_tempo === "boolean" ? { linear_tempo: projectTempo.linear_tempo } : {}),
+    },
+  };
 }
 
 function valueAtPath(value, path) {

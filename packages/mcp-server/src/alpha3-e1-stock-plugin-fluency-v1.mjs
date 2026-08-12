@@ -1347,6 +1347,14 @@ function plugin(id, displayName, aliases, category, parameters) {
 }
 
 function stockPluginControlInputSchema() {
+  const reaeqBandProperties = {
+    band: { type: "integer", minimum: 1, maximum: 4 },
+    type: { enum: ["low_shelf", "band", "high_shelf", "low_pass", "high_pass", "notch"] },
+    enabled: { type: "boolean" },
+    frequency_hz: { type: "number", minimum: 10, maximum: 30000 },
+    gain_db: { type: "number", minimum: -60, maximum: 60 },
+    bandwidth_oct: { type: "number", minimum: 0.01, maximum: 8 },
+  };
   const targetProperties = {
     id: { type: "string", minLength: 1 },
     param_index: { type: "integer", minimum: 0 },
@@ -1368,7 +1376,7 @@ function stockPluginControlInputSchema() {
     type: "object",
     required: [],
     properties: {
-      mode: { enum: ["semantic", "exact_parameters", "exact_assignments"] },
+      mode: { enum: ["semantic", "exact_parameters", "exact_assignments", "reaeq_bands"] },
       plugin: { type: "string", minLength: 1 },
       controls: { type: "object", additionalProperties: true },
       starter_action: { type: "string", minLength: 1 },
@@ -1407,6 +1415,17 @@ function stockPluginControlInputSchema() {
           ],
         },
       },
+      bands: {
+        type: "array",
+        minItems: 1,
+        maxItems: 4,
+        items: {
+          type: "object",
+          required: ["band"],
+          properties: reaeqBandProperties,
+          additionalProperties: false,
+        },
+      },
       dry_run: { type: "boolean" },
     },
     additionalProperties: false,
@@ -1419,6 +1438,7 @@ function stockPluginControlInputSchema() {
           anyOf: [
             { required: ["changes"] },
             { required: ["assignments"] },
+            { required: ["bands"] },
           ],
         },
       },
@@ -1455,6 +1475,21 @@ function stockPluginControlInputSchema() {
                 { required: ["control_overrides"] },
                 { required: ["selector"] },
                 { required: ["changes"] },
+              ],
+            },
+          },
+          {
+            required: ["mode", "bands"],
+            properties: { mode: { const: "reaeq_bands" } },
+            not: {
+              anyOf: [
+                { required: ["plugin"] },
+                { required: ["controls"] },
+                { required: ["starter_action"] },
+                { required: ["action_parameters"] },
+                { required: ["control_overrides"] },
+                { required: ["changes"] },
+                { required: ["assignments"] },
               ],
             },
           },

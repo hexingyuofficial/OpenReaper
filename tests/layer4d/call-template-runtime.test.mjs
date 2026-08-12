@@ -812,7 +812,7 @@ describe("Layer 4D call_template runtime binding", () => {
         CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS.includes(id)),
       false,
     );
-    assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 239);
+    assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 241);
     const currentProductRuntime = createCallTemplateRuntime({
       live: {
         opted_in: true,
@@ -820,7 +820,7 @@ describe("Layer 4D call_template runtime binding", () => {
         allowed_template_ids: CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS,
       },
     });
-    assert.equal(currentProductRuntime.live_gate.allowed_template_ids.length, 239);
+    assert.equal(currentProductRuntime.live_gate.allowed_template_ids.length, 241);
     assert.equal(
       currentProductRuntime.list_templates({
         ids: CALL_TEMPLATE_RUNTIME_ALPHA3_2C3A_PROJECT_FILE_READ_TEMPLATE_IDS,
@@ -949,6 +949,7 @@ describe("Layer 4D call_template runtime binding", () => {
       "template.fx.set_fx_bypass",
       "template.fx.set_fx_parameter_normalized",
       "template.fx.set_parameter_assignments_batch",
+      "template.fx.set_reaeq_bands",
       "template.fx.set_fx_preset_by_name",
       "template.fx.set_fx_preset_by_index",
       "template.fx.reorder_fx",
@@ -996,6 +997,7 @@ describe("Layer 4D call_template runtime binding", () => {
         "run_command:template.execute",
         "run_command:template.execute",
         "run_command:template.execute",
+        "run_command:template.execute",
         "query_state:fx.read_video_processor_code",
       ],
     );
@@ -1014,6 +1016,7 @@ describe("Layer 4D call_template runtime binding", () => {
         "fx.set_bypass",
         "fx.set_parameter_normalized",
         "fx.set_parameter_assignments_batch",
+        "fx.set_reaeq_bands",
         "fx.set_preset_by_name",
         "fx.set_preset_by_index",
         "fx.reorder",
@@ -1026,15 +1029,15 @@ describe("Layer 4D call_template runtime binding", () => {
       assert.equal(request.undo.mode, "none");
       assert.equal(request.artifacts.allow, false);
     }
-    for (const request of bridge.seen.slice(7, 15)) {
+    for (const request of bridge.seen.slice(7, 16)) {
       assert.equal(request.pack.id, "fx");
       assert.equal(request.pack.risk, "write");
       assert.equal(request.undo.mode, "required");
       assert.equal(request.verification.mode, "required");
       assert.equal(request.artifacts.allow, false);
     }
-    assert.equal(bridge.seen[15].pack.risk, "read");
-    assert.equal(bridge.seen[15].artifacts.allow, true);
+    assert.equal(bridge.seen[16].pack.risk, "read");
+    assert.equal(bridge.seen[16].artifacts.allow, true);
 
     const mixed = createCallTemplateRuntime({
       live: {
@@ -1710,6 +1713,12 @@ function fxB1RouteInput(id) {
       batch: [{ id: "gain", fx_ref: "fx:track:guid:{E2-FX-TRACK}:0", param_index: 0, normalized_value: 0.5 }],
     };
   }
+  if (id === "template.fx.set_reaeq_bands") {
+    return {
+      dry_run: true,
+      bands: [{ band: 1, type: "high_pass", enabled: true, frequency_hz: 85 }],
+    };
+  }
   if (id === "template.fx.set_fx_preset_by_name") {
     return { preset_name: "Default" };
   }
@@ -1755,6 +1764,7 @@ function fxB1IdempotencyKey(id) {
   return [
     "template.fx.set_fx_bypass",
     "template.fx.set_fx_parameter_normalized",
+    "template.fx.set_reaeq_bands",
     "template.fx.set_fx_preset_by_name",
     "template.fx.set_fx_preset_by_index",
     "template.fx.reorder_fx",

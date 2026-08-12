@@ -27,7 +27,75 @@ test("catalog enumerates exactly 10 plugins and 43 unproven semantic controls", 
   assert.equal(catalog.control_count, 43);
   assert.equal(catalog.controls.every((row) => row.proof_status === "unproven"), true);
   assert.equal(catalog.controls.every((row) => row.executable_semantic_conversion === false), true);
-  assert.deepEqual(ALPHA3_4_C_FX_SET_CONTROLS_MODES, ["semantic", "exact_parameters"]);
+  assert.deepEqual(ALPHA3_4_C_FX_SET_CONTROLS_MODES, ["semantic", "exact_parameters", "reaeq_bands"]);
+});
+
+test("reaeq_bands normalizes a strict unique first-four-band profile", () => {
+  const valid = normalizeAlpha34CFxSetControlsInput({
+    mode: "reaeq_bands",
+    dry_run: false,
+    bands: [
+      { band: 1, type: "high_pass", enabled: true, frequency_hz: 85 },
+      { band: 2, type: "band", gain_db: -3, bandwidth_oct: 1.2 },
+    ],
+  });
+  assert.equal(valid.ok, true, JSON.stringify(valid));
+  assert.equal(valid.mode, "reaeq_bands");
+  assert.equal(valid.bands.length, 2);
+
+  for (const input of [
+    { mode: "reaeq_bands", bands: [] },
+    { mode: "reaeq_bands", bands: [{ band: 1 }, { band: 1 }] },
+    { mode: "reaeq_bands", bands: [{ band: 1, type: "arbitrary" }] },
+    { mode: "reaeq_bands", bands: [{ band: 1, frequency_hz: 1 }] },
+    { mode: "reaeq_bands", bands: [{ band: 1, BANDTYPE0: "0" }] },
+  ]) {
+    assert.equal(normalizeAlpha34CFxSetControlsInput(input).ok, false, JSON.stringify(input));
+  }
+});
+
+test("reaeq_bands dispatches one typed atomic batch and invalidates FX once", async () => {
+  const calls = [];
+  const invalidations = [];
+  const response = await executeAlpha3_2_5CControlMacro({
+    request: {
+      id: "macro.set_stock_plugin_controls",
+      input: { mode: "reaeq_bands", dry_run: false, bands: [{ band: 1, type: "high_pass", enabled: true, frequency_hz: 85 }] },
+      refs: { fx_ref: "fx:track:guid:{TRACK}:0" },
+    },
+    executeAtomic: async ({ id, input, refs }) => {
+      calls.push({ id, input, refs });
+      if (id === "template.tracks.resolve_track_ref") {
+        return atomic(id, { track_ref: "track:guid:{TRACK}" }, [{ kind: "track", ref: "track:guid:{TRACK}", identity: { scheme: "guid", value: "{TRACK}" } }]);
+      }
+      if (id === "template.fx.resolve_fx_ref") {
+        return atomic(id, { fx_ref: "fx:track:guid:{TRACK}:0" }, [{ kind: "fx", ref: "fx:track:guid:{TRACK}:0", identity: { scheme: "track_fx", value: "track:guid:{TRACK}:0" } }]);
+      }
+      if (id === "template.fx.set_reaeq_bands") {
+        return atomic(id, {
+          fx_ref: "fx:track:guid:{TRACK}:0",
+          plugin_identity: "VST3:ReaEQ (Cockos)",
+          owner_kind: "track",
+          topology: [{ band: 1, type: "high_pass", enabled: true }],
+          parameter_inventory: Array.from({ length: 19 }, (_, param_index) => ({ param_index })),
+          rows: [{ band: 1, type: "high_pass", enabled: true, readback_status: "aggregate_passed" }],
+          mutation_attempted: true,
+          batch_timings: { preflight_ms: 1, mutation_ms: 1, readback_ms: 1 },
+        });
+      }
+      throw new Error(`unexpected ${id}`);
+    },
+    projectIndexRuntime: {
+      invalidateScopes({ scopes }) {
+        invalidations.push(scopes);
+        return { ok: true, scopes };
+      },
+    },
+  });
+  assert.equal(response.ok, true, JSON.stringify(response));
+  assert.equal(calls.filter((call) => call.id === "template.fx.set_reaeq_bands").length, 1);
+  assert.deepEqual(calls.at(-1).input.bands, [{ band: 1, type: "high_pass", enabled: true, frequency_hz: 85 }]);
+  assert.deepEqual(invalidations, [["fx"]]);
 });
 
 test("semantic mode fails closed for ReaSynth and RS5k Attack without native proof", async () => {
@@ -461,7 +529,7 @@ test("discrete exact_parameters requires matching native formatted readback", as
   assert.deepEqual(invalidations, [["fx"]]);
 });
 
-function atomic(id, readback) {
+function atomic(id, readback, objectRefs = null) {
   return {
     contract: "template.execution.v1",
     ok: true,
@@ -469,7 +537,7 @@ function atomic(id, readback) {
     result: {
       readback,
       data: readback,
-      refs: Object.entries(readback)
+      refs: objectRefs ?? Object.entries(readback)
         .filter(([, value]) => typeof value === "string" && /^(track|item|send|fx|project):/u.test(value))
         .map(([key, ref]) => ({ kind: key.replace(/_ref$/u, ""), ref })),
     },

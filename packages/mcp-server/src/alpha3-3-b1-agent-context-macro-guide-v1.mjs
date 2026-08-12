@@ -605,7 +605,7 @@ export function createAlpha3_3B1ExactMacroExpansion(id) {
   }
   if (id === "macro.fx.set_controls") {
     canonical.action_manual.when_to_use = [
-      "Prefer this Macro for FX parameter work: mode=semantic (default) for stock semantic controls only when native low/mid/high proof exists; mode=exact_parameters for 1-8 parameters on one FX; mode=exact_assignments for 1-64 parameters across one or more exact fx_ref targets.",
+      "Prefer this Macro for FX parameter work: mode=semantic (default) for proven stock controls; mode=reaeq_bands for 1-4 strict ReaEQ band rows; mode=exact_parameters for 1-8 parameters on one FX; mode=exact_assignments for 1-64 parameters across exact fx_ref targets.",
       "exact_parameters and exact_assignments are the general highways for ReaPlugs, third-party, and large parameter inventories; direct parameter Templates remain compatibility/debug fallback.",
     ];
     canonical.action_manual.when_not_to_use = [
@@ -614,8 +614,9 @@ export function createAlpha3_3B1ExactMacroExpansion(id) {
       "Do not mix selectors or legacy plugin/controls fields into exact_assignments; obtain exact fx_ref values first.",
     ];
     canonical.action_manual.input_shape = {
-      mode: "semantic | exact_parameters | exact_assignments; defaults to semantic for compatibility.",
+      mode: "semantic | reaeq_bands | exact_parameters | exact_assignments; defaults to semantic for compatibility.",
       semantic: "plugin/controls/starter_action as before; executable only when each control has native low/mid/high proof.",
+      reaeq_bands: "bands[] 1-4 unique rows with band 1-4 and optional type/enabled/frequency_hz/gain_db/bandwidth_oct; exact ReaEQ fx_ref or one unambiguous selector required.",
       exact_parameters: "changes[] 1-8 rows with id, normalized_value in [0,1], and param_index (optional param_ident) or one unique exact param_name/param_ident; selector or exact fx_ref required.",
       exact_assignments: "assignments[] 1-64 rows of {id,fx_ref,param_index|param_ident|param_name,normalized_value,requested_formatted_value?}. dry_run defaults true; set dry_run:false to mutate.",
       dry_run: "Boolean; preflight and inventory without mutation when true. exact_assignments defaults true when omitted.",

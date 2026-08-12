@@ -200,7 +200,7 @@ describe("S3 remove-silence and normalization static release contract", () => {
     const checksumBody = between(
       d27Source,
       "local function d27_batch_checksum_plan(rows, params, operation)",
-      "local function d27_batch_owner_track(context)",
+      "local function d27_batch_fragments(context, boundaries)",
     );
     assert.doesNotMatch(
       checksumBody,

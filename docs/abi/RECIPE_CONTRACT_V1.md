@@ -245,7 +245,7 @@ Template dependencies are derived from `steps[*].call_template.id`.
 
 Layer 5's accepted template dependency set is the Layer 4D accepted official
 catalog, currently the Wave 1A, Wave 2A, Wave 3B, critical-fill, P1, and
-Alpha3 C3 ids plus the accepted Alpha3.2 D31 render-target route, the eight Alpha3.3 lifecycle atoms (`template.fx.delete_fx`, `template.routing.remove_send`, `template.items.move_item_to_track`, `template.items.glue_item`, `template.tracks.freeze_track`, `template.tracks.unfreeze_track`, `template.automation.ensure_take_pitch_envelope`, and `template.items.split_item_by_silence`), and the Alpha3.4-D3 native project-switching atoms (`template.project.list_open_projects`, `template.project.open_project_in_tab`, and `template.project.activate_project_tab` with repaired `template.project.create_project_tab`), 239 templates total.
+Alpha3 C3 ids plus the accepted Alpha3.2 D31 render-target route, the eight Alpha3.3 lifecycle atoms (`template.fx.delete_fx`, `template.routing.remove_send`, `template.items.move_item_to_track`, `template.items.glue_item`, `template.tracks.freeze_track`, `template.tracks.unfreeze_track`, `template.automation.ensure_take_pitch_envelope`, and `template.items.split_item_by_silence`), and the Alpha3.4-D3 native project-switching atoms (`template.project.list_open_projects`, `template.project.open_project_in_tab`, and `template.project.activate_project_tab` with repaired `template.project.create_project_tab`), 241 templates total.
 Recipe validation rejects:
 
 ```text

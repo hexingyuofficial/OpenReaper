@@ -43,6 +43,86 @@ const RUNTIME_TAKE_A0_OBJECT = createObjectRef("take", { scheme: "guid", value: 
 const RUNTIME_TAKE_A1_OBJECT = createObjectRef("take", { scheme: "guid", value: "{TAKE-A1}" }, { ref: TAKE_A1.ref });
 
 describe("Alpha3.3-B1c executable macro.items.apply", () => {
+  it("selects 1-64 exact canonical Items through one aggregate Template call", async () => {
+    const calls = [];
+    const result = await executeAlpha3_3B1cItemsApplyMacro({
+      request: request({
+        mode: "select_exact",
+        selection_mode: "replace",
+        target_refs: [ITEM_A.ref, ITEM_B.ref],
+        dry_run: false,
+      }),
+      executeAtomic: async (input) => {
+        calls.push(input);
+        return {
+          ok: true,
+          request: { id: "selection-request" },
+          result: {
+            summary: {
+              mode: "replace",
+              requested_item_refs: [ITEM_A.ref, ITEM_B.ref],
+              selected_item_refs: [ITEM_B.ref, ITEM_A.ref],
+              selected_count: 2,
+              changed_count: 2,
+              readback_status: "passed",
+            },
+            refs: [ITEM_A, ITEM_B],
+          },
+        };
+      },
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].id, "template.items.set_exact_selection");
+    assert.deepEqual(calls[0].input, {
+      mode: "replace",
+      item_refs: [ITEM_A.ref, ITEM_B.ref],
+    });
+    assert.deepEqual(result.result.data.selected_item_refs, [ITEM_B.ref, ITEM_A.ref]);
+    assert.equal(result.result.data.readback_status, "passed");
+  });
+
+  it("prevalidates exact selection and audio adjacency before dispatch", async () => {
+    for (const input of [
+      { mode: "select_exact", selection_mode: "replace", target_refs: ["guid:{ITEM-A}"], dry_run: false },
+      { mode: "select_exact", selection_mode: "replace", target_refs: [ITEM_A.ref, ITEM_A.ref], dry_run: false },
+      { mode: "remove_silence", target: "selected", target_refs: [ITEM_A.ref], adjacent_audio: "both", dry_run: false },
+      { mode: "normalize_level", target: "exact", target_refs: [ITEM_A.ref, ITEM_B.ref], adjacent_audio: "left", normalization_metric: "peak", normalization_target: -6, dry_run: false },
+    ]) {
+      let dispatches = 0;
+      const result = await executeAlpha3_3B1cItemsApplyMacro({
+        request: request(input),
+        executeAtomic: async () => { dispatches += 1; },
+        now: () => new Date(NOW),
+      });
+      assert.equal(result.ok, false, JSON.stringify(result));
+      assert.equal(dispatches, 0);
+    }
+  });
+
+  it("passes same-Track adjacent audio expansion into the single shared batch call", async () => {
+    const bridge = new FakeFoundationBridge([item(ITEM_A, 2, 2, { silence_segment_count: 1, silence_seconds: 0.25 })]);
+    const result = await executeAlpha3_3B1cItemsApplyMacro({
+      request: request({
+        mode: "remove_silence",
+        target: "exact",
+        target_refs: [ITEM_A.ref],
+        adjacent_audio: "both",
+        dry_run: false,
+      }),
+      executeAtomic: bridge.executeAtomic,
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(bridge.calls.length, 1);
+    assert.equal(bridge.calls[0].input.adjacent_audio, "both");
+    assert.equal(result.result.data.adjacent_audio, "both");
+    assert.equal(result.result.data.transport_call_count, 1);
+  });
+
   it("registers one fixed allowlisted destructive program and truthfully holds unfinished modes and Take fields", () => {
     assert.deepEqual(ALPHA3_3_B1C_ITEMS_APPLY_REGISTRY.ids, ["macro.items.apply"]);
     const entry = ALPHA3_3_B1C_ITEMS_APPLY_REGISTRY.entries[0];

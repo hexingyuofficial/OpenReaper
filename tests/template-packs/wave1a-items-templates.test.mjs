@@ -31,6 +31,7 @@ const ALLOWLIST = Object.freeze([
   "template.items.resolve_item_ref",
   "template.items.read_item_summary",
   "template.items.list_selected_items",
+  "template.items.set_exact_selection",
   "template.items.list_items_on_track",
   "template.items.move_item",
   "template.items.trim_item",
@@ -151,6 +152,10 @@ describe("Wave 1A items template descriptors", () => {
         if (descriptor.id === "template.items.set_item_take_controls_batch") {
           assert.deepEqual(descriptor.refs.input, [], descriptor.id);
           assert.equal(descriptor.inputSchema.properties.batch.type, "array", descriptor.id);
+        } else if (descriptor.id === "template.items.set_exact_selection") {
+          assert.deepEqual(descriptor.refs.input, [], descriptor.id);
+          assert.equal(descriptor.inputSchema.properties.item_refs.type, "array", descriptor.id);
+          assert.equal(descriptor.inputSchema.properties.item_refs.maxItems, 64, descriptor.id);
         } else {
           assert.equal(descriptor.refs.input[0].kind, "item", descriptor.id);
         }
@@ -368,7 +373,7 @@ describe("Wave 1A items template descriptors", () => {
     for (const [index, id] of ALLOWLIST.filter((entry) => !READ_IDS.has(entry)).entries()) {
       const descriptor = catalog.require(id);
       const input = sampleInput(id);
-      const refs = id === "template.items.set_item_take_controls_batch"
+      const refs = id === "template.items.set_item_take_controls_batch" || id === "template.items.set_exact_selection"
         ? {}
         : id === "template.items.choose_new_source_file"
           ? { item_ref: item, file_ref: file }
@@ -499,6 +504,8 @@ function sampleInput(id) {
       return { volume_db: -3 };
     case "template.items.set_item_take_controls_batch":
       return { batch: [{ id: "row-1", item_ref: "item:guid:{ITEM-WRITE}", item_volume_db: -3 }] };
+    case "template.items.set_exact_selection":
+      return { mode: "replace", item_refs: ["item:guid:{ITEM-WRITE}"] };
     case "template.items.set_take_volume":
       return { volume_db: -3 };
     case "template.items.set_take_pan":
@@ -545,7 +552,7 @@ function sampleInput(id) {
 }
 
 function outputRefsFor(id, refs) {
-  if (id === "template.items.set_item_take_controls_batch") return [];
+  if (id === "template.items.set_item_take_controls_batch" || id === "template.items.set_exact_selection") return [];
   if (id === "template.items.split_item_at_time") return [refs.left, refs.right];
   if (id === "template.items.choose_new_source_file") return [refs.item, refs.file];
   if (id === "template.items.set_active_take") return [refs.item, refs.take];

@@ -983,6 +983,27 @@ local function e2_fx_set_param_normalized(owner_kind, owner, slot_index, param_i
   return call_reaper("TrackFX_SetParamNormalized", owner, slot_index, param_index, value) == true
 end
 
+local function e2_fx_set_param_value(owner_kind, owner, slot_index, param_index, value)
+  local api = owner_kind == "take" and "TakeFX_SetParam" or "TrackFX_SetParam"
+  local ok, accepted = call_reaper(api, owner, slot_index, param_index, value)
+  return ok and accepted == true
+end
+
+local function e2_fx_named_config_get(owner_kind, owner, slot_index, key)
+  local api = owner_kind == "take" and "TakeFX_GetNamedConfigParm" or "TrackFX_GetNamedConfigParm"
+  local ok, accepted, value = call_reaper(api, owner, slot_index, key)
+  if not ok or accepted ~= true or type(value) ~= "string" then
+    return nil
+  end
+  return bounded_string(value, 160)
+end
+
+local function e2_fx_named_config_set(owner_kind, owner, slot_index, key, value)
+  local api = owner_kind == "take" and "TakeFX_SetNamedConfigParm" or "TrackFX_SetNamedConfigParm"
+  local ok, accepted = call_reaper(api, owner, slot_index, key, value)
+  return ok and accepted == true
+end
+
 local function e2_fx_get_preset(owner_kind, owner, slot_index)
   local ok, _, name
   if owner_kind == "take" then
@@ -1560,6 +1581,324 @@ local function e2_fx_parameter_assignments_batch(request)
     return nil, failure
   end
   return e2_fx_write_summary(request, { rows = result_rows, mutation_attempted = true, batch_timings = batch_timings }), nil, json_array({}), json_array({}), refs
+end
+
+local E2_FX_REAEQ_BAND_MAX = 4
+local E2_FX_REAEQ_TYPE_VALUES = {
+  high_pass = 0,
+  low_shelf = 1,
+  band = 2,
+  notch = 3,
+  high_shelf = 4,
+  low_pass = 5,
+}
+local E2_FX_REAEQ_TYPE_NAMES = {
+  [0] = "high_pass",
+  [1] = "low_shelf",
+  [2] = "band",
+  [3] = "notch",
+  [4] = "high_shelf",
+  [5] = "low_pass",
+}
+local E2_FX_REAEQ_IDENT_TOKENS = {
+  high_pass = "High_Pass",
+  low_shelf = "Low_Shelf",
+  band = "Band",
+  notch = "Notch",
+  high_shelf = "High_Shelf",
+  low_pass = "Low_Pass",
+}
+
+local function e2_fx_reaeq_error(code, message, details)
+  details = details or {}
+  if details.zero_write == nil then details.zero_write = true end
+  return e2_fx_batch_error(code, message, details)
+end
+
+local function e2_fx_reaeq_identity(owner_kind, owner, slot_index)
+  return e2_fx_named_config_get(owner_kind, owner, slot_index, "fx_ident")
+end
+
+local function e2_fx_reaeq_identity_allowed(identity)
+  if type(identity) ~= "string" then return false end
+  local normalized = identity:lower():gsub("%s+", " "):gsub(": ", ":")
+  return normalized == "vst:reaeq (cockos)"
+    or normalized == "vst3:reaeq (cockos)"
+    or normalized == "au:reaeq (cockos)"
+    or normalized == "reaeq (cockos)"
+end
+
+local function e2_fx_reaeq_band_key(prefix, band)
+  return prefix .. tostring(band - 1)
+end
+
+local function e2_fx_reaeq_read_topology(owner_kind, owner, slot_index, band)
+  local type_raw = e2_fx_named_config_get(owner_kind, owner, slot_index, e2_fx_reaeq_band_key("BANDTYPE", band))
+  local enabled_raw = e2_fx_named_config_get(owner_kind, owner, slot_index, e2_fx_reaeq_band_key("BANDENABLED", band))
+  local type_value = tonumber(type_raw)
+  if not E2_FX_REAEQ_TYPE_NAMES[type_value] or (enabled_raw ~= "0" and enabled_raw ~= "1") then
+    return nil
+  end
+  return {
+    band = band,
+    type = E2_FX_REAEQ_TYPE_NAMES[type_value],
+    type_value = type_value,
+    enabled = enabled_raw == "1",
+  }
+end
+
+local function e2_fx_reaeq_expected_ident(band, field, band_type)
+  local prefix = field == "frequency_hz" and "_Freq_" or field == "gain_db" and "_Gain_" or "_BW_"
+  local suffix = band == 1 and "" or "_" .. tostring(band)
+  return prefix .. E2_FX_REAEQ_IDENT_TOKENS[band_type] .. suffix
+end
+
+local function e2_fx_reaeq_inventory(owner_kind, owner, slot_index)
+  local parameter_count = e2_fx_read_param_count(owner_kind, owner, slot_index)
+  if parameter_count < E2_FX_REAEQ_BAND_MAX * 3 then return nil, parameter_count end
+  local rows = json_array({})
+  for param_index = 0, parameter_count - 1 do
+    local ident = e2_fx_read_param_ident(owner_kind, owner, slot_index, param_index)
+    if not ident then return nil, parameter_count end
+    local values = e2_fx_read_param_value(owner_kind, owner, slot_index, param_index)
+    rows[#rows + 1] = {
+      param_index = param_index,
+      param_ident = ident,
+      name = e2_fx_read_param_name(owner_kind, owner, slot_index, param_index),
+      value = values.value,
+      min_value = values.min_value,
+      max_value = values.max_value,
+      normalized_value = e2_fx_read_param_normalized(owner_kind, owner, slot_index, param_index),
+      formatted_value = e2_fx_read_param_formatted(owner_kind, owner, slot_index, param_index),
+    }
+  end
+  return rows, parameter_count
+end
+
+local function e2_fx_reaeq_parse_formatted(field, formatted)
+  if type(formatted) ~= "string" then return nil end
+  local normalized = formatted:lower():gsub(",", ".")
+  local number_text = normalized:match("[-+]?%d+%.?%d*")
+  local value = tonumber(number_text)
+  if not value then return nil end
+  if field == "frequency_hz" and normalized:find("khz", 1, true) then value = value * 1000 end
+  return value
+end
+
+local function e2_fx_reaeq_target_tolerance(field, target)
+  if field == "frequency_hz" then return math.max(0.5, math.abs(target) * 0.0025) end
+  if field == "gain_db" then return 0.02 end
+  return 0.02
+end
+
+local function e2_fx_reaeq_compile_target(owner_kind, owner, slot_index, param_index, field, target)
+  local low_formatted = e2_fx_format_param_normalized(owner_kind, owner, slot_index, param_index, 0)
+  local high_formatted = e2_fx_format_param_normalized(owner_kind, owner, slot_index, param_index, 1)
+  local low_value = e2_fx_reaeq_parse_formatted(field, low_formatted)
+  local high_value = e2_fx_reaeq_parse_formatted(field, high_formatted)
+  if not low_value or not high_value or low_value == high_value then return nil end
+  local minimum = math.min(low_value, high_value)
+  local maximum = math.max(low_value, high_value)
+  local tolerance = e2_fx_reaeq_target_tolerance(field, target)
+  if target < minimum - tolerance or target > maximum + tolerance then return nil end
+  local ascending = high_value > low_value
+  local best_normalized = 0
+  local best_value = low_value
+  local best_formatted = low_formatted
+  local left = 0
+  local right = 1
+  for _ = 1, 48 do
+    local middle = (left + right) / 2
+    local formatted = e2_fx_format_param_normalized(owner_kind, owner, slot_index, param_index, middle)
+    local observed = e2_fx_reaeq_parse_formatted(field, formatted)
+    if not observed then return nil end
+    if math.abs(observed - target) < math.abs(best_value - target) then
+      best_normalized = middle
+      best_value = observed
+      best_formatted = formatted
+    end
+    if (ascending and observed < target) or (not ascending and observed > target) then
+      left = middle
+    else
+      right = middle
+    end
+  end
+  if math.abs(best_value - target) > tolerance then return nil end
+  local values = e2_fx_read_param_value(owner_kind, owner, slot_index, param_index)
+  local native_value = values.min_value + best_normalized * (values.max_value - values.min_value)
+  return {
+    normalized_value = best_normalized,
+    native_value = native_value,
+    requested_value = target,
+    native_formatted_value = best_formatted,
+    native_formatted_numeric = best_value,
+    tolerance = tolerance,
+  }
+end
+
+local function e2_fx_reaeq_validate_request(request, owner_kind, owner, slot_index)
+  local params = request.params or {}
+  local bands = params.bands
+  if type(params.dry_run) ~= "boolean" then
+    return e2_fx_reaeq_error("PARAMS_INVALID", "ReaEQ band batch dry_run must be boolean.")
+  end
+  if not is_json_array(bands) or #bands < 1 or #bands > E2_FX_REAEQ_BAND_MAX then
+    return e2_fx_reaeq_error("FX_REAEQ_BANDS_INVALID", "ReaEQ band batch accepts 1-4 rows.")
+  end
+  local identity = e2_fx_reaeq_identity(owner_kind, owner, slot_index)
+  if not e2_fx_reaeq_identity_allowed(identity) then
+    return e2_fx_reaeq_error("FX_REAEQ_IDENTITY_MISMATCH", "The exact live FX is not an approved Cockos ReaEQ instance.", { plugin_identity = identity or JSON_NULL })
+  end
+  local inventory, parameter_count = e2_fx_reaeq_inventory(owner_kind, owner, slot_index)
+  if not inventory then
+    return e2_fx_reaeq_error("FX_REAEQ_INVENTORY_INVALID", "ReaEQ did not expose a complete stable parameter inventory.", { parameter_count = parameter_count })
+  end
+  local topology = json_array({})
+  for band = 1, E2_FX_REAEQ_BAND_MAX do
+    local current = e2_fx_reaeq_read_topology(owner_kind, owner, slot_index, band)
+    if not current then
+      return e2_fx_reaeq_error("FX_REAEQ_TOPOLOGY_UNAVAILABLE", "ReaEQ did not expose the complete first-four-band topology.", { band = band })
+    end
+    topology[#topology + 1] = current
+    for field_offset, field in ipairs({ "frequency_hz", "gain_db", "bandwidth_oct" }) do
+      local param_index = (band - 1) * 3 + field_offset - 1
+      local live_ident = inventory[param_index + 1].param_ident
+      local expected_ident = e2_fx_reaeq_expected_ident(band, field, current.type)
+      if live_ident ~= expected_ident then
+        return e2_fx_reaeq_error("FX_REAEQ_PARAMETER_IDENTITY_MISMATCH", "ReaEQ first-four-band parameter identity does not match live topology.", { band = band, field = field, param_index = param_index, expected_param_ident = expected_ident, live_param_ident = live_ident })
+      end
+    end
+  end
+
+  local seen = {}
+  local prepared = {}
+  for row_index = 1, #bands do
+    local row = bands[row_index]
+    if not is_object(row) then return e2_fx_reaeq_error("FX_REAEQ_BAND_ROW_INVALID", "ReaEQ band rows must be objects.", { row_index = row_index }) end
+    for key in pairs(row) do
+      if key ~= "band" and key ~= "type" and key ~= "enabled" and key ~= "frequency_hz" and key ~= "gain_db" and key ~= "bandwidth_oct" then
+        return e2_fx_reaeq_error("FX_REAEQ_BAND_ROW_INVALID", "ReaEQ band row contains an unsupported field.", { row_index = row_index, field = key })
+      end
+    end
+    local band = tonumber(row.band)
+    if not band or band < 1 or band > E2_FX_REAEQ_BAND_MAX or band ~= math.floor(band) or seen[band] then
+      return e2_fx_reaeq_error("FX_REAEQ_BAND_INDEX_INVALID", "ReaEQ band must be a unique integer from 1 through 4.", { row_index = row_index })
+    end
+    seen[band] = true
+    if row.type ~= nil and not E2_FX_REAEQ_TYPE_VALUES[row.type] then
+      return e2_fx_reaeq_error("FX_REAEQ_BAND_TYPE_INVALID", "ReaEQ band type is not approved.", { row_index = row_index })
+    end
+    if row.enabled ~= nil and type(row.enabled) ~= "boolean" then
+      return e2_fx_reaeq_error("FX_REAEQ_BAND_ENABLED_INVALID", "ReaEQ band enabled must be boolean.", { row_index = row_index })
+    end
+    local target_type = row.type or topology[band].type
+    local item = { row = row, band = band, target_type = target_type, targets = {} }
+    for field_offset, field in ipairs({ "frequency_hz", "gain_db", "bandwidth_oct" }) do
+      if row[field] ~= nil then
+        local target = tonumber(row[field])
+        local bounds = field == "frequency_hz" and { 10, 30000 } or field == "gain_db" and { -60, 60 } or { 0.01, 8 }
+        if not e2_fx_batch_finite(target) or target < bounds[1] or target > bounds[2] then
+          return e2_fx_reaeq_error("FX_REAEQ_BAND_VALUE_INVALID", "ReaEQ band value is outside the bounded public range.", { row_index = row_index, field = field })
+        end
+        local param_index = (band - 1) * 3 + field_offset - 1
+        local compiled = e2_fx_reaeq_compile_target(owner_kind, owner, slot_index, param_index, field, target)
+        if not compiled then
+          return e2_fx_reaeq_error("FX_REAEQ_TARGET_UNAVAILABLE", "REAPER native formatting could not compile the requested ReaEQ value.", { row_index = row_index, band = band, field = field, requested_value = target })
+        end
+        compiled.field = field
+        compiled.param_index = param_index
+        compiled.preflight_param_ident = inventory[param_index + 1].param_ident
+        compiled.expected_param_ident = e2_fx_reaeq_expected_ident(band, field, target_type)
+        item.targets[#item.targets + 1] = compiled
+      end
+    end
+    prepared[#prepared + 1] = item
+  end
+  return { prepared = prepared, identity = identity, inventory = inventory, parameter_count = parameter_count, topology = topology }
+end
+
+local function e2_fx_set_reaeq_bands(request)
+  local owner_kind, owner, slot_index = e2_fx_read_fx_from_request_refs(request)
+  if not owner then return e2_fx_reaeq_error("FX_REF_NOT_FOUND", "ReaEQ band batch requires one resolvable exact FX ref.") end
+  local count = e2_fx_read_count(owner_kind, owner)
+  if slot_index < 0 or slot_index >= count then return e2_fx_reaeq_error("FX_SLOT_NOT_FOUND", "ReaEQ band batch slot is outside the exact owner FX chain.", { slot_index = slot_index, fx_count = count }) end
+  local preflight_started = os.clock()
+  local plan, failure = e2_fx_reaeq_validate_request(request, owner_kind, owner, slot_index)
+  if not plan then return nil, failure end
+  local batch_timings = { preflight_ms = (os.clock() - preflight_started) * 1000, mutation_ms = 0, readback_ms = 0, transport_ms = 0, rows = #plan.prepared, runner = "e2_reaeq_native_profile_batch", native_mutation_count = 0, native_readback_count = 0 }
+  local _, fx_ref = e2_fx_read_fx_summary(owner_kind, owner, slot_index)
+  if request.params.dry_run == true then
+    local rows = json_array({})
+    for index = 1, #plan.prepared do
+      local item = plan.prepared[index]
+      rows[#rows + 1] = { band = item.band, type = item.target_type, enabled = item.row.enabled == nil and plan.topology[item.band].enabled or item.row.enabled, targets = item.targets, readback_status = "preflight_passed" }
+    end
+    return e2_fx_read_summary(request, { fx_ref = fx_ref.ref, plugin_identity = plan.identity, owner_kind = owner_kind, slot_index = slot_index, topology = plan.topology, parameter_inventory = plan.inventory, rows = rows, mutation_attempted = false, batch_timings = batch_timings }), nil, json_array({}), json_array({}), e2_fx_read_refs(fx_ref)
+  end
+
+  local mutation_started = os.clock()
+  local mutation_attempted = false
+  for index = 1, #plan.prepared do
+    local item = plan.prepared[index]
+    if item.row.type ~= nil then
+      mutation_attempted = true
+      batch_timings.native_mutation_count = batch_timings.native_mutation_count + 1
+      if not e2_fx_named_config_set(owner_kind, owner, slot_index, e2_fx_reaeq_band_key("BANDTYPE", item.band), tostring(E2_FX_REAEQ_TYPE_VALUES[item.target_type])) then
+        return e2_fx_reaeq_error("COMMAND_FAILED", "REAPER rejected a ReaEQ BANDTYPE setter.", { band = item.band, mutation_attempted = true, zero_write = false })
+      end
+    end
+    if item.row.enabled ~= nil then
+      mutation_attempted = true
+      batch_timings.native_mutation_count = batch_timings.native_mutation_count + 1
+      if not e2_fx_named_config_set(owner_kind, owner, slot_index, e2_fx_reaeq_band_key("BANDENABLED", item.band), item.row.enabled and "1" or "0") then
+        return e2_fx_reaeq_error("COMMAND_FAILED", "REAPER rejected a ReaEQ BANDENABLED setter.", { band = item.band, mutation_attempted = true, zero_write = false })
+      end
+    end
+    for target_index = 1, #item.targets do
+      local target = item.targets[target_index]
+      mutation_attempted = true
+      batch_timings.native_mutation_count = batch_timings.native_mutation_count + 1
+      if not e2_fx_set_param_value(owner_kind, owner, slot_index, target.param_index, target.native_value) then
+        return e2_fx_reaeq_error("COMMAND_FAILED", "REAPER rejected an exact ReaEQ parameter setter.", { band = item.band, field = target.field, mutation_attempted = true, zero_write = false })
+      end
+    end
+  end
+  batch_timings.mutation_ms = (os.clock() - mutation_started) * 1000
+
+  local readback_started = os.clock()
+  local topology = json_array({})
+  for band = 1, E2_FX_REAEQ_BAND_MAX do
+    local current = e2_fx_reaeq_read_topology(owner_kind, owner, slot_index, band)
+    if not current then return e2_fx_reaeq_error("VERIFY_FAILED", "ReaEQ topology aggregate readback failed.", { band = band, mutation_attempted = mutation_attempted, zero_write = false }) end
+    topology[#topology + 1] = current
+  end
+  local inventory, parameter_count = e2_fx_reaeq_inventory(owner_kind, owner, slot_index)
+  if not inventory or parameter_count ~= plan.parameter_count then
+    return e2_fx_reaeq_error("VERIFY_FAILED", "ReaEQ parameter inventory changed or became incomplete after mutation.", { mutation_attempted = mutation_attempted, zero_write = false })
+  end
+  local rows = json_array({})
+  for index = 1, #plan.prepared do
+    local item = plan.prepared[index]
+    if topology[item.band].type ~= item.target_type or (item.row.enabled ~= nil and topology[item.band].enabled ~= item.row.enabled) then
+      return e2_fx_reaeq_error("VERIFY_FAILED", "ReaEQ named topology readback does not match the requested band row.", { band = item.band, mutation_attempted = mutation_attempted, zero_write = false })
+    end
+    local values = {}
+    for target_index = 1, #item.targets do
+      local target = item.targets[target_index]
+      local live = inventory[target.param_index + 1]
+      local observed = e2_fx_reaeq_parse_formatted(target.field, live.formatted_value)
+      if live.param_ident ~= target.expected_param_ident or not observed or math.abs(observed - target.requested_value) > target.tolerance then
+        return e2_fx_reaeq_error("VERIFY_FAILED", "ReaEQ exact parameter identity or value readback does not match the requested band row.", { band = item.band, field = target.field, expected_param_ident = target.expected_param_ident, live_param_ident = live.param_ident, requested_value = target.requested_value, observed_value = observed or JSON_NULL, mutation_attempted = mutation_attempted, zero_write = false })
+      end
+      values[target.field] = { requested_value = target.requested_value, observed_value = observed, formatted_value = live.formatted_value, normalized_value = live.normalized_value, param_index = target.param_index, param_ident = live.param_ident, tolerance = target.tolerance }
+      batch_timings.native_readback_count = batch_timings.native_readback_count + 1
+    end
+    rows[#rows + 1] = { band = item.band, type = topology[item.band].type, enabled = topology[item.band].enabled, values = values, readback_status = "aggregate_passed" }
+  end
+  local identity = e2_fx_reaeq_identity(owner_kind, owner, slot_index)
+  if identity ~= plan.identity then return e2_fx_reaeq_error("VERIFY_FAILED", "ReaEQ plugin identity changed during mutation.", { mutation_attempted = mutation_attempted, zero_write = false }) end
+  batch_timings.readback_ms = (os.clock() - readback_started) * 1000
+  return e2_fx_write_summary(request, { fx_ref = fx_ref.ref, plugin_identity = identity, owner_kind = owner_kind, slot_index = slot_index, topology = topology, parameter_inventory = inventory, rows = rows, mutation_attempted = mutation_attempted, batch_timings = batch_timings }), nil, json_array({}), json_array({}), e2_fx_read_refs(fx_ref)
 end
 
 local function reorder_fx(request)

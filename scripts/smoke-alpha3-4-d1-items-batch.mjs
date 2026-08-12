@@ -801,7 +801,7 @@ async function loadInstalledPackageProvenance(wrapperPath, { required }) {
     || Number.isNaN(Date.parse(value.build_time_utc))
     || value?.source_tree_clean !== true
     || value.accepted_macro_count !== 15
-    || value.accepted_template_count !== 239
+    || value.accepted_template_count !== 241
     || value.bridge_handler_count !== 91
   ) {
     throw coded("D1_HARNESS_PACKAGE_PROVENANCE_INVALID", "Installed package provenance does not prove a clean product commit.");

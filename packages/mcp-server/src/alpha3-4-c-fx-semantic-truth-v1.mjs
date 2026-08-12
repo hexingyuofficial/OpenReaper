@@ -1,6 +1,6 @@
 export const ALPHA3_4_C_FX_SEMANTIC_TRUTH_CONTRACT = "openreaper.alpha3.4.fx_semantic_truth.v1";
 export const ALPHA3_4_C_FX_SEMANTIC_TRUTH_VERSION = "1.0.0";
-export const ALPHA3_4_C_FX_SET_CONTROLS_MODES = Object.freeze(["semantic", "exact_parameters"]);
+export const ALPHA3_4_C_FX_SET_CONTROLS_MODES = Object.freeze(["semantic", "exact_parameters", "reaeq_bands"]);
 export const ALPHA3_4_C_EXACT_PARAMETER_MAX_CHANGES = 8;
 export const ALPHA3_4_C_PARAMETER_PAGE_HARD_CEILING = 4096;
 export const ALPHA3_4_C_PARAMETER_PAGE_LIMIT = 128;
@@ -122,6 +122,39 @@ export function normalizeAlpha34CFxSetControlsInput(input = {}) {
       code: "FX_SET_CONTROLS_MODE_UNSUPPORTED",
       message: `mode must be one of ${ALPHA3_4_C_FX_SET_CONTROLS_MODES.join(" | ")}.`,
     };
+  }
+  if (mode === "reaeq_bands") {
+    const bands = Array.isArray(input.bands) ? input.bands : null;
+    if (!bands || bands.length < 1 || bands.length > 4) {
+      return { ok: false, code: "FX_REAEQ_BANDS_INVALID", message: "reaeq_bands requires 1 through 4 band rows." };
+    }
+    const seen = new Set();
+    const normalizedBands = [];
+    const allowed = new Set(["band", "type", "enabled", "frequency_hz", "gain_db", "bandwidth_oct"]);
+    const types = new Set(["low_shelf", "band", "high_shelf", "low_pass", "high_pass", "notch"]);
+    for (let index = 0; index < bands.length; index += 1) {
+      const row = bands[index];
+      if (!isPlainObject(row) || Object.keys(row).some((key) => !allowed.has(key))) {
+        return { ok: false, code: "FX_REAEQ_BAND_ROW_INVALID", message: `bands[${index}] contains unsupported fields.` };
+      }
+      if (!Number.isInteger(row.band) || row.band < 1 || row.band > 4 || seen.has(row.band)) {
+        return { ok: false, code: "FX_REAEQ_BAND_INDEX_INVALID", message: `bands[${index}].band must be a unique integer from 1 through 4.` };
+      }
+      if (row.type !== undefined && !types.has(row.type)) {
+        return { ok: false, code: "FX_REAEQ_BAND_TYPE_INVALID", message: `bands[${index}].type is not an approved ReaEQ topology.` };
+      }
+      for (const [field, min, max] of [["frequency_hz", 10, 30000], ["gain_db", -60, 60], ["bandwidth_oct", 0.01, 8]]) {
+        if (row[field] !== undefined && (typeof row[field] !== "number" || !Number.isFinite(row[field]) || row[field] < min || row[field] > max)) {
+          return { ok: false, code: "FX_REAEQ_BAND_VALUE_INVALID", message: `bands[${index}].${field} is outside the bounded native range.` };
+        }
+      }
+      if (row.enabled !== undefined && typeof row.enabled !== "boolean") {
+        return { ok: false, code: "FX_REAEQ_BAND_ENABLED_INVALID", message: `bands[${index}].enabled must be boolean.` };
+      }
+      seen.add(row.band);
+      normalizedBands.push({ ...row });
+    }
+    return { ok: true, mode, dry_run: input.dry_run === true, bands: normalizedBands, selector: isPlainObject(input.selector) ? input.selector : null };
   }
   if (mode === "exact_parameters") {
     const changes = Array.isArray(input.changes) ? input.changes : null;

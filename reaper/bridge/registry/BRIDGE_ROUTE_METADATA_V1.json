@@ -3,9 +3,9 @@
   "generated_from": "reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json",
   "registry_summary": {
     "contract": "openreaper.bridge_handler_registry.v1",
-    "entryCount": 239,
+    "entryCount": 241,
     "legacyMonolithCount": 0,
-    "extractedHandlerCount": 239,
+    "extractedHandlerCount": 241,
     "handlerModuleCount": 91,
     "routeCount": 34,
     "operationCount": 103
@@ -277,9 +277,9 @@
     },
     {
       "route": "d13-items-core-handlers",
-      "template_count": 16,
+      "template_count": 17,
       "handler_module_count": 2,
-      "operation_count": 16,
+      "operation_count": 17,
       "packs": [
         "items"
       ],
@@ -295,6 +295,7 @@
       ],
       "template_ids": [
         "template.items.list_selected_items",
+        "template.items.set_exact_selection",
         "template.items.list_items_on_track",
         "template.items.set_item_volume",
         "template.items.set_item_take_controls_batch",
@@ -773,9 +774,9 @@
     },
     {
       "route": "e2-fx-b1-write-handlers",
-      "template_count": 8,
+      "template_count": 9,
       "handler_module_count": 1,
-      "operation_count": 8,
+      "operation_count": 9,
       "packs": [
         "fx"
       ],
@@ -795,6 +796,7 @@
         "template.fx.set_fx_bypass",
         "template.fx.set_fx_parameter_normalized",
         "template.fx.set_parameter_assignments_batch",
+        "template.fx.set_reaeq_bands",
         "template.fx.set_fx_preset_by_name",
         "template.fx.set_fx_preset_by_index",
         "template.fx.reorder_fx"

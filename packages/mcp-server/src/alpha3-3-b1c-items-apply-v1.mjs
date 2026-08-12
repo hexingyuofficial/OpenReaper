@@ -10,6 +10,7 @@ import {
 export const ALPHA3_3_B1C_ITEMS_APPLY_MACRO_ID = "macro.items.apply";
 export const ALPHA3_3_B1C_ITEMS_APPLY_CONTRACT = "alpha3.3.b1c.items_apply.v1";
 export const ALPHA3_3_B1C_ITEMS_APPLY_MODES = deepFreeze([
+  "select_exact",
   "align_starts",
   "align_ends",
   "sequence_with_gap",
@@ -76,6 +77,7 @@ export const ALPHA3_3_B1C_ITEMS_APPLY_TEMPLATE_IDS = deepFreeze([
   "template.items.resolve_item_ref",
   "template.items.read_item_summary",
   "template.items.list_selected_items",
+  "template.items.set_exact_selection",
   "template.items.move_item",
   "template.items.set_item_volume",
   "template.items.set_item_take_controls_batch",
@@ -103,6 +105,7 @@ export const ALPHA3_3_B1C_ITEMS_APPLY_TEMPLATE_IDS = deepFreeze([
 const RESOLVE_ITEM_ID = "template.items.resolve_item_ref";
 const READ_ITEM_ID = "template.items.read_item_summary";
 const LIST_SELECTED_ID = "template.items.list_selected_items";
+const SET_EXACT_SELECTION_ID = "template.items.set_exact_selection";
 const MOVE_ITEM_ID = "template.items.move_item";
 const SET_ACTIVE_TAKE_ID = "template.items.set_active_take";
 const SET_ITEM_VOLUME_ID = "template.items.set_item_volume";
@@ -132,6 +135,8 @@ const INPUT_FIELDS = new Set([
   "mode",
   "target",
   "target_refs",
+  "selection_mode",
+  "adjacent_audio",
   "limit",
   "dry_run",
   "anchor_seconds",
@@ -173,7 +178,7 @@ const REGISTRY_ENTRY = deepFreeze({
   contract: MACRO_PROGRAM_REGISTRY_CONTRACT,
   macro_id: ALPHA3_3_B1C_ITEMS_APPLY_MACRO_ID,
   program_id: "openreaper.macro.items.apply",
-  program_version: "1.6.0",
+  program_version: "1.7.0",
   implementation_status: "executable",
   risk: "destructive",
   input_schema: {
@@ -183,6 +188,8 @@ const REGISTRY_ENTRY = deepFreeze({
       mode: { type: "string", enum: ALPHA3_3_B1C_ITEMS_APPLY_MODES },
       target: { type: "string", enum: ["selected", "exact"] },
       target_refs: { type: "array", maxItems: AUDIO_BATCH_MAX_TARGETS, items: { type: "string" } },
+      selection_mode: { type: "string", enum: ["replace", "add", "remove"] },
+      adjacent_audio: { type: "string", enum: ["left", "right", "both"] },
       changes: {
         type: "array",
         minItems: 1,
@@ -371,6 +378,7 @@ export function createAlpha3_3B1cItemsApplyDiscoveryItems({ liveRunnableNow = fa
     held_property_fields: ALPHA3_3_B1C_ITEMS_APPLY_HELD_PROPERTY_FIELDS,
     examples: [
       { name: "sequence_selected_items", input: { mode: "sequence_with_gap", target: "selected", gap_seconds: 0.1, dry_run: true } },
+      { name: "select_exact_items", input: { mode: "select_exact", selection_mode: "replace", target_refs: ["item:guid:{ITEM-GUID}"], dry_run: false } },
       { name: "mute_exact_items", input: { mode: "set_properties", target_refs: ["item:guid:{ITEM-GUID}"], properties: { muted: true }, dry_run: false } },
       { name: "choose_exact_active_take", input: { mode: "set_active_take", active_take_assignments: [{ item_ref: "item:guid:{ITEM-GUID}", take_ref: "take:guid:{TAKE-GUID}" }], dry_run: false } },
       { name: "stack_on_existing_tracks", input: { mode: "stack_on_existing_tracks", track_assignments: [{ item_ref: "item:guid:{ITEM-GUID}", target_track_ref: "track:guid:{TRACK-GUID}" }], dry_run: false } },
@@ -611,6 +619,20 @@ export async function executeAlpha3_3B1cItemsApplyMacro({
   }
   if (typeof executeAtomic !== "function") {
     return failureEnvelope({ entry, request, startedAt, now, stages, state, activeBudget, code: "ITEM_APPLY_LIVE_EXECUTOR_REQUIRED", message: "macro.items.apply requires the managed OpenReaper live executor." });
+  }
+
+  if (normalized.input.mode === "select_exact") {
+    return executeExactSelectionMacro({
+      entry,
+      request,
+      executeAtomic,
+      now,
+      startedAt,
+      stages,
+      state,
+      activeBudget,
+      input: normalized.input,
+    });
   }
 
   if (["remove_silence", "normalize_level"].includes(normalized.input.mode)) {
@@ -1432,6 +1454,125 @@ async function executeLegacyRemoveSilencePlan({ plan, request, executeAtomic, st
   return null;
 }
 
+async function executeExactSelectionMacro({
+  entry,
+  request,
+  executeAtomic,
+  now,
+  startedAt,
+  stages,
+  state,
+  activeBudget,
+  input,
+}) {
+  state.targetScope = "exact";
+  state.totalTargetCount = input.target_refs.length;
+  state.returnedTargetCount = input.target_refs.length;
+  state.operations = [{
+    operation_id: "select-exact",
+    template_id: SET_EXACT_SELECTION_ID,
+    kind: "select_exact",
+    requested_value: input.selection_mode,
+  }];
+  pushStage(stages, "items-apply-targets", "live_ref_resolve", "completed", `Validated ${input.target_refs.length} canonical exact Item ref(s).`, []);
+  pushStage(stages, "items-apply-preflight", "template_execute", "completed", "Compiled one exact replace/add/remove selection request.", []);
+  if (input.dry_run) {
+    pushStage(stages, "items-apply-mutate", "template_execute", "skipped", "dry_run=true; Item selection was not changed.", []);
+    pushStage(stages, "items-apply-verify", "verify", "skipped", "No selection readback is claimed for a dry run.", []);
+    pushStage(stages, "items-apply-index", "index_update", "skipped", "Selection does not stale the Project Index.", []);
+    pushStage(stages, "items-apply-result", "result_project", "completed", "Projected one exact selection operation.", []);
+    return successEnvelope({
+      entry, request, startedAt, now, stages, state, activeBudget,
+      status: "dry_run_completed",
+      summary: `Previewed ${input.selection_mode} selection for ${input.target_refs.length} exact Item(s).`,
+      data: {
+        mode: "select_exact",
+        selection_mode: input.selection_mode,
+        requested_item_refs: input.target_refs,
+        mutation: { occurred: false, changes: 0 },
+        readback_status: "not_run",
+      },
+    });
+  }
+  let execution;
+  try {
+    execution = await runAtomic(executeAtomic, request, {
+      id: SET_EXACT_SELECTION_ID,
+      input: { mode: input.selection_mode, item_refs: input.target_refs },
+      refs: {},
+    });
+  } catch (error) {
+    const message = error?.message ?? "Exact Item selection dispatch failed.";
+    return failureEnvelope({
+      entry, request, startedAt, now, stages, state, activeBudget,
+      code: "ITEM_APPLY_ATOMIC_FAILED",
+      message,
+      blockers: [blocker("ITEM_APPLY_ATOMIC_FAILED", message)],
+      data: { mode: "select_exact", selection_mode: input.selection_mode, requested_item_refs: input.target_refs },
+    });
+  }
+  collectExecutionEvidence(state, execution);
+  if (execution?.ok !== true) {
+    const failure = atomicFailure(execution, SET_EXACT_SELECTION_ID);
+    pushStage(stages, "items-apply-mutate", "template_execute", "failed", failure.message, state.evidenceRefs);
+    return failureEnvelope({
+      entry, request, startedAt, now, stages, state, activeBudget,
+      code: failure.code,
+      message: failure.message,
+      blockers: failure.blockers,
+      data: { mode: "select_exact", selection_mode: input.selection_mode, requested_item_refs: input.target_refs },
+    });
+  }
+  const summary = executionSummary(execution);
+  const selectedRefs = Array.isArray(summary.selected_item_refs) ? [...summary.selected_item_refs] : null;
+  const selectedSet = selectedRefs ? new Set(selectedRefs) : new Set();
+  const valid = summary.mode === input.selection_mode
+    && summary.readback_status === "passed"
+    && Number.isSafeInteger(summary.selected_count)
+    && summary.selected_count === selectedRefs?.length
+    && selectedSet.size === selectedRefs?.length
+    && selectedRefs?.every((ref) => isExactGuidRef(ref, "item")) === true;
+  if (!valid) {
+    const message = "Exact Item selection aggregate readback was incomplete or inconsistent.";
+    pushStage(stages, "items-apply-mutate", "template_execute", "completed", "REAPER accepted the selection request.", state.evidenceRefs);
+    pushStage(stages, "items-apply-verify", "verify", "failed", message, state.evidenceRefs);
+    return failureEnvelope({
+      entry, request, startedAt, now, stages, state, activeBudget,
+      status: "partial_failure",
+      code: "ITEM_APPLY_READBACK_MISMATCH",
+      message,
+      blockers: [blocker("ITEM_APPLY_READBACK_MISMATCH", message)],
+      data: { mode: "select_exact", selection_mode: input.selection_mode, requested_item_refs: input.target_refs },
+    });
+  }
+  state.canonicalRefs = uniqueObjectRefs(executionObjectRefs(execution));
+  state.changes = [{
+    id: "select-exact",
+    status: "applied",
+    mutation: { status: "completed" },
+    live_readback: { status: "passed", source: "complete_selected_item_set", observed_value: summary.selected_count },
+    index_maintenance: { status: "skipped", scopes: [] },
+  }];
+  pushStage(stages, "items-apply-mutate", "template_execute", "completed", "Applied one exact Item selection mutation.", state.evidenceRefs);
+  pushStage(stages, "items-apply-verify", "verify", "completed", "Verified the complete final canonical selected Item set.", state.evidenceRefs);
+  pushStage(stages, "items-apply-index", "index_update", "skipped", "Selection does not stale the Project Index.", []);
+  pushStage(stages, "items-apply-result", "result_project", "completed", "Projected exact aggregate selection truth.", state.evidenceRefs);
+  return successEnvelope({
+    entry, request, startedAt, now, stages, state, activeBudget,
+    status: "completed",
+    summary: `Selected ${summary.selected_count} Item(s) using ${input.selection_mode} mode.`,
+    data: {
+      mode: "select_exact",
+      selection_mode: input.selection_mode,
+      requested_item_refs: input.target_refs,
+      selected_item_refs: selectedRefs,
+      selected_count: summary.selected_count,
+      changed_count: summary.changed_count,
+      readback_status: "passed",
+    },
+  });
+}
+
 async function executeAudioBatchMacro({
   entry,
   request,
@@ -1625,6 +1766,7 @@ async function executeRemoveSilencePlan({ request, input = request.input, execut
     operation: input.mode,
     target: input.target,
     target_refs: input.target_refs,
+    adjacent_audio: input.adjacent_audio,
     dry_run: input.dry_run,
     silence_scope: input.silence_scope,
     silence_threshold_dbfs: input.silence_threshold_dbfs,
@@ -1681,6 +1823,7 @@ function audioBatchData(input, state, extra = {}) {
   return {
     mode: input.mode,
     target_scope: state.targetScope,
+    adjacent_audio: input.adjacent_audio,
     target_count: state.totalTargetCount,
     returned_target_count: state.returnedTargetCount,
     zero_write: extra.zero_write === true,
@@ -2947,6 +3090,12 @@ function normalizeInput(input) {
   if (mode === "set_item_take_controls") {
     return failed("ITEM_APPLY_REQUEST_INVALID", "set_item_take_controls must be handled by the dedicated batch path.");
   }
+  if (mode !== "select_exact" && input.selection_mode !== undefined) {
+    return failed("ITEM_APPLY_REQUEST_INVALID", "selection_mode is valid only for select_exact.");
+  }
+  if (!isAudioBatchMode(mode) && input.adjacent_audio !== undefined) {
+    return failed("ITEM_APPLY_REQUEST_INVALID", "adjacent_audio is valid only for remove_silence or normalize_level.");
+  }
   const target = input.target ?? "selected";
   if (!["selected", "exact"].includes(target)) return failed("ITEM_APPLY_TARGET_SELECTOR_UNSUPPORTED", "target must be selected or exact.");
   const targetRefs = input.target_refs ?? [];
@@ -2985,12 +3134,22 @@ function normalizeInput(input) {
   let fadeMs = null;
   let normalizationMetric = null;
   let normalizationTarget = null;
+  let selectionMode = null;
+  let adjacentAudio = null;
   let transientDeltaLinear = null;
   let minTransientGapMs = null;
   if (mode !== "stack_on_existing_tracks" && input.track_assignments !== undefined) {
     return failed("ITEM_APPLY_REQUEST_INVALID", "track_assignments is valid only for stack_on_existing_tracks.");
   }
-  if (mode === "set_properties") {
+  if (mode === "select_exact") {
+    const unsupported = Object.keys(input).filter((field) => !["mode", "target_refs", "selection_mode", "dry_run"].includes(field));
+    if (unsupported.length > 0) return failed("ITEM_APPLY_REQUEST_INVALID", `select_exact does not accept field(s): ${unsupported.join(", ")}.`);
+    if (targetRefs.length < 1 || targetRefs.length > AUDIO_BATCH_MAX_TARGETS || targetRefs.some((ref) => !isExactGuidRef(ref, "item")) || new Set(targetRefs).size !== targetRefs.length) {
+      return failed("ITEM_APPLY_EXACT_TARGET_REQUIRED", "select_exact requires 1-64 unique canonical item:guid:{GUID} refs.");
+    }
+    selectionMode = input.selection_mode ?? "replace";
+    if (!["replace", "add", "remove"].includes(selectionMode)) return failed("ITEM_APPLY_SELECTION_MODE_INVALID", "selection_mode must be replace, add, or remove.");
+  } else if (mode === "set_properties") {
     const normalizedProperties = normalizeProperties(input.properties);
     if (!normalizedProperties.ok) return normalizedProperties;
     properties = normalizedProperties.value;
@@ -3035,7 +3194,7 @@ function normalizeInput(input) {
     if (!Number.isFinite(input.snap_offset_seconds) || input.snap_offset_seconds < 0) return failed("ITEM_APPLY_SNAP_OFFSET_INVALID", "set_snap_offset snap_offset_seconds must be a non-negative finite number.");
     snapOffsetSeconds = input.snap_offset_seconds;
   } else if (mode === "remove_silence") {
-    const unsupported = Object.keys(input).filter((field) => !["mode", "target", "target_refs", "limit", "dry_run", "silence_threshold_dbfs", "min_silence_ms", "silence_scope", "keep_before_ms", "keep_after_ms", "min_kept_audio_ms", "fade_ms"].includes(field));
+    const unsupported = Object.keys(input).filter((field) => !["mode", "target", "target_refs", "limit", "dry_run", "adjacent_audio", "silence_threshold_dbfs", "min_silence_ms", "silence_scope", "keep_before_ms", "keep_after_ms", "min_kept_audio_ms", "fade_ms"].includes(field));
     if (unsupported.length > 0) return failed("ITEM_APPLY_REQUEST_INVALID", `remove_silence does not accept field(s): ${unsupported.join(", ")}.`);
     if (target !== "selected" && target !== "exact") return failed("ITEM_APPLY_TARGET_SELECTOR_UNSUPPORTED", "remove_silence target must be selected or exact.");
     silenceThresholdDbfs = input.silence_threshold_dbfs ?? -60;
@@ -3045,6 +3204,7 @@ function normalizeInput(input) {
     keepAfterMs = input.keep_after_ms ?? 20;
     minKeptAudioMs = input.min_kept_audio_ms ?? 80;
     fadeMs = input.fade_ms ?? 5;
+    adjacentAudio = input.adjacent_audio ?? null;
     if (!Number.isFinite(silenceThresholdDbfs) || silenceThresholdDbfs < -150 || silenceThresholdDbfs > 0) return failed("ITEM_APPLY_SILENCE_THRESHOLD_INVALID", "silence_threshold_dbfs must be a finite number from -150 to 0.");
     if (!Number.isFinite(minSilenceMs) || minSilenceMs < 1 || minSilenceMs > 60000) return failed("ITEM_APPLY_MIN_SILENCE_INVALID", "min_silence_ms must be a finite number from 1 to 60000.");
     if (!["all", "leading", "trailing", "edges", "internal"].includes(silenceScope)) return failed("ITEM_APPLY_SILENCE_SCOPE_INVALID", "silence_scope must be all, leading, trailing, edges, or internal.");
@@ -3052,11 +3212,12 @@ function normalizeInput(input) {
       if (!Number.isFinite(value) || value < minimum || value > maximum) return failed("ITEM_APPLY_SILENCE_PARAMETER_INVALID", `${field} must be a finite number from ${minimum} to ${maximum}.`);
     }
   } else if (mode === "normalize_level") {
-    const unsupported = Object.keys(input).filter((field) => !["mode", "target", "target_refs", "limit", "dry_run", "normalization_metric", "normalization_target"].includes(field));
+    const unsupported = Object.keys(input).filter((field) => !["mode", "target", "target_refs", "limit", "dry_run", "adjacent_audio", "normalization_metric", "normalization_target"].includes(field));
     if (unsupported.length > 0) return failed("ITEM_APPLY_REQUEST_INVALID", `normalize_level does not accept field(s): ${unsupported.join(", ")}.`);
     if (target !== "selected" && target !== "exact") return failed("ITEM_APPLY_TARGET_SELECTOR_UNSUPPORTED", "normalize_level target must be selected or exact.");
     normalizationMetric = input.normalization_metric;
     normalizationTarget = input.normalization_target;
+    adjacentAudio = input.adjacent_audio ?? null;
     if (!["lufs_i", "rms_i", "peak", "true_peak", "lufs_m_max", "lufs_s_max"].includes(normalizationMetric)) return failed("ITEM_APPLY_NORMALIZATION_METRIC_INVALID", "normalization_metric must be one of lufs_i, rms_i, peak, true_peak, lufs_m_max, or lufs_s_max.");
     if (!Number.isFinite(normalizationTarget) || normalizationTarget > 0) return failed("ITEM_APPLY_NORMALIZATION_TARGET_INVALID", "normalization_target must be a finite dB/LUFS target at or below 0.");
   } else if (mode === "align_onsets") {
@@ -3072,12 +3233,20 @@ function normalizeInput(input) {
     if (mode === "move_to_anchor" && anchor.value === null) return failed("ITEM_APPLY_ANCHOR_REQUIRED", "move_to_anchor requires anchor_seconds.");
     if (mode !== "sequence_with_gap" && gap.value !== null) return failed("ITEM_APPLY_REQUEST_INVALID", `gap_seconds is valid only for sequence_with_gap.`);
   }
+  if (adjacentAudio !== null) {
+    if (!["left", "right", "both"].includes(adjacentAudio)) return failed("ITEM_APPLY_ADJACENT_AUDIO_INVALID", "adjacent_audio must be left, right, or both.");
+    if (target !== "exact" || targetRefs.length !== 1 || !isExactGuidRef(targetRefs[0], "item")) {
+      return { ...failed("ITEM_APPLY_ADJACENT_ANCHOR_REQUIRED", "adjacent_audio requires target=exact and exactly one canonical item:guid anchor ref."), zero_write: true };
+    }
+  }
   return {
     ok: true,
     input: {
       mode,
       target,
       target_refs: [...targetRefs],
+      selection_mode: selectionMode,
+      adjacent_audio: adjacentAudio,
       limit,
       dry_run: dryRun,
       anchor_seconds: anchor.value,
@@ -3131,7 +3300,7 @@ function isAudioBatchMode(mode) {
 }
 
 function maxTargetsForMode(mode) {
-  return isAudioBatchMode(mode) ? AUDIO_BATCH_MAX_TARGETS : MAX_TARGETS;
+  return isAudioBatchMode(mode) || mode === "select_exact" ? AUDIO_BATCH_MAX_TARGETS : MAX_TARGETS;
 }
 
 function normalizeTrackAssignments(value) {
@@ -3447,6 +3616,7 @@ function projectCompactBatchData(data) {
     mode: typeof value.mode === "string" ? value.mode : "set_item_take_controls",
     ...(value.zero_write === true ? { zero_write: true } : {}),
     ...(typeof value.target_scope === "string" ? { target_scope: value.target_scope } : {}),
+    ...(typeof value.adjacent_audio === "string" ? { adjacent_audio: value.adjacent_audio } : {}),
     ...(Number.isInteger(value.target_count) ? { target_count: value.target_count } : {}),
     ...(Number.isInteger(value.returned_target_count) ? { returned_target_count: value.returned_target_count } : {}),
     ...(Number.isFinite(value.silence_threshold_dbfs) ? { silence_threshold_dbfs: value.silence_threshold_dbfs } : {}),

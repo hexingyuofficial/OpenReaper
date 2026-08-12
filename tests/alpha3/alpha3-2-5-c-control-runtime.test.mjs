@@ -139,6 +139,42 @@ describe("Alpha3.2.5-C executable controls", () => {
     assert.deepEqual(validateMacroExecutionEnvelope(response), { valid: true, errors: [] });
   });
 
+  it("executes project time signature with the current BPM and verifies all marker fields", async () => {
+    const calls = [];
+    const response = await executeAlpha3_2_5CControlMacro({
+      request: {
+        id: "macro.controls.set",
+        input: {
+          target_kind: "project",
+          fields: { time_signature_numerator: 7, time_signature_denominator: 8 },
+          dry_run: false,
+        },
+        refs: [],
+      },
+      executeAtomic: controlAtomic(calls, { initialProjectBpm: 123, initialProjectLinearTempo: true }),
+      projectIndexRuntime: projectIndexInvalidator([]),
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(response.ok, true, JSON.stringify(response));
+    assert.deepEqual(calls.map((call) => call.id), [
+      "template.project.read_tempo_map",
+      "template.project.set_tempo_marker",
+      "template.project.read_tempo_map",
+    ]);
+    assert.deepEqual(calls[1].input, {
+      position_seconds: 0,
+      bpm: 123,
+      time_signature_numerator: 7,
+      time_signature_denominator: 8,
+      linear_tempo: true,
+    });
+    assert.deepEqual(response.result.data.readback_verification.map((row) => [row.field, row.observed]), [
+      ["time_signature_numerator", 7],
+      ["time_signature_denominator", 8],
+    ]);
+  });
+
   it("fails project grid truth when accepted atomic live readback disagrees", async () => {
     const response = await executeAlpha3_2_5CControlMacro({
       request: {
@@ -628,6 +664,9 @@ describe("Alpha3.2.5-C executable controls", () => {
 
 function controlAtomic(calls, options = {}) {
   let projectBpm = options.initialProjectBpm ?? 120;
+  let projectTimeSigNum = 4;
+  let projectTimeSigDenom = 4;
+  let projectLinearTempo = options.initialProjectLinearTempo === true;
   return async ({ id, input = {}, refs = {} }) => {
     calls.push({ id, input, refs });
     if (id === "template.project.read_summary") {
@@ -635,8 +674,8 @@ function controlAtomic(calls, options = {}) {
     }
     if (id === "template.project.read_tempo_map") {
       return execution(id, {
-        tempo_markers: [],
-        effective: [{ time_seconds: 0, bpm: options.projectReadbackBpm ?? projectBpm, time_sig_num: 4, time_sig_denom: 4 }],
+        tempo_markers: [{ index: 0, time_seconds: 0, bpm: options.projectReadbackBpm ?? projectBpm, time_sig_num: projectTimeSigNum, time_sig_denom: projectTimeSigDenom, linear_tempo: projectLinearTempo }],
+        effective: [{ time_seconds: 0, bpm: options.projectReadbackBpm ?? projectBpm, time_sig_num: projectTimeSigNum, time_sig_denom: projectTimeSigDenom }],
         truncated: false,
       });
     }
@@ -646,6 +685,22 @@ function controlAtomic(calls, options = {}) {
         project_ref: "project:current",
         bpm: input.bpm,
         requested_bpm: input.bpm,
+        updated: true,
+        readback_status: "passed",
+      });
+    }
+    if (id === "template.project.set_tempo_marker") {
+      projectBpm = input.bpm;
+      projectTimeSigNum = input.time_signature_numerator;
+      projectTimeSigDenom = input.time_signature_denominator;
+      projectLinearTempo = input.linear_tempo === true;
+      return execution(id, {
+        project_ref: "project:current",
+        position_seconds: input.position_seconds,
+        bpm: input.bpm,
+        time_sig_num: projectTimeSigNum,
+        time_sig_denom: projectTimeSigDenom,
+        linear_tempo: projectLinearTempo,
         updated: true,
         readback_status: "passed",
       });

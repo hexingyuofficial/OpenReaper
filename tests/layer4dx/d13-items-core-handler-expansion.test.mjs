@@ -27,6 +27,7 @@ const READ_IDS = Object.freeze([
   "template.items.list_items_on_track",
 ]);
 const WRITE_CAPABILITIES = Object.freeze([
+  "items.set_exact_selection",
   "items.set_item_volume",
   "items.set_item_take_controls_batch",
   "items.set_take_volume",
@@ -55,9 +56,10 @@ describe("D13 items core live handler expansion", () => {
     );
   });
 
-  it("adds a separate runtime allowlist for the sixteen D13 template ids", async () => {
+  it("adds a separate runtime allowlist for the seventeen D13 template ids", async () => {
     assert.deepEqual(CALL_TEMPLATE_RUNTIME_D13_ITEMS_CORE_TEMPLATE_IDS, [
       "template.items.list_selected_items",
+      "template.items.set_exact_selection",
       "template.items.list_items_on_track",
       "template.items.set_item_volume",
       "template.items.set_item_take_controls_batch",
@@ -99,17 +101,19 @@ describe("D13 items core live handler expansion", () => {
       bridge.seen.map((request) => `${request.operation.family}:${request.operation.name}`),
       [
         "query_state:items.list_selected_items",
+        "run_command:template.execute",
         "query_state:items.list_items_on_track",
-        ...Array(WRITE_CAPABILITIES.length).fill("run_command:template.execute"),
+        ...Array(WRITE_CAPABILITIES.length - 1).fill("run_command:template.execute"),
       ],
     );
     assert.deepEqual(bridge.seen.map((request) => request.pack.capability), [
       "items.list_selected_items",
+      "items.set_exact_selection",
       "items.list_items_on_track",
-      ...WRITE_CAPABILITIES,
+      ...WRITE_CAPABILITIES.slice(1),
     ]);
 
-    for (const request of bridge.seen.slice(0, 2)) {
+    for (const request of bridge.seen.filter((entry) => entry.pack.risk === "read")) {
       assert.equal(request.pack.id, "items");
       assert.equal(request.pack.risk, "read");
       assert.equal(request.undo.mode, "none");
@@ -117,18 +121,23 @@ describe("D13 items core live handler expansion", () => {
       assert.equal(request.artifacts.allow, false);
       assert.equal("idempotency_key" in request, false);
     }
-    assert.equal(bridge.seen[1].refs.some((ref) => ref.kind === "track" && ref.ref === TRACK_REF.ref), true);
+    const listTrackRequest = bridge.seen.find((entry) => entry.pack.capability === "items.list_items_on_track");
+    assert.equal(listTrackRequest.refs.some((ref) => ref.kind === "track" && ref.ref === TRACK_REF.ref), true);
 
-    for (const request of bridge.seen.slice(2)) {
+    for (const request of bridge.seen.filter((entry) => entry.pack.risk === "write")) {
       assert.equal(request.pack.id, "items");
       assert.equal(request.pack.risk, "write");
       assert.equal(request.undo.mode, "required");
       assert.equal(request.verification.mode, "required");
       assert.equal(request.artifacts.allow, false);
-      if (request.pack.capability === "items.set_item_take_controls_batch") {
+      if (request.pack.capability === "items.set_item_take_controls_batch" || request.pack.capability === "items.set_exact_selection") {
         assert.equal(request.refs.length, 0);
-        assert.equal(request.params.batch[0].item_ref, ITEM_REF.ref);
-        assert.equal(request.params.batch[0].take_ref, TAKE_REF.ref);
+        if (request.pack.capability === "items.set_item_take_controls_batch") {
+          assert.equal(request.params.batch[0].item_ref, ITEM_REF.ref);
+          assert.equal(request.params.batch[0].take_ref, TAKE_REF.ref);
+        } else {
+          assert.deepEqual(request.params.item_refs, [ITEM_REF.ref]);
+        }
       } else {
         assert.equal(request.refs.some((ref) => ref.kind === "item" && ref.ref === ITEM_REF.ref), true);
       }
@@ -238,6 +247,9 @@ function d13Input(id) {
   if (id === "template.items.list_selected_items") {
     return { limit: 8, include_track_refs: true };
   }
+  if (id === "template.items.set_exact_selection") {
+    return { mode: "replace", item_refs: [ITEM_REF.ref] };
+  }
   if (id === "template.items.list_items_on_track") {
     return { limit: 8, include_take_summary: true };
   }
@@ -290,7 +302,7 @@ function d13Input(id) {
 }
 
 function d13Refs(id) {
-  if (id === "template.items.list_selected_items" || id === "template.items.set_item_take_controls_batch") {
+  if (id === "template.items.list_selected_items" || id === "template.items.set_exact_selection" || id === "template.items.set_item_take_controls_batch") {
     return {};
   }
   if (id === "template.items.list_items_on_track") {
@@ -314,6 +326,7 @@ function context(extra = {}) {
 
 function handlerExport(capability) {
   return {
+    "items.set_exact_selection": "OPENREAPER_HANDLER_EXPORTS.d13_items_set_exact_selection",
     "items.set_item_volume": "OPENREAPER_HANDLER_EXPORTS.d13_items_set_item_volume",
     "items.set_item_take_controls_batch": "OPENREAPER_HANDLER_EXPORTS.d13_items_set_item_take_controls_batch",
     "items.set_take_volume": "OPENREAPER_HANDLER_EXPORTS.d13_items_set_take_volume",

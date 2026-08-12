@@ -855,6 +855,7 @@ local E2_FX_B1_WRITE_HANDLERS = {
   ["fx.set_bypass"] = set_fx_bypass,
   ["fx.set_parameter_normalized"] = set_fx_parameter_normalized,
   ["fx.set_parameter_assignments_batch"] = e2_fx_parameter_assignments_batch,
+  ["fx.set_reaeq_bands"] = e2_fx_set_reaeq_bands,
   ["fx.set_preset_by_name"] = set_fx_preset_by_name,
   ["fx.set_preset_by_index"] = set_fx_preset_by_index,
   ["fx.reorder"] = reorder_fx,
@@ -896,6 +897,7 @@ local D12_TRANSPORT_SAFE_HANDLERS = {
 }
 
 local D13_ITEMS_CORE_WRITE_HANDLERS = {
+  ["items.set_exact_selection"] = d13_items_set_exact_selection,
   ["items.set_item_volume"] = d13_items_set_item_volume,
   ["items.set_item_take_controls_batch"] = d13_items_set_item_take_controls_batch,
   ["items.set_take_volume"] = d13_items_set_take_volume,
@@ -2034,13 +2036,17 @@ local function dispatch_request(request, fallback_id, resume_continuation, runti
       },
     })
   end
-  -- Media source writes must not enter the handler when both Undo_BeginBlock2
-  -- and fallback Undo_BeginBlock failed (zero-write fail-closed before mutation).
-  if (e3_media_write_capability or d15_source_relink)
-      and phase_may_mutate
+  -- Every required-Undo mutation must stop before its handler when both
+  -- Undo_BeginBlock2 and fallback Undo_BeginBlock failed. Preflight/read-only
+  -- phases and the selection-only no-content phase do not require a block.
+  if phase_may_mutate
+      and not selection_only_no_content_undo
+      and required_undo_capability(request, key)
+      and is_object(request.undo)
+      and request.undo.mode == "required"
       and request.__openreaper_undo_block_open ~= true then
     request.__openreaper_undo_phase = nil
-    return bridge_error_envelope(request, "COMMAND_FAILED", "Required Undo block could not be opened before media source mutation.", {
+    return bridge_error_envelope(request, "COMMAND_FAILED", "Required Undo block could not be opened before mutation.", {
       recoverable = true,
       started_at = started_at,
       details = {

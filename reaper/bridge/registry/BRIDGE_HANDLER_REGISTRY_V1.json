@@ -867,6 +867,23 @@
       ]
     },
     {
+      "template_id": "template.items.set_exact_selection",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "items.set_exact_selection",
+      "pack": "items",
+      "risk": "write",
+      "route": "d13-items-core-handlers",
+      "handler_file": "items/d13_items_core_route.lua",
+      "handler_export": "d13_items_set_exact_selection",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d13-items-core-handler-expansion.test.mjs"
+      ]
+    },
+    {
       "template_id": "template.items.list_items_on_track",
       "operation": {
         "family": "query_state",
@@ -3215,6 +3232,24 @@
       "route": "e2-fx-b1-write-handlers",
       "handler_file": "fx/e2_fx_l1_read_route.lua",
       "handler_export": "e2_fx_parameter_assignments_batch",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e2-fx-l1-read-handler-expansion.test.mjs",
+        "tests/layer4dx/e2-fx-native-batch-handler.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.fx.set_reaeq_bands",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "fx.set_reaeq_bands",
+      "pack": "fx",
+      "risk": "write",
+      "route": "e2-fx-b1-write-handlers",
+      "handler_file": "fx/e2_fx_l1_read_route.lua",
+      "handler_export": "e2_fx_set_reaeq_bands",
       "artifact_policy": "none",
       "tests": [
         "tests/layer4dx/e2-fx-l1-read-handler-expansion.test.mjs",

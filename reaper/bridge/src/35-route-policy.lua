@@ -116,6 +116,7 @@ local D12_TRANSPORT_SAFE_CAPABILITIES = {
 
 local D13_ITEMS_CORE_WRITE_CAPABILITIES = {
   ["items.set_item_volume"] = { pack = "items", risk = "write" },
+  ["items.set_exact_selection"] = { pack = "items", risk = "write" },
   ["items.set_item_take_controls_batch"] = { pack = "items", risk = "write" },
   ["items.set_take_volume"] = { pack = "items", risk = "write" },
   ["items.set_take_pan"] = { pack = "items", risk = "write" },
@@ -212,6 +213,7 @@ local E2_FX_B1_WRITE_CAPABILITIES = {
   ["fx.set_bypass"] = { pack = "fx", risk = "write" },
   ["fx.set_parameter_normalized"] = { pack = "fx", risk = "write" },
   ["fx.set_parameter_assignments_batch"] = { pack = "fx", risk = "write" },
+  ["fx.set_reaeq_bands"] = { pack = "fx", risk = "write" },
   ["fx.set_preset_by_name"] = { pack = "fx", risk = "write" },
   ["fx.set_preset_by_index"] = { pack = "fx", risk = "write" },
   ["fx.reorder"] = { pack = "fx", risk = "write" },

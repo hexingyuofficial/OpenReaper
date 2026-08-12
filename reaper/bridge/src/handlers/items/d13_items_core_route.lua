@@ -518,6 +518,151 @@ local function d13_items_list_selected_items(request)
   }, nil, nil, nil, refs
 end
 
+local function d13_items_set_exact_selection(request)
+  local params = is_object(request.params) and request.params or {}
+  local mode = params.mode
+  local tokens = is_json_array(params.item_refs) and params.item_refs or nil
+  if mode ~= "replace" and mode ~= "add" and mode ~= "remove" then
+    return d13_items_error("PARAMS_INVALID", "Exact Item selection mode must be replace, add, or remove.", { zero_write = true })
+  end
+  if not tokens or #tokens < 1 or #tokens > 64 then
+    return d13_items_error("SELECTION_LIMIT_EXCEEDED", "Exact Item selection requires 1-64 canonical Item GUID refs.", {
+      requested_count = tokens and #tokens or 0,
+      maximum = 64,
+      zero_write = true,
+    })
+  end
+  local requested, requested_lookup = {}, {}
+  for index = 1, #tokens do
+    local token = tokens[index]
+    local guid = is_string(token) and token:match("^item:guid:(.+)$") or nil
+    if not guid or guid == "" or requested_lookup[token] then
+      return d13_items_error("REF_INVALID", "Exact Item selection accepts unique canonical item:guid refs only.", {
+        target_order = index,
+        item_ref = tostring(token),
+        zero_write = true,
+      })
+    end
+    local item = d13_items_find_item_by_guid(guid)
+    if not item then
+      return d13_items_error("ITEM_NOT_FOUND", "Exact Item selection could not resolve every requested GUID.", {
+        target_order = index,
+        item_ref = token,
+        zero_write = true,
+      })
+    end
+    requested[#requested + 1] = { item = item, item_ref = token }
+    requested_lookup[token] = true
+  end
+  local ok_count, raw_count = call_reaper("CountMediaItems", 0)
+  local count = ok_count and math.floor(first_number(raw_count) or -1) or -1
+  if count < 0 then
+    return d13_items_error("COMMAND_FAILED", "Exact Item selection could not enumerate the complete project Item set.", { zero_write = true }, false)
+  end
+  local all = {}
+  local expected = {}
+  for index = 0, count - 1 do
+    local ok_item, item = call_reaper("GetMediaItem", 0, index)
+    local item_ref = item and d13_items_item_ref_string(item) or nil
+    local ok_selected, selected = item and call_reaper("IsMediaItemSelected", item) or false, false
+    if item then ok_selected, selected = call_reaper("IsMediaItemSelected", item) end
+    if not ok_item or not item or not item_ref or not item_ref:match("^item:guid:") or not ok_selected then
+      return d13_items_error("COMMAND_FAILED", "Exact Item selection could not freeze complete selection truth.", {
+        item_index = index,
+        zero_write = true,
+      }, false)
+    end
+    local should_select
+    if mode == "replace" then should_select = requested_lookup[item_ref] == true
+    elseif mode == "add" then should_select = selected == true or requested_lookup[item_ref] == true
+    else should_select = selected == true and requested_lookup[item_ref] ~= true end
+    all[#all + 1] = { item = item, item_ref = item_ref, before = selected == true, after = should_select }
+    if should_select then expected[#expected + 1] = item_ref end
+  end
+  if #expected > 64 then
+    return d13_items_error("SELECTION_LIMIT_EXCEEDED", "The compiled final selection exceeds 64 Items; zero_write=true.", {
+      selected_count = #expected,
+      maximum = 64,
+      zero_write = true,
+    })
+  end
+  local function restore_selection()
+    local restored = true
+    for index = 1, #all do
+      local row = all[index]
+      local ok_restore, accepted = call_reaper("SetMediaItemSelected", row.item, row.before)
+      if not ok_restore or accepted == false then restored = false end
+    end
+    for index = 1, #all do
+      local row = all[index]
+      local ok_selected, selected = call_reaper("IsMediaItemSelected", row.item)
+      if not ok_selected or (selected == true) ~= row.before then restored = false end
+    end
+    call_reaper("UpdateArrange")
+    return restored
+  end
+  local function fail_after_mutation(code, message, details)
+    details = type(details) == "table" and details or {}
+    details.rollback_status = restore_selection() and "restored" or "restore_failed"
+    details.zero_write = details.rollback_status == "restored"
+    return d13_items_error(code, message, details, false)
+  end
+  local changed_count = 0
+  for index = 1, #all do
+    local row = all[index]
+    if row.before ~= row.after then
+      local ok_set, accepted = call_reaper("SetMediaItemSelected", row.item, row.after)
+      if not ok_set or accepted == false then
+        return fail_after_mutation("COMMAND_FAILED", "REAPER rejected an exact Item selection mutation; the prior selection was restored when possible.", {
+          item_ref = row.item_ref,
+        })
+      end
+      changed_count = changed_count + 1
+    end
+  end
+  call_reaper("UpdateArrange")
+  local selected_refs = json_array({})
+  local output_refs = json_array({})
+  local expected_lookup = {}
+  for index = 1, #expected do expected_lookup[expected[index]] = true end
+  local ok_selected_count, raw_selected_count = call_reaper("CountSelectedMediaItems", 0)
+  local selected_count = ok_selected_count and math.floor(first_number(raw_selected_count) or -1) or -1
+  if selected_count < 0 or selected_count ~= #expected then
+    return fail_after_mutation("VERIFY_FAILED", "Exact Item selection count readback did not match the compiled set; the prior selection was restored when possible.", {
+      expected_count = #expected,
+      observed_count = selected_count,
+    })
+  end
+  for index = 0, selected_count - 1 do
+    local ok_item, item = call_reaper("GetSelectedMediaItem", 0, index)
+    local ref = item and d13_items_item_ref_string(item) or nil
+    if not ok_item or not ref or not expected_lookup[ref] then
+      return fail_after_mutation("VERIFY_FAILED", "Exact Item selection aggregate readback did not match the compiled set; the prior selection was restored when possible.", {
+        target_order = index + 1,
+        observed_item_ref = ref,
+      })
+    end
+    expected_lookup[ref] = nil
+    selected_refs[#selected_refs + 1] = ref
+    output_refs[#output_refs + 1] = d13_items_item_object_ref(item)
+  end
+  for ref in pairs(expected_lookup) do
+    return fail_after_mutation("VERIFY_FAILED", "Exact Item selection aggregate readback omitted a compiled Item; the prior selection was restored when possible.", {
+      expected_item_ref = ref,
+    })
+  end
+  table.sort(selected_refs)
+  return {
+    mode = mode,
+    requested_item_refs = tokens,
+    selected_item_refs = selected_refs,
+    selected_count = selected_count,
+    changed_count = changed_count,
+    readback_status = "passed",
+    zero_write = false,
+  }, nil, json_array({}), json_array({}), output_refs
+end
+
 local function d13_items_list_items_on_track(request)
   local track, failure = d13_items_track_from_request_refs(request)
   if not track then

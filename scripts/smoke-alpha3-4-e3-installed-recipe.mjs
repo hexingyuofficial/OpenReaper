@@ -57,7 +57,7 @@ try {
   const catalog = productCatalog.createExecutableRecipeProductCatalog();
   report.product_counts = { macros: catalog.macros.length, templates: catalog.templates.length };
   report.catalog_hash = productCatalog.hashExecutableRecipeProductCatalog();
-  if (catalog.macros.length !== 15 || catalog.templates.length !== 239) {
+  if (catalog.macros.length !== 15 || catalog.templates.length !== 241) {
     throw new Error("installed executable Recipe product catalog count drift");
   }
 

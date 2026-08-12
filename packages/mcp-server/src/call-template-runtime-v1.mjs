@@ -564,6 +564,7 @@ export const CALL_TEMPLATE_RUNTIME_E2_FX_B1_ROUTE_TEMPLATE_IDS = deepFreeze([
   "template.fx.set_fx_bypass",
   "template.fx.set_fx_parameter_normalized",
   "template.fx.set_parameter_assignments_batch",
+  "template.fx.set_reaeq_bands",
   "template.fx.set_fx_preset_by_name",
   "template.fx.set_fx_preset_by_index",
   "template.fx.reorder_fx",
@@ -660,6 +661,7 @@ export const CALL_TEMPLATE_RUNTIME_D12_TRANSPORT_SAFE_TEMPLATE_IDS = deepFreeze(
 
 export const CALL_TEMPLATE_RUNTIME_D13_ITEMS_CORE_TEMPLATE_IDS = deepFreeze([
   "template.items.list_selected_items",
+  "template.items.set_exact_selection",
   "template.items.list_items_on_track",
   "template.items.set_item_volume",
   "template.items.set_item_take_controls_batch",
@@ -840,6 +842,8 @@ const CALL_TEMPLATE_RUNTIME_ALPHA3_4_D3_PROJECT_SWITCHING_TEMPLATE_IDS = deepFre
 
 const CALL_TEMPLATE_RUNTIME_ALPHA4_BATCH_TEMPLATE_IDS = deepFreeze([
   "template.items.set_item_take_controls_batch",
+  "template.items.set_exact_selection",
+  "template.fx.set_reaeq_bands",
 ]);
 
 const CALL_TEMPLATE_RUNTIME_ALPHA3_PRODUCT_TEMPLATE_IDS = new Set([

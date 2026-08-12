@@ -322,11 +322,11 @@ function runLua(body) {
 }
 
 describe("Alpha3.4-D3 native project-switching atoms", () => {
-  it("registers exactly three new project templates on the D30 module and keeps 239/91", () => {
+  it("registers exactly three new project templates on the D30 module and keeps 241/91", () => {
     const catalog = createAcceptedOfficialTemplateCatalogTemplates();
-    assert.equal(catalog.length, 239);
-    assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 239);
-    assert.equal(REGISTRY.entries.length, 239);
+    assert.equal(catalog.length, 241);
+    assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 241);
+    assert.equal(REGISTRY.entries.length, 241);
     assert.equal(new Set(REGISTRY.entries.map((entry) => entry.handler_file)).size, 91);
     assert.match(HANDLER_SOURCE, /D30_WRITE_SUCCESS_ENVELOPE_MIN_BYTES\s*=\s*65536/);
     assert.match(HANDLER_SOURCE, /d30_project_write_budget_gate/);

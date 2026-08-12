@@ -76,7 +76,7 @@ const PACKAGE_PROVENANCE_CONTRACT = "openreaper.package.provenance.v1";
 const ALPHA3_3_PACKAGE_CATALOG_COUNTS = Object.freeze({
   exact_tool_count: 6,
   accepted_macro_count: 15,
-  accepted_template_count: 239,
+  accepted_template_count: 241,
   bridge_handler_count: 91,
 });
 const skipZip = options.skip_zip === true;

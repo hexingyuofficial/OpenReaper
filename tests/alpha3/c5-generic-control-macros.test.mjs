@@ -87,7 +87,7 @@ describe("Alpha3 C5 generic control macro schemas", () => {
     assert.equal(controls.inputSchema.properties.changes.maxItems, 8);
     assert.deepEqual(controls.inputSchema.properties.changes.items.required, ["id", "target_kind", "fields"]);
     assert.deepEqual(controls.target_kinds, ["project", "track", "item", "take", "transport", "send"]);
-    assert.deepEqual(controls.fields_by_target.project, ["bpm", "grid_division", "grid_swing", "snap_enabled"]);
+    assert.deepEqual(controls.fields_by_target.project, ["bpm", "time_signature_numerator", "time_signature_denominator", "grid_division", "grid_swing", "snap_enabled"]);
     assert.equal(controls.expectedDelta.kind, "write");
   });
 
@@ -136,6 +136,32 @@ describe("Alpha3 C5 generic control macro schemas", () => {
     assert.deepEqual(plan.requests[1].input, { enabled: true });
   });
 
+  it("plans a project time-signature marker at zero and lets runtime supply unchanged BPM", () => {
+    const plan = planAlpha3_2_5CControlsSetMacro({
+      target_kind: "project",
+      fields: { time_signature_numerator: 7, time_signature_denominator: 8 },
+    });
+
+    assert.equal(plan.ok, true, JSON.stringify(plan));
+    assert.deepEqual(plan.requests.map((request) => request.id), ["template.project.set_tempo_marker"]);
+    assert.deepEqual(plan.requests[0].input, {
+      position_seconds: 0,
+      time_signature_numerator: 7,
+      time_signature_denominator: 8,
+    });
+    assert.deepEqual(plan.requests[0].fields, ["time_signature_numerator", "time_signature_denominator"]);
+
+    const withBpm = planAlpha3_2_5CControlsSetMacro({
+      target_kind: "project",
+      fields: { bpm: 132, time_signature_numerator: 5, time_signature_denominator: 4 },
+    });
+    assert.deepEqual(withBpm.requests.map((request) => request.id), [
+      "template.project.set_bpm",
+      "template.project.set_tempo_marker",
+    ]);
+    assert.equal(withBpm.requests[1].input.bpm, 132);
+  });
+
   it("makes the accepted grid atom's zero-swing default explicit in projected truth", () => {
     const plan = planAlpha3_2_5CControlsSetMacro({
       target_kind: "project",
@@ -153,6 +179,9 @@ describe("Alpha3 C5 generic control macro schemas", () => {
       [{ target_kind: "project", fields: {} }, "CONTROL_FIELDS_REQUIRED"],
       [{ target_kind: "project", fields: { bpm: 19 } }, "CONTROL_BPM_INVALID"],
       [{ target_kind: "project", fields: { bpm: 120, tempo: 121 } }, "CONTROL_FIELD_ALIAS_CONFLICT"],
+      [{ target_kind: "project", fields: { time_signature_numerator: 3 } }, "CONTROL_TIME_SIGNATURE_PAIR_REQUIRED"],
+      [{ target_kind: "project", fields: { time_signature_numerator: 0, time_signature_denominator: 4 } }, "CONTROL_TIME_SIGNATURE_NUMERATOR_INVALID"],
+      [{ target_kind: "project", fields: { time_signature_numerator: 3, time_signature_denominator: 3 } }, "CONTROL_TIME_SIGNATURE_DENOMINATOR_INVALID"],
       [{ target_kind: "project", fields: { grid_division: "1/0" } }, "CONTROL_GRID_DIVISION_INVALID"],
       [{ target_kind: "project", fields: { grid_swing: 0.25 } }, "CONTROL_GRID_DIVISION_REQUIRED"],
       [{ target_kind: "project", fields: { grid_division: "1/8", grid_swing: 1.1 } }, "CONTROL_GRID_SWING_INVALID"],

@@ -176,6 +176,7 @@ const EXTRACTED_D12_TRANSPORT_SAFE_HANDLERS = Object.freeze(new Map([
 ]));
 const EXTRACTED_D13_ITEMS_CORE_HANDLERS = Object.freeze(new Map([
   ["template.items.list_selected_items", ["items/d13_items_core_route.lua", "d13_items_list_selected_items"]],
+  ["template.items.set_exact_selection", ["items/d13_items_core_route.lua", "d13_items_set_exact_selection"]],
   ["template.items.list_items_on_track", ["items/d13_items_core_route.lua", "d13_items_list_items_on_track"]],
   ["template.items.set_item_volume", ["items/d13_items_core_route.lua", "d13_items_set_item_volume"]],
   ["template.items.set_item_take_controls_batch", ["items/d13_items_core_route.lua", "d13_items_set_item_take_controls_batch"]],
@@ -243,6 +244,7 @@ const EXTRACTED_E2_FX_B1_WRITE_HANDLERS = Object.freeze(new Map([
   ["template.fx.set_fx_bypass", ["fx/e2_fx_l1_read_route.lua", "set_fx_bypass"]],
   ["template.fx.set_fx_parameter_normalized", ["fx/e2_fx_l1_read_route.lua", "set_fx_parameter_normalized"]],
   ["template.fx.set_parameter_assignments_batch", ["fx/e2_fx_l1_read_route.lua", "e2_fx_parameter_assignments_batch"]],
+  ["template.fx.set_reaeq_bands", ["fx/e2_fx_l1_read_route.lua", "e2_fx_set_reaeq_bands"]],
   ["template.fx.set_fx_preset_by_name", ["fx/e2_fx_l1_read_route.lua", "set_fx_preset_by_name"]],
   ["template.fx.set_fx_preset_by_index", ["fx/e2_fx_l1_read_route.lua", "set_fx_preset_by_index"]],
   ["template.fx.reorder_fx", ["fx/e2_fx_l1_read_route.lua", "reorder_fx"]],
@@ -374,7 +376,7 @@ const EXTRACTED_HANDLER_ROWS = Object.freeze(new Map([
 describe("Layer 4D.R bridge handler registry", () => {
   it("defines one standard registered handler entry shape", () => {
     assert.equal(REGISTRY.contract, "openreaper.bridge_handler_registry.v1");
-    assert.equal(REGISTRY.entries.length, 239);
+    assert.equal(REGISTRY.entries.length, 241);
     for (const entry of REGISTRY.entries) {
       for (const field of REQUIRED_ENTRY_FIELDS) {
         assert.equal(Object.hasOwn(entry, field), true, `${entry.template_id}:${field}`);
@@ -406,9 +408,9 @@ describe("Layer 4D.R bridge handler registry", () => {
     const summary = validateBridgeHandlerRegistry({ cwd: ROOT.pathname });
     assert.deepEqual(summary, {
       contract: "openreaper.bridge_handler_registry.v1",
-      entryCount: 239,
+      entryCount: 241,
       legacyMonolithCount: 0,
-      extractedHandlerCount: 239,
+      extractedHandlerCount: 241,
       handlerModuleCount: 91,
       routeCount: 34,
       operationCount: 103,
@@ -668,6 +670,7 @@ describe("Layer 4D.R bridge handler registry", () => {
         "transport.set_record_mode",
         "transport.set_punch_record_range",
         "transport.schedule_recording",
+        "items.set_exact_selection",
         "items.set_item_volume",
         "items.set_item_take_controls_batch",
         "items.set_take_volume",
@@ -746,6 +749,7 @@ describe("Layer 4D.R bridge handler registry", () => {
         "fx.set_bypass",
         "fx.set_parameter_normalized",
         "fx.set_parameter_assignments_batch",
+        "fx.set_reaeq_bands",
         "fx.set_preset_by_name",
         "fx.set_preset_by_index",
         "fx.reorder",
@@ -799,7 +803,7 @@ describe("Layer 4D.R bridge handler registry", () => {
   it("keeps the generated bundle deterministic and registry-stamped", () => {
     const rebuilt = buildLiveBridgeBundle({ cwd: ROOT.pathname });
     assert.equal(rebuilt, BRIDGE_SOURCE);
-    assert.match(BRIDGE_SOURCE, /Handler registry: reaper\/bridge\/registry\/BRIDGE_HANDLER_REGISTRY_V1\.json \(239 registered template handler row\(s\); 0 legacy_monolith row\(s\); 239 extracted handler row\(s\); 91 handler module file\(s\)\)\./);
+    assert.match(BRIDGE_SOURCE, /Handler registry: reaper\/bridge\/registry\/BRIDGE_HANDLER_REGISTRY_V1\.json \(241 registered template handler row\(s\); 0 legacy_monolith row\(s\); 241 extracted handler row\(s\); 91 handler module file\(s\)\)\./);
     let lastIndex = BRIDGE_SOURCE.indexOf("local dispatch_request = (function()");
     assert.notEqual(lastIndex, -1);
     assert.match(BRIDGE_SOURCE, /local OPENREAPER_HANDLER_EXPORTS = \{\}/);
