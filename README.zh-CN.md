@@ -54,13 +54,11 @@ normalization 和 Remove Silence 流程。Remove Silence 提供软件包内的
 LUFS-I、RMS-I、peak、true peak、LUFS-M max 和 LUFS-S max。它声明的是
 source/item/take pre-FX 范围，不是 post-FX normalization。
 
-四个官方 Recipe 是：
+当前提供两个官方 Recipe：
 
 ```text
 recipe.mix.create_bus_processing
 recipe.midi.create_instrument_part
-recipe.media.create_layered_sound_effect_variants
-recipe.items.create_sound_variations
 ```
 
 官方、用户编写和 fork 的 Recipe 共用 generic runner、聚合读回和

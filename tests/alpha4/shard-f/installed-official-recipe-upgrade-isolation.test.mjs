@@ -56,7 +56,7 @@ test("real A-to-B installer upgrade preserves user Recipes and rejects stale off
     await assertSixTools(clientA);
     const officialA = await callRecipe(clientA, { operation: "list" });
     assert.equal(officialA.ok, true, JSON.stringify(officialA));
-    assert.equal(officialA.count, 4);
+    assert.equal(officialA.count, 2);
     assert.equal(officialA.items.every((entry) => entry.source === "official"), true);
     const upgradedOfficialA = officialA.items.find(
       (entry) => entry.recipe_id === "recipe.mix.create_bus_processing",
@@ -86,7 +86,7 @@ test("real A-to-B installer upgrade preserves user Recipes and rejects stale off
 
     const officialARoot = path.join(installRoot, "session", "executable-recipes.official");
     const officialABytes = await snapshotFiles(officialARoot);
-    assert.equal(officialABytes.length, 4);
+    assert.equal(officialABytes.length, 2);
     await writeFile(path.join(officialARoot, "old-install-only.marker"), "must-not-survive-upgrade\n", "utf8");
     await cp(officialARoot, staleOfficialRoot, { recursive: true });
     const staleRevisionPath = path.join(staleOfficialRoot, officialABytes[0].path);
@@ -111,8 +111,8 @@ test("real A-to-B installer upgrade preserves user Recipes and rejects stale off
     await assertSixTools(clientB);
     const listedB = await callRecipe(clientB, { operation: "list" });
     assert.equal(listedB.ok, true, JSON.stringify(listedB));
-    assert.equal(listedB.count, 5);
-    assert.equal(listedB.items.filter((entry) => entry.source === "official").length, 4);
+    assert.equal(listedB.count, 3);
+    assert.equal(listedB.items.filter((entry) => entry.source === "official").length, 2);
     assert.equal(listedB.items.filter((entry) => entry.source === "user").length, 1);
     assert.equal(listedB.items.every((entry) => entry.immutable === true), true);
     assert.doesNotMatch(JSON.stringify(listedB), /STORE_(?:CORRUPT|ERROR)/u);
@@ -131,7 +131,7 @@ test("real A-to-B installer upgrade preserves user Recipes and rejects stale off
     assert.deepEqual(exactIdentity(got), identity);
     assert.deepEqual(await snapshotFiles(userRoot), userBytesBefore);
     const officialBBytes = await snapshotFiles(officialBRoot);
-    assert.equal(officialBBytes.length, 4);
+    assert.equal(officialBBytes.length, 2);
     assert.notDeepEqual(officialBBytes, officialABytes);
   } finally {
     await clientA?.close().catch(() => {});

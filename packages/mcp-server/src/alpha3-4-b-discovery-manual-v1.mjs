@@ -17,8 +17,6 @@ export const ALPHA3_45_RECIPE_MANUAL_CONTRACT = "openreaper.alpha3.45.recipe_pro
 export const ALPHA3_45_OFFICIAL_RECIPE_IDS = deepFreeze([
   "recipe.mix.create_bus_processing",
   "recipe.midi.create_instrument_part",
-  "recipe.media.create_layered_sound_effect_variants",
-  "recipe.items.create_sound_variations",
 ]);
 
 const PLACEHOLDER_REF_RE = /\{[A-Z][A-Z0-9_-]*\}/u;
@@ -121,11 +119,15 @@ const OFFICIAL_RECIPE_MANUALS = deepFreeze({
   "recipe.mix.create_bus_processing": officialRecipeManual({
     intent: "Create or reuse one named processing bus for exact source Tracks, route without duplicate sends, and apply a verified stock or accepted FX chain.",
     required_inputs: ["source_tracks"],
-    defaults: { bus_name: "OpenReaper Bus", fx_chain: ["ReaEQ", "ReaComp"] },
+    defaults: { bus_name: "OpenReaper Bus", fx_chain: [{ plugin_query: "ReaEQ" }, { plugin_query: "ReaComp" }] },
     inputs: ["source_tracks", "bus_name", "fx_chain", "controls"],
     safety: "First use macro.project.query or an equivalent read to obtain exact canonical track:guid refs. Preserves source Tracks and stops later stages on an invalid supplied ref; inspect whole-Recipe Undo truth if the bus layout stage already applied.",
     undo: "One Recipe run must report whole-Recipe Undo truth; do not claim recovery unless the complete Recipe undo/rollback is natively verified.",
-    example_inputs: { source_tracks: ["COPY_FROM_QUERY"], bus_name: "DRUM BUS" },
+    example_inputs: {
+      source_tracks: ["COPY_FROM_QUERY"],
+      bus_name: "DRUM BUS",
+      fx_chain: [{ plugin_query: "ReaVerbate" }],
+    },
   }),
   "recipe.midi.create_instrument_part": officialRecipeManual({
     intent: "Create or reuse an instrument Track, prove the requested/default instrument is installed, and create a deterministic playable MIDI part.",
@@ -135,24 +137,6 @@ const OFFICIAL_RECIPE_MANUALS = deepFreeze({
     safety: "Fails before writes when the instrument cannot be proven installed; verifies Track, FX, MIDI Take, note count/range, and audibility prerequisites.",
     undo: "One Recipe run owns the Track/FX/MIDI mutation Undo truth and reports any partial or unknown recovery explicitly.",
     example_inputs: { track_name: "Pulse Lead", bars: 4, instrument: "ReaSynth" },
-  }),
-  "recipe.media.create_layered_sound_effect_variants": officialRecipeManual({
-    intent: "Search approved indexed media sources, place separate layers on separate Tracks, align and balance them, then create deterministic bounded variants.",
-    required_inputs: ["search_terms", "seed"],
-    defaults: { variant_count: 4, track_prefix: "SFX Layer", variant_spacing_seconds: 2 },
-    inputs: ["search_terms", "variant_count", "seed", "track_prefix", "variant_spacing_seconds"],
-    safety: "Uses only approved indexed media, resolves exact canonical files before mutation, and never deletes or mutates source media files.",
-    undo: "One Recipe run owns all project-local placement and variation changes; source media files are outside Undo and remain untouched.",
-    example_inputs: { search_terms: ["impact", "metal"], variant_count: 4, seed: 7301 },
-  }),
-  "recipe.items.create_sound_variations": officialRecipeManual({
-    intent: "Create seeded controlled variation groups from existing selected Items while preserving layer-to-Track structure by default.",
-    required_inputs: ["source_items", "seed"],
-    defaults: { variation_count: 4, source_offset_max_seconds: 0.15, volume_max_db: 2, pan_max: 0.4, pitch_max_semitones: 3, min_playrate: 0.92, max_playrate: 1.08, position_gap_seconds: 0.25, tone_param_index: 0, automation_param_index: 1 },
-    inputs: ["source_items", "variation_count", "seed", "source_offset_max_seconds", "volume_max_db", "pan_max", "pitch_max_semitones", "min_playrate", "max_playrate", "position_gap_seconds", "tone_param_index", "tone_min", "tone_max", "automation_param_index", "automation_value_variation", "automation_points"],
-    safety: "Pass explicit canonical Item/Take/Track refs plus source position and length for every seeded source row. Each source active Take needs at least one real FX; the generic Item-copy result must prove that chain and return the copied first-slot fx_ref used by Tone and Automation. Never construct that ref. Requires source_item_count * variation_count <= 64 and freezes the seed before writes.",
-    undo: "The complete seeded Item/Take, position, volume, pan, Tone/FX, and Automation/Envelope variation is one Recipe Undo unit; unknown Undo closure must be reported as outcome=unknown.",
-    example_inputs: { source_items: [{ item_ref: "COPY_FROM_QUERY", take_ref: "COPY_FROM_QUERY", track_ref: "COPY_FROM_QUERY", position_seconds: 0, length_seconds: 1 }], variation_count: 4, seed: 7301 },
   }),
 });
 

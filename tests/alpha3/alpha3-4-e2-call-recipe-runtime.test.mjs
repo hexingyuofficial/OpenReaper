@@ -172,7 +172,7 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
       assert.ok(binding);
       const listed = await binding.runtime.call_recipe({ operation: "list", limit: 16 });
       const official = listed.items.filter((item) => item.source === "official");
-      assert.equal(official.length, 4);
+      assert.equal(official.length, 2);
 
       for (const item of official) {
         const loaded = await binding.runtime.call_recipe({ operation: "get", ...exactIdentity(item) });
@@ -182,15 +182,40 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
         assert.equal(loaded.draft.id, item.recipe_id, item.recipe_id);
       }
 
-      const recipe04 = official.find((item) => item.recipe_id === "recipe.items.create_sound_variations");
+      const busRecipe = official.find((item) => item.recipe_id === "recipe.mix.create_bus_processing");
       const compact = await binding.runtime.call_recipe({
         operation: "get",
-        ...exactIdentity(recipe04),
-        budget: { max_response_bytes: 16_384 },
+        ...exactIdentity(busRecipe),
+        budget: { max_response_bytes: 1_024 },
       });
       assert.equal(compact.ok, true);
       assert.equal(compact.response_compacted, true);
       assert.equal(compact.draft, undefined);
+
+      for (const recipe_id of [
+        "recipe.media.create_layered_sound_effect_variants",
+        "recipe.items.create_sound_variations",
+      ]) {
+        const withdrawn = await binding.runtime.call_recipe({
+          operation: "run",
+          recipe_id,
+          version: "1.0.0",
+          revision: 1,
+          content_hash: "f".repeat(64),
+          validation_result_id: "validation:withdrawn-recipe",
+          inputs: {},
+        });
+        assert.equal(withdrawn.ok, false, recipe_id);
+        assert.equal(withdrawn.error.code, "REVISION_NOT_FOUND", recipe_id);
+        assert.equal(withdrawn.resume_safe, false, recipe_id);
+        assert.equal(withdrawn.execution_truth.mutation, "not_applied", recipe_id);
+        assert.equal(withdrawn.execution_truth.stage_dispatch_count, 0, recipe_id);
+        assert.equal(withdrawn.execution_truth.transport_call_count, 0, recipe_id);
+        assert.equal(withdrawn.execution_truth.native_mutation_count, 0, recipe_id);
+        assert.equal(withdrawn.execution_truth.readback_count, 0, recipe_id);
+        assert.equal(withdrawn.undo.claimed, false, recipe_id);
+        assert.equal(withdrawn.undo.opened, false, recipe_id);
+      }
     } finally {
       rmSync(root, { recursive: true, force: true });
       rmSync(`${root}.official`, { recursive: true, force: true });
@@ -420,6 +445,54 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
       rollback_attempted: false,
       rollback_proven: false,
     });
+  });
+
+  it("rejects string fx_chain nodes with a typed zero-write patch before Recipe Undo", async () => {
+    const draft = makeDraft();
+    draft.inputs.push({ id: "fx_chain", type: "json", required: false });
+    draft.stages[0].inputs.push("fx_chain");
+    draft.bindings.push({
+      from: { scope: "recipe_input", id: null, port: "fx_chain" },
+      to: { scope: "stage", id: "run_macro", port: "fx_chain" },
+    });
+    let dispatches = 0;
+    let undoBegins = 0;
+    const { runtime } = makeRuntime({
+      facts: (revision) => completeFacts(revision, draft),
+      dispatchers: {
+        macro: async () => { dispatches += 1; return macroEnvelope(); },
+        template: async () => { dispatches += 1; return templateEnvelope(); },
+      },
+      undoController: {
+        async begin() { undoBegins += 1; throw new Error("must not open"); },
+        async end() { throw new Error("must not close"); },
+      },
+    });
+    const saved = await saveFixture(runtime, draft);
+    assert.equal(saved.ok, true, JSON.stringify(saved));
+
+    const blocked = await runtime.call_recipe({
+      operation: "run",
+      ...exactIdentity(saved),
+      inputs: { track_name: "Bus", fx_chain: ["ReaVerbate", "ReaComp"] },
+    });
+
+    assert.equal(blocked.ok, false);
+    assert.equal(blocked.error.code, "PREFLIGHT_FAILED");
+    assert.equal(blocked.error.details.code, "RECIPE_FX_CHAIN_NODE_SHAPE_INVALID");
+    assert.equal(blocked.error.details.zero_write, true);
+    assert.deepEqual(blocked.error.details.request_patch, {
+      inputs: {
+        fx_chain: [
+          { plugin_query: "ReaVerbate" },
+          { plugin_query: "ReaComp" },
+        ],
+      },
+    });
+    assert.equal(blocked.resume_safe, false);
+    assert.equal(blocked.execution_truth.mutation, "not_applied");
+    assert.equal(dispatches, 0);
+    assert.equal(undoBegins, 0);
   });
 
   it("binds Recipe take_ref and verified fx_ref through the generic runner with one Whole-Recipe Undo", async () => {
@@ -2167,7 +2240,7 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
         arguments: { operation: "list", limit: 1 },
       }));
       assert.equal(listed.count, 1);
-      assert.equal(listed.total, 5);
+      assert.equal(listed.total, 3);
       assert.equal(listed.items[0].source, "official");
 
       const userListed = parseToolJson(await client.callTool({

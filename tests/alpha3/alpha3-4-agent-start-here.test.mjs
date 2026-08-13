@@ -173,9 +173,9 @@ test("canonical AGENT_START_HERE markers project under 16 KiB with exact 15 Macr
   for (const id of [
     "recipe.mix.create_bus_processing",
     "recipe.midi.create_instrument_part",
-    "recipe.media.create_layered_sound_effect_variants",
-    "recipe.items.create_sound_variations",
   ]) assert.match(instructions, new RegExp(id.replaceAll(".", "\\.")));
+  assert.doesNotMatch(instructions, /recipe\.media\.create_layered_sound_effect_variants/u);
+  assert.doesNotMatch(instructions, /recipe\.items\.create_sound_variations/u);
   assert.match(instructions, /direct Template/u);
   assert.match(instructions, /inputSchema/u);
   assert.match(instructions, /expectedDelta/u);

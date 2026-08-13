@@ -45,772 +45,215 @@ test("installed official harness connector replaces stale package-local paths", 
   assert.equal(environment.OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR, liveEnvironment.transportDir);
 });
 
-test("official live harness discovers and one-calls all four Recipes with Recipe 04 native batch Automation and 1/8/64/65 truth", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "openreaper-alpha345-official-harness-"));
-  roots.push(root);
-  const wrapper = path.join(root, "openreaper-mcp.sh");
-  await writeFile(wrapper, "#!/bin/sh\n", { mode: 0o700 });
-  const evidenceRoot = path.join(root, "evidence");
+test("official live harness discovers and one-calls exactly two active Recipes", async () => {
+  const fixtureValue = await makeHarnessFixture();
   const calls = [];
-  const identities = new Map(ALPHA3_45_OFFICIAL_RECIPE_IDS.map((recipe_id, index) => [recipe_id, {
-    recipe_id,
-    version: "1.0.0",
-    revision: 1,
-    content_hash: `sha256:${String(index + 1).repeat(64)}`,
-    validation_result_id: `validation:${index + 1}`,
-  }]));
-  const callRecipe = async (args) => {
-    calls.push(structuredClone(args));
-    if (args.operation === "list") return { ok: true, items: [...identities.values()].map((row) => ({ ...row, source: "official" })) };
-    if (args.operation === "get" && args.evidence_ref) return fakeEvidencePage(args.evidence_ref);
-    if (args.operation === "get") return { ok: true, source: "official", payload: { draft: { stages: [{ id: "stage" }] } }, ...identities.get(args.recipe_id) };
-    if (args.operation === "run" && args.inputs.variation_count === 65) {
-      return {
-        ok: false,
-        status: "failed",
-        error: { code: "OFFICIAL_VARIATION_ROW_LIMIT", details: { zero_write: true } },
-        undo: { claimed: true, status: "closed", proven: true },
-        execution_truth: { mutation: "not_applied", native_mutation_count: 0, readback_count: 0 },
-      };
-    }
-    const successful = fakeSuccessfulRun(args);
-    if (args.recipe_id === "recipe.items.create_sound_variations") {
-      replaceWithAggregateAutomationOutput(successful);
-      if (args.inputs.variation_count === 64) projectCapacityOutputs(successful);
-    }
-    if (args.recipe_id === "recipe.mix.create_bus_processing") {
-      successful.verified_outputs.find((output) => output.id === "layout_changes").value[0] = {
-        operation_id: "bus",
-        target_ref: "track:guid:{EXISTING-BUS}",
-        status: "matched_existing",
-        mutation: { status: "completed", completed_count: 0, total_count: 0 },
-        live_readback: { status: "passed" },
-        match: { status: "matched_existing", policy: "update_declared_fields" },
-      };
-    }
-    if (args.recipe_id === "recipe.midi.create_instrument_part") {
-      successful.verified_outputs.find((output) => output.id === "instrument_changes").value[0] = {
-        operation_id: "instrument",
-        target_ref: "track:guid:{EXISTING-INSTRUMENT}",
-        related_ref: "fx:track:guid:{EXISTING-INSTRUMENT}:0",
-        duplicate_policy: "reuse_exact",
-        status: "unchanged",
-        mutation: { status: "not_run", actions: [] },
-        live_readback: { status: "passed", observed_ref: "fx:track:guid:{EXISTING-INSTRUMENT}:0" },
-      };
-    }
-    if (args.recipe_id === "recipe.media.create_layered_sound_effect_variants") {
-      successful.verified_outputs = successful.verified_outputs.map((output) => output.id === "placement_changes"
-        ? { ...output, value: { omitted: true, reason: "inline_value_exceeds_call_recipe_budget" } }
-        : output);
-    }
-    return successful;
-  };
+  const transport = fakeRecipeTransport(calls);
   const report = await runAlpha345OfficialRecipesHarness({
-    installedWrapper: wrapper,
-    evidenceRoot,
-    fixture: fixture(),
-    callRecipe,
+    installedWrapper: fixtureValue.wrapper,
+    evidenceRoot: fixtureValue.evidenceRoot,
+    fixture: activeFixture(),
+    callRecipe: transport.callRecipe,
   });
+
   assert.equal(report.ok, true, JSON.stringify(report));
   assert.deepEqual(report.discovery.ids, ALPHA3_45_OFFICIAL_RECIPE_IDS);
-  assert.equal(report.official_runs.every((row) => row.public_call_count === 1 && row.undo.claimed === true), true);
-  assert.deepEqual(report.capacity.map((row) => [row.count, row.ok, row.fail_closed]), [
-    [1, true, false], [8, true, false], [64, true, false], [65, false, true],
-  ]);
-  assert.deepEqual(report.capacity.find((row) => row.count === 8).stage_counters.automation, {
-    native_mutation_count: 1,
-    readback_count: 1,
-    transport_call_count: 1,
-  });
-  assert.equal(report.capacity.find((row) => row.count === 8).native_mutation_count, 25);
-  assert.equal(report.capacity.find((row) => row.count === 64).inline_rows_proven, false);
-  assert.equal(report.capacity.find((row) => row.count === 64).evidence_linked, true);
-  assert.equal(report.capacity.find((row) => row.count === 64).aggregate_automation_proven, true);
-  assert.equal(report.capacity.find((row) => row.count === 64).projected_outputs_proven, true);
-  assert.equal(report.recipe04_truth.position_volume_pan_pitch_playrate, true);
-  assert.equal(report.recipe04_truth.take_tone_fx, true);
-  assert.equal(report.recipe04_truth.automation_envelope, true);
-  assert.deepEqual(report.official_runs.find((row) => row.recipe_id === "recipe.items.create_sound_variations").output_counts, {
-    variation_changes: 1,
-    control_changes: 1,
-    tone_changes: 1,
-    automation_changes: 1,
-  });
-  assert.equal(report.recipe04_truth.evidence_refs.some((ref) => ref.startsWith("recipe-evidence:recipe.items.create_sound_variations:")), true);
-  assert.equal(calls.filter((call) => call.operation === "run").every((call) => typeof call.validation_result_id === "string"), true);
-  const exactGets = calls.filter((call) => call.operation === "get" && !call.evidence_ref);
-  assert.equal(exactGets.length, ALPHA3_45_OFFICIAL_RECIPE_IDS.length);
-  assert.equal(exactGets.every((call) => call.budget?.max_response_bytes === 65_536), true);
-  assert.equal(exactGets.every((call) => typeof call.recipe_id === "string" && typeof call.content_hash === "string"), true);
-  assert.deepEqual(calls.filter((call) => call.operation === "run").map((call) => call.recipe_id), [
-    ...ALPHA3_45_OFFICIAL_RECIPE_IDS,
-    "recipe.items.create_sound_variations",
-    "recipe.items.create_sound_variations",
-    "recipe.items.create_sound_variations",
-    "recipe.items.create_sound_variations",
-  ]);
-  const persisted = JSON.parse(await readFile(path.join(evidenceRoot, "alpha3-45-official-recipes.json"), "utf8"));
+  assert.equal(report.discovery.count, 2);
+  assert.equal(report.official_runs.length, 2);
+  assert.equal(report.official_runs.every((row) => (
+    row.public_call_count === 1
+    && row.speed_ok === true
+    && row.undo?.status === "closed"
+    && row.undo?.proven === true
+    && row.evidence_refs.length > 0
+  )), true);
+  assert.deepEqual(
+    calls.filter((call) => call.operation === "run").map((call) => call.recipe_id),
+    ALPHA3_45_OFFICIAL_RECIPE_IDS,
+  );
+  assert.equal(calls.some((call) => /create_layered_sound_effect_variants|create_sound_variations/u.test(call.recipe_id ?? "")), false);
+
+  const persisted = JSON.parse(await readFile(path.join(fixtureValue.evidenceRoot, "alpha3-45-official-recipes.json"), "utf8"));
   assert.equal(persisted.ok, true);
   assert.equal(persisted.report_storage.mode, "bounded_truth_summary");
   assert.equal(Buffer.byteLength(JSON.stringify(persisted), "utf8") <= 64 * 1024, true);
-  assert.equal(persisted.official_runs.some((row) => Object.hasOwn(row, "output_values")), false);
-  assert.equal(persisted.recipe04_truth.automation_envelope, true);
-  assert.deepEqual(persisted.capacity.map((row) => [row.count, row.batch_proven, row.fail_closed]), [
-    [1, true, false], [8, true, false], [64, true, false], [65, false, true],
-  ]);
+  assert.equal(persisted.official_runs.every((row) => Object.hasOwn(row, "output_values") === false), true);
 });
 
-test("official live harness proves public validate/save/reconnect/list/get/run for every generic fork", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "openreaper-alpha345-official-fork-harness-"));
+test("official live harness proves generic fork validate/save/reconnect/list/get/run for both active Recipes", async () => {
+  const fixtureValue = await makeHarnessFixture();
+  const calls = [];
+  const transport = fakeRecipeTransport(calls);
+  const report = await runAlpha345OfficialRecipesHarness({
+    installedWrapper: fixtureValue.wrapper,
+    evidenceRoot: fixtureValue.evidenceRoot,
+    fixture: activeFixture(),
+    callRecipe: transport.callRecipe,
+    runForkProof: true,
+  });
+
+  assert.equal(report.ok, true, JSON.stringify(report));
+  assert.equal(report.fork_proof.ok, true, JSON.stringify(report.fork_proof));
+  assert.equal(report.fork_proof.forks.length, 2);
+  assert.deepEqual(report.fork_proof.forks.map((row) => row.semantic_recipe_id), ALPHA3_45_OFFICIAL_RECIPE_IDS);
+  assert.equal(report.fork_proof.forks.every((row) => row.fork_truth === true && row.speed_ok === true), true);
+  assert.equal(calls.filter((call) => call.operation === "validate").length, 2);
+  assert.equal(calls.filter((call) => call.operation === "save").length, 2);
+  assert.equal(calls.filter((call) => call.operation === "run" && /^recipe\.user\.forked_/u.test(call.recipe_id)).length, 2);
+});
+
+test("official live harness fails closed when an active official Recipe is missing", async () => {
+  const fixtureValue = await makeHarnessFixture();
+  const report = await runAlpha345OfficialRecipesHarness({
+    installedWrapper: fixtureValue.wrapper,
+    evidenceRoot: fixtureValue.evidenceRoot,
+    fixture: activeFixture(),
+    callRecipe: async (args) => args.operation === "list"
+      ? { ok: true, items: [officialIdentity(ALPHA3_45_OFFICIAL_RECIPE_IDS[0], 0)] }
+      : { ok: false },
+  });
+  assert.equal(report.ok, false);
+  assert.equal(report.error.code, "OFFICIAL_RECIPE_NOT_DISCOVERED");
+  assert.equal(report.project.final_state, "failed");
+});
+
+test("official live harness rejects a fixture missing an active Recipe input before execution", async () => {
+  const fixtureValue = await makeHarnessFixture();
+  await assert.rejects(
+    runAlpha345OfficialRecipesHarness({
+      installedWrapper: fixtureValue.wrapper,
+      evidenceRoot: fixtureValue.evidenceRoot,
+      fixture: { inputs: { [ALPHA3_45_OFFICIAL_RECIPE_IDS[0]]: {} } },
+      callRecipe: async () => ({ ok: true }),
+    }),
+    (error) => error.code === "OFFICIAL_FIXTURE_INPUT_REQUIRED",
+  );
+});
+
+async function makeHarnessFixture() {
+  const root = await mkdtemp(path.join(os.tmpdir(), "openreaper-alpha345-active-harness-"));
   roots.push(root);
   const wrapper = path.join(root, "openreaper-mcp.sh");
   await writeFile(wrapper, "#!/bin/sh\n", { mode: 0o700 });
-  const fixtureValue = fixture();
-  const calls = [];
-  let listCalls = 0;
-  const officialIdentities = new Map(ALPHA3_45_OFFICIAL_RECIPE_IDS.map((recipe_id, index) => [recipe_id, {
-    recipe_id,
-    version: "1.0.0",
-    revision: 1,
-    content_hash: `official-${String(index + 1).repeat(64)}`,
-    validation_result_id: `validation:${index + 1}`,
-  }]));
-  const userForks = new Map();
-  const userToOfficial = new Map();
+  return { root, wrapper, evidenceRoot: path.join(root, "evidence") };
+}
+
+function activeFixture() {
+  return {
+    inputs: {
+      "recipe.mix.create_bus_processing": {
+        source_tracks: ["track:guid:{SOURCE}"],
+        bus_name: "OpenReaper Bus",
+        fx_chain: [{ plugin_query: "ReaVerbate" }],
+      },
+      "recipe.midi.create_instrument_part": {
+        track_name: "OpenReaper Instrument",
+        instrument: "ReaSynth",
+        bars: 4,
+      },
+    },
+  };
+}
+
+function fakeRecipeTransport(calls) {
+  const official = new Map(ALPHA3_45_OFFICIAL_RECIPE_IDS.map((id, index) => [id, officialIdentity(id, index)]));
+  const users = new Map();
+  const userSemanticIds = new Map();
+  let saveIndex = 0;
   const callRecipe = async (args) => {
     calls.push(structuredClone(args));
     if (args.operation === "list") {
-      listCalls += 1;
-      const listedUserForks = [...userForks.entries()].map(([recipe_id, identity]) => ({ ...identity, recipe_id, source: "user", immutable: true }));
-      if (listCalls === 1) {
-        return {
-          ok: true,
-          items: [...[...officialIdentities.entries()].map(([recipe_id, identity]) => ({ ...identity, recipe_id, source: "official" }))],
-        };
-      }
-      if (listCalls === 2) {
-        return {
-          ok: true,
-          items: [
-            ...[...officialIdentities.entries()].map(([recipe_id, identity]) => ({ ...identity, recipe_id, source: "official" })),
-            ...listedUserForks.slice(0, 2),
-          ],
-          page: { cursor: "0", next_cursor: "6", has_more: true },
-        };
-      }
       return {
         ok: true,
         items: [
-          ...listedUserForks.slice(2),
+          ...[...official.values()],
+          ...[...users.values()].map((row) => ({ ...row, source: "user", immutable: true })),
         ],
-        page: { cursor: "6", next_cursor: null, has_more: false },
       };
     }
-    if (args.operation === "validate") return { ok: true, status: "validated", operation: "validate" };
+    if (args.operation === "validate") return { ok: true, status: "validated" };
     if (args.operation === "save") {
-      const recipe_id = args.draft.id;
+      const semanticId = ALPHA3_45_OFFICIAL_RECIPE_IDS[saveIndex];
+      saveIndex += 1;
       const identity = {
-        recipe_id,
-        version: "1.0.0",
+        recipe_id: args.draft.id,
+        version: args.version,
         revision: 1,
-        content_hash: `user-${recipe_id}`,
-        validation_result_id: `validation:user:${recipe_id}`,
+        content_hash: `user-${saveIndex}-${"c".repeat(64)}`,
+        validation_result_id: `validation:user:${saveIndex}`,
       };
-      userForks.set(recipe_id, identity);
-      userToOfficial.set(recipe_id, ALPHA3_45_OFFICIAL_RECIPE_IDS[userForks.size - 1]);
-      return { ok: true, status: "saved", operation: "save", immutable: true, identity, ...identity };
+      users.set(identity.recipe_id, identity);
+      userSemanticIds.set(identity.recipe_id, semanticId);
+      return { ok: true, status: "saved", immutable: true, identity, ...identity };
     }
-    if (args.operation === "get" && args.evidence_ref) return fakeEvidencePage(args.evidence_ref);
     if (args.operation === "get") {
-      const userIdentity = userForks.get(args.recipe_id);
-      if (userIdentity) {
-        return {
-          ok: true,
-          status: "loaded",
-          source: "user",
-          immutable: true,
-          identity: userIdentity,
-          draft: { contract: "recipe.executable.draft.v1", id: args.recipe_id },
-          ...userIdentity,
-        };
-      }
-      const official = officialIdentities.get(args.recipe_id);
-      return {
-        ok: true,
-        status: "loaded",
-        source: "official",
-        immutable: true,
-        draft: { contract: "recipe.executable.draft.v1", id: args.recipe_id },
-        ...official,
-      };
+      const user = users.get(args.recipe_id);
+      if (user) return { ok: true, source: "user", immutable: true, draft: { id: user.recipe_id }, ...user };
+      const identity = official.get(args.recipe_id);
+      return identity
+        ? { ok: true, source: "official", immutable: true, draft: officialDraft(identity.recipe_id), ...identity }
+        : { ok: false, error: { code: "REVISION_NOT_FOUND" } };
     }
-    if (args.operation === "run" && args.inputs?.variation_count === 65) {
-      return {
-        ok: false,
-        status: "failed",
-        error: { code: "OFFICIAL_VARIATION_ROW_LIMIT", details: { zero_write: true } },
-        undo: { claimed: true, status: "closed", proven: true },
-        execution_truth: { mutation: "not_applied", native_mutation_count: 0, readback_count: 0 },
-      };
-    }
-    const semanticId = userToOfficial.get(args.recipe_id) ?? args.recipe_id;
-    return fakeSuccessfulRun({ ...args, recipe_id: semanticId });
+    if (args.operation === "run") return successfulRun(userSemanticIds.get(args.recipe_id) ?? args.recipe_id);
+    throw new Error(`Unexpected operation: ${args.operation}`);
   };
+  return { callRecipe };
+}
 
-  const report = await runAlpha345OfficialRecipesHarness({
-    installedWrapper: wrapper,
-    evidenceRoot: path.join(root, "evidence"),
-    fixture: fixtureValue,
-    callRecipe,
-    runForkProof: true,
-  });
-  assert.equal(report.ok, true, JSON.stringify(report));
-  assert.equal(report.fork_proof.ok, true, JSON.stringify(report.fork_proof));
-  assert.equal(report.fork_proof.reconnected, true);
-  assert.equal(report.fork_proof.forks.length, ALPHA3_45_OFFICIAL_RECIPE_IDS.length);
-  assert.equal(report.fork_proof.forks.every((row) => row.fork_truth === true), true);
-  assert.deepEqual(report.fork_proof.forks.map((row) => row.semantic_recipe_id), ALPHA3_45_OFFICIAL_RECIPE_IDS);
-  assert.equal(calls.filter((call) => call.operation === "validate").length, 4);
-  assert.equal(calls.filter((call) => call.operation === "save").length, 4);
-  assert.equal(calls.filter((call) => call.operation === "list").length, 3);
-  assert.deepEqual(calls.filter((call) => call.operation === "list").map((call) => call.cursor ?? null), [null, null, "6"]);
-  assert.equal(calls.filter((call) => call.operation === "run").some((call) => /^recipe\.user\.forked_4_[a-f0-9]{8}$/u.test(call.recipe_id)), true);
-  const persisted = JSON.parse(await readFile(path.join(root, "evidence", "alpha3-45-official-recipes.json"), "utf8"));
-  assert.equal(persisted.fork_proof.forks.every((row) => Object.hasOwn(row, "output_values") === false), true);
-  assert.equal(persisted.project.changes.some((row) => /^recipe\.user\.forked_4_[a-f0-9]{8}$/u.test(row.recipe_id)), true);
-});
-
-test("official live harness fails when count 65 is not explicit zero-write", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "openreaper-alpha345-official-fail-"));
-  roots.push(root);
-  const wrapper = path.join(root, "openreaper-mcp.sh");
-  await writeFile(wrapper, "#!/bin/sh\n", { mode: 0o700 });
-  const identities = ALPHA3_45_OFFICIAL_RECIPE_IDS.map((recipe_id, index) => ({
-    recipe_id,
-    source: "official",
-    version: "1.0.0",
-    revision: 1,
-    content_hash: `sha256:${String(index + 1).repeat(64)}`,
-    validation_result_id: `validation:${index + 1}`,
-  }));
-  const report = await runAlpha345OfficialRecipesHarness({
-    installedWrapper: wrapper,
-    evidenceRoot: path.join(root, "evidence"),
-    fixture: fixture(),
-    callRecipe: async (args) => {
-      if (args.operation === "list") return { ok: true, items: identities };
-      if (args.operation === "get" && args.evidence_ref) return fakeEvidencePage(args.evidence_ref);
-      if (args.operation === "get") return { ok: true, source: "official", ...identities.find((row) => row.recipe_id === args.recipe_id) };
-      if (args.inputs.variation_count === 65) return { ok: false, error: { code: "BAD_FAILURE", details: { zero_write: false } }, undo: { claimed: false } };
-      return fakeSuccessfulRun(args);
-    },
-  });
-  assert.equal(report.ok, false);
-  assert.equal(report.error.code, "OFFICIAL_CAPACITY_FAIL_CLOSED_REQUIRED");
-  assert.equal(report.recovery.recovery_required, true);
-});
-
-test("official live harness rejects omitted Recipe 04 feature output as unverified", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "openreaper-alpha345-official-omitted-"));
-  roots.push(root);
-  const wrapper = path.join(root, "openreaper-mcp.sh");
-  await writeFile(wrapper, "#!/bin/sh\n", { mode: 0o700 });
-  const identities = ALPHA3_45_OFFICIAL_RECIPE_IDS.map((recipe_id, index) => ({
-    recipe_id,
-    source: "official",
-    version: "1.0.0",
-    revision: 1,
-    content_hash: `sha256:${String(index + 1).repeat(64)}`,
-    validation_result_id: `validation:${index + 1}`,
-  }));
-  const report = await runAlpha345OfficialRecipesHarness({
-    installedWrapper: wrapper,
-    evidenceRoot: path.join(root, "evidence"),
-    fixture: fixture(),
-    callRecipe: async (args) => {
-      if (args.operation === "list") return { ok: true, items: identities };
-      if (args.operation === "get" && args.evidence_ref) return fakeEvidencePage(args.evidence_ref);
-      if (args.operation === "get") return { ok: true, source: "official", ...identities.find((row) => row.recipe_id === args.recipe_id) };
-      if (args.inputs.variation_count === 65) {
-        return { ok: false, error: { code: "ROW_LIMIT", details: { zero_write: true } }, undo: { claimed: false } };
-      }
-      const successful = fakeSuccessfulRun(args);
-      successful.verified_outputs = successful.verified_outputs.map((output) => output.id === "tone_changes"
-        ? { ...output, value: { omitted: true, reason: "inline_value_exceeds_call_recipe_budget" } }
-        : output);
-      return successful;
-    },
-  });
-  assert.equal(report.ok, false);
-  assert.equal(report.error.code, "OFFICIAL_RECIPE_RUN_TRUTH_INCOMPLETE", JSON.stringify(report));
-  assert.equal(report.recipe04_truth, null);
-  assert.equal(report.official_runs.find((row) => row.recipe_id.endsWith("sound_variations")).output_omitted.tone_changes, true);
-});
-
-test("official live harness rejects missing and mismatched generic Take-FX copy proof", async () => {
-  for (const corruption of ["missing", "wrong_target"]) {
-    const root = await mkdtemp(path.join(os.tmpdir(), `openreaper-alpha345-official-${corruption}-copy-proof-`));
-    roots.push(root);
-    const wrapper = path.join(root, "openreaper-mcp.sh");
-    await writeFile(wrapper, "#!/bin/sh\n", { mode: 0o700 });
-    const identities = ALPHA3_45_OFFICIAL_RECIPE_IDS.map((recipe_id, index) => ({
-      recipe_id, source: "official", version: "1.0.0", revision: 1,
-      content_hash: `sha256:${String(index + 1).repeat(64)}`,
-      validation_result_id: `validation:${index + 1}`,
-    }));
-    const report = await runAlpha345OfficialRecipesHarness({
-      installedWrapper: wrapper,
-      evidenceRoot: path.join(root, "evidence"),
-      fixture: fixture(),
-      callRecipe: async (args) => {
-        if (args.operation === "list") return { ok: true, items: identities };
-        if (args.operation === "get" && args.evidence_ref) return fakeEvidencePage(args.evidence_ref);
-        if (args.operation === "get") return { ok: true, source: "official", ...identities.find((row) => row.recipe_id === args.recipe_id) };
-        const successful = fakeSuccessfulRun(args);
-        if (args.recipe_id === "recipe.items.create_sound_variations") {
-          const variation = successful.verified_outputs.find((output) => output.id === "variation_changes").value[0];
-          if (corruption === "missing") delete variation.take_fx_copy;
-          else variation.take_fx_copy.slots[0].target_fx_ref = "fx:take:guid:{OTHER}:0";
-        }
-        return successful;
-      },
-    });
-    assert.equal(report.ok, false, corruption);
-    assert.equal(report.error.code, "OFFICIAL_RECIPE_RUN_TRUTH_INCOMPLETE", JSON.stringify(report));
-  }
-});
-
-test("official live harness rejects applied rows with failed mutation truth", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "openreaper-alpha345-official-failed-mutation-"));
-  roots.push(root);
-  const wrapper = path.join(root, "openreaper-mcp.sh");
-  await writeFile(wrapper, "#!/bin/sh\n", { mode: 0o700 });
-  const identities = ALPHA3_45_OFFICIAL_RECIPE_IDS.map((recipe_id, index) => ({
-    recipe_id, source: "official", version: "1.0.0", revision: 1,
-    content_hash: `sha256:${String(index + 1).repeat(64)}`,
-    validation_result_id: `validation:${index + 1}`,
-  }));
-  const report = await runAlpha345OfficialRecipesHarness({
-    installedWrapper: wrapper,
-    evidenceRoot: path.join(root, "evidence"),
-    fixture: fixture(),
-    callRecipe: async (args) => {
-      if (args.operation === "list") return { ok: true, items: identities };
-      if (args.operation === "get") return { ok: true, source: "official", ...identities.find((row) => row.recipe_id === args.recipe_id) };
-      const successful = fakeSuccessfulRun(args);
-      successful.verified_outputs[0].value[0] = {
-        status: "applied", mutation: { status: "failed" }, live_readback: { status: "passed" },
-      };
-      return successful;
-    },
-  });
-  assert.equal(report.ok, false);
-  assert.equal(report.error.code, "OFFICIAL_RECIPE_RUN_TRUTH_INCOMPLETE");
-});
-
-test("official live harness rejects applied rows with missing mutation truth", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "openreaper-alpha345-official-missing-mutation-"));
-  roots.push(root);
-  const wrapper = path.join(root, "openreaper-mcp.sh");
-  await writeFile(wrapper, "#!/bin/sh\n", { mode: 0o700 });
-  const identities = ALPHA3_45_OFFICIAL_RECIPE_IDS.map((recipe_id, index) => ({
-    recipe_id, source: "official", version: "1.0.0", revision: 1,
-    content_hash: `sha256:${String(index + 1).repeat(64)}`,
-    validation_result_id: `validation:${index + 1}`,
-  }));
-  const report = await runAlpha345OfficialRecipesHarness({
-    installedWrapper: wrapper,
-    evidenceRoot: path.join(root, "evidence"),
-    fixture: fixture(),
-    callRecipe: async (args) => {
-      if (args.operation === "list") return { ok: true, items: identities };
-      if (args.operation === "get") return { ok: true, source: "official", ...identities.find((row) => row.recipe_id === args.recipe_id) };
-      const successful = fakeSuccessfulRun(args);
-      successful.verified_outputs[0].value[0] = {
-        status: "applied", mutation: {}, live_readback: { status: "passed" },
-      };
-      return successful;
-    },
-  });
-  assert.equal(report.ok, false);
-  assert.equal(report.error.code, "OFFICIAL_RECIPE_RUN_TRUTH_INCOMPLETE");
-});
-
-test("official live harness rejects a non-canonical automation Envelope ref", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "openreaper-alpha345-official-envelope-ref-"));
-  roots.push(root);
-  const wrapper = path.join(root, "openreaper-mcp.sh");
-  await writeFile(wrapper, "#!/bin/sh\n", { mode: 0o700 });
-  const identities = ALPHA3_45_OFFICIAL_RECIPE_IDS.map((recipe_id, index) => ({
-    recipe_id, source: "official", version: "1.0.0", revision: 1,
-    content_hash: `sha256:${String(index + 1).repeat(64)}`,
-    validation_result_id: `validation:${index + 1}`,
-  }));
-  const report = await runAlpha345OfficialRecipesHarness({
-    installedWrapper: wrapper,
-    evidenceRoot: path.join(root, "evidence"),
-    fixture: fixture(),
-    callRecipe: async (args) => {
-      if (args.operation === "list") return { ok: true, items: identities };
-      if (args.operation === "get" && args.evidence_ref) return fakeEvidencePage(args.evidence_ref);
-      if (args.operation === "get") return { ok: true, source: "official", ...identities.find((row) => row.recipe_id === args.recipe_id) };
-      const successful = fakeSuccessfulRun(args);
-      if (args.recipe_id === "recipe.items.create_sound_variations") {
-        successful.verified_outputs.find((output) => output.id === "automation_changes").value[0].live_readback.envelope_ref = "envelope:not-canonical";
-      }
-      return successful;
-    },
-  });
-  assert.equal(report.ok, false);
-  assert.equal(report.error.code, "OFFICIAL_RECIPE_RUN_TRUTH_INCOMPLETE");
-});
-
-test("official live harness rejects a copied Item whose position did not change from its seed", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "openreaper-alpha345-official-position-"));
-  roots.push(root);
-  const wrapper = path.join(root, "openreaper-mcp.sh");
-  await writeFile(wrapper, "#!/bin/sh\n", { mode: 0o700 });
-  const identities = ALPHA3_45_OFFICIAL_RECIPE_IDS.map((recipe_id, index) => ({
-    recipe_id, source: "official", version: "1.0.0", revision: 1,
-    content_hash: `sha256:${String(index + 1).repeat(64)}`,
-    validation_result_id: `validation:${index + 1}`,
-  }));
-  const report = await runAlpha345OfficialRecipesHarness({
-    installedWrapper: wrapper,
-    evidenceRoot: path.join(root, "evidence"),
-    fixture: fixture(),
-    callRecipe: async (args) => {
-      if (args.operation === "list") return { ok: true, items: identities };
-      if (args.operation === "get" && args.evidence_ref) return fakeEvidencePage(args.evidence_ref);
-      if (args.operation === "get") return { ok: true, source: "official", ...identities.find((row) => row.recipe_id === args.recipe_id) };
-      const successful = fakeSuccessfulRun(args);
-      if (args.recipe_id === "recipe.items.create_sound_variations") {
-        successful.verified_outputs.find((output) => output.id === "variation_changes").value[0].position_seconds = args.inputs.source_items[0].position_seconds;
-      }
-      return successful;
-    },
-  });
-  assert.equal(report.ok, false);
-  assert.equal(report.error.code, "OFFICIAL_RECIPE_RUN_TRUTH_INCOMPLETE");
-});
-
-test("official live harness rejects inflated capacity counters", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "openreaper-alpha345-official-inflated-"));
-  roots.push(root);
-  const wrapper = path.join(root, "openreaper-mcp.sh");
-  await writeFile(wrapper, "#!/bin/sh\n", { mode: 0o700 });
-  const identities = ALPHA3_45_OFFICIAL_RECIPE_IDS.map((recipe_id, index) => ({
-    recipe_id, source: "official", version: "1.0.0", revision: 1,
-    content_hash: `sha256:${String(index + 1).repeat(64)}`,
-    validation_result_id: `validation:${index + 1}`,
-  }));
-  const report = await runAlpha345OfficialRecipesHarness({
-    installedWrapper: wrapper,
-    evidenceRoot: path.join(root, "evidence"),
-    fixture: fixture(),
-    callRecipe: async (args) => {
-      if (args.operation === "list") return { ok: true, items: identities };
-      if (args.operation === "get" && args.evidence_ref) {
-        const evidence = fakeEvidencePage(args.evidence_ref);
-        if (args.evidence_ref.endsWith(":64")) {
-          evidence.items[0].counters.native_mutation_count = 65;
-          evidence.items[0].counters.readback_count = 65;
-        }
-        return evidence;
-      }
-      if (args.operation === "get") return { ok: true, source: "official", ...identities.find((row) => row.recipe_id === args.recipe_id) };
-      if (args.inputs.variation_count === 64) {
-        return {
-          ok: false,
-          error: {
-            code: "STAGE_FAILED",
-            message: "copy stage failed",
-            details: { stage_id: "copy", nested: { code: "BRIDGE_TIMEOUT" } },
-          },
-        };
-      }
-      if (args.inputs.variation_count === 65) return { ok: false, error: { code: "ROW_LIMIT", details: { zero_write: true } }, undo: { claimed: false } };
-      return fakeSuccessfulRun(args);
-    },
-  });
-  assert.equal(report.ok, false);
-  assert.equal(report.error.code, "OFFICIAL_CAPACITY_SUCCESS_REQUIRED");
-  assert.equal(report.capacity.at(-1).count, 64);
-  assert.equal(report.capacity.at(-1).batch_proven, false);
-  assert.equal(report.capacity.at(-1).error_message, "copy stage failed");
-  assert.match(report.capacity.at(-1).error_details_json, /BRIDGE_TIMEOUT/);
-});
-
-test("official live harness rejects count 64 success with underreported batch proof", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "openreaper-alpha345-official-underproof-"));
-  roots.push(root);
-  const wrapper = path.join(root, "openreaper-mcp.sh");
-  await writeFile(wrapper, "#!/bin/sh\n", { mode: 0o700 });
-  const identities = ALPHA3_45_OFFICIAL_RECIPE_IDS.map((recipe_id, index) => ({
-    recipe_id,
-    source: "official",
-    version: "1.0.0",
-    revision: 1,
-    content_hash: `sha256:${String(index + 1).repeat(64)}`,
-    validation_result_id: `validation:${index + 1}`,
-  }));
-  const report = await runAlpha345OfficialRecipesHarness({
-    installedWrapper: wrapper,
-    evidenceRoot: path.join(root, "evidence"),
-    fixture: fixture(),
-    callRecipe: async (args) => {
-      if (args.operation === "list") return { ok: true, items: identities };
-      if (args.operation === "get" && args.evidence_ref) {
-        const evidence = fakeEvidencePage(args.evidence_ref);
-        if (args.evidence_ref.endsWith(":64")) {
-          evidence.items.find((item) => item.stage_id === "tone").counters.native_mutation_count = 1;
-          evidence.items.find((item) => item.stage_id === "tone").counters.readback_count = 1;
-        }
-        return evidence;
-      }
-      if (args.operation === "get") return { ok: true, source: "official", ...identities.find((row) => row.recipe_id === args.recipe_id) };
-      if (args.inputs.variation_count === 65) {
-        return { ok: false, error: { code: "ROW_LIMIT", details: { zero_write: true } }, undo: { claimed: false } };
-      }
-      return fakeSuccessfulRun(args);
-    },
-  });
-  assert.equal(report.ok, false);
-  assert.equal(report.error.code, "OFFICIAL_CAPACITY_SUCCESS_REQUIRED");
-  assert.equal(report.capacity.at(-1).count, 64);
-  assert.equal(report.capacity.at(-1).batch_proven, false);
-});
-
-test("official live harness rejects retained evidence from a different run identity", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "openreaper-alpha345-official-evidence-identity-"));
-  roots.push(root);
-  const wrapper = path.join(root, "openreaper-mcp.sh");
-  await writeFile(wrapper, "#!/bin/sh\n", { mode: 0o700 });
-  const identities = ALPHA3_45_OFFICIAL_RECIPE_IDS.map((recipe_id, index) => ({
-    recipe_id,
-    source: "official",
-    version: "1.0.0",
-    revision: 1,
-    content_hash: `sha256:${String(index + 1).repeat(64)}`,
-    validation_result_id: `validation:${index + 1}`,
-  }));
-  const report = await runAlpha345OfficialRecipesHarness({
-    installedWrapper: wrapper,
-    evidenceRoot: path.join(root, "evidence"),
-    fixture: fixture(),
-    callRecipe: async (args) => {
-      if (args.operation === "list") return { ok: true, items: identities };
-      if (args.operation === "get" && args.evidence_ref) {
-        const evidence = fakeEvidencePage(args.evidence_ref);
-        evidence.run_id = `different:${evidence.run_id}`;
-        return evidence;
-      }
-      if (args.operation === "get") return { ok: true, source: "official", ...identities.find((row) => row.recipe_id === args.recipe_id) };
-      if (args.inputs.variation_count === 65) {
-        return { ok: false, error: { code: "ROW_LIMIT", details: { zero_write: true } }, undo: { claimed: false } };
-      }
-      return fakeSuccessfulRun(args);
-    },
-  });
-  assert.equal(report.ok, false);
-  assert.equal(report.error.code, "OFFICIAL_CAPACITY_SUCCESS_REQUIRED");
-  assert.equal(report.capacity.at(-1).count, 1);
-  assert.equal(report.capacity.at(-1).evidence_linked, false);
-  assert.equal(report.capacity.at(-1).batch_proven, false);
-});
-
-function fakeSuccessfulRun(args) {
-  const count = Math.max(1, args.inputs?.variation_count ?? 1);
+function officialIdentity(recipeId, index) {
   return {
-    ok: true,
-    status: "succeeded",
-    verified_outputs: fakeOutputsForRecipe(args.recipe_id, count, args.inputs?.source_items ?? []),
-    undo: {
-      claimed: true,
-      status: "closed",
-      proven: true,
-      scope: "whole_recipe",
-      mutation_truth: "applied",
-      evidence_refs: [`bridge:undo:${args.recipe_id}`],
-    },
-    execution_truth: {
-      mutation: "applied",
-      native_mutation_count: recipeIsItemVariations(args.recipe_id) ? count * 4 : count,
-      readback_count: recipeIsItemVariations(args.recipe_id) ? count * 4 : count,
-    },
-    run_id: `fake-run:${args.recipe_id}:${count}`,
-    recipe_id: args.recipe_id,
-    evidence_ref: `recipe-evidence:${args.recipe_id}:${count}`,
-  };
-}
-
-function recipeIsItemVariations(recipeId) {
-  return recipeId === "recipe.items.create_sound_variations";
-}
-
-function fakeOutputsForRecipe(recipeId, count = 1, sourceItems = []) {
-  const ids = {
-    "recipe.mix.create_bus_processing": ["layout_changes", "routing_changes", "processing_evidence"],
-    "recipe.midi.create_instrument_part": ["layout_changes", "instrument_changes", "midi_evidence"],
-    "recipe.media.create_layered_sound_effect_variants": ["placement_changes", "variation_changes", "control_evidence"],
-    "recipe.items.create_sound_variations": ["variation_changes", "control_changes", "tone_changes", "automation_changes"],
-  }[recipeId];
-  return ids.map((id) => ({
-    id,
-    verified: true,
-    value: id.endsWith("_evidence")
-      ? `evidence:${recipeId}:${id}`
-      : Array.from({ length: recipeId === "recipe.items.create_sound_variations" ? count * Math.max(1, sourceItems.length) : 1 }, (_, index) => fakeVerifiedOutput(id, index, sourceItems[index % Math.max(1, sourceItems.length)])),
-  }));
-}
-
-function fakeVerifiedOutput(id, index = 0, source = { item_ref: "item:guid:{SEED}", take_ref: "take:guid:{SEED}", track_ref: "track:guid:{SEED}", position_seconds: 1 }) {
-  const itemRef = `item:guid:{COPY-${index + 1}}`;
-  const takeRef = `take:guid:{COPY-${index + 1}}`;
-  if (id === "variation_changes") return {
-    id: `variation-${index + 1}`, status: "ok", mutation: "done", readback: "pass",
-    new_item_ref: itemRef, new_take_ref: takeRef, position_seconds: source.position_seconds + index + 1,
-    take_fx_copy: {
-      status: "passed",
-      copied_count: 1,
-      slots: [{ slot_index: 0, target_fx_ref: `fx:${takeRef}:0` }],
-    },
-  };
-  if (id === "control_changes") return {
-    id: `controls-${index + 1}`, item_ref: itemRef, take_ref: takeRef, status: "ok", mutation: "done", readback: "pass",
-    item: { volume_db: -1 }, take: { pan: 0.2, pitch_semitones: 2, playrate: 1.05 },
-  };
-  if (id === "tone_changes") return {
-    id: `tone-${index + 1}`, status: "ok", mutation: "done", readback: "pass",
-    fx_ref: `fx:${takeRef}:0`, param_index: 0, normalized_value: 0.5,
-  };
-  if (id === "automation_changes") return {
-    operation_id: `automation-${index + 1}`, mode: "insert_fx_parameter_points", target_ref: `fx:${takeRef}:0`,
-    requested: { point_count: 2 }, status: "applied", mutation: { status: "completed" },
-    live_readback: { status: "passed", envelope_ref: "envelope:guid:{AUTO}" },
-  };
-  return { id: `${id}:${index + 1}`, status: "ok", mutation: "done", readback: "pass" };
-}
-
-function fakeEvidencePage(evidenceRef) {
-  const parts = evidenceRef.split(":");
-  const count = Number([...parts].reverse().find((part) => /^\d+$/u.test(part))) || 1;
-  const aggregateAutomation = parts.at(-1) === "aggregate";
-  const recipeId = parts[1];
-  const nativeCount = aggregateAutomation ? (count * 3) + 1 : count * 4;
-  return {
-    ok: true,
-    evidence_ref: evidenceRef,
-    run_id: `fake-run:${recipeId}:${count}`,
     recipe_id: recipeId,
-    run_summary: {
-      mutation_truth: "applied_verified",
-      counters: {
-        native_mutation_count: nativeCount,
-        readback_count: nativeCount,
-      },
-    },
-    items: ["copy", "controls", "tone", "automation"].map((stage_id) => ({
-      stage_id,
-      counters: {
-        native_mutation_count: aggregateAutomation && stage_id === "automation" ? 1 : count,
-        readback_count: aggregateAutomation && stage_id === "automation" ? 1 : count,
-        transport_call_count: 1,
-      },
-    })),
+    version: "1.0.0",
+    revision: 1,
+    content_hash: `sha256:${String(index + 1).repeat(64)}`,
+    validation_result_id: `validation:${index + 1}`,
+    source: "official",
+    immutable: true,
   };
 }
 
-function replaceWithAggregateAutomationOutput(successful) {
-  const toneRows = successful.verified_outputs.find((output) => output.id === "tone_changes").value;
-  const targets = toneRows.map((tone, index) => ({
-    fx_ref: tone.fx_ref,
-    envelope_ref: `envelope:guid:{AUTO-${index + 1}}`,
-    requested: 2,
-    before: 0,
-    after: 2,
-    processed_count: 2,
-  }));
-  successful.verified_outputs = successful.verified_outputs.map((output) => output.id === "automation_changes"
-    ? {
-        ...output,
-        value: [{
-          operation_id: "automation-fx-parameter-points-batch",
-          template_id: "template.automation.insert_fx_parameter_envelope_points_batch",
-          target_ref: "fx:batch",
-          mode: "insert_fx_parameter_points",
-          requested: {
-            target_count: targets.length,
-            total_requested_points: targets.length * 2,
-            execution_shape: "single_bridge_request_native_batch",
-          },
-          status: "applied",
-          mutation: {
-            status: "completed",
-            target_count: targets.length,
-            total_processed_points: targets.length * 2,
-          },
-          live_readback: {
-            status: "passed",
-            source: "fx_parameter_batch_readback",
-            target_count: targets.length,
-            total_requested_points: targets.length * 2,
-            total_processed_points: targets.length * 2,
-            targets,
-          },
-        }],
-      }
-    : output);
-  const count = toneRows.length;
-  successful.execution_truth.native_mutation_count = count * 3 + 1;
-  successful.execution_truth.readback_count = count * 3 + 1;
-  successful.evidence_ref = `${successful.evidence_ref}:aggregate`;
-}
-
-function projectCapacityOutputs(successful) {
-  successful.verified_outputs = successful.verified_outputs.map((output) => {
-    if (["variation_changes", "control_changes", "automation_changes"].includes(output.id)) {
-      return { ...output, value: { omitted: true, reason: "inline_value_exceeds_call_recipe_budget" } };
-    }
-    if (output.id === "tone_changes") {
-      return {
-        ...output,
-        value: output.value.map((row, index) => ({
-          id: `tone_${index + 1}`,
-          status: row.status,
-          mutation: row.mutation,
-          readback: row.readback,
-          index: "done",
-        })),
-      };
-    }
-    return output;
-  });
-}
-
-function fixture() {
-  const item = {
-    item_ref: "item:guid:{SEED}", take_ref: "take:guid:{SEED}", track_ref: "track:guid:{SEED}", position_seconds: 1, length_seconds: 2,
-  };
+function officialDraft(recipeId) {
   return {
-    project_path: "/tmp/alpha345-fixture.RPP",
-    recipe04_seed: {
-      ...item,
-      take_fx_ref: "fx:take:guid:{SEED}:0",
-      take_fx_identity: {
-        fx_ref: "fx:take:guid:{SEED}:0",
-        slot_index: 0,
-        plugin_name: "VST: ReaEQ (Cockos)",
-        enabled: true,
-        parameter_count: 8,
-      },
-    },
-    inputs: {
-      "recipe.mix.create_bus_processing": { source_tracks: [item.track_ref], bus_name: "Recipe Bus" },
-      "recipe.midi.create_instrument_part": { track_name: "Recipe Instrument", bars: 2, instrument: "ReaSynth" },
-      "recipe.media.create_layered_sound_effect_variants": { search_terms: ["alpha345", "impact"], variant_count: 1, seed: 345 },
-      "recipe.items.create_sound_variations": { source_items: [item], variation_count: 1, seed: 345 },
-    },
+    contract: "recipe.executable.draft.v1",
+    id: recipeId,
+    title: recipeId,
+    stages: [{ id: "stage" }],
+  };
+}
+
+function successfulRun(recipeId) {
+  const outputs = recipeId === "recipe.mix.create_bus_processing"
+    ? [
+      verified("layout_changes", [applied("track:guid:{BUS}")]),
+      verified("routing_changes", [applied("send:guid:{SEND}")]),
+      verified("processing_evidence", "artifact:fx-chain"),
+    ]
+    : [
+      verified("layout_changes", [applied("track:guid:{INSTRUMENT}")]),
+      verified("instrument_changes", [applied("fx:track:guid:{INSTRUMENT}:0")]),
+      verified("midi_evidence", "artifact:midi-part"),
+    ];
+  return {
+    ok: true,
+    status: "completed",
+    recipe_id: recipeId,
+    run_id: `run:${recipeId}`,
+    verified_outputs: outputs,
+    evidence_ref: `recipe-evidence:${recipeId}`,
+    undo: { claimed: true, status: "closed", proven: true, evidence_refs: [`undo:${recipeId}`] },
+    execution_truth: { mutation: "applied_verified", native_mutation_count: 3, readback_count: 3 },
+  };
+}
+
+function verified(id, value) {
+  return { id, verified: true, value };
+}
+
+function applied(targetRef) {
+  return {
+    target_ref: targetRef,
+    status: "applied",
+    mutation: { status: "completed" },
+    live_readback: { status: "passed" },
   };
 }

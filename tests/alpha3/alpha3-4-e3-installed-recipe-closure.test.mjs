@@ -29,8 +29,6 @@ const EXACT_TOOLS = ["call_recipe", "call_template", "get_state", "list_recipes"
 const OFFICIAL_RECIPE_IDS = [
   "recipe.mix.create_bus_processing",
   "recipe.midi.create_instrument_part",
-  "recipe.media.create_layered_sound_effect_variants",
-  "recipe.items.create_sound_variations",
 ];
 const roots = [];
 
@@ -202,8 +200,8 @@ describe("Alpha3.4-E3 installed recipe closure", () => {
 
       const listedBefore = await callRecipe(firstClient, { operation: "list", root: callerRoot });
       assert.equal(listedBefore.ok, true);
-      assert.equal(listedBefore.count, 5);
-      assert.equal(listedBefore.items.filter((item) => item.source === "official").length, 4);
+      assert.equal(listedBefore.count, 3);
+      assert.equal(listedBefore.items.filter((item) => item.source === "official").length, 2);
       assert.equal(listedBefore.items.filter((item) => item.source === "user").length, 1);
       assert.equal(listedBefore.items.every((item) => item.immutable === true), true);
       const discovered = await callJson(firstClient, "list_recipes", { limit: 25 });
@@ -236,15 +234,15 @@ describe("Alpha3.4-E3 installed recipe closure", () => {
         capabilities: [...catalogMacro.capabilities],
       });
       const exactOfficial = await callJson(firstClient, "list_recipes", {
-        ids: ["recipe.items.create_sound_variations"],
+        ids: ["recipe.mix.create_bus_processing"],
         fields: ["steps", "assertions", "recovery"],
       });
-      assert.equal(exactOfficial.items[0].steps.length, 4);
+      assert.equal(exactOfficial.items[0].steps.length, 3);
       assert.match(exactOfficial.items[0].assertions.undo, /Recipe Undo/u);
       assert.match(exactOfficial.items[0].recovery, /preflight/u);
       assert.equal(
         exactOfficial.product_surface.recipe_productization.requested_manuals[0].id,
-        "recipe.items.create_sound_variations",
+        "recipe.mix.create_bus_processing",
       );
       const identity = exactIdentity(saved);
       const bytesBefore = await snapshotFiles(fixture.recipeRoot);
@@ -265,8 +263,8 @@ describe("Alpha3.4-E3 installed recipe closure", () => {
         catalog: { macros: [], templates: [], capabilities: [] },
       });
       assert.equal(listedAfter.ok, true);
-      assert.equal(listedAfter.count, 5);
-      assert.equal(listedAfter.items.filter((item) => item.source === "official").length, 4);
+      assert.equal(listedAfter.count, 3);
+      assert.equal(listedAfter.items.filter((item) => item.source === "official").length, 2);
       assert.equal(listedAfter.items.filter((item) => item.source === "user").length, 1);
       assert.equal(listedAfter.items.every((item) => item.immutable === true), true);
 
@@ -289,7 +287,7 @@ describe("Alpha3.4-E3 installed recipe closure", () => {
       assert.equal(deleted.ok, true, JSON.stringify(deleted));
       assert.equal(deleted.deleted, true);
       const listedAfterDelete = await callRecipe(secondClient, { operation: "list" });
-      assert.equal(listedAfterDelete.count, 4);
+      assert.equal(listedAfterDelete.count, 2);
       assert.equal(listedAfterDelete.items.every((item) => item.source === "official"), true);
       assert.equal(listedAfterDelete.items.some((item) => item.recipe_id === identity.recipe_id), false);
       assert.equal(await exists(callerRoot), false);

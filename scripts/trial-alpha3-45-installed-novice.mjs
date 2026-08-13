@@ -36,8 +36,6 @@ export const ALPHA345_NOVICE_MACRO_IDS = Object.freeze([
 export const ALPHA345_NOVICE_OFFICIAL_RECIPE_IDS = Object.freeze([
   "recipe.mix.create_bus_processing",
   "recipe.midi.create_instrument_part",
-  "recipe.media.create_layered_sound_effect_variants",
-  "recipe.items.create_sound_variations",
 ]);
 export const ALPHA345_NOVICE_RECIPE_OPS = Object.freeze([
   "validate",
@@ -231,7 +229,7 @@ export async function runInstalledNoviceTrial({
     report.discovery.recipe_lifecycle_ops = [...ALPHA345_NOVICE_RECIPE_OPS];
 
     const officialIds = productization?.official_recipe_ids ?? [];
-    assertSameSet(officialIds, ALPHA345_NOVICE_OFFICIAL_RECIPE_IDS, "four official Recipe ids");
+    assertSameSet(officialIds, ALPHA345_NOVICE_OFFICIAL_RECIPE_IDS, "two active official Recipe ids");
     const defaultOfficialItems = assertExactOfficialCatalogItems(recipes?.items, "default official Recipe catalog");
     report.discovery.official_recipe_ids = [...ALPHA345_NOVICE_OFFICIAL_RECIPE_IDS];
     report.discovery.official_catalog_count = defaultOfficialItems.length;
@@ -242,8 +240,8 @@ export async function runInstalledNoviceTrial({
     });
     const officialManuals = exactOfficial?.product_surface?.recipe_productization?.requested_manuals ?? [];
     const officialManualIds = officialManuals.map((entry) => entry.id).filter(Boolean);
-    assertSameSet(officialManualIds, ALPHA345_NOVICE_OFFICIAL_RECIPE_IDS, "four official Recipe manuals");
-    assert(officialManuals.length === ALPHA345_NOVICE_OFFICIAL_RECIPE_IDS.length, "official Recipe manuals must contain exactly four unique rows");
+    assertSameSet(officialManualIds, ALPHA345_NOVICE_OFFICIAL_RECIPE_IDS, "two active official Recipe manuals");
+    assert(officialManuals.length === ALPHA345_NOVICE_OFFICIAL_RECIPE_IDS.length, "official Recipe manuals must contain exactly two unique rows");
     assertExactOfficialCatalogItems(exactOfficial?.items, "exact official Recipe expansion");
     report.discovery.official_manual_ids = [...ALPHA345_NOVICE_OFFICIAL_RECIPE_IDS];
     report.exact_expansions.official_recipes_expanded = ALPHA345_NOVICE_OFFICIAL_RECIPE_IDS.length;
@@ -722,7 +720,7 @@ function assertExactOfficialCatalogItems(items, label) {
   assert(Array.isArray(items), `${label} omitted Recipe items`);
   const officialItems = items.filter((item) => !item?.id?.startsWith("recipe.user."));
   const officialIds = officialItems.map((item) => item?.id).filter(Boolean);
-  assert(officialItems.length === ALPHA345_NOVICE_OFFICIAL_RECIPE_IDS.length, `${label} must contain exactly four official rows`);
+  assert(officialItems.length === ALPHA345_NOVICE_OFFICIAL_RECIPE_IDS.length, `${label} must contain exactly two official rows`);
   assertSameSet(officialIds, ALPHA345_NOVICE_OFFICIAL_RECIPE_IDS, `${label} ids`);
   const leaked = officialItems.filter((item) => (
     item?.lifecycle === "draft"

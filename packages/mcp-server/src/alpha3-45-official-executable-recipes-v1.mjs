@@ -14,8 +14,6 @@ export const ALPHA3_45_OFFICIAL_EXECUTABLE_RECIPE_CONTRACT = "openreaper.alpha3.
 export const ALPHA3_45_OFFICIAL_EXECUTABLE_RECIPE_IDS = Object.freeze([
   "recipe.mix.create_bus_processing",
   "recipe.midi.create_instrument_part",
-  "recipe.media.create_layered_sound_effect_variants",
-  "recipe.items.create_sound_variations",
 ]);
 
 const PORTABILITY = Object.freeze({
@@ -30,11 +28,6 @@ const DEFAULT_MIDI_NOTES = Object.freeze([
   Object.freeze({ start_offset_quarter_notes: 1, end_offset_quarter_notes: 1.8, pitch: 64, velocity: 88, channel: 0 }),
   Object.freeze({ start_offset_quarter_notes: 2, end_offset_quarter_notes: 2.8, pitch: 67, velocity: 88, channel: 0 }),
   Object.freeze({ start_offset_quarter_notes: 3, end_offset_quarter_notes: 3.8, pitch: 72, velocity: 88, channel: 0 }),
-]);
-
-const DEFAULT_AUTOMATION_POINTS = Object.freeze([
-  Object.freeze({ time_seconds: 0, value: 0.25 }),
-  Object.freeze({ time_seconds: 0.5, value: 0.75 }),
 ]);
 
 // These revisions are ordinary sealed Recipe graphs. Every derived Macro input and
@@ -126,138 +119,6 @@ const RECIPE_SPECS = Object.freeze([
       refsBinding("midi", object({ track_ref: get(stage("layout", "changes"), [0, "target_ref"]) })),
     ],
   },
-  {
-    id: "recipe.media.create_layered_sound_effect_variants",
-    title: "Create layered sound-effect variants",
-    summary: "Resolve approved media sources and create aligned layered sound-effect variants on separate Tracks.",
-    pack: "media",
-    inputs: ["search_terms", "variant_count", "seed", "track_prefix", "variant_spacing_seconds"],
-    requiredInputs: ["search_terms", "seed"],
-    stages: [
-      stage("search", "macro.media.place_assets", ["mode", "query", "page_size", "dry_run"], ["results"]),
-      stage("place", "macro.media.place_assets", ["mode", "assets", "placement", "track_policy", "new_track", "dry_run"], ["changes"]),
-      stage("copy", "macro.items.apply", ["mode", "variations", "dry_run"], ["changes"]),
-      stage("controls", "macro.items.apply", ["mode", "changes", "dry_run"], ["evidence_ref"]),
-    ],
-    outputs: [
-      recipeOutput("placement_changes", "place", "changes"),
-      recipeOutput("variation_changes", "copy", "changes"),
-      recipeOutput("control_evidence", "controls", "evidence_ref", "string"),
-    ],
-    bindings: [
-      expressionBinding("search", "mode", literal("search_library")),
-      expressionBinding("search", "query", join(coalesce(input("search_terms"), array()), " ")),
-      expressionBinding("search", "page_size", clamp(length(coalesce(input("search_terms"), array())), literal(4), literal(8))),
-      expressionBinding("search", "dry_run", literal(true)),
-      expressionBinding("place", "mode", literal("place_assets")),
-      expressionBinding("place", "assets", map(stage("search", "results"), "candidate", "candidate_index", object({
-        id: concat([literal("layer_"), add([local("candidate_index"), literal(1)])]),
-        path: get(local("candidate"), ["path"]),
-      }))),
-      expressionBinding("place", "placement", literal({ mode: "stack_on_separate_tracks", start_seconds: 0, align_basis: "item_start" })),
-      expressionBinding("place", "track_policy", literal("one_new_track_per_asset")),
-      expressionBinding("place", "new_track", object({ name_prefix: coalesce(input("track_prefix"), literal("SFX Layer")) })),
-      expressionBinding("place", "dry_run", literal(false)),
-      expressionBinding("copy", "mode", literal("create_variations")),
-      expressionBinding("copy", "variations", flatMap(
-        range(literal(0), coalesce(input("variant_count"), literal(4))), "variant", "variant_index",
-        map(verifiedPlacements(), "placement", "placement_index", object({
-          id: concat([literal("lv"), add([local("variant_index"), literal(1)]), literal("_"), add([local("placement_index"), literal(1)])]),
-          source_item_ref: get(local("placement"), ["live_readback", "item_ref"]),
-          target_track_ref: get(local("placement"), ["live_readback", "track_ref"]),
-          position_seconds: add([
-            get(local("placement"), ["live_readback", "position_seconds"]),
-            mul([add([local("variant_index"), literal(1)]), coalesce(input("variant_spacing_seconds"), literal(2))]),
-          ]),
-        })),
-      )),
-      expressionBinding("copy", "dry_run", literal(false)),
-      expressionBinding("controls", "mode", literal("set_item_take_controls")),
-      expressionBinding("controls", "changes", map(verifiedCopies(), "copy", "copy_index", object({
-        id: concat([literal("lc_"), add([local("copy_index"), literal(1)])]),
-        item_ref: get(local("copy"), ["new_item_ref"]), take_ref: get(local("copy"), ["new_take_ref"]),
-        item: object({ volume_db: seededUniform(recipeSeed(), local("copy_index"), literal(-2), literal(1)) }),
-        take: object({ pan: seededUniform(recipeSeed(), add([local("copy_index"), literal(101)]), literal(-0.25), literal(0.25)) }),
-      }))),
-      expressionBinding("controls", "dry_run", literal(false)),
-    ],
-  },
-  {
-    id: "recipe.items.create_sound_variations",
-    title: "Create sound variations",
-    summary: "Create bounded seeded Item, Take, Tone/FX, and Automation/Envelope variations from selected Items.",
-    pack: "items",
-    inputs: ["source_items", "variation_count", "seed", "source_offset_max_seconds", "volume_max_db", "pan_max", "pitch_max_semitones", "min_playrate", "max_playrate", "position_gap_seconds", "tone_param_index", "tone_min", "tone_max", "automation_param_index", "automation_value_variation", "automation_points"],
-    requiredInputs: ["source_items", "seed"],
-    stages: [
-      stage("copy", "macro.items.apply", ["mode", "variations", "dry_run"], ["changes"]),
-      stage("controls", "macro.items.apply", ["mode", "changes", "dry_run"], ["changes"]),
-      stage("tone", "macro.fx.set_controls", ["mode", "assignments", "dry_run"], ["changes"]),
-      stage("automation", "macro.automation.apply", ["mode", "fx_targets", "fx_parameter", "dry_run"], ["changes", "evidence_ref"]),
-    ],
-    outputs: [
-      recipeOutput("variation_changes", "copy", "changes"),
-      recipeOutput("control_changes", "controls", "changes"),
-      recipeOutput("tone_changes", "tone", "changes"),
-      recipeOutput("automation_changes", "automation", "changes"),
-    ],
-    bindings: [
-      expressionBinding("copy", "mode", literal("create_variations")),
-      expressionBinding("copy", "variations", flatMap(
-        range(literal(0), coalesce(input("variation_count"), literal(4))), "variant", "variant_index",
-        map(input("source_items"), "source", "source_index", object({
-          id: concat([literal("v"), add([local("variant_index"), literal(1)]), literal("_"), add([local("source_index"), literal(1)])]),
-          source_item_ref: get(local("source"), ["item_ref"]), target_track_ref: get(local("source"), ["track_ref"]),
-          position_seconds: add([
-            get(local("source"), ["position_seconds"]),
-            mul([
-              add([local("variant_index"), literal(1)]),
-              mul([
-                length(input("source_items")),
-                add([get(local("source"), ["length_seconds"]), coalesce(input("position_gap_seconds"), literal(0.25))]),
-              ]),
-            ]),
-          ]),
-          source_offset_seconds: seededUniform(recipeSeed(), add([mul([local("variant_index"), length(input("source_items"))]), local("source_index")]), literal(0), coalesce(input("source_offset_max_seconds"), literal(0.15))),
-        })),
-      )),
-      expressionBinding("copy", "dry_run", literal(false)),
-      expressionBinding("controls", "mode", literal("set_item_take_controls")),
-      expressionBinding("controls", "changes", map(verifiedCopies(), "copy", "copy_index", object({
-        id: concat([literal("ctl_"), add([local("copy_index"), literal(1)])]),
-        item_ref: get(local("copy"), ["new_item_ref"]), take_ref: get(local("copy"), ["new_take_ref"]),
-        item: object({ volume_db: seededUniform(recipeSeed(), add([local("copy_index"), literal(11)]), sub([literal(0), coalesce(input("volume_max_db"), literal(2))]), coalesce(input("volume_max_db"), literal(2))) }),
-        take: object({
-          pan: seededUniform(recipeSeed(), add([local("copy_index"), literal(23)]), sub([literal(0), coalesce(input("pan_max"), literal(0.4))]), coalesce(input("pan_max"), literal(0.4))),
-          pitch_semitones: seededUniform(recipeSeed(), add([local("copy_index"), literal(37)]), sub([literal(0), coalesce(input("pitch_max_semitones"), literal(3))]), coalesce(input("pitch_max_semitones"), literal(3))),
-          playrate: seededUniform(recipeSeed(), add([local("copy_index"), literal(41)]), coalesce(input("min_playrate"), literal(0.92)), coalesce(input("max_playrate"), literal(1.08))),
-          preserve_pitch: literal(true),
-        }),
-      }))),
-      expressionBinding("controls", "dry_run", literal(false)),
-      expressionBinding("tone", "mode", literal("exact_assignments")),
-      expressionBinding("tone", "assignments", map(verifiedCopies(), "copy", "copy_index", object({
-        id: concat([literal("tone_"), add([local("copy_index"), literal(1)])]),
-        fx_ref: get(local("copy"), ["take_fx_copy", "slots", 0, "target_fx_ref"]),
-        param_index: coalesce(input("tone_param_index"), literal(0)),
-        normalized_value: seededUniform(recipeSeed(), add([local("copy_index"), literal(53)]), coalesce(input("tone_min"), literal(0.25)), coalesce(input("tone_max"), literal(0.75))),
-      }))),
-      expressionBinding("tone", "dry_run", literal(false)),
-      expressionBinding("automation", "mode", literal("insert_fx_parameter_points")),
-      expressionBinding("automation", "fx_targets", map(verifiedCopies(), "copy", "copy_index", object({
-        fx_ref: get(local("copy"), ["take_fx_copy", "slots", 0, "target_fx_ref"]),
-        points: map(coalesce(input("automation_points"), literal(DEFAULT_AUTOMATION_POINTS)), "point", "point_index", object({
-          time_seconds: add([get(local("copy"), ["position_seconds"]), get(local("point"), ["time_seconds"])]),
-          value: clamp(add([
-            get(local("point"), ["value"]),
-            seededUniform(recipeSeed(), add([literal(67), mul([local("copy_index"), length(coalesce(input("automation_points"), literal(DEFAULT_AUTOMATION_POINTS)))]), local("point_index")]), sub([literal(0), coalesce(input("automation_value_variation"), literal(0.08))]), coalesce(input("automation_value_variation"), literal(0.08))),
-          ]), literal(0), literal(1)),
-        })),
-      }))),
-      expressionBinding("automation", "fx_parameter", object({ param_index: coalesce(input("automation_param_index"), literal(1)), create_if_missing: literal(true) })),
-      expressionBinding("automation", "dry_run", literal(false)),
-    ],
-  },
 ]);
 
 function stage(id, dependencyId, inputs, outputs) {
@@ -305,30 +166,6 @@ function join(values, separator) { return expression("join", { values, separator
 function concat(values) { return expression("concat", { values }); }
 function seededUniform(seed, index, min, max) { return expression("seeded_uniform", { seed, index, min, max }); }
 function recipeSeed() { return input("seed"); }
-
-function verifiedPlacements() {
-  return filter(stage("place", "changes"), "placement_row", "placement_index", ifElse(
-    eq([get(local("placement_row"), ["mode"]), literal("place_assets")]),
-    ifElse(
-      eq([get(local("placement_row"), ["status"]), literal("applied")]),
-      eq([get(local("placement_row"), ["live_readback", "status"]), literal("passed")]),
-      literal(false),
-    ),
-    literal(false),
-  ));
-}
-
-function verifiedCopies() {
-  return filter(stage("copy", "changes"), "copy_row", "copy_row_index", ifElse(
-    eq([get(local("copy_row"), ["status"]), literal("ok")]),
-    ifElse(
-      eq([get(local("copy_row"), ["mutation"]), literal("done")]),
-      eq([get(local("copy_row"), ["readback"]), literal("pass")]),
-      literal(false),
-    ),
-    literal(false),
-  ));
-}
 
 export function createAlpha345OfficialExecutableRecipeRevisions(options = {}) {
   const catalog = options.catalog ?? createExecutableRecipeProductCatalog();

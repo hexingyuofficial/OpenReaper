@@ -677,6 +677,32 @@ async function opRun(request, options, { startedAt, resume, budget }) {
     });
   }
   const inputs = hydration.inputs;
+  const staticInputBlocker = preflightRecipeStaticInputs(inputs);
+  if (staticInputBlocker) {
+    const retained = retainedFailureTruth(revision, resumeState, runId, options.performance);
+    return withRunExecutionTruth(projectRunFailureEnvelope({
+      operation: resume ? "resume" : "run",
+      revision,
+      runId,
+      status: "blocked",
+      code: "PREFLIGHT_FAILED",
+      message: staticInputBlocker.message,
+      failedStageIds: [],
+      completedStageIds: retained.completedStageIds,
+      notStartedStageIds: retained.notStartedStageIds,
+      provenPartialChanges: retained.provenPartialChanges,
+      latestCheckpoint: retained.latestCheckpoint,
+      resumeSafe: false,
+      nextCall: buildExactNextCall("get", exactRevisionIdentity(revision)),
+      evidenceRef: retained.evidenceRef,
+      details: staticInputBlocker.details,
+    }), {
+      startedAt,
+      telemetry: retained.telemetry,
+      undo: retained.undo,
+      mutationTruth: retained.mutationTruth,
+    });
+  }
   const trustRuntimeFacts = bindRuntimePortabilityFacts(revision, runtimeFacts);
   const runtimeBinding = snapshotRuntimeBinding(runtimeFacts);
 
@@ -2693,6 +2719,25 @@ function normalizeRunHydrator(value) {
 
 function normalizeStageInputHydrator(value) {
   return typeof value === "function" ? value : null;
+}
+
+function preflightRecipeStaticInputs(inputs) {
+  if (!Array.isArray(inputs?.fx_chain) || !inputs.fx_chain.some((node) => typeof node === "string")) {
+    return null;
+  }
+  const patched = inputs.fx_chain.map((node) => (
+    typeof node === "string" ? { plugin_query: node } : cloneJson(node)
+  ));
+  return {
+    message: "Recipe input fx_chain must use object nodes; apply the returned request_patch before retrying.",
+    details: {
+      code: "RECIPE_FX_CHAIN_NODE_SHAPE_INVALID",
+      field: "inputs.fx_chain",
+      expected_shape: [{ plugin_query: "ReaVerbate" }],
+      request_patch: { inputs: { fx_chain: patched } },
+      zero_write: true,
+    },
+  };
 }
 
 function preflightRecipeInputRefs(draft, bindingValues, inputs) {

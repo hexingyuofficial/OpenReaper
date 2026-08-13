@@ -21,7 +21,7 @@ const HARNESS_PATH = path.resolve("scripts/trial-alpha3-45-installed-novice.mjs"
 
 after(async () => Promise.all(roots.map((root) => rm(root, { recursive: true, force: true }))));
 
-test("fake transport proves manuals, exact-four official recipes, resume, authoring, and reconnect", async () => {
+test("fake transport proves manuals, exact-two official recipes, resume, authoring, and reconnect", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "openreaper-alpha345-novice-"));
   roots.push(root);
   const wrapper = path.join(root, "openreaper-mcp");
@@ -64,11 +64,11 @@ test("fake transport proves manuals, exact-four official recipes, resume, author
   assert.deepEqual(report.discovery.recipe_lifecycle_ops, [...ALPHA345_NOVICE_RECIPE_OPS]);
   assert.deepEqual(report.discovery.official_recipe_ids, [...ALPHA345_NOVICE_OFFICIAL_RECIPE_IDS]);
   assert.deepEqual(report.discovery.official_manual_ids, [...ALPHA345_NOVICE_OFFICIAL_RECIPE_IDS]);
-  assert.equal(report.discovery.official_catalog_count, 4);
+  assert.equal(report.discovery.official_catalog_count, 2);
   assert.equal(report.discovery.official_legacy_or_draft_leak_count, 0);
   assert.equal(report.discovery.direct_template_fallback, true);
   assert.equal(report.exact_expansions.macros_expanded, 15);
-  assert.equal(report.exact_expansions.official_recipes_expanded, 4);
+  assert.equal(report.exact_expansions.official_recipes_expanded, 2);
   assert.equal(report.authoring.temp_run_ok, true);
   assert.equal(report.authoring.persistent_save_ok, true);
   assert.equal(report.authoring.persistent_cleanup_ok, true);
@@ -160,7 +160,7 @@ test("fails closed and closes clients when official Recipe manuals are incomplet
         clientName,
         requests: [],
         store: new Map(),
-        officialManualIds: ALPHA345_NOVICE_OFFICIAL_RECIPE_IDS.slice(0, 2),
+        officialManualIds: ALPHA345_NOVICE_OFFICIAL_RECIPE_IDS.slice(0, 1),
       });
       clients.push(client);
       return client;
@@ -255,7 +255,7 @@ test("statically verifies installed-wrapper-only public-tool truth and no REAPER
   assert.doesNotMatch(source, /spawn\s*\(|execFile\s*\(|execSync\s*\(/);
   assert.doesNotMatch(source, /readFileSync\s*\(\s*['"]packages\//);
   assert.equal(ALPHA345_NOVICE_MACRO_IDS.length, 15);
-  assert.equal(ALPHA345_NOVICE_OFFICIAL_RECIPE_IDS.length, 4);
+  assert.equal(ALPHA345_NOVICE_OFFICIAL_RECIPE_IDS.length, 2);
   assert.equal(ALPHA345_NOVICE_RECIPE_OPS.length, 7);
   assert.equal(ALPHA345_NOVICE_EXACT_TOOLS.length, 6);
   assert.deepEqual([...ALPHA345_NOVICE_EXACT_TOOLS].sort(), [

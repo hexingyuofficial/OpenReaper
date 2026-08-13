@@ -167,7 +167,7 @@ test("all 15 manuals audit and every executable first-try call passes the curren
   }
 });
 
-test("Alpha3.45 Recipe manual covers seven operations, temporary/persistent reuse, four official Recipes, and direct Template fallback", async () => {
+test("Alpha3.45 Recipe manual covers seven operations, temporary/persistent reuse, two active official Recipes, and direct Template fallback", async () => {
   const lifecycle = createAlpha345RecipeLifecycleManual();
   assert.deepEqual(lifecycle.operations, ["validate", "save", "list", "get", "delete", "run", "resume"]);
   assert.match(lifecycle.run_rule, /one public call_recipe run/u);
@@ -191,7 +191,7 @@ test("Alpha3.45 Recipe manual covers seven operations, temporary/persistent reus
   assert.match(product.system_model, /same general Recipe system/u);
   assert.deepEqual(product.shared_lifecycle, ["validate", "save", "list", "get", "run", "reconnect", "trust", "evidence", "whole-Recipe Undo"]);
   assert.match(lifecycle.official_and_user_rule, /share validate\/save\/list\/get\/run\/reconnect/u);
-  assert.equal(product.requested_manuals.length, 4);
+  assert.equal(product.requested_manuals.length, 2);
   for (const id of ALPHA3_45_OFFICIAL_RECIPE_IDS) {
     const manual = createAlpha345OfficialRecipeManual(id);
     assert.equal(manual.id, id);
@@ -216,13 +216,8 @@ test("Alpha3.45 Recipe manual covers seven operations, temporary/persistent reus
   assert.match(busManual.safety, /Undo truth/u);
   const midiManual = createAlpha345OfficialRecipeManual("recipe.midi.create_instrument_part");
   assert.deepEqual(midiManual.inputs, ["target_track", "track_name", "instrument", "bars", "meter", "notes"]);
-  const mediaManual = createAlpha345OfficialRecipeManual("recipe.media.create_layered_sound_effect_variants");
-  assert.deepEqual(mediaManual.required_inputs, ["search_terms", "seed"]);
-  const itemManual = createAlpha345OfficialRecipeManual("recipe.items.create_sound_variations");
-  assert.deepEqual(itemManual.required_inputs, ["source_items", "seed"]);
-  assert.match(itemManual.safety, /return the copied first-slot fx_ref/u);
-  assert.match(itemManual.safety, /Never construct that ref/u);
-  assert.equal(itemManual.example_inputs.source_items[0].item_ref, "COPY_FROM_QUERY");
+  assert.equal(createAlpha345OfficialRecipeManual("recipe.media.create_layered_sound_effect_variants"), null);
+  assert.equal(createAlpha345OfficialRecipeManual("recipe.items.create_sound_variations"), null);
 
   const fallback = createAlpha345DirectTemplateFallbackManual();
   assert.equal(fallback.discover.tool, "list_templates");

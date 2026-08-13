@@ -26,12 +26,10 @@ raw executor。
 必须原样复用完整的 `recipe_id`、`version`、数字 `revision`、`content_hash`
 和 `validation_result_id`。不要只凭模糊 Recipe id 执行，也不要自行重放步骤。
 
-四个官方 Recipe 是：
+当前提供两个官方 Recipe：
 
 - `recipe.mix.create_bus_processing`
 - `recipe.midi.create_instrument_part`
-- `recipe.media.create_layered_sound_effect_variants`
-- `recipe.items.create_sound_variations`
 
 官方、用户和 fork Recipe 共用 generic runner、一次公开 `call_recipe`、完整
 plan、REAPER 侧批处理、一次聚合 readback/evidence 和一次 Whole-Recipe Undo。

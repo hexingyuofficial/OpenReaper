@@ -57,13 +57,11 @@ Silence with Last Settings` Actions plus the Macro route, with `all`, `leading`,
 normalization calculation for LUFS-I, RMS-I, peak, true peak, LUFS-M max, and
 LUFS-S max. Normalization is source/item/take pre-FX; it is not a post-FX claim.
 
-The four official Recipes are:
+The two active official Recipes are:
 
 ```text
 recipe.mix.create_bus_processing
 recipe.midi.create_instrument_part
-recipe.media.create_layered_sound_effect_variants
-recipe.items.create_sound_variations
 ```
 
 Official, user-authored, and forked Recipes use the same generic runner,

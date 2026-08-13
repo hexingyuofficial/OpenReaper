@@ -16,7 +16,7 @@ import { createExecutableRecipeRevisionStore } from "../../packages/core/src/exe
 import { createCallRecipeRuntime } from "../../packages/mcp-server/src/call-recipe-runtime-v1.mjs";
 import { createExecutableRecipeProductCatalog } from "../../packages/mcp-server/src/executable-recipe-product-catalog-v1.mjs";
 
-test("Alpha3.45 official Recipe catalog seals four immutable expression-bound revisions", () => {
+test("Alpha3.45 official Recipe catalog seals two immutable expression-bound revisions", () => {
   const catalog = createExecutableRecipeProductCatalog();
   const source = createAlpha345OfficialExecutableRecipeCatalog({ catalog });
   assert.deepEqual(source.revisions.map((revision) => revision.recipe_id), ALPHA3_45_OFFICIAL_EXECUTABLE_RECIPE_IDS);
@@ -29,8 +29,6 @@ test("Alpha3.45 official Recipe catalog seals four immutable expression-bound re
   assert.deepEqual(source.revisions.map((revision) => revision.draft.inputs.filter((input) => input.required).map((input) => input.id)), [
     ["source_tracks"],
     [],
-    ["search_terms", "seed"],
-    ["source_items", "seed"],
   ]);
   const sourceText = readFileSync(new URL("../../packages/mcp-server/src/alpha3-45-official-executable-recipes-v1.mjs", import.meta.url), "utf8");
   assert.equal(sourceText.includes("official-recipe-runtime"), false);
@@ -55,16 +53,7 @@ test("all official Recipes execute once through generic call_recipe expressions"
       });
       assert.equal(result.ok, true, `${revision.recipe_id}: ${JSON.stringify(result)}`);
       assert.ok(result.evidence_ref);
-      if (revision.recipe_id === "recipe.items.create_sound_variations") {
-        assert.deepEqual(result.verified_outputs.map((output) => output.id).sort(), [
-          "automation_changes",
-          "control_changes",
-          "evidence_ref",
-          "tone_changes",
-          "variation_changes",
-        ]);
-        assert.equal(result.verified_outputs.every((output) => output.verified === true), true);
-      }
+      assert.equal(result.verified_outputs.every((output) => output.verified === true), true);
     }
 
     const busCalls = calls.filter((call) => call.recipe_id === "recipe.mix.create_bus_processing");
@@ -72,20 +61,6 @@ test("all official Recipes execute once through generic call_recipe expressions"
     assert.equal(busCalls[1].inputs.routes[0].destination_track_ref, "track:guid:{BUS}");
     assert.deepEqual(busCalls[2].refs, { track_ref: "track:guid:{BUS}" });
 
-    const mediaCalls = calls.filter((call) => call.recipe_id === "recipe.media.create_layered_sound_effect_variants");
-    assert.equal(mediaCalls.find((call) => call.stage === "place").inputs.assets.length, 2);
-    assert.equal(mediaCalls.find((call) => call.stage === "copy").inputs.variations.length, 8);
-
-    const itemCalls = calls.filter((call) => call.recipe_id === "recipe.items.create_sound_variations");
-    const controls = itemCalls.find((call) => call.stage === "controls").inputs.changes;
-    const tone = itemCalls.find((call) => call.stage === "tone").inputs.assignments;
-    const automation = itemCalls.find((call) => call.stage === "automation").inputs.fx_targets;
-    assert.equal(controls.length, 8);
-    assert.equal(tone.length, 8);
-    assert.equal(automation.length, 8);
-    assert.equal(tone[0].fx_ref, `fx:take:guid:{COPY-TAKE-v1_1}:0`);
-    assert.equal(automation[0].fx_ref, tone[0].fx_ref);
-    assert.deepEqual(automation[0].points.map((point) => point.time_seconds), [2.5, 3]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -111,8 +86,6 @@ test("official required inputs fail generic preflight before Undo or dispatch", 
     });
     for (const [recipeId, missing] of [
       ["recipe.mix.create_bus_processing", "source_tracks"],
-      ["recipe.media.create_layered_sound_effect_variants", "seed"],
-      ["recipe.items.create_sound_variations", "source_items"],
     ]) {
       const saved = store.list().items.find((item) => item.recipe_id === recipeId);
       const inputs = recipeInputs(recipeId);
@@ -257,97 +230,7 @@ function createRuntime(store, catalog, calls, options = {}) {
 function recipeInputs(recipeId) {
   if (recipeId === "recipe.mix.create_bus_processing") return { source_tracks: ["track:guid:{SOURCE}"], bus_name: "SFX BUS", seed: 345 };
   if (recipeId === "recipe.midi.create_instrument_part") return { track_name: "Instrument", bars: 2, meter: { numerator: 4, denominator: 4 } };
-  if (recipeId === "recipe.media.create_layered_sound_effect_variants") return { search_terms: ["impact", "metal"], variant_count: 4, seed: 345 };
-  return {
-    source_items: sourceItems(2), variation_count: 4, seed: 345,
-    automation_points: [{ time_seconds: 0, value: 0.25 }, { time_seconds: 0.5, value: 0.75 }],
-  };
-}
-
-test("generic official expressions produce the full 64-row Recipe 03 and 04 batches", async () => {
-  const root = mkdtempSync(path.join(os.tmpdir(), "openreaper-alpha345-expression-64-"));
-  try {
-    const catalog = createExecutableRecipeProductCatalog();
-    const store = createExecutableRecipeRevisionStore({ root, source: "official", catalog });
-    seedAlpha345OfficialExecutableRecipeRevisions(store, { catalog });
-    const calls = [];
-    const runtime = createRuntime(store, catalog, calls);
-
-    for (const [recipe_id, inputs] of [
-      ["recipe.media.create_layered_sound_effect_variants", { search_terms: ["impact", "metal"], variant_count: 32, seed: 345 }],
-      ["recipe.items.create_sound_variations", { source_items: sourceItems(64), variation_count: 1, seed: 345 }],
-    ]) {
-      const saved = store.list().items.find((item) => item.recipe_id === recipe_id);
-      const result = await runtime.call_recipe({ operation: "run", ...saved, inputs, budget: { max_response_bytes: 16_384 } });
-      assert.equal(result.ok, true, `${recipe_id}: ${JSON.stringify(result)}`);
-      if (recipe_id === "recipe.items.create_sound_variations") {
-        assert.equal(result.execution_truth.native_mutation_count >= 256, true, JSON.stringify(result.execution_truth));
-        assert.equal(result.execution_truth.readback_count >= 256, true, JSON.stringify(result.execution_truth));
-        const evidence = await runtime.call_recipe({ operation: "get", evidence_ref: result.evidence_ref, limit: 8 });
-        const stageCounters = new Map(evidence.items.map((item) => [item.stage_id, item.counters]));
-        for (const stageId of ["copy", "controls", "tone", "automation"]) {
-          assert.equal(stageCounters.get(stageId).native_mutation_count, 64, stageId);
-          assert.equal(stageCounters.get(stageId).readback_count, 64, stageId);
-        }
-      }
-    }
-
-    for (const recipe_id of [
-      "recipe.media.create_layered_sound_effect_variants",
-      "recipe.items.create_sound_variations",
-    ]) {
-      const copy = calls.find((call) => call.recipe_id === recipe_id && call.stage === "copy");
-      assert.equal(copy.inputs.variations.length, 64, recipe_id);
-    }
-
-    const recipe04 = store.list().items.find((item) => item.recipe_id === "recipe.items.create_sound_variations");
-    const overLimit = await runtime.call_recipe({
-      operation: "run",
-      ...recipe04,
-      inputs: { source_items: sourceItems(1), variation_count: 65, seed: 345 },
-      budget: { max_response_bytes: 16_384 },
-    });
-    assert.equal(overLimit.ok, false);
-    assert.equal(overLimit.error.details.zero_write, true, JSON.stringify(overLimit));
-    assert.equal(overLimit.execution_truth.mutation, "not_applied");
-    assert.equal(overLimit.undo.claimed, true);
-    assert.equal(overLimit.undo.status, "closed");
-    assert.equal(overLimit.undo.proven, true);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test("Recipe 04 filters compact skip rows and fails closed before later write stages", async () => {
-  const root = mkdtempSync(path.join(os.tmpdir(), "openreaper-alpha345-expression-skip-"));
-  try {
-    const catalog = createExecutableRecipeProductCatalog();
-    const store = createExecutableRecipeRevisionStore({ root, source: "official", catalog });
-    seedAlpha345OfficialExecutableRecipeRevisions(store, { catalog });
-    const calls = [];
-    const runtime = createRuntime(store, catalog, calls, {
-      copyChanges: (inputs) => inputs.variations.map((row) => ({ ...appliedVariation(row), mutation: "skip" })),
-    });
-    const saved = store.list().items.find((item) => item.recipe_id === "recipe.items.create_sound_variations");
-    const result = await runtime.call_recipe({
-      operation: "run",
-      ...saved,
-      inputs: { source_items: sourceItems(1), variation_count: 1, seed: 345 },
-    });
-    assert.equal(result.ok, false);
-    assert.equal(result.execution_truth.mutation, "not_applied");
-    assert.deepEqual(calls.find((call) => call.stage === "controls").inputs.changes, []);
-    assert.equal(calls.some((call) => call.stage === "tone" || call.stage === "automation"), false);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-function sourceItems(count) {
-  return Array.from({ length: count }, (_, index) => ({
-    item_ref: `item:guid:{ITEM-${index}}`, take_ref: `take:guid:{TAKE-${index}}`, track_ref: `track:guid:{TRACK-${index}}`,
-    position_seconds: index * 0.1, length_seconds: 1,
-  }));
+  throw new Error(`Unknown active official Recipe: ${recipeId}`);
 }
 
 function appliedTrack(id) { return { target_ref: `track:guid:{${id}}`, status: "applied", live_readback: { status: "passed" } }; }

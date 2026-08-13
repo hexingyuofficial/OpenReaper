@@ -55,8 +55,6 @@ selections fail closed before mutation.
 |---|---|
 | `recipe.mix.create_bus_processing` | supported |
 | `recipe.midi.create_instrument_part` | supported |
-| `recipe.media.create_layered_sound_effect_variants` | supported |
-| `recipe.items.create_sound_variations` | supported |
 
 Official, user-authored, forked, and learned Recipes use the same generic
 runner. Official Recipes are not special-cased in the execution kernel.

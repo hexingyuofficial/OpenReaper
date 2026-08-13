@@ -54,8 +54,6 @@ official product Recipes are:
 
 - `recipe.mix.create_bus_processing`
 - `recipe.midi.create_instrument_part`
-- `recipe.media.create_layered_sound_effect_variants`
-- `recipe.items.create_sound_variations`
 
 Official Recipes pressure-test the same general Recipe system; they are not a
 special execution surface. A fork becomes a user-owned revision and uses the
