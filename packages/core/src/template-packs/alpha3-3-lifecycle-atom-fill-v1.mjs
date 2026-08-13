@@ -315,6 +315,7 @@ export const ALPHA3_3_LIFECYCLE_ATOM_TEMPLATES = deepFreeze([
       operation: { type: "string", enum: ["remove_silence", "normalize_level"] },
       target: { type: "string", enum: ["selected", "exact"] },
       target_refs: { type: "array", maxItems: 64, items: { type: "string" } },
+      adjacent_audio: { type: "string", enum: ["left", "right", "both"] },
       dry_run: { type: "boolean" },
       normalization_metric: { type: "string", enum: ["lufs_i", "rms_i", "peak", "true_peak", "lufs_m_max", "lufs_s_max"] },
       normalization_target: { type: "number", maximum: 0 },

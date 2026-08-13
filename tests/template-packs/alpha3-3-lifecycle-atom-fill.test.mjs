@@ -162,6 +162,25 @@ describe("Alpha3.3 exact lifecycle atom descriptors", () => {
       "track_item_count_matches",
     ]);
 
+    const adjacentBridge = new FakeFoundationBridge();
+    const adjacentResult = await executeTemplate({
+      descriptor: splitSilence,
+      input: {
+        batch: true,
+        operation: "remove_silence",
+        target: "exact",
+        target_refs: [ITEM_REF.ref],
+        adjacent_audio: "both",
+        dry_run: true,
+      },
+      refs: { item_ref: ITEM_REF },
+      context: context({ request_sequence: 9 }),
+      executor: adjacentBridge,
+    });
+    assert.equal(adjacentResult.ok, true, JSON.stringify(adjacentResult));
+    assert.equal(adjacentBridge.seen.length, 1);
+    assert.equal(adjacentBridge.seen[0].params.adjacent_audio, "both");
+
     const bridge = new FakeFoundationBridge();
     for (const [index, id] of IDS.entries()) {
       const result = await executeTemplate({
