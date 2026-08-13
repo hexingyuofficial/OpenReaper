@@ -14899,14 +14899,6 @@ local function e2_fx_parameter_assignments_batch(request)
 end
 
 local E2_FX_REAEQ_BAND_MAX = 4
-local E2_FX_REAEQ_WRITE_TYPE_VALUES = {
-  high_pass = 0,
-  low_shelf = 1,
-  band = 2,
-  notch = 3,
-  high_shelf = 4,
-  low_pass = 5,
-}
 local E2_FX_REAEQ_READ_TYPE_NAMES = {
   [0] = "low_shelf",
   [1] = "high_shelf",
@@ -14923,6 +14915,13 @@ local E2_FX_REAEQ_IDENT_TOKENS = {
   high_shelf = "High_Shelf",
   low_pass = "Low_Pass",
 }
+
+local function e2_fx_reaeq_type_allowed(value)
+  for _, type_name in pairs(E2_FX_REAEQ_READ_TYPE_NAMES) do
+    if value == type_name then return true end
+  end
+  return false
+end
 
 local function e2_fx_reaeq_error(code, message, details)
   details = details or {}
@@ -14984,9 +14983,16 @@ local function e2_fx_reaeq_expected_ident(band, field, band_type)
   return prefix .. E2_FX_REAEQ_IDENT_TOKENS[band_type] .. suffix
 end
 
-local function e2_fx_reaeq_ident_matches(param_index, live_ident, expected_ident)
+local function e2_fx_reaeq_ident_matches(param_index, live_ident, expected_ident, band)
   if type(live_ident) ~= "string" or type(expected_ident) ~= "string" then return false end
-  return live_ident == expected_ident or live_ident == tostring(param_index) .. ":" .. expected_ident
+  local native_ident = live_ident
+  local native_index, indexed_ident = live_ident:match("^(%d+):(.*)$")
+  if native_index ~= nil then
+    if tonumber(native_index) ~= param_index then return false end
+    native_ident = indexed_ident
+  end
+  if native_ident == expected_ident then return true end
+  return band == 1 and native_ident == expected_ident .. "_1"
 end
 
 local function e2_fx_reaeq_inventory(owner_kind, owner, slot_index)
@@ -15103,7 +15109,7 @@ local function e2_fx_reaeq_validate_request(request, owner_kind, owner, slot_ind
         local param_index = (band - 1) * 3 + field_offset - 1
         local live_ident = inventory[param_index + 1].param_ident
         local expected_ident = e2_fx_reaeq_expected_ident(band, field, current.type)
-        if not e2_fx_reaeq_ident_matches(param_index, live_ident, expected_ident) then
+        if not e2_fx_reaeq_ident_matches(param_index, live_ident, expected_ident, band) then
           return e2_fx_reaeq_error("FX_REAEQ_PARAMETER_IDENTITY_MISMATCH", "ReaEQ first-four-band parameter identity does not match live topology.", { band = band, field = field, param_index = param_index, expected_param_ident = expected_ident, live_param_ident = live_ident })
         end
       end
@@ -15128,13 +15134,16 @@ local function e2_fx_reaeq_validate_request(request, owner_kind, owner, slot_ind
       return e2_fx_reaeq_error("FX_REAEQ_BAND_INDEX_INVALID", "ReaEQ band must be a unique integer from 1 through 4.", { row_index = row_index })
     end
     seen[band] = true
-    if row.type ~= nil and E2_FX_REAEQ_WRITE_TYPE_VALUES[row.type] == nil then
+    if row.type ~= nil and not e2_fx_reaeq_type_allowed(row.type) then
       return e2_fx_reaeq_error("FX_REAEQ_BAND_TYPE_INVALID", "ReaEQ band type is not approved.", { row_index = row_index })
     end
     if row.enabled ~= nil and type(row.enabled) ~= "boolean" then
       return e2_fx_reaeq_error("FX_REAEQ_BAND_ENABLED_INVALID", "ReaEQ band enabled must be boolean.", { row_index = row_index })
     end
     local target_type = row.type or topology[band].type
+    if target_type ~= topology[band].type then
+      return e2_fx_reaeq_error("FX_REAEQ_TOPOLOGY_MUTATION_UNAVAILABLE", "Stock REAPER exposes stable ReaEQ topology readback but no approved native topology mutation primitive.", { row_index = row_index, band = band, current_type = topology[band].type, requested_type = target_type })
+    end
     local item = { row = row, band = band, target_type = target_type, targets = {} }
     for field_offset, field in ipairs({ "frequency_hz", "gain_db", "bandwidth_oct" }) do
       if row[field] ~= nil then
@@ -15183,14 +15192,7 @@ local function e2_fx_set_reaeq_bands(request)
   local mutation_attempted = false
   for index = 1, #plan.prepared do
     local item = plan.prepared[index]
-    if item.row.type ~= nil then
-      mutation_attempted = true
-      batch_timings.native_mutation_count = batch_timings.native_mutation_count + 1
-      if not e2_fx_named_config_set(owner_kind, owner, slot_index, e2_fx_reaeq_band_key("BANDTYPE", item.band), tostring(E2_FX_REAEQ_WRITE_TYPE_VALUES[item.target_type])) then
-        return e2_fx_reaeq_error("COMMAND_FAILED", "REAPER rejected a ReaEQ BANDTYPE setter.", { band = item.band, mutation_attempted = true, zero_write = false })
-      end
-    end
-    if item.row.enabled ~= nil then
+    if item.row.enabled ~= nil and item.row.enabled ~= plan.topology[item.band].enabled then
       mutation_attempted = true
       batch_timings.native_mutation_count = batch_timings.native_mutation_count + 1
       if not e2_fx_named_config_set(owner_kind, owner, slot_index, e2_fx_reaeq_band_key("BANDENABLED", item.band), item.row.enabled and "1" or "0") then
@@ -15230,7 +15232,7 @@ local function e2_fx_set_reaeq_bands(request)
       local target = item.targets[target_index]
       local live = inventory[target.param_index + 1]
       local observed = e2_fx_reaeq_parse_formatted(target.field, live.formatted_value)
-      if not e2_fx_reaeq_ident_matches(target.param_index, live.param_ident, target.expected_param_ident) or not observed or math.abs(observed - target.requested_value) > target.tolerance then
+      if not e2_fx_reaeq_ident_matches(target.param_index, live.param_ident, target.expected_param_ident, item.band) or not observed or math.abs(observed - target.requested_value) > target.tolerance then
         return e2_fx_reaeq_error("VERIFY_FAILED", "ReaEQ exact parameter identity or value readback does not match the requested band row.", { band = item.band, field = target.field, expected_param_ident = target.expected_param_ident, live_param_ident = live.param_ident, requested_value = target.requested_value, observed_value = observed or JSON_NULL, mutation_attempted = mutation_attempted, zero_write = false })
       end
       values[target.field] = { requested_value = target.requested_value, observed_value = observed, formatted_value = live.formatted_value, normalized_value = live.normalized_value, param_index = target.param_index, param_ident = live.param_ident, tolerance = target.tolerance }

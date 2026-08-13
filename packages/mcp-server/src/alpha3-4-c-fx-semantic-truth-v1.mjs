@@ -141,7 +141,7 @@ export function normalizeAlpha34CFxSetControlsInput(input = {}) {
         return { ok: false, code: "FX_REAEQ_BAND_INDEX_INVALID", message: `bands[${index}].band must be a unique integer from 1 through 4.` };
       }
       if (row.type !== undefined && !types.has(row.type)) {
-        return { ok: false, code: "FX_REAEQ_BAND_TYPE_INVALID", message: `bands[${index}].type is not an approved ReaEQ topology.` };
+        return { ok: false, code: "FX_REAEQ_BAND_TYPE_INVALID", message: `bands[${index}].type is not an approved ReaEQ topology assertion.` };
       }
       for (const [field, min, max] of [["frequency_hz", 10, 30000], ["gain_db", -60, 60], ["bandwidth_oct", 0.01, 8]]) {
         if (row[field] !== undefined && (typeof row[field] !== "number" || !Number.isFinite(row[field]) || row[field] < min || row[field] > max)) {

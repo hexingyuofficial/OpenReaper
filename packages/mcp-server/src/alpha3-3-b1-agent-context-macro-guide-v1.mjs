@@ -616,7 +616,7 @@ export function createAlpha3_3B1ExactMacroExpansion(id) {
     canonical.action_manual.input_shape = {
       mode: "semantic | reaeq_bands | exact_parameters | exact_assignments; defaults to semantic for compatibility.",
       semantic: "plugin/controls/starter_action as before; executable only when each control has native low/mid/high proof.",
-      reaeq_bands: "bands[] 1-4 unique rows with band 1-4 and optional type/enabled/frequency_hz/gain_db/bandwidth_oct; exact ReaEQ fx_ref or one unambiguous selector required.",
+      reaeq_bands: "bands[] 1-4 unique rows with band 1-4 and optional enabled/frequency_hz/gain_db/bandwidth_oct; optional type asserts the current live topology and cannot change it; exact ReaEQ fx_ref or one unambiguous selector required.",
       exact_parameters: "changes[] 1-8 rows with id, normalized_value in [0,1], and param_index (optional param_ident) or one unique exact param_name/param_ident; selector or exact fx_ref required.",
       exact_assignments: "assignments[] 1-64 rows of {id,fx_ref,param_index|param_ident|param_name,normalized_value,requested_formatted_value?}. dry_run defaults true; set dry_run:false to mutate.",
       dry_run: "Boolean; preflight and inventory without mutation when true. exact_assignments defaults true when omitted.",

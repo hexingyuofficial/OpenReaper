@@ -206,7 +206,7 @@ export const WAVE2A_FX_TEMPLATES = deepFreeze([
   writeDescriptor({
     id: "template.fx.set_reaeq_bands",
     title: "Set ReaEQ bands",
-    summary: "Set a bounded ReaEQ band profile by exact live parameter identity and approved named topology keys.",
+    summary: "Set a bounded ReaEQ band profile by exact live parameter identity and asserted live topology.",
     entity_kind: "fx_reaeq_profile",
     tags: ["fx", "reaeq", "bands", "parameter", "topology", "write", "wave2a"],
     capability: "fx.set_reaeq_bands",
@@ -220,7 +220,10 @@ export const WAVE2A_FX_TEMPLATES = deepFreeze([
           type: "object",
           properties: {
             band: { type: "integer", minimum: 1, maximum: 4 },
-            type: { enum: ["low_shelf", "band", "high_shelf", "low_pass", "high_pass", "notch"] },
+            type: {
+              enum: ["low_shelf", "band", "high_shelf", "low_pass", "high_pass", "notch"],
+              description: "Optional assertion of the current live band type; stock REAPER does not expose an approved ReaEQ topology mutation primitive.",
+            },
             enabled: { type: "boolean" },
             frequency_hz: { type: "number", minimum: 10, maximum: 30000 },
             gain_db: { type: "number", minimum: -60, maximum: 60 },
@@ -247,11 +250,11 @@ export const WAVE2A_FX_TEMPLATES = deepFreeze([
       output: [ref("fx_ref", "fx", true, "Same exact ReaEQ FX ref after aggregate readback.")],
     }),
     expectedAction: "update",
-    expectedSummary: "Validates ReaEQ identity, complete first-four-band topology and parameter inventory before one native profile mutation.",
-    expectedEntitySummary: "ReaEQ topology and requested band values are read back as one typed profile.",
+    expectedSummary: "Validates ReaEQ identity, asserted first-four-band topology, and complete parameter inventory before one native value mutation.",
+    expectedEntitySummary: "ReaEQ topology and requested enabled/frequency/gain/bandwidth values are read back as one typed profile.",
     checks: [
       check("reaeq_identity", "state_delta", "The live FX remains ReaEQ with the requested owner kind and slot identity."),
-      check("reaeq_topology", "state_delta", "Every requested named topology value matches aggregate native readback."),
+      check("reaeq_topology", "state_delta", "Every optional type assertion matches aggregate native topology readback; topology changes fail before mutation."),
       check("reaeq_parameter_identity", "state_delta", "Every returned band row preserves the exact native parameter identity."),
       check("reaeq_zero_write_preflight", "state_delta", "Unknown plugin, topology, inventory, or target mismatch returns zero-write truth."),
     ],

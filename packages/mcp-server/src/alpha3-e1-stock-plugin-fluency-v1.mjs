@@ -1349,7 +1349,10 @@ function plugin(id, displayName, aliases, category, parameters) {
 function stockPluginControlInputSchema() {
   const reaeqBandProperties = {
     band: { type: "integer", minimum: 1, maximum: 4 },
-    type: { enum: ["low_shelf", "band", "high_shelf", "low_pass", "high_pass", "notch"] },
+    type: {
+      enum: ["low_shelf", "band", "high_shelf", "low_pass", "high_pass", "notch"],
+      description: "Optional assertion of the current live ReaEQ band type; it is not a topology mutation request.",
+    },
     enabled: { type: "boolean" },
     frequency_hz: { type: "number", minimum: 10, maximum: 30000 },
     gain_db: { type: "number", minimum: -60, maximum: 60 },

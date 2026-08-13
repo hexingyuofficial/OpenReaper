@@ -222,10 +222,9 @@ describe("E2 FX native assignment batch", () => {
     const extracted = source.slice(start, end);
     assert.match(source, /TakeFX_SetParam/);
     assert.match(source, /TrackFX_SetParam/);
-    assert.match(source, /TakeFX_SetNamedConfigParm/);
-    assert.match(source, /TrackFX_SetNamedConfigParm/);
     assert.match(extracted, /BANDTYPE/);
     assert.match(extracted, /BANDENABLED/);
+    assert.match(extracted, /FX_REAEQ_TOPOLOGY_MUTATION_UNAVAILABLE/);
     assert.match(extracted, /type_raw = type_raw or JSON_NULL/);
     assert.match(extracted, /enabled_raw = enabled_raw or JSON_NULL/);
     assert.doesNotMatch(extracted, /Main_OnCommand|SetParamNormalized|reaper\.ini|SWS|ReaPack/u);
@@ -251,12 +250,6 @@ describe("E2 FX native assignment batch", () => {
       assert(not e2_fx_reaeq_identity_allowed("VST3:OtherEQ (Cockos)"))
       assert(not e2_fx_reaeq_identity_allowed("/tmp/reaeq.vst.dylib<1"))
       assert(not e2_fx_reaeq_identity_allowed("/tmp/not-reaeq.vst.dylib<1919247729"))
-      assert(E2_FX_REAEQ_WRITE_TYPE_VALUES.high_pass == 0)
-      assert(E2_FX_REAEQ_WRITE_TYPE_VALUES.low_shelf == 1)
-      assert(E2_FX_REAEQ_WRITE_TYPE_VALUES.band == 2)
-      assert(E2_FX_REAEQ_WRITE_TYPE_VALUES.notch == 3)
-      assert(E2_FX_REAEQ_WRITE_TYPE_VALUES.high_shelf == 4)
-      assert(E2_FX_REAEQ_WRITE_TYPE_VALUES.low_pass == 5)
       assert(E2_FX_REAEQ_READ_TYPE_NAMES[0] == "low_shelf")
       assert(E2_FX_REAEQ_READ_TYPE_NAMES[1] == "high_shelf")
       assert(E2_FX_REAEQ_READ_TYPE_NAMES[3] == "low_pass")
@@ -266,7 +259,13 @@ describe("E2 FX native assignment batch", () => {
       assert(E2_FX_REAEQ_READ_TYPE_NAMES[2] == nil)
       assert(E2_FX_REAEQ_READ_TYPE_NAMES[5] == nil)
       assert(E2_FX_REAEQ_READ_TYPE_NAMES[7] == nil)
-      assert(E2_FX_REAEQ_WRITE_TYPE_VALUES.arbitrary == nil)
+      assert(e2_fx_reaeq_type_allowed("low_shelf"))
+      assert(e2_fx_reaeq_type_allowed("high_shelf"))
+      assert(e2_fx_reaeq_type_allowed("low_pass"))
+      assert(e2_fx_reaeq_type_allowed("high_pass"))
+      assert(e2_fx_reaeq_type_allowed("notch"))
+      assert(e2_fx_reaeq_type_allowed("band"))
+      assert(not e2_fx_reaeq_type_allowed("arbitrary"))
     `);
   });
 
@@ -288,11 +287,23 @@ describe("E2 FX native assignment batch", () => {
       ${extracted}
       local expected = e2_fx_reaeq_expected_ident(1, "frequency_hz", "low_shelf")
       assert(expected == "_Freq_Low_Shelf")
-      assert(e2_fx_reaeq_ident_matches(0, "_Freq_Low_Shelf", expected))
-      assert(e2_fx_reaeq_ident_matches(0, "0:_Freq_Low_Shelf", expected))
-      assert(not e2_fx_reaeq_ident_matches(0, "1:_Freq_Low_Shelf", expected))
-      assert(not e2_fx_reaeq_ident_matches(0, "0:_Freq_High_Pass", expected))
-      assert(not e2_fx_reaeq_ident_matches(0, "prefix:_Freq_Low_Shelf", expected))
+      assert(e2_fx_reaeq_ident_matches(0, "_Freq_Low_Shelf", expected, 1))
+      assert(e2_fx_reaeq_ident_matches(0, "_Freq_Low_Shelf_1", expected, 1))
+      assert(e2_fx_reaeq_ident_matches(0, "0:_Freq_Low_Shelf", expected, 1))
+      assert(e2_fx_reaeq_ident_matches(0, "0:_Freq_Low_Shelf_1", expected, 1))
+      assert(not e2_fx_reaeq_ident_matches(0, "1:_Freq_Low_Shelf_1", expected, 1))
+      assert(not e2_fx_reaeq_ident_matches(0, "0:_Freq_Low_Shelf_2", expected, 1))
+      assert(not e2_fx_reaeq_ident_matches(0, "0:_Freq_High_Pass_1", expected, 1))
+      assert(not e2_fx_reaeq_ident_matches(0, "prefix:_Freq_Low_Shelf_1", expected, 1))
+      local high_pass = e2_fx_reaeq_expected_ident(1, "frequency_hz", "high_pass")
+      assert(high_pass == "_Freq_High_Pass")
+      assert(e2_fx_reaeq_ident_matches(0, "_Freq_High_Pass_1", high_pass, 1))
+      local band_two = e2_fx_reaeq_expected_ident(2, "frequency_hz", "band")
+      assert(band_two == "_Freq_Band_2")
+      assert(e2_fx_reaeq_ident_matches(3, "3:_Freq_Band_2", band_two, 2))
+      assert(not e2_fx_reaeq_ident_matches(3, "_Freq_Band", band_two, 2))
+      assert(not e2_fx_reaeq_ident_matches(3, "3:_Freq_Band_3", band_two, 2))
+      assert(e2_fx_reaeq_expected_ident(4, "gain_db", "high_shelf") == "_Gain_High_Shelf_4")
     `);
   });
 });
