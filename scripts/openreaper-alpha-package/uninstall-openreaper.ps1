@@ -24,6 +24,43 @@ if (-not $ReaperResourceRoot) {
     $ReaperResourceRoot = Join-Path $appData "REAPER"
 }
 if (-not $EvidenceRoot) { $EvidenceRoot = Join-Path (Split-Path -Parent $InstallRoot) "evidence" }
+
+function Assert-OpenReaperUninstallReady {
+    $resolvedInstallRoot = [System.IO.Path]::GetFullPath($InstallRoot).TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+    $mcpScriptPaths = @(
+        [System.IO.Path]::GetFullPath((Join-Path $resolvedInstallRoot "bin\openreaper-mcp-bootstrap.mjs")),
+        [System.IO.Path]::GetFullPath((Join-Path $resolvedInstallRoot "vendor\openreaper-kernel\packages\mcp-server\src\openreaper-mcp-stdio.mjs"))
+    )
+
+    try {
+        $activeMcp = @(Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" -ErrorAction Stop | Where-Object {
+            $commandLine = [string] $_.CommandLine
+            $mcpScriptPaths | Where-Object { $commandLine.IndexOf($_, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 }
+        })
+    } catch {
+        throw "OpenReaper uninstall could not verify whether its MCP process is active. Close or restart the MCP client, then rerun uninstall. Detail: $($_.Exception.Message)"
+    }
+    if ($activeMcp.Count -gt 0) {
+        $processIds = ($activeMcp | ForEach-Object { [string] $_.ProcessId }) -join ", "
+        throw "OpenReaper uninstall is blocked because the installed MCP server is active (node.exe PID: $processIds). Close or restart the MCP client, then rerun uninstall. No files or configuration were changed."
+    }
+
+    $stateRoot = Join-Path $resolvedInstallRoot "session\state"
+    if (Test-Path -LiteralPath $stateRoot -PathType Container) {
+        foreach ($database in @(Get-ChildItem -LiteralPath $stateRoot -File -Filter "*.sqlite*" -ErrorAction Stop)) {
+            $stream = $null
+            try {
+                $stream = [System.IO.File]::Open($database.FullName, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::None)
+            } catch {
+                throw "OpenReaper uninstall is blocked because an installed session database is in use: $($database.FullName). Close or restart the MCP client, then rerun uninstall. No files or configuration were changed."
+            } finally {
+                if ($null -ne $stream) { $stream.Dispose() }
+            }
+        }
+    }
+}
+
+Assert-OpenReaperUninstallReady
 New-Item -ItemType Directory -Force -Path $EvidenceRoot | Out-Null
 
 function Get-PathManifest {
@@ -48,6 +85,7 @@ Get-PathManifest $before
 $arguments = @("$nodeScript", "--install-root", $InstallRoot, "--reaper-resource-root", $ReaperResourceRoot)
 if ($SkipClientConfig) { $arguments += "--skip-client-config" }
 if ($SkipStartupHook) { $arguments += "--skip-startup-hook" }
+Assert-OpenReaperUninstallReady
 & $nodePath @arguments 2>&1 | Tee-Object -FilePath (Join-Path $EvidenceRoot "uninstall.log") | Write-Output
 $exitCode = $LASTEXITCODE
 Get-PathManifest $after

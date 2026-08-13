@@ -639,7 +639,17 @@ async function smokeWindowsPackageContract() {
     ["bin/openreaper-doctor.ps1", "openreaper-doctor.mjs"],
     ["bin/openreaper-start.ps1", "Start-Process", "OPENREAPER_SESSION_ROOT", "openreaper-doctor.ps1"],
     ["install-openreaper.ps1", "install-openreaper.mjs", "install-before.json", "install-after.json"],
-    ["uninstall-openreaper.ps1", "uninstall-openreaper.mjs", "uninstall-before.json", "uninstall-after.json"],
+    [
+      "uninstall-openreaper.ps1",
+      "uninstall-openreaper.mjs",
+      "uninstall-before.json",
+      "uninstall-after.json",
+      "Assert-OpenReaperUninstallReady",
+      "openreaper-mcp-bootstrap.mjs",
+      "openreaper-mcp-stdio.mjs",
+      "FileShare]::None",
+      "Close or restart the MCP client, then rerun uninstall",
+    ],
   ];
   for (const [relativePath, ...needles] of wrapperChecks) {
     const source = await readFile(path.join(packageRoot, ...relativePath.split("/")), "utf8");

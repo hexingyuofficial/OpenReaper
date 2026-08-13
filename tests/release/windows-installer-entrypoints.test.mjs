@@ -11,6 +11,10 @@ const installerPs1 = await readFile(
   path.resolve(import.meta.dirname, "../../scripts/openreaper-alpha-package/install-openreaper.ps1"),
   "utf8",
 );
+const uninstallerPs1 = await readFile(
+  path.resolve(import.meta.dirname, "../../scripts/openreaper-alpha-package/uninstall-openreaper.ps1"),
+  "utf8",
+);
 const doctor = await readFile(
   path.resolve(import.meta.dirname, "../../scripts/openreaper-alpha-package/openreaper-doctor.sh"),
   "utf8",
@@ -177,4 +181,23 @@ test("Windows installer can upgrade its own read-only S3 Action files", () => {
   assert.match(installer, /if \(existingStatus\) await chmod\(action\.targetPath, 0o644\);/u);
   assert.match(installer, /await copyFile\(action\.sourcePath, action\.targetPath\);/u);
   assert.match(installer, /if \(existingStatus\) await chmod\(action\.targetPath, 0o444\)\.catch\(\(\) => \{\}\);/u);
+});
+
+test("Windows uninstaller fails closed before mutation while its installed MCP state is active", () => {
+  assert.match(uninstallerPs1, /function Assert-OpenReaperUninstallReady/u);
+  assert.match(uninstallerPs1, /\[System\.IO\.Path\]::GetFullPath\(\$InstallRoot\)/u);
+  assert.match(uninstallerPs1, /Join-Path \$resolvedInstallRoot "bin\\openreaper-mcp-bootstrap\.mjs"/u);
+  assert.match(uninstallerPs1, /Join-Path \$resolvedInstallRoot "vendor\\openreaper-kernel\\packages\\mcp-server\\src\\openreaper-mcp-stdio\.mjs"/u);
+  assert.match(uninstallerPs1, /Get-CimInstance Win32_Process -Filter "Name = 'node\.exe'"/u);
+  assert.match(uninstallerPs1, /IndexOf\(\$_, \[System\.StringComparison\]::OrdinalIgnoreCase\)/u);
+  assert.match(uninstallerPs1, /\[System\.IO\.FileShare\]::None/u);
+  assert.match(uninstallerPs1, /Close or restart the MCP client, then rerun uninstall/u);
+  assert.doesNotMatch(uninstallerPs1, /Stop-Process|CloseMainWindow|\.Kill\(|taskkill/u);
+
+  const checks = [...uninstallerPs1.matchAll(/^Assert-OpenReaperUninstallReady$/gmu)].map(({ index }) => index);
+  assert.equal(checks.length, 2, "the wrapper must preflight before evidence and again immediately before Node mutation");
+  assert.ok(checks[0] < uninstallerPs1.indexOf("New-Item -ItemType Directory -Force -Path $EvidenceRoot"));
+  assert.ok(checks[0] < uninstallerPs1.indexOf("Get-PathManifest $before"));
+  assert.ok(checks[1] > uninstallerPs1.indexOf("Get-PathManifest $before"));
+  assert.ok(checks[1] < uninstallerPs1.indexOf("& $nodePath @arguments"));
 });
