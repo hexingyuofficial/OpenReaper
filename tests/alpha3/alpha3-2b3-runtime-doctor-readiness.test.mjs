@@ -920,6 +920,10 @@ describe("Alpha3.2-B3 runtime / doctor live readiness", () => {
     const doctorSource = await readFile(path.join(REPO_ROOT, "scripts/openreaper-alpha-package/openreaper-doctor.sh"), "utf8");
     const windowsMcpWrapper = await readFile(path.join(REPO_ROOT, "scripts/openreaper-alpha-package/openreaper-mcp.ps1"), "utf8");
     const windowsMcpBootstrap = await readFile(path.join(REPO_ROOT, "scripts/openreaper-alpha-package/openreaper-mcp-bootstrap.mjs"), "utf8");
+    const packageCommandSmoke = doctorSource.slice(
+      doctorSource.indexOf("async function smokeOpenReaperMcpCommandInner()"),
+      doctorSource.indexOf("async function smokeOpenReaperMcpInner()"),
+    );
     const openReaperSmoke = doctorSource.slice(
       doctorSource.indexOf("async function smokeOpenReaperMcpInner()"),
       doctorSource.indexOf("function projectIndexReadiness("),
@@ -933,19 +937,22 @@ describe("Alpha3.2-B3 runtime / doctor live readiness", () => {
     assert.match(doctorSource, /report\.project_index = report\.smoke\?\.openreaper\?\.project_index\s+\?\? null/);
     assert.match(
       doctorSource,
-      /const openreaper = await smokeOpenReaperMcpInner\(\);\s*const packageMcpCommand = openreaper\.package_command;/u,
-      "package-command proof must derive from the same wrapper-backed live MCP lifecycle",
+      /const packageMcpCommand = process\.platform === "win32"\s*\? openreaper\.package_command\s*:\s*await smokeOpenReaperMcpCommandInner\(\);/u,
+      "Windows must reuse one wrapper while macOS retains isolated package-command proof",
     );
-    assert.doesNotMatch(doctorSource, /smokeOpenReaperMcpCommandInner|createPackageCommandValidationRuntime|packageMcpCommandPromise/);
+    assert.match(packageCommandSmoke, /createPackageCommandValidationRuntime\(\)/);
+    assert.match(packageCommandSmoke, /validation_scope: "isolated_package_runtime"/);
+    assert.match(packageCommandSmoke, /mkdtemp\(path\.join\(os\.tmpdir\(\), "openreaper-doctor-package-"\)\)/);
+    assert.match(packageCommandSmoke, /await validationRuntime\.cleanup\(\)/);
     assert.equal(
       (openReaperSmoke.match(/new OwnedStdioClientTransport\(\{/gu) ?? []).length,
       1,
       "Doctor must own exactly one wrapper-backed OpenReaper MCP transport",
     );
-    assert.match(openReaperSmoke, /command: mcpLaunch\.command,\s*args: mcpLaunch\.args,[\s\S]*env: mcpEnv/u);
-    assert.doesNotMatch(openReaperSmoke, /command: process\.execPath|args: \[serverScript\]/);
+    assert.match(openReaperSmoke, /const liveMcpLaunch = process\.platform === "win32"\s*\? mcpLaunch\s*:\s*\{ command: process\.execPath, args: \[serverScript\] \}/u);
+    assert.match(openReaperSmoke, /command: liveMcpLaunch\.command,\s*args: liveMcpLaunch\.args,[\s\S]*env: mcpEnv/u);
     assert.match(openReaperSmoke, /assertExactArray\(toolNames, exactTools, "MCP tool surface"\)/);
-    assert.match(openReaperSmoke, /package_command: \{\s*ok: true,[\s\S]*validation_scope: "live_installed_package_runtime",[\s\S]*command: mcpCommand/u);
+    assert.match(openReaperSmoke, /process\.platform === "win32"[\s\S]*package_command: \{\s*ok: true,[\s\S]*validation_scope: "live_installed_package_runtime",[\s\S]*command: mcpCommand/u);
     assert.match(openReaperSmoke, /await lifecycle\.close\("normal_finish"\)/);
     assert.match(doctorSource, /error_message: boundedErrorMessage\(error\)/);
     assert.match(doctorSource, /function boundedErrorMessage\(error\)/);
