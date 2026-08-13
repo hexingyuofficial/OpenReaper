@@ -685,12 +685,15 @@ function normalizeCallTemplateToolRequest(request, context) {
   };
 }
 
-export async function resolveAuthoritativeBridgeIdentity({ callContext, liveBridge }) {
+export async function resolveAuthoritativeBridgeIdentity({ callContext, liveBridge, forceFresh = false }) {
   const installed = callContext?.identity;
   if (!installed || liveBridge?.configured !== true || typeof liveBridge?.executor?.probeLiveness !== "function") {
     return installed;
   }
-  const probe = await liveBridge.executor.probeLiveness({ expectedOwner: installed.owner });
+  const probeMethod = forceFresh !== true && typeof liveBridge.executor.probeLeasedLiveness === "function"
+    ? liveBridge.executor.probeLeasedLiveness
+    : liveBridge.executor.probeLiveness;
+  const probe = await probeMethod.call(liveBridge.executor, { expectedOwner: installed.owner });
   if (probe?.status === LIVE_BRIDGE_LIVENESS_STATUS.OWNER_MISMATCH) {
     throw new Alpha3_2C1CallContextError(
       "CALL_TEMPLATE_BRIDGE_OWNER_MISMATCH",
@@ -713,7 +716,11 @@ export async function resolveAuthoritativeBridgeIdentity({ callContext, liveBrid
 export async function callTemplateWithAuthoritativeIdentity({ request, signal, callContext, runtime, liveBridge, projectIndexBinding = null }) {
   let attempt = 0;
   while (attempt < 2) {
-    const identity = await resolveAuthoritativeBridgeIdentity({ callContext, liveBridge });
+    const identity = await resolveAuthoritativeBridgeIdentity({
+      callContext,
+      liveBridge,
+      forceFresh: attempt > 0,
+    });
     await projectIndexBinding?.activate(identity);
     const called = await callContext.runWithIdentity(identity, async () => {
       const context = callContext.allocate(request?.context);

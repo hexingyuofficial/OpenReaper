@@ -7,6 +7,7 @@ param(
 $ErrorActionPreference = "Stop"
 $binRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $serverScript = Join-Path $binRoot "..\vendor\openreaper-kernel\packages\mcp-server\src\openreaper-mcp-stdio.mjs"
+$bootstrapScript = Join-Path $binRoot "openreaper-mcp-bootstrap.mjs"
 $installRoot = [IO.Path]::GetFullPath((Split-Path -Parent $binRoot))
 $sessionRoot = if ($env:OPENREAPER_SESSION_ROOT) {
     [IO.Path]::GetFullPath($env:OPENREAPER_SESSION_ROOT)
@@ -120,6 +121,9 @@ New-Item -ItemType Directory -Force -Path $transportRoot, (Join-Path $transportR
 if (-not (Test-Path -LiteralPath $serverScript -PathType Leaf)) {
     throw "Packaged OpenReaper MCP server is missing: $serverScript"
 }
+if (-not (Test-Path -LiteralPath $bootstrapScript -PathType Leaf)) {
+    throw "Packaged OpenReaper MCP bootstrap is missing: $bootstrapScript"
+}
 
 function Resolve-OpenReaperNode {
     if ($env:OPENREAPER_NODE_PATH) {
@@ -136,12 +140,5 @@ function Resolve-OpenReaperNode {
 }
 
 $node = Resolve-OpenReaperNode
-$nodeVersion = (& $node --version 2>$null).Trim()
-if ($nodeVersion -notmatch '^v(\d+)\.') {
-    throw "Could not determine the Node.js version from $node."
-}
-if ([int]$Matches[1] -lt 20) {
-    throw "OpenReaper requires Node.js 20 or newer. Found $nodeVersion."
-}
-& $node $serverScript @ArgumentList
+& $node $bootstrapScript $serverScript @ArgumentList
 exit $LASTEXITCODE

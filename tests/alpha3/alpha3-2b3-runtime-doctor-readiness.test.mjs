@@ -918,9 +918,11 @@ describe("Alpha3.2-B3 runtime / doctor live readiness", () => {
 
   it("keeps packaged Doctor smoke aligned with the current macro surface and returns bounded failure detail", async () => {
     const doctorSource = await readFile(path.join(REPO_ROOT, "scripts/openreaper-alpha-package/openreaper-doctor.sh"), "utf8");
-    const packageCommandSmoke = doctorSource.slice(
-      doctorSource.indexOf("async function smokeOpenReaperMcpCommandInner()"),
-      doctorSource.indexOf("async function smokeVitalAgentMcpInner()"),
+    const windowsMcpWrapper = await readFile(path.join(REPO_ROOT, "scripts/openreaper-alpha-package/openreaper-mcp.ps1"), "utf8");
+    const windowsMcpBootstrap = await readFile(path.join(REPO_ROOT, "scripts/openreaper-alpha-package/openreaper-mcp-bootstrap.mjs"), "utf8");
+    const openReaperSmoke = doctorSource.slice(
+      doctorSource.indexOf("async function smokeOpenReaperMcpInner()"),
+      doctorSource.indexOf("function projectIndexReadiness("),
     );
     assert.match(doctorSource, /const requiredMacros = \["macro\.project\.inspect", "macro\.project\.query"\];/);
     assert.doesNotMatch(doctorSource, /const requiredMacros = \[[^\]]*macro\.index_status/);
@@ -929,29 +931,32 @@ describe("Alpha3.2-B3 runtime / doctor live readiness", () => {
     assert.match(doctorSource, /projectIndexReadiness: report\.project_index_readiness/);
     assert.match(doctorSource, /OPENREAPER_LIVE_SMOKE_RENDER_ROOT: effectiveRenderRoot/);
     assert.match(doctorSource, /report\.project_index = report\.smoke\?\.openreaper\?\.project_index\s+\?\? null/);
-    assert.match(packageCommandSmoke, /createPackageCommandValidationRuntime\(\)/);
-    assert.match(packageCommandSmoke, /try \{[\s\S]*command: mcpLaunch\.command,[\s\S]*args: mcpLaunch\.args,[\s\S]*env: validationRuntime\.env,[\s\S]*assertExactArray\(toolNames, exactTools/);
-    assert.doesNotMatch(packageCommandSmoke, /path\.join\(installRoot, "session", "renders"\)/);
-    assert.match(packageCommandSmoke, /validation_scope: "isolated_package_runtime"/);
-    assert.match(packageCommandSmoke, /OPENREAPER_EXECUTABLE_RECIPE_ROOT: recipeRoot/);
-    assert.match(packageCommandSmoke, /await lifecycle\?\.close\("normal_finish"\);\s+\} finally \{\s+await validationRuntime\.cleanup\(\)/);
-    assert.match(packageCommandSmoke, /mkdtemp\(path\.join\(os\.tmpdir\(\), "openreaper-doctor-package-"\)\)/);
-    for (const variable of [
-      "OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR",
-      "OPENREAPER_ARTIFACT_ROOT",
-      "OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT",
-      "OPENREAPER_LIVE_SMOKE_RENDER_ROOT",
-      "OPENREAPER_PROJECT_INDEX_STATE_ROOT",
-      "OPENREAPER_PROJECT_INDEX_LOGICAL_SESSION_KEY",
-    ]) {
-      assert.match(packageCommandSmoke, new RegExp(`${variable}:`), `${variable} is not isolated`);
-    }
-    assert.match(packageCommandSmoke, /delete env\.OPENREAPER_CURRENT_PROJECT_PATH/);
-    assert.match(packageCommandSmoke, /chmod\(root, 0o700\)/);
-    assert.match(packageCommandSmoke, /rm\(root, \{ recursive: true, force: true \}\)/);
+    assert.match(
+      doctorSource,
+      /const openreaper = await smokeOpenReaperMcpInner\(\);\s*const packageMcpCommand = openreaper\.package_command;/u,
+      "package-command proof must derive from the same wrapper-backed live MCP lifecycle",
+    );
+    assert.doesNotMatch(doctorSource, /smokeOpenReaperMcpCommandInner|createPackageCommandValidationRuntime|packageMcpCommandPromise/);
+    assert.equal(
+      (openReaperSmoke.match(/new OwnedStdioClientTransport\(\{/gu) ?? []).length,
+      1,
+      "Doctor must own exactly one wrapper-backed OpenReaper MCP transport",
+    );
+    assert.match(openReaperSmoke, /command: mcpLaunch\.command,\s*args: mcpLaunch\.args,[\s\S]*env: mcpEnv/u);
+    assert.doesNotMatch(openReaperSmoke, /command: process\.execPath|args: \[serverScript\]/);
+    assert.match(openReaperSmoke, /assertExactArray\(toolNames, exactTools, "MCP tool surface"\)/);
+    assert.match(openReaperSmoke, /package_command: \{\s*ok: true,[\s\S]*validation_scope: "live_installed_package_runtime",[\s\S]*command: mcpCommand/u);
+    assert.match(openReaperSmoke, /await lifecycle\.close\("normal_finish"\)/);
     assert.match(doctorSource, /error_message: boundedErrorMessage\(error\)/);
     assert.match(doctorSource, /function boundedErrorMessage\(error\)/);
     assert.match(doctorSource, /return Math\.max\(\s*30_000,/u);
+    assert.doesNotMatch(windowsMcpWrapper, /& \$node --version/);
+    assert.match(windowsMcpWrapper, /\$bootstrapScript = Join-Path \$binRoot "openreaper-mcp-bootstrap\.mjs"/);
+    assert.match(windowsMcpWrapper, /& \$node \$bootstrapScript \$serverScript @ArgumentList/);
+    assert.equal((windowsMcpWrapper.match(/& \$node\b/gu) ?? []).length, 1, "Windows MCP wrapper must launch Node exactly once");
+    assert.match(windowsMcpBootstrap, /const nodeMajor = Number\.parseInt\(process\.versions\.node\.split\("\."\)\[0\], 10\)/);
+    assert.match(windowsMcpBootstrap, /nodeMajor < 20[\s\S]*process\.exit\(1\)/);
+    assert.match(windowsMcpBootstrap, /process\.argv\.splice\(1, 1\);\s*await import\(pathToFileURL\(serverScript\)\.href\)/u);
   });
 
   it("treats host-exported empty optional OpenReaper values as absent without discarding non-empty overrides", { timeout: 30_000 }, async () => {

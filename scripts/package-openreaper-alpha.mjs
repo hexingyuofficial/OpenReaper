@@ -345,6 +345,7 @@ async function copyInstallerTemplates() {
     for (const name of ["openreaper-mcp.ps1", "openreaper-doctor.ps1", "openreaper-start.ps1"]) {
       await cp(path.join(templateRoot, name), path.join(packageRoot, "bin", name));
     }
+    await cp(path.join(templateRoot, "openreaper-mcp-bootstrap.mjs"), path.join(packageRoot, "bin", "openreaper-mcp-bootstrap.mjs"));
     for (const name of ["install-openreaper.ps1", "uninstall-openreaper.ps1"]) {
       await cp(path.join(templateRoot, name), path.join(packageRoot, name));
     }
@@ -622,6 +623,7 @@ async function smokeWindowsPackageContract() {
     "install-openreaper.ps1",
     "uninstall-openreaper.ps1",
     "bin/openreaper-mcp.ps1",
+    "bin/openreaper-mcp-bootstrap.mjs",
     "bin/openreaper-doctor.ps1",
     "bin/openreaper-doctor.mjs",
     "bin/openreaper-start.ps1",
@@ -633,7 +635,7 @@ async function smokeWindowsPackageContract() {
     await assertReadable(path.join(packageRoot, ...relativePath.split("/")));
   }
   const wrapperChecks = [
-    ["bin/openreaper-mcp.ps1", "Resolve-OpenReaperNode", "openreaper-mcp-stdio.mjs"],
+    ["bin/openreaper-mcp.ps1", "Resolve-OpenReaperNode", "openreaper-mcp-bootstrap.mjs", "openreaper-mcp-stdio.mjs"],
     ["bin/openreaper-doctor.ps1", "openreaper-doctor.mjs"],
     ["bin/openreaper-start.ps1", "Start-Process", "OPENREAPER_SESSION_ROOT", "openreaper-doctor.ps1"],
     ["install-openreaper.ps1", "install-openreaper.mjs", "install-before.json", "install-after.json"],

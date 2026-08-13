@@ -73,7 +73,8 @@ const HEARTBEAT_REPLACEMENT_RETRY_DELAY_MS = 40;
 // A Windows safe heartbeat read launches native Windows PowerShell. Reuse one
 // exact ready identity briefly across adjacent Bridge dispatches; every Bridge
 // request still carries owner/generation and is rejected REAPER-side if that
-// generation has changed. Public probes always bypass this dispatch-only lease.
+// generation has changed. Public probes always read fresh and may seed the
+// lease for immediately adjacent internal identity/dispatch checks.
 const WINDOWS_DISPATCH_LIVENESS_LEASE_MS = 5_000;
 const HEARTBEAT_FIELDS = Object.freeze([
   "active_generation",
@@ -156,7 +157,7 @@ export function createLiveBridgeExecutor(options = {}) {
 
   async function probeLiveness(probeOptions = {}) {
     dispatchLivenessLease = null;
-    return livenessProbe({
+    const result = await livenessProbe({
       transportDir,
       ...(Object.prototype.hasOwnProperty.call(probeOptions, "expectedOwner")
         ? { expectedOwner: probeOptions.expectedOwner }
@@ -167,53 +168,59 @@ export function createLiveBridgeExecutor(options = {}) {
       maxAgeMs: probeOptions.maxAgeMs ?? heartbeatMaxAgeMs,
       now: probeOptions.now ?? now,
     });
+    seedWindowsDispatchLivenessLease(result, probeOptions);
+    return result;
   }
 
-  async function probeDispatchLiveness(request) {
-    const expectedOwner = request?.bridge?.expected_owner;
-    const expectedGeneration = request?.bridge?.expected_generation;
+  function seedWindowsDispatchLivenessLease(result, expected = {}) {
+    if (platform !== "win32" || result?.status !== LIVE_BRIDGE_LIVENESS_STATUS.READY) return;
+    const observed = result?.heartbeat?.observed ?? {};
+    const owner = observed.active_owner ?? observed.owner ?? result?.expected?.owner ?? expected.expectedOwner;
+    const generation = observed.active_generation ?? observed.generation
+      ?? result?.expected?.generation ?? expected.expectedGeneration;
+    if (
+      typeof owner !== "string"
+      || owner === ""
+      || !Number.isSafeInteger(generation)
+      || generation < 0
+      || (typeof expected.expectedOwner === "string" && expected.expectedOwner !== owner)
+      || (Number.isSafeInteger(expected.expectedGeneration) && expected.expectedGeneration !== generation)
+    ) return;
+    const observedAgeMs = Number.isFinite(observed.age_ms)
+      ? Math.max(0, Math.floor(observed.age_ms))
+      : heartbeatMaxAgeMs;
+    const remainingFreshnessMs = Math.max(0, heartbeatMaxAgeMs - observedAgeMs);
+    const leaseMs = Math.min(WINDOWS_DISPATCH_LIVENESS_LEASE_MS, remainingFreshnessMs);
+    if (leaseMs <= 0) return;
+    dispatchLivenessLease = {
+      owner,
+      generation,
+      expires_at_ms: dispatchLeaseNow() + leaseMs,
+      result,
+    };
+  }
+
+  async function probeLeasedLiveness({ expectedOwner, expectedGeneration } = {}) {
     const monotonicNowMs = dispatchLeaseNow();
     if (
       platform === "win32"
       && dispatchLivenessLease
       && dispatchLivenessLease.owner === expectedOwner
-      && dispatchLivenessLease.generation === expectedGeneration
+      && (!Number.isSafeInteger(expectedGeneration) || dispatchLivenessLease.generation === expectedGeneration)
       && monotonicNowMs <= dispatchLivenessLease.expires_at_ms
     ) {
       return dispatchLivenessLease.result;
     }
 
     dispatchLivenessLease = null;
-    const result = await livenessProbe({
-      transportDir,
-      expectedOwner,
-      expectedGeneration,
-      maxAgeMs: heartbeatMaxAgeMs,
-      now,
+    return probeLiveness({ expectedOwner, ...(Number.isSafeInteger(expectedGeneration) ? { expectedGeneration } : {}) });
+  }
+
+  async function probeDispatchLiveness(request) {
+    return probeLeasedLiveness({
+      expectedOwner: request?.bridge?.expected_owner,
+      expectedGeneration: request?.bridge?.expected_generation,
     });
-    if (
-      platform === "win32"
-      && result?.status === LIVE_BRIDGE_LIVENESS_STATUS.READY
-      && typeof expectedOwner === "string"
-      && expectedOwner !== ""
-      && Number.isSafeInteger(expectedGeneration)
-      && expectedGeneration >= 0
-    ) {
-      const observedAgeMs = Number.isFinite(result?.heartbeat?.observed?.age_ms)
-        ? Math.max(0, Math.floor(result.heartbeat.observed.age_ms))
-        : heartbeatMaxAgeMs;
-      const remainingFreshnessMs = Math.max(0, heartbeatMaxAgeMs - observedAgeMs);
-      const leaseMs = Math.min(WINDOWS_DISPATCH_LIVENESS_LEASE_MS, remainingFreshnessMs);
-      if (leaseMs > 0) {
-        dispatchLivenessLease = {
-          owner: expectedOwner,
-          generation: expectedGeneration,
-          expires_at_ms: dispatchLeaseNow() + leaseMs,
-          result,
-        };
-      }
-    }
-    return result;
   }
 
   async function dispatch(request) {
@@ -425,6 +432,7 @@ export function createLiveBridgeExecutor(options = {}) {
     dispatch,
     dispatchReadBatch,
     probeLiveness,
+    probeLeasedLiveness,
   });
 }
 

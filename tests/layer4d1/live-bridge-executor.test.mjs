@@ -1308,7 +1308,13 @@ describe("Layer 4D.1 live bridge executor binding", () => {
         contract: LIVE_BRIDGE_LIVENESS_PROBE_CONTRACT,
         status: LIVE_BRIDGE_LIVENESS_STATUS.READY,
         ready: true,
-        heartbeat: { observed: { age_ms: 0 } },
+        heartbeat: {
+          observed: {
+            active_owner: expectedOwner ?? "owner-test",
+            active_generation: expectedGeneration ?? 1,
+            age_ms: 0,
+          },
+        },
         expected: { owner: expectedOwner, generation: expectedGeneration },
         details: {},
       };
@@ -1343,13 +1349,46 @@ describe("Layer 4D.1 live bridge executor binding", () => {
     await executor.probeLiveness({ expectedOwner: "owner-test", expectedGeneration: 1 });
     assert.equal(probeCount, 2, "public probe must always read fresh liveness");
     await dispatchPrepared("after_public_probe");
-    assert.equal(probeCount, 3, "public probe must not seed the dispatch-only lease");
+    assert.equal(probeCount, 2, "fresh public Windows probe should seed the exact dispatch lease");
 
     await dispatchPrepared("new_generation", 2);
-    assert.equal(probeCount, 4, "generation changes must invalidate the lease");
+    assert.equal(probeCount, 3, "generation changes must invalidate the lease");
     leaseNowMs = 5_001;
     await dispatchPrepared("expired", 2);
-    assert.equal(probeCount, 5, "the bounded lease must expire");
+    assert.equal(probeCount, 4, "the bounded lease must expire");
+  });
+
+  it("never reuses public liveness on non-Windows platforms", async () => {
+    const transport = await makeTransport();
+    const bridgeScriptPath = join(transport.root, "openreaper-live-bridge.lua");
+    await writeFile(bridgeScriptPath, "-- minimal test fixture; not a runtime\n");
+    let probeCount = 0;
+    const executor = createLiveBridgeExecutor({
+      transportDir: transport.root,
+      bridgeScriptPath,
+      __platformForTest: "darwin",
+      __probeLivenessForTest: async ({ expectedOwner, expectedGeneration }) => {
+        probeCount += 1;
+        return {
+          contract: LIVE_BRIDGE_LIVENESS_PROBE_CONTRACT,
+          status: LIVE_BRIDGE_LIVENESS_STATUS.READY,
+          ready: true,
+          heartbeat: {
+            observed: {
+              active_owner: expectedOwner,
+              active_generation: expectedGeneration ?? 1,
+              age_ms: 0,
+            },
+          },
+          expected: { owner: expectedOwner, generation: expectedGeneration },
+          details: {},
+        };
+      },
+    });
+
+    await executor.probeLiveness({ expectedOwner: "owner-test" });
+    await executor.probeLeasedLiveness({ expectedOwner: "owner-test" });
+    assert.equal(probeCount, 2, "non-Windows liveness must remain fresh");
   });
 
   it("never leases a failed Windows dispatch liveness probe", async () => {

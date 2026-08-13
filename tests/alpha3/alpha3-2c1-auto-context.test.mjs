@@ -339,13 +339,21 @@ describe("Alpha3.2-C1 server-managed call context", () => {
         OPENREAPER_LIVE_BRIDGE_GENERATION: "1",
       },
     });
-    const probedGenerations = [7, 8];
+    let leasedProbeCalls = 0;
+    let freshProbeCalls = 0;
     const seen = [];
     const liveBridge = {
       configured: true,
       executor: {
-        async probeLiveness() {
-          return readyProbe("installed-owner", probedGenerations.shift() ?? 8);
+        async probeLeasedLiveness(options) {
+          leasedProbeCalls += 1;
+          assert.deepEqual(options, { expectedOwner: "installed-owner" });
+          return readyProbe("installed-owner", 7);
+        },
+        async probeLiveness(options) {
+          freshProbeCalls += 1;
+          assert.deepEqual(options, { expectedOwner: "installed-owner" });
+          return readyProbe("installed-owner", 8);
         },
       },
     };
@@ -362,6 +370,8 @@ describe("Alpha3.2-C1 server-managed call context", () => {
     assert.equal(result.generation, 8);
     assert.deepEqual(seen.map((entry) => entry.generation), [7, 8]);
     assert.notEqual(seen[0].sequence, seen[1].sequence);
+    assert.equal(leasedProbeCalls, 1, "initial identity resolution should consume the Windows lease when available");
+    assert.equal(freshProbeCalls, 1, "zero-write generation retry must bypass the lease");
 
     for (const rejected of [
       generationMismatchResult(false),
