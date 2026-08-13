@@ -222,14 +222,20 @@ describe("E2 FX native assignment batch", () => {
     const extracted = source.slice(start, end);
     assert.match(source, /TakeFX_SetParam/);
     assert.match(source, /TrackFX_SetParam/);
+    assert.match(source, /TakeFX_SetNamedConfigParm/);
+    assert.match(source, /TrackFX_SetNamedConfigParm/);
     assert.match(extracted, /BANDTYPE/);
     assert.match(extracted, /BANDENABLED/);
-    assert.match(extracted, /FX_REAEQ_TOPOLOGY_MUTATION_UNAVAILABLE/);
+    assert.match(extracted, /FX_REAEQ_TOPOLOGY_WRITE_MISMATCH/);
     assert.match(extracted, /type_raw = type_raw or JSON_NULL/);
     assert.match(extracted, /enabled_raw = enabled_raw or JSON_NULL/);
     assert.doesNotMatch(extracted, /Main_OnCommand|SetParamNormalized|reaper\.ini|SWS|ReaPack/u);
     assert.doesNotMatch(extracted, /request\.params\.(?:key|named_config|parmname)/u);
     assert.ok(extracted.indexOf("e2_fx_reaeq_validate_request(request") < extracted.indexOf("local mutation_started"));
+    const mutation = extracted.slice(extracted.indexOf("local mutation_started"));
+    assert.ok(mutation.indexOf('e2_fx_reaeq_band_key("BANDTYPE"') < mutation.indexOf("e2_fx_reaeq_compile_rows(owner_kind, owner, slot_index, plan.prepared, post_topology_layout)"));
+    assert.ok(mutation.indexOf("post_topology_layout") < mutation.indexOf('e2_fx_reaeq_band_key("BANDENABLED"'));
+    assert.ok(mutation.indexOf("post_topology_identity") < mutation.indexOf("e2_fx_reaeq_compile_rows(owner_kind, owner, slot_index, plan.prepared, post_topology_layout)"));
   });
 
   it("maps only approved Cockos ReaEQ identities and the six public topologies", () => {
@@ -259,6 +265,13 @@ describe("E2 FX native assignment batch", () => {
       assert(E2_FX_REAEQ_READ_TYPE_NAMES[2] == nil)
       assert(E2_FX_REAEQ_READ_TYPE_NAMES[5] == nil)
       assert(E2_FX_REAEQ_READ_TYPE_NAMES[7] == nil)
+      assert(e2_fx_reaeq_type_value("low_shelf") == 0)
+      assert(e2_fx_reaeq_type_value("high_shelf") == 1)
+      assert(e2_fx_reaeq_type_value("low_pass") == 3)
+      assert(e2_fx_reaeq_type_value("high_pass") == 4)
+      assert(e2_fx_reaeq_type_value("notch") == 6)
+      assert(e2_fx_reaeq_type_value("band") == 8)
+      assert(e2_fx_reaeq_type_value("arbitrary") == nil)
       assert(e2_fx_reaeq_type_allowed("low_shelf"))
       assert(e2_fx_reaeq_type_allowed("high_shelf"))
       assert(e2_fx_reaeq_type_allowed("low_pass"))
@@ -304,6 +317,40 @@ describe("E2 FX native assignment batch", () => {
       assert(not e2_fx_reaeq_ident_matches(3, "_Freq_Band", band_two, 2))
       assert(not e2_fx_reaeq_ident_matches(3, "3:_Freq_Band_3", band_two, 2))
       assert(e2_fx_reaeq_expected_ident(4, "gain_db", "high_shelf") == "_Gain_High_Shelf_4")
+    `);
+  });
+
+  it("preserves typed ReaEQ helper failures without an extra nil return", () => {
+    const source = readFileSync(new URL("../../reaper/bridge/src/handlers/fx/e2_fx_l1_read_route.lua", import.meta.url), "utf8");
+    const start = source.indexOf("local function e2_fx_reaeq_error");
+    const end = source.indexOf("\nlocal function e2_fx_reaeq_parse_formatted", start);
+    assert.ok(start >= 0 && end > start);
+    const extracted = source.slice(start, end);
+    runLua(String.raw`
+      local JSON_NULL = {}
+      local E2_FX_REAEQ_BAND_MAX = 4
+      local E2_FX_REAEQ_READ_TYPE_NAMES = {}
+      local E2_FX_REAEQ_IDENT_TOKENS = {}
+      local function json_array(value) return value end
+      local function e2_fx_batch_error(code, message, details)
+        return nil, { code = code, message = message, details = details }
+      end
+      local function e2_fx_read_param_count() return 0 end
+      local function e2_fx_read_param_ident() return nil end
+      local function e2_fx_read_param_value() return {} end
+      local function e2_fx_read_param_name() return nil end
+      local function e2_fx_read_param_normalized() return nil end
+      local function e2_fx_read_param_formatted() return nil end
+      local function e2_fx_named_config_get() return nil end
+      local function bounded_string(value) return value end
+      local function call_reaper() return false end
+      ${extracted}
+      local layout, failure = e2_fx_reaeq_read_layout("track", {}, 0, nil)
+      assert(layout == nil)
+      assert(type(failure) == "table")
+      assert(failure.code == "FX_PARAMETER_NOT_FOUND")
+      assert(failure.details.blocker == "FX_REAEQ_INVENTORY_INVALID")
+      assert(failure.details.zero_write == true)
     `);
   });
 });

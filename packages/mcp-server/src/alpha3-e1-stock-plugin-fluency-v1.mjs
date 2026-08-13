@@ -1351,7 +1351,7 @@ function stockPluginControlInputSchema() {
     band: { type: "integer", minimum: 1, maximum: 4 },
     type: {
       enum: ["low_shelf", "band", "high_shelf", "low_pass", "high_pass", "notch"],
-      description: "Optional assertion of the current live ReaEQ band type; it is not a topology mutation request.",
+      description: "Optional target ReaEQ band type; topology is written and read back before exact values are compiled.",
     },
     enabled: { type: "boolean" },
     frequency_hz: { type: "number", minimum: 10, maximum: 30000 },

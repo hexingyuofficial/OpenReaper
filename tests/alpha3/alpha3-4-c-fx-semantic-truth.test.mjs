@@ -98,6 +98,50 @@ test("reaeq_bands dispatches one typed atomic batch and invalidates FX once", as
   assert.deepEqual(invalidations, [["fx"]]);
 });
 
+test("reaeq_bands live-resolves exact audio Take FX without the MIDI-only resolver", async () => {
+  const takeRef = "take:guid:{TAKE}";
+  const fxRef = `fx:${takeRef}:0`;
+  const calls = [];
+  const response = await executeAlpha3_2_5CControlMacro({
+    request: {
+      id: "macro.set_stock_plugin_controls",
+      input: { mode: "reaeq_bands", dry_run: false, bands: [{ band: 1, type: "high_pass", frequency_hz: 85 }] },
+      refs: { fx_ref: fxRef },
+    },
+    executeAtomic: async ({ id, input, refs }) => {
+      calls.push({ id, input, refs });
+      if (id === "template.fx.resolve_fx_ref") {
+        assert.deepEqual(input, { owner_kind: "take", slot_index: 0 });
+        assert.deepEqual(refs, {
+          take_ref: { kind: "take", ref: takeRef, identity: { scheme: "guid", value: "{TAKE}" } },
+        });
+        return atomic(id, { fx_ref: fxRef }, [
+          { kind: "fx", ref: fxRef, identity: { scheme: "take_fx", value: `${takeRef}:0` } },
+        ]);
+      }
+      if (id === "template.fx.set_reaeq_bands") {
+        return atomic(id, {
+          fx_ref: fxRef,
+          plugin_identity: "VST3:ReaEQ (Cockos)",
+          owner_kind: "take",
+          topology: [{ band: 1, type: "high_pass", enabled: true }],
+          parameter_inventory: Array.from({ length: 19 }, (_, param_index) => ({ param_index })),
+          rows: [{ band: 1, type: "high_pass", frequency_hz: 85, readback_status: "aggregate_passed" }],
+          mutation_attempted: true,
+          batch_timings: { preflight_ms: 1, mutation_ms: 1, readback_ms: 1 },
+        });
+      }
+      throw new Error(`unexpected ${id}`);
+    },
+  });
+
+  assert.equal(response.ok, true, JSON.stringify(response));
+  assert.deepEqual(calls.map((call) => call.id), [
+    "template.fx.resolve_fx_ref",
+    "template.fx.set_reaeq_bands",
+  ]);
+});
+
 test("semantic mode fails closed for ReaSynth and RS5k Attack without native proof", async () => {
   for (const [plugin, control] of [["reasynth", "attack_ms"], ["rs5k", "attack_ms"]]) {
     const proof = assertAlpha34CSemanticUnitsProven(plugin, [control]);

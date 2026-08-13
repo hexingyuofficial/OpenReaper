@@ -57,7 +57,6 @@ const READ_TRANSPORT_ID = "template.transport.read_state";
 const READ_PROJECT_TEMPO_ID = "template.project.read_tempo_map";
 const READ_FX_SUMMARY_ID = "template.fx.read_fx_summary";
 const RESOLVE_FX_ID = "template.fx.resolve_fx_ref";
-const RESOLVE_MIDI_TAKE_ID = "template.midi.resolve_midi_take_ref";
 const LIST_FX_PARAMETERS_ID = "template.fx.list_fx_parameters";
 const SET_FX_PARAMETER_ID = "template.fx.set_fx_parameter_normalized";
 const READ_FX_PARAMETER_ID = "template.fx.read_fx_parameter";
@@ -92,7 +91,6 @@ const CONTROL_TEMPLATE_IDS = Object.freeze([...new Set([
 
 const STOCK_TEMPLATE_IDS = Object.freeze([
   RESOLVE_TRACK_ID,
-  RESOLVE_MIDI_TAKE_ID,
   RESOLVE_FX_ID,
   READ_FX_SUMMARY_ID,
   LIST_FX_PARAMETERS_ID,
@@ -1673,17 +1671,19 @@ async function resolveFxTarget(options) {
 async function liveResolveFxCandidate({ fxRef, request, executeAtomic, state }) {
   const parsed = parseFxRef(fxRef);
   if (!parsed) throw coded("STOCK_PLUGIN_FX_REF_UNSUPPORTED", "The FX ref must be an owner-scoped track/take slot ref.");
-  const ownerExecution = await runAtomic({
-    executeAtomic,
-    request,
-    state,
-    child: parsed.ownerKind === "track"
-      ? { id: RESOLVE_TRACK_ID, input: { track_ref: parsed.ownerRef }, refs: {} }
-      : { id: RESOLVE_MIDI_TAKE_ID, input: { take_ref: parsed.ownerRef }, refs: {} },
-  });
-  collectExecution(state, ownerExecution);
-  const ownerObject = state.objectRefs.get(parsed.ownerRef)
-    ?? executionObjectRefs(ownerExecution).find((entry) => entry.kind === parsed.ownerKind);
+  let ownerExecution = null;
+  let ownerObject = exactTakeOwnerObject(parsed);
+  if (!ownerObject) {
+    ownerExecution = await runAtomic({
+      executeAtomic,
+      request,
+      state,
+      child: { id: RESOLVE_TRACK_ID, input: { track_ref: parsed.ownerRef }, refs: {} },
+    });
+    collectExecution(state, ownerExecution);
+    ownerObject = state.objectRefs.get(parsed.ownerRef)
+      ?? executionObjectRefs(ownerExecution).find((entry) => entry.kind === parsed.ownerKind);
+  }
   if (!ownerObject) throw coded("STOCK_PLUGIN_FX_OWNER_RESOLUTION_FAILED", "The live owner resolver returned no canonical object ref.");
   requireStableRefMatch(parsed.ownerRef, ownerObject.ref, "STOCK_PLUGIN_FX_OWNER_IDENTITY_MISMATCH");
   const fxExecution = await runAtomic({
@@ -1703,6 +1703,13 @@ async function liveResolveFxCandidate({ fxRef, request, executeAtomic, state }) 
   if (!objectRef) throw coded("STOCK_PLUGIN_FX_REF_RESOLUTION_FAILED", "The live FX resolver returned no canonical FX object ref.");
   requireStableRefMatch(fxRef, objectRef.ref, "STOCK_PLUGIN_FX_IDENTITY_MISMATCH", { alwaysExact: true });
   return objectRef.ref;
+}
+
+function exactTakeOwnerObject(parsed) {
+  if (parsed.ownerKind !== "take") return null;
+  const guid = parsed.ownerRef.match(/^take:guid:(\{[^}]+\})$/u)?.[1];
+  if (!guid) throw coded("STOCK_PLUGIN_FX_REF_UNSUPPORTED", "Take FX targets require an exact take:guid owner ref.");
+  return { kind: "take", ref: parsed.ownerRef, identity: { scheme: "guid", value: guid } };
 }
 
 function parseFxRef(ref) {
