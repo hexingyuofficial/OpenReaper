@@ -1460,8 +1460,10 @@ describe("Alpha3.2-B2 managed render root", () => {
     const safeStart = source.indexOf("startup_dialog_result_is_safe() {");
     const safeEnd = source.indexOf("\n}\n\nrecord_dialog_result()", safeStart);
     assert.ok(safeStart >= 0 && safeEnd > safeStart, "startup dialog safety classifier must remain inspectable");
-    assert.match(source.slice(safeStart, safeEnd), /no_safe_dialog\)/u);
-    assert.doesNotMatch(source.slice(safeStart, safeEnd), /click|perform action|dismiss/u);
+    const safeClassifier = source.slice(safeStart, safeEnd);
+    assert.match(safeClassifier, /no_safe_dialog\|ignored_reascript_run_status_window\)/u);
+    assert.match(safeClassifier, /esac\s+return 1/u, "all other observer results must remain unsafe");
+    assert.doesNotMatch(safeClassifier, /click|perform action|dismiss/u);
   });
 
   it("serializes staggered LaunchServices starts with one stable installed-scope lock", async () => {
