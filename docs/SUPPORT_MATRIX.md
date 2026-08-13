@@ -10,8 +10,8 @@ Untested combinations are not implied by a nearby supported row.
 |---|---|---|
 | MCP tools | supported | Exactly `ping`, `get_state`, `list_templates`, `list_recipes`, `call_template`, and `call_recipe`. |
 | Discovery | supported | Compact discovery, exact-id expansion, 15 visible executable Macros, and typed direct-Template fallback. |
-| Templates | supported for accepted catalog | 239 accepted official Templates with 91 registered Bridge handler modules; exact modes and schemas remain authoritative. |
-| Recipes | supported | Four official Recipes plus validated user and forked Recipes through the same generic serial runner. |
+| Templates | supported for accepted catalog | 241 accepted official Templates with 91 registered Bridge handler modules; exact modes and schemas remain authoritative. |
+| Recipes | supported | Two official Recipes plus validated user and forked Recipes through the same generic serial runner. Catalog-stale user revisions are preserved but isolated from discovery recommendations and execution. |
 | Recipe execution | supported | One `call_recipe`, complete preflight and plan, aggregate readback/evidence, resume/reconnect, and one Whole-Recipe Undo. |
 | REAPER Actions | supported | `Remove Silence...`, `Repeat Remove Silence with Last Settings`, and `OpenReaper: Start MCP bridge` recovery Action. |
 | Evidence | supported | Fresh bounded evidence roots, live REAPER readback, typed mutation truth, and exact package provenance. |
@@ -65,7 +65,7 @@ runner. Official Recipes are not special-cased in the execution kernel.
 |---|---|
 | REAPER theme and preferences | Preserved. OpenReaper does not select a theme or take over `reaper.ini`. |
 | License and plugin state | Preserved. No macOS license/theme/plugin state is copied to Windows. |
-| User Recipes | Preserved across install, update, uninstall, and reinstall. |
+| User Recipes | Preserved across install, update, uninstall, and reinstall. A catalog-stale revision is not rewritten; it returns typed `REVISION_STALE` until the user revalidates/rebases it, while unaffected Recipes remain available. |
 | Source media and external renders | Never deleted by default; exact acceptance fixtures remain byte-stable. |
 | MCP client configuration | Only exact OpenReaper-owned rows are added, updated, or removed; unrelated rows remain unchanged. |
 | Startup decisions | License, plugin scan, recovery, version/upgrade, and unknown decision windows remain user-mediated and fail closed. |

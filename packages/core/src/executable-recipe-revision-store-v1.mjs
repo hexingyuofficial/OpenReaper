@@ -16,6 +16,7 @@ import path from "node:path";
 import {
   EXECUTABLE_RECIPE_BUDGETS,
   EXECUTABLE_RECIPE_REVISION_CONTRACT,
+  createExecutableDependencyCatalog,
   evaluateExecutableRecipeTrust,
   normalizeExecutableRecipeRevision,
   sealExecutableRecipeRevision,
@@ -39,6 +40,7 @@ export const EXECUTABLE_RECIPE_STORE_ERROR_CODES = Object.freeze([
   "REVISION_CONFLICT",
   "REVISION_OWNERSHIP_CONFLICT",
   "REVISION_REGRESSION",
+  "REVISION_STALE",
   "PATH_ESCAPE",
   "SYMLINK_ESCAPE",
   "CROSS_FORMAT_SHADOW",
@@ -60,6 +62,8 @@ const CONTENT_HASH_PATTERN = /^[a-f0-9]{64}$/;
 const VERSION_PATTERN = /^\d+\.\d+\.\d+$/;
 const ALLOWED_SOURCES = Object.freeze(["user", "community", "official"]);
 const PLATFORM_ALIAS_NAMES = Object.freeze(["tmp", "var"]);
+const STALE_DIAGNOSTIC_MAX_ITEMS = 8;
+const STALE_DIAGNOSTIC_MAX_DRIFT = 8;
 
 export class ExecutableRecipeRevisionStoreError extends Error {
   constructor(message, code = "PARAMS_INVALID", details = {}) {
@@ -267,6 +271,9 @@ export function listExecutableRecipeRevisions(options = {}) {
       source,
       count: 0,
       items: [],
+      unavailable_count: 0,
+      unavailable_items: [],
+      unavailable_truncated: false,
     });
   }
 
@@ -300,6 +307,7 @@ export function listExecutableRecipeRevisions(options = {}) {
   }
 
   const items = [];
+  const unavailableItems = [];
   for (const file of files) {
     // Byte budget already enforced by pre-stat during discovery; re-stat before read.
     let stats;
@@ -342,6 +350,15 @@ export function listExecutableRecipeRevisions(options = {}) {
     try {
       revision = normalizeExecutableRecipeRevision(parsed, { catalog });
     } catch (error) {
+      const stale = classifyCatalogStaleRevision(parsed, catalog, error, file);
+      if (stale) {
+        if (filter.recipe_id && stale.recipe_id !== filter.recipe_id) continue;
+        if (filter.version && stale.version !== filter.version) continue;
+        if (Number.isInteger(filter.revision) && stale.revision !== filter.revision) continue;
+        if (filter.content_hash && stale.content_hash !== filter.content_hash) continue;
+        unavailableItems.push(stale);
+        continue;
+      }
       throw new ExecutableRecipeRevisionStoreError(
         `Stored executable revision failed validation: ${error.message}`,
         "STORE_CORRUPT",
@@ -392,6 +409,23 @@ export function listExecutableRecipeRevisions(options = {}) {
     if (left.revision !== right.revision) return left.revision - right.revision;
     return left.relative_path.localeCompare(right.relative_path);
   });
+  unavailableItems.sort((left, right) => {
+    if (left.recipe_id !== right.recipe_id) return left.recipe_id.localeCompare(right.recipe_id);
+    if (left.revision !== right.revision) return left.revision - right.revision;
+    return left.relative_path.localeCompare(right.relative_path);
+  });
+
+  if (items.length + unavailableItems.length > budgets.max_list_items) {
+    throw new ExecutableRecipeRevisionStoreError(
+      `Store list exceeds max_list_items budget (${budgets.max_list_items}).`,
+      "STORE_BUDGET_EXCEEDED",
+      {
+        budget: "max_list_items",
+        limit: budgets.max_list_items,
+        observed: items.length + unavailableItems.length,
+      },
+    );
+  }
 
   // Store list returns executable revisions only. Historical recipe.contract.v1
   // preservation remains owned by user recipe authoring; no second traversal here.
@@ -403,6 +437,79 @@ export function listExecutableRecipeRevisions(options = {}) {
     source,
     count: items.length,
     items,
+    unavailable_count: unavailableItems.length,
+    unavailable_items: unavailableItems.slice(0, STALE_DIAGNOSTIC_MAX_ITEMS),
+    unavailable_truncated: unavailableItems.length > STALE_DIAGNOSTIC_MAX_ITEMS,
+  });
+}
+
+function classifyCatalogStaleRevision(parsed, catalog, currentError, file) {
+  if (!isPlainObject(parsed?.draft) || !Array.isArray(parsed.draft.dependencies)) return null;
+  let historicalCatalog;
+  try {
+    historicalCatalog = createExecutableDependencyCatalog({
+      macros: parsed.draft.dependencies
+        .filter((entry) => entry?.kind === "macro")
+        .map((entry) => ({ ...entry, capabilities: [] })),
+      templates: parsed.draft.dependencies
+        .filter((entry) => entry?.kind === "template")
+        .map((entry) => ({ ...entry, capabilities: [] })),
+      capabilities: Array.isArray(parsed.draft.required_capabilities)
+        ? parsed.draft.required_capabilities
+        : [],
+    });
+  } catch {
+    return null;
+  }
+
+  let revision;
+  try {
+    revision = normalizeExecutableRecipeRevision(parsed, { catalog: historicalCatalog });
+  } catch {
+    return null;
+  }
+
+  const drift = [];
+  for (const dependency of revision.draft.dependencies) {
+    const current = dependency.kind === "macro"
+      ? catalog.getMacro(dependency.id)
+      : catalog.getTemplate(dependency.id);
+    if (!current) {
+      drift.push({ kind: dependency.kind, id: dependency.id, reason: "dependency_unavailable" });
+      continue;
+    }
+    for (const field of ["version", "descriptor_hash", "risk"]) {
+      if (current[field] !== dependency[field]) {
+        drift.push({ kind: dependency.kind, id: dependency.id, reason: `${field}_drift` });
+      }
+    }
+  }
+  for (const capability of revision.draft.required_capabilities) {
+    if (!catalog.hasCapability(capability)) {
+      drift.push({ kind: "capability", id: capability, reason: "capability_unavailable" });
+    }
+  }
+  if (drift.length === 0) return null;
+
+  return deepFreeze({
+    source: file.source,
+    path: file.path,
+    relative_path: file.relative_path,
+    recipe_id: revision.recipe_id,
+    version: revision.version,
+    revision: revision.revision,
+    content_hash: revision.content_hash,
+    validation_result_id: revision.validation_result_id,
+    immutable: revision.immutable,
+    lifecycle: "stale",
+    executable: false,
+    code: "REVISION_STALE",
+    reason: "dependency_catalog_drift",
+    drift_count: drift.length,
+    drift: drift.slice(0, STALE_DIAGNOSTIC_MAX_DRIFT),
+    errors: (currentError?.errors ?? [currentError?.message ?? "Current catalog validation failed."])
+      .slice(0, 8)
+      .map((message) => String(message).slice(0, 240)),
   });
 }
 
@@ -449,6 +556,25 @@ export function getExecutableRecipeRevision(identityInput, options = {}) {
   });
 
   if (listed.items.length === 0) {
+    const stale = listed.unavailable_items?.find((item) => (
+      item.recipe_id === identity.recipe_id
+      && item.version === identity.version
+      && item.revision === identity.revision
+      && item.content_hash === identity.content_hash
+    ));
+    if (stale) {
+      throw new ExecutableRecipeRevisionStoreError(
+        `Executable revision ${formatIdentity(identity)} is stale against the current dependency catalog.`,
+        "REVISION_STALE",
+        {
+          identity: projectIdentity(identity),
+          reason: stale.reason,
+          drift: stale.drift,
+          zero_write: true,
+          revalidation_required: true,
+        },
+      );
+    }
     throw new ExecutableRecipeRevisionStoreError(
       `Executable revision not found for ${formatIdentity(identity)}.`,
       "REVISION_NOT_FOUND",

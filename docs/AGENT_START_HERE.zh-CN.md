@@ -34,6 +34,11 @@ raw executor。
 官方、用户和 fork Recipe 共用 generic runner、一次公开 `call_recipe`、完整
 plan、REAPER 侧批处理、一次聚合 readback/evidence 和一次 Whole-Recipe Undo。
 
+升级后，如果某个被保留的用户 Recipe revision 与当前 dependency catalog
+不再一致，`list_recipes` 会将它标记为 `REVISION_STALE`，同时保持官方 Recipe
+和其他有效 Recipe 可用。不要自动改写或执行 stale revision；提示用户需要
+revalidate/rebase，并在合适时继续使用不受影响的 Recipe。
+
 优先使用十五个平级 Macro。只有 Macro 不覆盖任务、mode 尚未接受、目标无法
 安全解析、领域尚未接受，或预算更适合原子调用时，才使用 direct Template，并
 记录 typed fallback reason。不要用多个 Template 调用拼出隐藏 workflow。

@@ -231,6 +231,60 @@ describe("Alpha3.4-E1 executable recipe revision store", () => {
     assert.ok(drifted.invalidation_reasons.includes("recipe_content_hash_drift"));
   });
 
+  it("isolates a self-consistent catalog-stale revision without rewriting its bytes", () => {
+    const oldCatalog = makeCatalog();
+    const currentDefinition = structuredClone({
+      macros: oldCatalog.macros,
+      templates: oldCatalog.templates,
+      capabilities: oldCatalog.capabilities,
+    });
+    currentDefinition.macros[0].version = "1.1.0";
+    currentDefinition.macros[0].descriptor_hash = "c".repeat(64);
+    const currentCatalog = createExecutableDependencyCatalog(currentDefinition);
+    const root = makeRoot();
+    const sealed = sealExecutableRecipeRevision(makeDraft(), {
+      catalog: oldCatalog,
+      version: "1.0.0",
+      revision: 1,
+      saved_at: "1970-01-01T00:00:00.000Z",
+    });
+    const saved = saveExecutableRecipeRevision(sealed, { root, catalog: oldCatalog, source: "user" });
+    const bytesBefore = readFileSync(saved.path);
+
+    const listed = listExecutableRecipeRevisions({ root, catalog: currentCatalog, source: "user" });
+    assert.equal(listed.count, 0);
+    assert.equal(listed.unavailable_count, 1);
+    assert.equal(listed.unavailable_truncated, false);
+    assert.equal(listed.unavailable_items[0].code, "REVISION_STALE");
+    assert.equal(listed.unavailable_items[0].lifecycle, "stale");
+    assert.equal(listed.unavailable_items[0].executable, false);
+    assert.equal(listed.unavailable_items[0].drift.some((entry) => entry.reason === "version_drift"), true);
+    assert.equal(listed.unavailable_items[0].drift.some((entry) => entry.reason === "descriptor_hash_drift"), true);
+    assert.deepEqual(readFileSync(saved.path), bytesBefore);
+
+    assert.throws(
+      () => getExecutableRecipeRevision({
+        recipe_id: sealed.recipe_id,
+        version: sealed.version,
+        revision: sealed.revision,
+        content_hash: sealed.content_hash,
+      }, { root, catalog: currentCatalog, source: "user" }),
+      (error) => error instanceof ExecutableRecipeRevisionStoreError
+        && error.code === "REVISION_STALE"
+        && error.details.zero_write === true
+        && error.details.revalidation_required === true,
+    );
+    assert.deepEqual(readFileSync(saved.path), bytesBefore);
+
+    const tampered = JSON.parse(bytesBefore.toString("utf8"));
+    tampered.draft.title = "Tampered without resealing";
+    writeFileSync(saved.path, `${JSON.stringify(tampered)}\n`, "utf8");
+    assert.throws(
+      () => listExecutableRecipeRevisions({ root, catalog: currentCatalog, source: "user" }),
+      (error) => error instanceof ExecutableRecipeRevisionStoreError && error.code === "STORE_CORRUPT",
+    );
+  });
+
   it("fails closed on invalid schema, hash mismatch, path escape, and zero-write cases", () => {
     const catalog = makeCatalog();
     const root = makeRoot();
@@ -1094,14 +1148,18 @@ describe("Alpha3.4-E1 executable recipe revision store", () => {
     const originalRead = fs.readFileSync;
     const originalUnlink = fs.unlinkSync;
     const fsModule = require("node:fs");
+    let targetReadCount = 0;
     let unlinkCalled = false;
 
     // After verification content is read, mutate mtime so pre-rename identity fails closed.
     fs.readFileSync = (candidate, options) => {
       const body = originalRead(candidate, options);
       if (path.resolve(String(candidate)) === path.resolve(saved.path)) {
-        const future = (Date.now() / 1000) + 30;
-        fs.utimesSync(saved.path, future, future);
+        targetReadCount += 1;
+        if (targetReadCount === 2) {
+          const future = (statSync(saved.path).mtimeMs / 1000) + 60;
+          fs.utimesSync(saved.path, future, future);
+        }
       }
       return body;
     };

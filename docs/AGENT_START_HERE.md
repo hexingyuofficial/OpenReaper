@@ -49,7 +49,7 @@ Use the returned exact `next_call` for a safe resume;
 never replay Recipe stages or targets yourself.
 
 Search Recipes with the user's original words, then exact-expand the selected
-id using `list_recipes` fields `steps`, `assertions`, and `recovery`. The four
+id using `list_recipes` fields `steps`, `assertions`, and `recovery`. The two
 official product Recipes are:
 
 - `recipe.mix.create_bus_processing`
@@ -59,6 +59,12 @@ Official Recipes pressure-test the same general Recipe system; they are not a
 special execution surface. A fork becomes a user-owned revision and uses the
 same validate/save/list/get/run/reconnect, trust, evidence, and whole-Recipe
 Undo path as every user-authored Recipe.
+
+An update may preserve a user Recipe revision whose sealed dependency catalog
+no longer matches the installed catalog. `list_recipes` reports it as
+`REVISION_STALE` and keeps official and other valid Recipes available. Never
+rewrite or execute the stale revision automatically. Tell the user it needs
+revalidation/rebase, then continue with unaffected Recipes when appropriate.
 
 Exact Recipe manuals carry required inputs, deterministic defaults, safety,
 whole-Recipe Undo/recovery posture, fork guidance, and the complete one-call run

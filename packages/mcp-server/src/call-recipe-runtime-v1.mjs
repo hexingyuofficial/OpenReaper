@@ -73,6 +73,7 @@ export const CALL_RECIPE_STAGE_RESULT_CONTRACT = "call_recipe.stage_result.v1";
 export const CALL_RECIPE_CHECKPOINT_PROOF_CONTRACT = "call_recipe.checkpoint_proof.v1";
 
 const COMPACT_FAILURE_PARTIAL_CHANGE_MAX_COUNT = 4;
+const STALE_DIAGNOSTIC_MAX_ITEMS = 8;
 const RECIPE_UNDO_SCOPE = "whole_recipe";
 const RUNTIME_BOUND_PORTABILITY = Object.freeze({
   project_identity: "project:runtime_bound",
@@ -394,6 +395,26 @@ function opList(request, options, budget) {
       immutable: item.immutable === true,
       discovery: compactRevisionDiscovery(item.payload ?? item),
     }));
+    const unavailableItems = (listed.unavailable_items ?? [])
+      .slice(0, STALE_DIAGNOSTIC_MAX_ITEMS)
+      .map((item) => ({
+        source: item.source ?? "user",
+        recipe_id: item.recipe_id,
+        version: item.version,
+        revision: item.revision,
+        content_hash: item.content_hash,
+        validation_result_id: item.validation_result_id,
+        lifecycle: "stale",
+        executable: false,
+        immutable: item.immutable === true,
+        error: {
+          code: "REVISION_STALE",
+          reason: item.reason ?? "dependency_catalog_drift",
+          drift: cloneJson(item.drift ?? []),
+          zero_write: true,
+          revalidation_required: true,
+        },
+      }));
     const limit = clampInteger(
       request.limit,
       1,
@@ -403,11 +424,16 @@ function opList(request, options, budget) {
     const start = parseCursor(request.cursor, allItems.length);
     let end = Math.min(start + limit, allItems.length);
     let items = allItems.slice(start, end);
-    let response = buildListResponse({ allItems, items, start, end, limit });
+    const unavailableCount = listed.unavailable_count ?? unavailableItems.length;
+    let response = buildListResponse({
+      allItems, items, start, end, limit, unavailableItems, unavailableCount,
+    });
     while (items.length > 0 && responseBytes(response) > budget.max_response_bytes) {
       items = items.slice(0, -1);
       end -= 1;
-      response = buildListResponse({ allItems, items, start, end, limit });
+      response = buildListResponse({
+        allItems, items, start, end, limit, unavailableItems, unavailableCount,
+      });
     }
     if (items.length === 0 && start < allItems.length) {
       throw new CallRecipeRuntimeError(
@@ -429,7 +455,15 @@ function opList(request, options, budget) {
   }
 }
 
-function buildListResponse({ allItems, items, start, end, limit }) {
+function buildListResponse({
+  allItems,
+  items,
+  start,
+  end,
+  limit,
+  unavailableItems = [],
+  unavailableCount = unavailableItems.length,
+}) {
   const hasMore = end < allItems.length;
   return {
     contract: CALL_RECIPE_RUNTIME_CONTRACT,
@@ -440,6 +474,9 @@ function buildListResponse({ allItems, items, start, end, limit }) {
     count: items.length,
     total: allItems.length,
     items,
+    unavailable_count: unavailableCount,
+    unavailable_items: unavailableItems,
+    unavailable_truncated: unavailableCount > unavailableItems.length,
     page: {
       limit,
       cursor: String(start),
@@ -2662,6 +2699,7 @@ function mapStoreError(error) {
 
 function mapStoreCode(code) {
   if (code === "REVISION_NOT_FOUND") return "REVISION_NOT_FOUND";
+  if (code === "REVISION_STALE") return "REVISION_STALE";
   if (code === "PARAMS_INVALID") return "PARAMS_INVALID";
   if (code === "ZERO_WRITE_FAILURE" || code === "ZERO_DELETE_FAILURE") return "ZERO_WRITE_FAILURE";
   return "STORE_ERROR";

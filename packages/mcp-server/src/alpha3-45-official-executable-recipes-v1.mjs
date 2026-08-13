@@ -244,14 +244,20 @@ export function createAlpha345CombinedExecutableRecipeStore({
         ...(official.items ?? []).map((item) => withSource(item, "official")),
         ...(user.items ?? []).map((item) => withSource(item, "user")),
       ].sort(compareStoredRevision);
-      if (items.length > EXECUTABLE_RECIPE_STORE_BUDGETS.max_list_items) {
+      const unavailableItems = [
+        ...(official.unavailable_items ?? []).map((item) => withSource(item, "official")),
+        ...(user.unavailable_items ?? []).map((item) => withSource(item, "user")),
+      ].sort(compareStoredRevision);
+      const unavailableCount = (official.unavailable_count ?? official.unavailable_items?.length ?? 0)
+        + (user.unavailable_count ?? user.unavailable_items?.length ?? 0);
+      if (items.length + unavailableCount > EXECUTABLE_RECIPE_STORE_BUDGETS.max_list_items) {
         throw new ExecutableRecipeRevisionStoreError(
           `Combined executable Recipe store exceeds max_list_items budget (${EXECUTABLE_RECIPE_STORE_BUDGETS.max_list_items}).`,
           "STORE_BUDGET_EXCEEDED",
           {
             budget: "max_list_items",
             limit: EXECUTABLE_RECIPE_STORE_BUDGETS.max_list_items,
-            observed: items.length,
+            observed: items.length + unavailableCount,
           },
         );
       }
@@ -263,6 +269,9 @@ export function createAlpha345CombinedExecutableRecipeStore({
         source: "combined",
         count: items.length,
         items: Object.freeze(items),
+        unavailable_count: unavailableCount,
+        unavailable_items: Object.freeze(unavailableItems.slice(0, 8)),
+        unavailable_truncated: unavailableCount > unavailableItems.length || unavailableItems.length > 8,
       });
     },
     get(identity, options) {

@@ -255,8 +255,8 @@ async function main() {
     },
     async (request) => {
       try {
-        const recipes = loadStdioExecutableRecipeDiscovery(callRecipeBinding);
-        const recipeDiscovery = createDiscoveryCatalog({ recipes });
+        const loaded = loadStdioExecutableRecipeDiscovery(callRecipeBinding);
+        const recipeDiscovery = createDiscoveryCatalog({ recipes: loaded.recipes });
         const response = attachAlpha3_3B1AgentContextProductMetadata(
           recipeDiscovery.list_recipes(request ?? {}),
         );
@@ -266,6 +266,9 @@ async function main() {
         });
         return jsonToolResult({
           ...response,
+          unavailable_revision_count: loaded.unavailable_revision_count,
+          unavailable_revisions: loaded.unavailable_revisions,
+          unavailable_revisions_truncated: loaded.unavailable_revisions_truncated,
           product_surface: {
             ...(response.product_surface ?? {}),
             recipe_productization: manual.recipe_productization,
@@ -1232,7 +1235,14 @@ function isCanonicalProjectRef(value) {
 }
 
 function loadStdioExecutableRecipeDiscovery(binding) {
-  if (!binding?.runtime?.store) return [];
+  if (!binding?.runtime?.store) {
+    return {
+      recipes: [],
+      unavailable_revision_count: 0,
+      unavailable_revisions: [],
+      unavailable_revisions_truncated: false,
+    };
+  }
   const listed = binding.runtime.store.list();
   const latestByRecipeId = new Map();
   for (const item of listed.items ?? []) {
@@ -1261,7 +1271,28 @@ function loadStdioExecutableRecipeDiscovery(binding) {
       executable_identity: executableIdentity,
     });
   }
-  return [...latestByRecipeId.values()].sort((left, right) => left.id.localeCompare(right.id));
+  return {
+    recipes: [...latestByRecipeId.values()].sort((left, right) => left.id.localeCompare(right.id)),
+    unavailable_revision_count: listed.unavailable_count ?? 0,
+    unavailable_revisions: (listed.unavailable_items ?? []).slice(0, 8).map((item) => ({
+      recipe_id: item.recipe_id,
+      version: item.version,
+      revision: item.revision,
+      content_hash: item.content_hash,
+      validation_result_id: item.validation_result_id,
+      source: item.source ?? "user",
+      lifecycle: "stale",
+      executable: false,
+      error: {
+        code: "REVISION_STALE",
+        reason: item.reason ?? "dependency_catalog_drift",
+        drift: item.drift ?? [],
+        zero_write: true,
+        revalidation_required: true,
+      },
+    })),
+    unavailable_revisions_truncated: listed.unavailable_truncated === true,
+  };
 }
 
 function createExecutableRecipeDiscoveryDetails(revision, manual = null) {

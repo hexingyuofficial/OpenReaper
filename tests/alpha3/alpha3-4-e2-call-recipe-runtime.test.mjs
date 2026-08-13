@@ -2290,6 +2290,152 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
     }
   });
 
+  it("keeps public Recipe discovery available beside one preserved stale revision", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "openreaper-e2-stdio-stale-"));
+    const currentCatalog = createExecutableRecipeProductCatalog();
+    const oldDefinition = {
+      macros: currentCatalog.macros.map((entry) => ({ ...entry, capabilities: [...entry.capabilities] })),
+      templates: currentCatalog.templates.map((entry) => ({ ...entry, capabilities: [...entry.capabilities] })),
+      capabilities: [...currentCatalog.capabilities],
+    };
+    const oldMacro = oldDefinition.macros.find((entry) => entry.id === "macro.project.inspect");
+    oldMacro.version = "1.6.0";
+    oldMacro.descriptor_hash = "d".repeat(64);
+    const oldCatalog = createExecutableDependencyCatalog(oldDefinition);
+    const staleDraft = makeProductDraft();
+    staleDraft.id = "recipe.user.preserved_stale_fixture";
+    staleDraft.title = "Preserved stale fixture";
+    staleDraft.summary = "A self-consistent user revision sealed against an older dependency catalog.";
+    staleDraft.dependencies[0].version = oldMacro.version;
+    staleDraft.dependencies[0].descriptor_hash = oldMacro.descriptor_hash;
+    staleDraft.stages[0].dependency.version = oldMacro.version;
+    const stale = sealExecutableRecipeRevision(staleDraft, {
+      catalog: oldCatalog,
+      version: "1.0.0",
+      revision: 1,
+      saved_at: "1970-01-01T00:00:00.000Z",
+    });
+    const staleStore = createExecutableRecipeRevisionStore({ root, catalog: oldCatalog, source: "user" });
+    const staleSaved = staleStore.save(stale);
+    const bytesBefore = readFileSync(staleSaved.path);
+    const currentStore = createExecutableRecipeRevisionStore({ root, catalog: currentCatalog, source: "user" });
+    const currentDraft = { ...makeProductDraft(), id: "recipe.user.current_fixture" };
+    let validDispatches = 0;
+    const validUndoCalls = [];
+    const currentRuntime = createCallRecipeRuntime({
+      store: currentStore,
+      catalog: currentCatalog,
+      dispatchers: {
+        macro: async ({ inputs }) => {
+          validDispatches += 1;
+          return macroEnvelope({ project_summary: { name: inputs.track_name } });
+        },
+        template: async () => {
+          validDispatches += 1;
+          return templateEnvelope({ track_ref: "track:index:0" });
+        },
+      },
+      undoController: {
+        async begin(request) {
+          validUndoCalls.push(request);
+          return {
+            ok: true,
+            opened: true,
+            handle: "recipe-undo-current-valid",
+            project_ref: request.project_ref,
+          };
+        },
+        async end(request) {
+          validUndoCalls.push(request);
+          return {
+            ok: true,
+            closed: true,
+            verified: true,
+            handle: request.handle,
+            project_ref: request.project_ref,
+          };
+        },
+      },
+      runtimeFactsProvider: async ({ revision }) => completeFacts(revision, currentDraft, currentCatalog),
+    });
+    const client = new Client({ name: "alpha3-4-e2-stale-test", version: "0.0.0" });
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [STDIO_SERVER],
+      cwd: path.resolve("."),
+      env: {
+        PATH: process.env.PATH ?? "",
+        HOME: process.env.HOME ?? "",
+        OPENREAPER_EXECUTABLE_RECIPE_ROOT: root,
+        OPENREAPER_EXECUTABLE_RECIPE_SOURCE: "user",
+        OPENREAPER_EXECUTABLE_RECIPE_RISK_GRANTS_JSON: JSON.stringify(["read", "write"]),
+      },
+      stderr: "pipe",
+    });
+
+    try {
+      await client.connect(transport);
+      const valid = parseToolJson(await client.callTool({
+        name: "call_recipe",
+        arguments: {
+          operation: "save",
+          draft: currentDraft,
+          version: "1.0.0",
+          revision_number: 1,
+          saved_at: "1970-01-01T00:00:00.000Z",
+        },
+      }));
+      assert.equal(valid.ok, true, JSON.stringify(valid));
+
+      const validRun = await currentRuntime.call_recipe({
+        operation: "run",
+        recipe_id: valid.recipe_id,
+        version: valid.version,
+        revision: valid.revision,
+        content_hash: valid.content_hash,
+        validation_result_id: valid.validation_result_id,
+        inputs: { track_name: "Current recipe remains executable" },
+      });
+      assert.equal(validRun.ok, true, JSON.stringify(validRun));
+      assert.equal(validRun.execution_truth.stage_dispatch_count, 2);
+      assert.equal(validRun.undo.opened, true);
+      assert.equal(validRun.undo.closed, true);
+      assert.equal(validDispatches, 2);
+      assert.deepEqual(validUndoCalls.map((call) => call.operation), ["begin", "end"]);
+
+      const discovery = parseToolJson(await client.callTool({ name: "list_recipes", arguments: {} }));
+      assert.equal(discovery.items.some((item) => item.id === "recipe.mix.create_bus_processing"), true);
+      assert.equal(discovery.items.some((item) => item.id === "recipe.midi.create_instrument_part"), true);
+      assert.equal(discovery.items.some((item) => item.id === valid.recipe_id), true);
+      assert.equal(discovery.items.some((item) => item.id === stale.recipe_id), false);
+      assert.equal(discovery.unavailable_revision_count, 1);
+      assert.equal(discovery.unavailable_revisions_truncated, false);
+      const unavailable = discovery.unavailable_revisions.find((item) => item.recipe_id === stale.recipe_id);
+      assert.equal(unavailable.error.code, "REVISION_STALE");
+      assert.equal(unavailable.error.zero_write, true);
+      assert.equal(unavailable.executable, false);
+
+      const blocked = parseToolJson(await client.callTool({
+        name: "call_recipe",
+        arguments: { operation: "run", ...exactIdentity(stale), inputs: { track_name: "Never dispatched" } },
+      }));
+      assert.equal(blocked.ok, false);
+      assert.equal(blocked.error.code, "REVISION_STALE");
+      assert.equal(blocked.error.details.zero_write, true);
+      assert.equal(blocked.resume_safe, false);
+      assert.equal(blocked.execution_truth.mutation, "not_applied");
+      assert.equal(blocked.execution_truth.stage_dispatch_count, 0);
+      assert.equal(blocked.execution_truth.transport_call_count, 0);
+      assert.equal(blocked.execution_truth.native_mutation_count, 0);
+      assert.equal(blocked.undo.opened, false);
+      assert.deepEqual(readFileSync(staleSaved.path), bytesBefore);
+    } finally {
+      await client.close().catch(() => {});
+      rmSync(root, { recursive: true, force: true });
+      rmSync(`${root}.official`, { recursive: true, force: true });
+    }
+  });
+
   it("keeps E1 store non-executing and bound ownership non-overridable", async () => {
     const catalog = makeCatalog();
     const root = mkdtempSync(path.join(os.tmpdir(), "openreaper-e2-store-"));
@@ -2849,9 +2995,9 @@ function makeComposedDraft() {
   return draft;
 }
 
-function completeFacts(saved, draft = makeDraft()) {
+function completeFacts(saved, draft = makeDraft(), catalog = makeCatalog()) {
   const sealed = sealExecutableRecipeRevision(draft, {
-    catalog: makeCatalog(),
+    catalog,
     version: saved.version,
     revision: saved.revision,
     saved_at: "1970-01-01T00:00:00.000Z",
