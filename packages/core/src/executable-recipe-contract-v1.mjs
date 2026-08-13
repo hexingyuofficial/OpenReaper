@@ -825,7 +825,7 @@ function validateBindings(bindings, inputIds, outputIds, stageIndex, errors) {
       const state = { nodes: 0, locals: new Set(), stageRefs: [] };
       validateExpression(binding.expression, `${field}.expression`, inputIds, stageIndex, errors, state, 1);
       expressionNodes += state.nodes;
-      if (isPlainObject(binding.to) && ["stage", "stage_refs"].includes(binding.to.scope)) {
+      if (isPlainObject(binding.to) && ["stage", "stage_refs", "refs"].includes(binding.to.scope)) {
         const consumerPosition = stageIndex.stagePositions.get(binding.to.id);
         for (const ref of state.stageRefs) {
           const producerPosition = stageIndex.stagePositions.get(ref.id);
@@ -874,7 +874,7 @@ function validateBindings(bindings, inputIds, outputIds, stageIndex, errors) {
     }
 
     if (!expressionBinding && isPlainObject(binding.from) && isPlainObject(binding.to)) {
-      if (binding.from.scope === "stage" && binding.to.scope === "stage") {
+      if (binding.from.scope === "stage" && ["stage", "refs"].includes(binding.to.scope)) {
         const producerPosition = stageIndex.stagePositions.get(binding.from.id);
         const consumerPosition = stageIndex.stagePositions.get(binding.to.id);
         if (
@@ -1163,7 +1163,7 @@ function validateBindingEndpoint(endpoint, field, inputIds, outputIds, stageInde
     return;
   }
   requireExactObjectFields(endpoint, ["scope", "id", "port"], field, errors);
-  if (!["recipe_input", "recipe_output", "stage", "stage_refs"].includes(endpoint.scope)) {
+  if (!["recipe_input", "recipe_output", "stage", "stage_refs", "refs"].includes(endpoint.scope)) {
     errors.push(`${field}.scope is invalid: ${String(endpoint.scope)}.`);
     return;
   }
@@ -1185,6 +1185,14 @@ function validateBindingEndpoint(endpoint, field, inputIds, outputIds, stageInde
     if (options.role === "source") errors.push(`${field} cannot source stage_refs.`);
     if (!stageIndex.stageIds.has(endpoint.id)) errors.push(`${field}.id references unknown stage: ${String(endpoint.id)}.`);
     if (endpoint.port !== "refs") errors.push(`${field}.port must be refs for stage_refs.`);
+    return;
+  }
+  if (endpoint.scope === "refs") {
+    if (options.role === "source") errors.push(`${field} cannot source refs.`);
+    if (!stageIndex.stageIds.has(endpoint.id)) errors.push(`${field}.id references unknown stage: ${String(endpoint.id)}.`);
+    if (typeof endpoint.port === "string" && !/_refs?$/u.test(endpoint.port)) {
+      errors.push(`${field}.port must name a typed ref port ending in _ref or _refs.`);
+    }
     return;
   }
 
@@ -1669,6 +1677,9 @@ function endpointPortKey(endpoint) {
   if (endpoint.scope === "stage_refs" && typeof endpoint.id === "string") {
     return `stage_refs:${endpoint.id}:refs`;
   }
+  if (endpoint.scope === "refs" && typeof endpoint.id === "string") {
+    return `refs:${endpoint.id}:${endpoint.port}`;
+  }
   if (endpoint.scope === "recipe_output") return `output:${endpoint.port}`;
   if (endpoint.scope === "recipe_input") return `input:${endpoint.port}`;
   return null;
@@ -1846,6 +1857,7 @@ function endpointNode(endpoint) {
   if (!isPlainObject(endpoint)) return null;
   if (endpoint.scope === "stage") return `stage:${endpoint.id}`;
   if (endpoint.scope === "stage_refs") return `stage:${endpoint.id}`;
+  if (endpoint.scope === "refs") return `stage:${endpoint.id}`;
   if (endpoint.scope === "recipe_input") return `input:${endpoint.port}`;
   if (endpoint.scope === "recipe_output") return `output:${endpoint.port}`;
   return null;

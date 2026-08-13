@@ -52,9 +52,14 @@ describe("Alpha3.4-E3 installed recipe closure", () => {
     assert.equal(await exists(path.join(recipeRoot, "user", ".gitkeep")), true);
   });
 
-  it("treats inherited empty optional values as absent while restoring the default identity", async () => {
+  it("treats inherited empty optional values as absent while restoring the managed identity", async () => {
     const fixture = await makeFixture();
     const capturePath = path.join(fixture.root, "captured-env.json");
+    await writeFile(
+      path.join(fixture.currentRoot, "session", "bridge-generation-v1.json"),
+      `${JSON.stringify({ contract: "openreaper.bridge_generation.v1", generation: 7 })}\n`,
+      "utf8",
+    );
     const serverPath = path.join(
       fixture.currentRoot,
       "vendor",
@@ -108,7 +113,7 @@ describe("Alpha3.4-E3 installed recipe closure", () => {
       path.join(await realpath(fixture.currentRoot), "vendor/openreaper-kernel/reaper/bridge/openreaper-live-bridge.lua"),
     );
     assert.equal(captured.OPENREAPER_LIVE_BRIDGE_OWNER, "openreaper-alpha");
-    assert.equal(captured.OPENREAPER_LIVE_BRIDGE_GENERATION, "1");
+    assert.equal(captured.OPENREAPER_LIVE_BRIDGE_GENERATION, "7");
     assert.equal(captured.OPENREAPER_CURRENT_PROJECT_REF, "project:explicit");
     assert.equal(captured.OPENREAPER_EXECUTABLE_RECIPE_RISK_GRANTS_JSON, '["read","write","destructive"]');
   });

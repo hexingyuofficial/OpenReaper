@@ -481,6 +481,48 @@ describe("Alpha3.4-E0 executable recipe revision contract", () => {
     );
   });
 
+  it("accepts typed per-port Recipe refs and rejects unsafe ref bindings", () => {
+    const catalog = makeCatalog();
+    const draft = makeDraft();
+    draft.inputs.push({ id: "take_ref", type: "ref.take", required: true });
+    draft.stages[0].outputs.push("fx_ref");
+    draft.bindings.push(
+      {
+        from: { scope: "recipe_input", id: null, port: "take_ref" },
+        to: { scope: "refs", id: "run_macro", port: "take_ref" },
+      },
+      {
+        from: { scope: "stage", id: "run_macro", port: "fx_ref" },
+        to: { scope: "refs", id: "readback", port: "fx_ref" },
+      },
+    );
+    assert.equal(validateExecutableRecipeDraft(draft, { catalog }).ok, true);
+
+    const nonRefPort = structuredClone(draft);
+    nonRefPort.bindings.at(-1).to.port = "plugin";
+    assert.match(
+      validateExecutableRecipeDraft(nonRefPort, { catalog }).errors.join("\n"),
+      /must name a typed ref port ending in _ref or _refs/,
+    );
+
+    const duplicateTarget = structuredClone(draft);
+    duplicateTarget.bindings.push(structuredClone(duplicateTarget.bindings.at(-1)));
+    assert.match(
+      validateExecutableRecipeDraft(duplicateTarget, { catalog }).errors.join("\n"),
+      /duplicate full binding|duplicate input target/,
+    );
+
+    const laterStage = structuredClone(draft);
+    laterStage.bindings[laterStage.bindings.length - 1] = {
+      from: { scope: "stage", id: "readback", port: "track_ref" },
+      to: { scope: "refs", id: "run_macro", port: "track_ref" },
+    };
+    assert.match(
+      validateExecutableRecipeDraft(laterStage, { catalog }).errors.join("\n"),
+      /must be declared before consumer/,
+    );
+  });
+
   it("binds revision identity deterministically and fails closed on incomplete trust facts", () => {
     const catalog = makeCatalog();
     const sealed = sealExecutableRecipeRevision(makeDraft(), {

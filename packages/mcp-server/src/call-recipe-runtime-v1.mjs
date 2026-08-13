@@ -768,6 +768,31 @@ async function opRun(request, options, { startedAt, resume, budget }) {
   const telemetry = createRunTelemetry(resumeState?.telemetry);
   telemetry.performance = options.performance;
   const attempt = (resumeState?.attempt_count ?? 0) + 1;
+  try {
+    preflightRecipeInputRefs(revision.draft, bindingValues, inputs);
+  } catch (error) {
+    return withRunExecutionTruth(projectRunFailureEnvelope({
+      operation: resume ? "resume" : "run",
+      revision,
+      runId,
+      status: "blocked",
+      code: "PREFLIGHT_FAILED",
+      message: error?.message ?? "Recipe input ref preflight failed before Whole-Recipe Undo opened.",
+      failedStageIds: [],
+      completedStageIds: [...completed],
+      notStartedStageIds: stages.filter((stage) => !completed.has(stage.id)).map((stage) => stage.id),
+      provenPartialChanges,
+      counts: { processed, applied, skipped },
+      latestCheckpoint,
+      resumeSafe: false,
+      nextCall: buildExactNextCall("get", exactRevisionIdentity(revision)),
+      details: {
+        code: error?.code ?? "RECIPE_REF_INVALID",
+        ...(isPlainObject(error?.details) ? error.details : {}),
+        zero_write: true,
+      },
+    }), { startedAt, telemetry, undo: defaultRecipeUndoTruth(), mutationTruth: "not_applied" });
+  }
   assertRecipeRequestActive(options.signal, options.deadline);
   let undo = await measureRecipeUndoCall(options.performance, () => beginRecipeUndo(options.undoController, {
     revision,
@@ -892,6 +917,7 @@ async function opRun(request, options, { startedAt, resume, budget }) {
         inputs,
         revision.draft.bindings,
       );
+      validateRecipeStageRefs(stage, resolvedStageRefs);
       hydratedStage = await hydrateRecipeStage(options.stageInputHydrator, {
         stage,
         revision,
@@ -2667,6 +2693,79 @@ function normalizeRunHydrator(value) {
 
 function normalizeStageInputHydrator(value) {
   return typeof value === "function" ? value : null;
+}
+
+function preflightRecipeInputRefs(draft, bindingValues, inputs) {
+  for (const stage of draft.stages ?? []) {
+    const refBindings = (draft.bindings ?? []).filter((binding) => (
+      binding?.to?.id === stage.id
+      && ["refs", "stage_refs"].includes(binding?.to?.scope)
+    ));
+    if (refBindings.length === 0 || refBindings.some(bindingDependsOnStageOutput)) continue;
+    const refs = resolveStageRefs(stage, bindingValues, inputs, draft.bindings);
+    validateRecipeStageRefs(stage, refs);
+  }
+}
+
+function bindingDependsOnStageOutput(binding) {
+  if (binding?.from?.scope === "stage") return true;
+  const visit = (value) => {
+    if (!isPlainObject(value)) {
+      if (Array.isArray(value)) return value.some(visit);
+      return false;
+    }
+    if (value.op === "stage") return true;
+    return Object.values(value).some(visit);
+  };
+  return visit(binding?.expression);
+}
+
+function validateRecipeStageRefs(stage, refs) {
+  if (refs == null) return;
+  if (!isPlainObject(refs)) throw recipeRefError(stage, null, "RECIPE_REFS_INVALID", "Recipe stage refs must be a named object.");
+  for (const [port, raw] of Object.entries(refs)) {
+    const expectedKind = recipeRefPortKind(port);
+    if (!expectedKind) throw recipeRefError(stage, port, "RECIPE_REF_PORT_INVALID", `Recipe stage ref port ${port} has no supported typed ref kind.`);
+    const values = Array.isArray(raw) ? raw : [raw];
+    if (!port.endsWith("_refs") && values.length !== 1) {
+      throw recipeRefError(stage, port, "RECIPE_REF_AMBIGUOUS", `Recipe stage ref port ${port} must resolve to exactly one ref.`);
+    }
+    if (values.length === 0) throw recipeRefError(stage, port, "RECIPE_REF_MISSING", `Recipe stage ref port ${port} is empty.`);
+    const seen = new Set();
+    for (const value of values) {
+      const canonical = canonicalRecipeRef(value, expectedKind, stage, port);
+      if (seen.has(canonical)) throw recipeRefError(stage, port, "RECIPE_REF_AMBIGUOUS", `Recipe stage ref port ${port} contains a duplicate ref.`);
+      seen.add(canonical);
+    }
+  }
+}
+
+function recipeRefPortKind(port) {
+  if (typeof port !== "string") return null;
+  const kinds = ["project", "track", "item", "take", "fx", "send", "envelope", "marker", "region", "file", "artifact", "job"];
+  return kinds.find((kind) => port === `${kind}_ref` || port === `${kind}_refs` || port.endsWith(`_${kind}_ref`) || port.endsWith(`_${kind}_refs`)) ?? null;
+}
+
+function canonicalRecipeRef(value, expectedKind, stage, port) {
+  const ref = typeof value === "string" ? value : value?.ref;
+  if (typeof ref !== "string" || !ref.startsWith(`${expectedKind}:`) || /[\u0000-\u001f\u007f]/u.test(ref)) {
+    throw recipeRefError(stage, port, "RECIPE_REF_KIND_MISMATCH", `Recipe stage ref ${port} must be one canonical ${expectedKind} ref.`);
+  }
+  if (isPlainObject(value)) {
+    if (value.kind !== expectedKind || !isPlainObject(value.identity)) {
+      throw recipeRefError(stage, port, "RECIPE_REF_KIND_MISMATCH", `Recipe stage object ref ${port} must preserve kind, ref, and identity.`);
+    }
+  } else if (typeof value !== "string") {
+    throw recipeRefError(stage, port, "RECIPE_REF_INVALID", `Recipe stage ref ${port} must be a canonical string or object ref.`);
+  }
+  return ref;
+}
+
+function recipeRefError(stage, port, code, message) {
+  const error = new Error(message);
+  error.code = code;
+  error.details = { stage_id: stage?.id ?? null, ref_port: port, zero_write: true };
+  return error;
 }
 
 async function hydrateRecipeRun(hydrator, context) {

@@ -422,6 +422,113 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
     });
   });
 
+  it("binds Recipe take_ref and verified fx_ref through the generic runner with one Whole-Recipe Undo", async () => {
+    const draft = makeRecipeRefDraft();
+    const dispatches = [];
+    const undoCalls = [];
+    const { runtime } = makeRuntime({
+      facts: (revision) => completeFacts(revision, draft),
+      undoController: {
+        async begin(request) {
+          undoCalls.push(request);
+          return { ok: true, opened: true, handle: "recipe-ref-undo", project_ref: request.project_ref };
+        },
+        async end(request) {
+          undoCalls.push(request);
+          return { ok: true, closed: true, verified: true, handle: request.handle, project_ref: request.project_ref };
+        },
+      },
+      dispatchers: {
+        macro: async ({ stage, refs, recipe_undo }) => {
+          dispatches.push({ stage_id: stage.id, refs, recipe_undo });
+          if (stage.id === "add_take_fx") {
+            assert.equal(refs.take_ref, "take:guid:{TAKE-ONE}");
+            return macroEnvelopeWithChange({ fx_ref: "fx:take:{TAKE-ONE}:0" });
+          }
+          assert.equal(refs.fx_ref, "fx:take:{TAKE-ONE}:0");
+          return macroEnvelopeWithChange({ parameter_value: 0.25 });
+        },
+      },
+    });
+    const saved = await saveFixture(runtime, draft);
+    assert.equal(saved.ok, true, JSON.stringify(saved));
+    const ran = await runtime.call_recipe({
+      operation: "run",
+      ...exactIdentity(saved),
+      inputs: { take_ref: "take:guid:{TAKE-ONE}" },
+    });
+
+    assert.equal(ran.ok, true, JSON.stringify(ran));
+    assert.deepEqual(dispatches.map((entry) => entry.stage_id), ["add_take_fx", "control_fx"]);
+    assert.equal(dispatches.every((entry) => entry.recipe_undo?.suppress_child_undo === true), true);
+    assert.deepEqual(undoCalls.map((call) => call.operation), ["begin", "end"]);
+    assert.equal(ran.verified_outputs.find((item) => item.id === "parameter_value")?.value, 0.25);
+  });
+
+  it("fails invalid Recipe refs closed without stale generation bindings", async () => {
+    const draft = makeRecipeRefDraft();
+    const dispatches = [];
+    const undoCalls = [];
+    let generation = "1";
+    const { runtime } = makeRuntime({
+      facts: (revision) => ({ ...completeFacts(revision, draft), bridge_generation: generation }),
+      undoController: {
+        async begin(request) {
+          undoCalls.push(request);
+          return { ok: true, opened: true, handle: `recipe-ref-undo-${generation}`, project_ref: request.project_ref };
+        },
+        async end(request) {
+          undoCalls.push(request);
+          return { ok: true, closed: true, verified: true, handle: request.handle, project_ref: request.project_ref };
+        },
+      },
+      dispatchers: {
+        macro: async ({ stage, refs }) => {
+          dispatches.push({ generation, stage_id: stage.id, refs });
+          return stage.id === "add_take_fx"
+            ? macroEnvelopeWithChange({ fx_ref: "fx:take:{TAKE-ONE}:0" })
+            : macroEnvelopeWithChange({ parameter_value: 0.25 });
+        },
+      },
+    });
+    const saved = await saveFixture(runtime, draft);
+    assert.equal(saved.ok, true, JSON.stringify(saved));
+    const identity = exactIdentity(saved);
+
+    for (const takeRef of [
+      "item:guid:{WRONG-KIND}",
+      undefined,
+      ["take:guid:{TAKE-ONE}", "take:guid:{TAKE-TWO}"],
+      { kind: "take", ref: "take:guid:{TAKE-ONE}" },
+    ]) {
+      const failed = await runtime.call_recipe({
+        operation: "run",
+        ...identity,
+        inputs: { take_ref: takeRef },
+      });
+      assert.equal(failed.ok, false, JSON.stringify(failed));
+      assert.equal(failed.error.code, "PREFLIGHT_FAILED");
+      assert.equal(
+        failed.error.details.zero_write === true || failed.error.details.mutates_project === false,
+        true,
+        JSON.stringify(failed),
+      );
+    }
+    assert.deepEqual(dispatches, []);
+    assert.deepEqual(undoCalls, []);
+
+    generation = "2";
+    const reconnected = await runtime.call_recipe({
+      operation: "run",
+      ...identity,
+      inputs: { take_ref: "take:guid:{TAKE-TWO}" },
+    });
+    assert.equal(reconnected.ok, true, JSON.stringify(reconnected));
+    assert.equal(dispatches[0].refs.take_ref, "take:guid:{TAKE-TWO}");
+    assert.equal(dispatches.some((entry) => entry.refs?.take_ref === "take:guid:{TAKE-ONE}"), false);
+    assert.deepEqual(undoCalls.map((call) => call.operation), ["begin", "end"]);
+  });
+
   it("stops after the active stage and closes Whole-Recipe Undo when the caller cancels", async () => {
     const controller = new AbortController();
     const undoCalls = [];
@@ -2470,6 +2577,66 @@ function makeTwoMacroDraft() {
   ];
   draft.preflight.stage_count = 2;
   draft.preflight.dependency_count = 1;
+  return draft;
+}
+
+function makeRecipeRefDraft() {
+  const draft = makeTwoMacroDraft();
+  draft.id = "recipe.fx.bind_take_and_control_fx";
+  draft.title = "Bind one Take and control its created FX";
+  draft.summary = "Binds an exact Take ref, then passes the verified created FX ref to a later stage.";
+  draft.inputs = [{ id: "take_ref", type: "ref.take", required: true }];
+  draft.outputs = [{ id: "parameter_value", type: "number", required: true }];
+  draft.portability = {
+    ...draft.portability,
+    project_identity: "project:runtime_bound",
+    bridge_owner: "bridge:runtime_bound",
+    bridge_generation: "generation:runtime_bound",
+  };
+  draft.stages[0] = {
+    ...draft.stages[0],
+    id: "add_take_fx",
+    inputs: [],
+    outputs: ["fx_ref"],
+    checkpoint: "checkpoint_add_take_fx",
+  };
+  draft.stages[1] = {
+    ...draft.stages[1],
+    id: "control_fx",
+    inputs: [],
+    outputs: ["parameter_value"],
+    checkpoint: "checkpoint_control_fx",
+  };
+  draft.bindings = [
+    {
+      from: { scope: "recipe_input", id: null, port: "take_ref" },
+      to: { scope: "refs", id: "add_take_fx", port: "take_ref" },
+    },
+    {
+      from: { scope: "stage", id: "add_take_fx", port: "fx_ref" },
+      to: { scope: "refs", id: "control_fx", port: "fx_ref" },
+    },
+    {
+      from: { scope: "stage", id: "control_fx", port: "parameter_value" },
+      to: { scope: "recipe_output", id: null, port: "parameter_value" },
+    },
+  ];
+  draft.checkpoints = [
+    {
+      id: "checkpoint_add_take_fx",
+      after_stage: "add_take_fx",
+      evidence_id: "evidence_add_take_fx",
+      resume_identity: "resume.add_take_fx",
+      summary: "Take FX created and read back.",
+    },
+    {
+      id: "checkpoint_control_fx",
+      after_stage: "control_fx",
+      evidence_id: "evidence_control_fx",
+      resume_identity: "resume.control_fx",
+      summary: "FX parameter controlled and read back.",
+    },
+  ];
   return draft;
 }
 

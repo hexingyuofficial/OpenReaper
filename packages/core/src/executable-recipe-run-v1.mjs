@@ -550,15 +550,34 @@ export function resolveStageRefs(stage, bindingValues, recipeInputs, bindings = 
     && binding?.to?.scope === "stage_refs"
     && binding.to.id === stage.id
     && binding.to.port === "refs");
-  if (!expressionBinding) return null;
-  const refs = evaluateExecutableRecipeExpression(expressionBinding.expression, {
-    inputs: recipeInputs,
-    binding_values: bindingValues,
-  });
-  if (!isPlainObject(refs)) {
-    throw expressionError("Recipe stage_refs expression must evaluate to an object.", "EXPRESSION_TYPE_INVALID");
+  const refs = {};
+  if (expressionBinding) {
+    const resolved = evaluateExecutableRecipeExpression(expressionBinding.expression, {
+      inputs: recipeInputs,
+      binding_values: bindingValues,
+    });
+    if (!isPlainObject(resolved)) {
+      throw expressionError("Recipe stage_refs expression must evaluate to an object.", "EXPRESSION_TYPE_INVALID");
+    }
+    Object.assign(refs, resolved);
   }
-  return refs;
+  for (const binding of bindings) {
+    if (binding?.to?.scope !== "refs" || binding.to.id !== stage.id) continue;
+    const port = binding.to.port;
+    if (Object.prototype.hasOwnProperty.call(refs, port)) {
+      throw expressionError(`Recipe stage ref ${stage.id}.${port} has multiple resolved values.`, "EXPRESSION_TYPE_INVALID");
+    }
+    if (isPlainObject(binding.expression)) {
+      refs[port] = evaluateExecutableRecipeExpression(binding.expression, {
+        inputs: recipeInputs,
+        binding_values: bindingValues,
+      });
+      continue;
+    }
+    const key = `refs:${stage.id}:${port}`;
+    if (Object.prototype.hasOwnProperty.call(bindingValues, key)) refs[port] = bindingValues[key];
+  }
+  return Object.keys(refs).length === 0 ? null : refs;
 }
 
 export function applyBindingsAfterStage(bindings, stage, stageOutputs, bindingValues) {
@@ -568,6 +587,8 @@ export function applyBindingsAfterStage(bindings, stage, stageOutputs, bindingVa
       const value = stageOutputs[binding.from.port];
       if (binding.to?.scope === "stage" && typeof binding.to.id === "string") {
         next[`${binding.to.id}:${binding.to.port}`] = value;
+      } else if (binding.to?.scope === "refs" && typeof binding.to.id === "string") {
+        next[`refs:${binding.to.id}:${binding.to.port}`] = value;
       } else if (binding.to?.scope === "recipe_output") {
         next[`recipe_output:${binding.to.port}`] = value;
       }
@@ -582,8 +603,11 @@ export function applyBindingsAfterStage(bindings, stage, stageOutputs, bindingVa
 export function seedBindingValuesFromInputs(bindings, inputs) {
   const values = {};
   for (const binding of bindings) {
-    if (binding.from?.scope === "recipe_input" && binding.to?.scope === "stage") {
+    if (binding.from?.scope !== "recipe_input") continue;
+    if (binding.to?.scope === "stage") {
       values[`${binding.to.id}:${binding.to.port}`] = inputs[binding.from.port];
+    } else if (binding.to?.scope === "refs") {
+      values[`refs:${binding.to.id}:${binding.to.port}`] = inputs[binding.from.port];
     }
   }
   return values;
