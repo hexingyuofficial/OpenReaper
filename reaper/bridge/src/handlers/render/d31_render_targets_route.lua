@@ -1,5 +1,5 @@
 -- Extracted D31 handler: bounded project render targets.
--- Uses project render settings and audited action 41824; never RenderFileSection.
+-- Uses project render settings and an audited native render action; never RenderFileSection.
 
 local D31_MANIFEST_SPEC = {
   template_id = "template.render.render_targets",
@@ -72,6 +72,7 @@ local D31_ERROR_CODE_MAP = {
   MAX_TARGETS_INVALID = "PARAMS_INVALID",
   TARGET_COUNT_EXCEEDED = "PARAMS_INVALID",
   OUTPUT_BASENAME_INVALID = "PARAMS_INVALID",
+  RENDER_OUTPUT_ALL_ZERO = "VERIFY_FAILED",
   RESTORE_FAILED = "VERIFY_FAILED",
 }
 
@@ -329,19 +330,76 @@ local function d31_measure_wav_pcm(path_value)
   }
 end
 
-local function d31_measure_output(path_value, extension)
-  if extension == "wav" then return d31_measure_wav_pcm(path_value) end
-  return {
-    measurement_status = "unavailable",
-    measurement_scope = "rendered_file",
-    measurement_format = extension,
-    peak_linear = JSON_NULL,
-    peak_dbfs = JSON_NULL,
+local function d31_measure_native_peaks(path_value, extension)
+  local ok_source, source = call_reaper("PCM_Source_CreateFromFile", path_value)
+  if not ok_source or not source then
+    return nil, { code = "MEASUREMENT_UNAVAILABLE", message = "REAPER could not decode the rendered output for native peak measurement." }
+  end
+  local function finish(result, failure)
+    local destroyed = call_reaper("PCM_Source_Destroy", source)
+    if not destroyed then return nil, { code = "MEASUREMENT_UNAVAILABLE", message = "REAPER could not release the rendered-output measurement source." } end
+    return result, failure
+  end
+  local ok_length, raw_length, length_is_qn = call_reaper("GetMediaSourceLength", source)
+  local ok_rate, raw_rate = call_reaper("GetMediaSourceSampleRate", source)
+  local ok_channels, raw_channels = call_reaper("GetMediaSourceNumChannels", source)
+  local length_seconds = ok_length and first_number(raw_length) or nil
+  local sample_rate = ok_rate and first_number(raw_rate) or nil
+  local channels = ok_channels and first_number(raw_channels) or nil
+  if length_is_qn == true or type(length_seconds) ~= "number" or length_seconds <= 0
+      or type(sample_rate) ~= "number" or sample_rate <= 0
+      or type(channels) ~= "number" or channels < 1 or channels > 64 then
+    return finish(nil, { code = "MEASUREMENT_UNAVAILABLE", message = "Rendered output reported invalid native duration, sample-rate, or channel metadata." })
+  end
+  channels = math.floor(channels)
+  local peak_rate = math.min(sample_rate, 1000)
+  local total_frames = math.max(1, math.ceil(length_seconds * peak_rate))
+  local frame_offset = 0
+  local peak_linear = 0
+  while frame_offset < total_frames do
+    local requested_frames = math.min(8192, total_frames - frame_offset)
+    local ok_buffer, buffer = call_reaper("new_array", requested_frames * channels * 2)
+    if not ok_buffer or not buffer then return finish(nil, { code = "MEASUREMENT_UNAVAILABLE", message = "REAPER could not allocate a rendered-output peak buffer." }) end
+    local ok_peaks, raw_return = call_reaper("PCM_Source_GetPeaks", source, peak_rate, frame_offset / peak_rate, channels, requested_frames, 0, buffer)
+    local return_value = ok_peaks and first_number(raw_return) or nil
+    local returned_frames = type(return_value) == "number" and math.floor(return_value) % 1048576 or -1
+    if returned_frames < 1 or returned_frames > requested_frames then return finish(nil, { code = "MEASUREMENT_UNAVAILABLE", message = "REAPER returned an invalid rendered-output peak frame count." }) end
+    local values = nil
+    if type(buffer.table) == "function" then
+      local table_ok, table_values = pcall(function() return buffer.table() end)
+      if table_ok and type(table_values) == "table" then values = table_values end
+    end
+    if not values then return finish(nil, { code = "MEASUREMENT_UNAVAILABLE", message = "Rendered-output peak data was not readable." }) end
+    local block_values = returned_frames * channels
+    for value_index = 1, block_values * 2 do
+      local value = tonumber(values[value_index])
+      if value == nil then return finish(nil, { code = "MEASUREMENT_UNAVAILABLE", message = "Rendered-output peak data contained an invalid sample." }) end
+      local absolute = math.abs(value)
+      if absolute > peak_linear then peak_linear = absolute end
+    end
+    frame_offset = frame_offset + returned_frames
+  end
+  local all_zero = peak_linear == 0
+  return finish({
+    measurement_status = "measured",
+    measurement_scope = "rendered_file_native_peaks",
+    measurement_format = extension .. "_native_peaks",
+    sample_rate_hz = sample_rate,
+    channel_count = channels,
+    frame_count = total_frames,
+    sample_count = JSON_NULL,
+    peak_linear = peak_linear,
+    peak_dbfs = d31_linear_db(peak_linear),
     rms_linear = JSON_NULL,
     rms_dbfs = JSON_NULL,
-    silence_classification = "unavailable",
-    is_silent = JSON_NULL,
-  }
+    silence_classification = all_zero and "all_zero" or "non_silent",
+    is_silent = all_zero,
+  })
+end
+
+local function d31_measure_output(path_value, extension)
+  if extension == "wav" then return d31_measure_wav_pcm(path_value) end
+  return d31_measure_native_peaks(path_value, extension)
 end
 
 local function d31_get_number(project, key)
@@ -718,6 +776,27 @@ local function d31_job_ref(request)
   return { kind = "job", ref = "job:job_id:" .. job_id, identity = { scheme = "job_id", value = job_id }, summary = { template_id = "template.render.render_targets", pack = "render" } }
 end
 
+local function d31_finish_render_attempt(project, settings, prior_tracks, prior_items, call_ok, outcome)
+  local settings_restored, failed_settings = d31_restore_settings(project, settings)
+  local tracks_restored = d31_apply_track_selection(project, prior_tracks)
+  local items_restored = d31_apply_item_selection(project, prior_items)
+  if not settings_restored or not tracks_restored or not items_restored then
+    return d31_error("RESTORE_FAILED", "D31 could not restore pre-render settings or selections.", {
+      failed_render_setting_keys = failed_settings,
+      track_selection_restored = tracks_restored,
+      item_selection_restored = items_restored,
+      render_attempt_failed = not call_ok or (is_object(outcome) and outcome.failure ~= nil),
+    }, false)
+  end
+  if not call_ok then
+    return d31_error("INTERNAL_ERROR", "D31 render target execution failed unexpectedly after state restoration.", { message = bounded_string(outcome, 240) }, false)
+  end
+  if outcome.failure then
+    return d31_error(outcome.failure.code, outcome.failure.message, outcome.failure.details, outcome.failure.recoverable)
+  end
+  return outcome
+end
+
 local function d31_render_targets(request)
   if request.params.output_policy ~= "openreaper_managed_render_root" then return d31_error("PARAMS_INVALID", "D31 requires openreaper_managed_render_root output_policy.", { field = "output_policy" }, false) end
   if request.params.collision_policy ~= "fail_if_exists" then return d31_error("IDEMPOTENCY_CONFLICT", "D31 currently supports only collision_policy fail_if_exists.", { collision_policy = request.params.collision_policy }, false) end
@@ -767,6 +846,7 @@ local function d31_render_targets(request)
       if size <= 0 or not header_ok or actual_format ~= request.params.format or (format.mp3_bitrate_kbps and actual_bitrate ~= format.mp3_bitrate_kbps) then return { failure = { code = "VERIFY_FAILED", message = "Rendered output is absent, empty, or has the wrong container, MPEG layer, or bitrate.", details = { output_basename = output.output_basename, requested_format = request.params.format, actual_format = actual_format, requested_bitrate_kbps = format.mp3_bitrate_kbps, actual_bitrate_kbps = actual_bitrate, extension = output.extension, file_size_bytes = size, target_index = index - 1 }, recoverable = false } } end
       local measurement, measurement_error = d31_measure_output(output.absolute_path, output.extension)
       if not measurement then return { failure = { code = "VERIFY_FAILED", message = "Rendered output could not be measured without inferring audible content from file size.", details = { output_basename = output.output_basename, measurement_error = measurement_error and measurement_error.message or "unknown_measurement_failure", target_index = index - 1 }, recoverable = false } } end
+      if measurement.is_silent == true then return { failure = { code = "RENDER_OUTPUT_ALL_ZERO", message = "Rendered output decoded successfully but every measured sample was zero; the render is not accepted as successful.", details = { output_basename = output.output_basename, requested_format = request.params.format, actual_format = actual_format, measurement_status = measurement.measurement_status, measurement_scope = measurement.measurement_scope, silence_classification = measurement.silence_classification, measured_peak_linear = measurement.peak_linear, target_identity = target.ref or target.label, target_index = index - 1 }, recoverable = false } } end
       local project_copy_path = output.absolute_path .. ".RPP"
       local project_copy_retained = file_exists(project_copy_path)
       result_outputs[#result_outputs + 1] = {
@@ -801,12 +881,9 @@ local function d31_render_targets(request)
   end
 
   local call_ok, outcome = xpcall(render_all, function(message) return tostring(message) end)
-  local settings_restored, failed_settings = d31_restore_settings(project, settings)
-  local tracks_restored = d31_apply_track_selection(project, prior_tracks)
-  local items_restored = d31_apply_item_selection(project, prior_items)
-  if not settings_restored or not tracks_restored or not items_restored then return d31_error("RESTORE_FAILED", "D31 could not restore pre-render settings or selections.", { failed_render_setting_keys = failed_settings, track_selection_restored = tracks_restored, item_selection_restored = items_restored, render_attempt_failed = not call_ok or (is_object(outcome) and outcome.failure ~= nil) }, false) end
-  if not call_ok then return d31_error("INTERNAL_ERROR", "D31 render target execution failed unexpectedly after state restoration.", { message = bounded_string(outcome, 240) }, false) end
-  if outcome.failure then return d31_error(outcome.failure.code, outcome.failure.message, outcome.failure.details, outcome.failure.recoverable) end
+  local finished_outcome, finish_error = d31_finish_render_attempt(project, settings, prior_tracks, prior_items, call_ok, outcome)
+  if not finished_outcome then return nil, finish_error end
+  outcome = finished_outcome
 
   local job_ref = d31_job_ref(request)
   local manifest_summary = { job_ref = job_ref.ref, format = request.params.format, mp3_bitrate_kbps = format.mp3_bitrate_kbps, requested_output_basename = requested_basename, file_count = #outcome.outputs, max_targets = max_targets, output_policy = request.params.output_policy, collision_policy = request.params.collision_policy, truncated = false }

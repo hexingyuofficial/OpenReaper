@@ -10,7 +10,7 @@ import {
 } from "../../packages/mcp-server/src/call-template-runtime-v1.mjs";
 
 const require = createRequire(import.meta.url);
-const { lua, lauxlib, to_jsstring, to_luastring } = require("fengari");
+const { lua, lauxlib, lualib, to_jsstring, to_luastring } = require("fengari");
 
 const HANDLER = readFileSync(
   new URL("../../reaper/bridge/src/handlers/render/d31_render_targets_route.lua", import.meta.url),
@@ -57,6 +57,38 @@ function wholeProjectWavInput() {
   };
 }
 
+function runHandlerLua(body, exposedFunctions = []) {
+  const state = lauxlib.luaL_newstate();
+  lualib.luaL_openlibs(state);
+  let source = HANDLER;
+  for (const name of exposedFunctions) {
+    source = source.replace(`local function ${name}`, `function ${name}`);
+  }
+  const prelude = String.raw`
+JSON_NULL = {}
+function first_number(...)
+  for index = 1, select("#", ...) do
+    local value = select(index, ...)
+    if type(value) == "number" then return value end
+  end
+  return nil
+end
+function call_reaper(name, ...)
+  if not reaper or type(reaper[name]) ~= "function" then return false end
+  return pcall(reaper[name], ...)
+end
+function is_object(value) return type(value) == "table" end
+function bounded_string(value) return tostring(value or "") end
+function json_array(value) return value or {} end
+`;
+  const status = lauxlib.luaL_loadstring(state, to_luastring(`${prelude}\n${source}\n${body}\nreturn true`));
+  if (status !== lua.LUA_OK) throw new Error(`Lua load failed: ${to_jsstring(lua.lua_tostring(state, -1))}`);
+  const callStatus = lua.lua_pcall(state, 0, 1, 0);
+  if (callStatus !== lua.LUA_OK) throw new Error(`Lua execution failed: ${to_jsstring(lua.lua_tostring(state, -1))}`);
+  assert.equal(lua.lua_toboolean(state, -1), true);
+  lua.lua_close(state);
+}
+
 describe("Alpha3.2 D31 render-targets bridge route", () => {
   it("exposes an exact D31 live allowlist while retaining the fixed D29 registry route membership", () => {
     assert.deepEqual(CALL_TEMPLATE_RUNTIME_D31_RENDER_TARGETS_TEMPLATE_IDS, [
@@ -101,6 +133,91 @@ describe("Alpha3.2 D31 render-targets bridge route", () => {
     const status = lauxlib.luaL_loadstring(state, to_luastring(HANDLER));
     const message = status === lua.LUA_OK ? "D31 Lua parsed" : to_jsstring(lua.lua_tostring(state, -1));
     assert.equal(status, lua.LUA_OK, message);
+  });
+
+  it("executes native compressed-output peak measurement for non-zero and all-zero streams and always destroys the source", () => {
+    runHandlerLua(String.raw`
+local function install(peaks)
+  local source = {}
+  local destroyed = 0
+  reaper = {
+    PCM_Source_CreateFromFile = function(path) assert(path == "/tmp/render.ogg"); return source end,
+    GetMediaSourceLength = function(actual) assert(actual == source); return 0.004, false end,
+    GetMediaSourceSampleRate = function(actual) assert(actual == source); return 48000 end,
+    GetMediaSourceNumChannels = function(actual) assert(actual == source); return 2 end,
+    new_array = function(size)
+      local values = {}
+      return { values = values, table = function() return values end }
+    end,
+    PCM_Source_GetPeaks = function(actual, rate, start, channels, requested, extra, buffer)
+      assert(actual == source and rate == 1000 and channels == 2 and extra == 0)
+      local count = requested * channels
+      for index = 1, count * 2 do buffer.values[index] = peaks[((index - 1) % #peaks) + 1] end
+      return requested
+    end,
+    PCM_Source_Destroy = function(actual) assert(actual == source); destroyed = destroyed + 1 end,
+  }
+  return function() return destroyed end
+end
+
+local destroyed = install({ 0, 0.25, -0.5, 0 })
+local measured, failure = d31_measure_native_peaks("/tmp/render.ogg", "ogg")
+assert(failure == nil)
+assert(measured.is_silent == false)
+assert(measured.silence_classification == "non_silent")
+assert(measured.peak_linear == 0.5)
+assert(measured.measurement_format == "ogg_native_peaks")
+assert(destroyed() == 1)
+
+destroyed = install({ 0 })
+measured, failure = d31_measure_native_peaks("/tmp/render.ogg", "ogg")
+assert(failure == nil)
+assert(measured.is_silent == true)
+assert(measured.silence_classification == "all_zero")
+assert(measured.peak_linear == 0)
+assert(destroyed() == 1)
+`, ["d31_measure_native_peaks"]);
+  });
+
+  it("executes restoration before returning a typed all-zero render failure", () => {
+    let source = HANDLER
+      .replace("local function d31_finish_render_attempt", "function d31_finish_render_attempt")
+      .replace("local function d31_restore_settings", "function d31_restore_settings")
+      .replace("local function d31_apply_track_selection", "function d31_apply_track_selection")
+      .replace("local function d31_apply_item_selection", "function d31_apply_item_selection");
+    const state = lauxlib.luaL_newstate();
+    lualib.luaL_openlibs(state);
+    const script = String.raw`
+JSON_NULL = {}
+function is_object(value) return type(value) == "table" end
+function bounded_string(value) return tostring(value or "") end
+function json_array(value) return value or {} end
+function call_reaper() return false end
+${source}
+local order = {}
+d31_restore_settings = function() order[#order + 1] = "settings"; return true, {} end
+d31_apply_track_selection = function() order[#order + 1] = "tracks"; return true end
+d31_apply_item_selection = function() order[#order + 1] = "items"; return true end
+local result, failure = d31_finish_render_attempt({}, {}, {}, {}, true, {
+  failure = {
+    code = "RENDER_OUTPUT_ALL_ZERO",
+    message = "all zero",
+    details = { silence_classification = "all_zero" },
+    recoverable = false,
+  },
+})
+assert(result == nil)
+assert(failure.code == "VERIFY_FAILED")
+assert(failure.details.local_code == "RENDER_OUTPUT_ALL_ZERO")
+assert(order[1] == "settings" and order[2] == "tracks" and order[3] == "items")
+return true
+`;
+    const status = lauxlib.luaL_loadstring(state, to_luastring(script));
+    if (status !== lua.LUA_OK) throw new Error(`Lua load failed: ${to_jsstring(lua.lua_tostring(state, -1))}`);
+    const callStatus = lua.lua_pcall(state, 0, 1, 0);
+    if (callStatus !== lua.LUA_OK) throw new Error(`Lua execution failed: ${to_jsstring(lua.lua_tostring(state, -1))}`);
+    assert.equal(lua.lua_toboolean(state, -1), true);
+    lua.lua_close(state);
   });
 
   it("uses audited codec blobs with the expected raw WAV, OGG, and native MP3 layouts", () => {
@@ -177,11 +294,17 @@ describe("Alpha3.2 D31 render-targets bridge route", () => {
     assert.match(HANDLER, /layer_bits == 1/);
     assert.match(HANDLER, /actual_bitrate ~= format\.mp3_bitrate_kbps/);
     assert.match(HANDLER, /d31_measure_wav_pcm/);
+    assert.match(HANDLER, /d31_measure_native_peaks/);
+    assert.match(HANDLER, /PCM_Source_CreateFromFile/);
+    assert.match(HANDLER, /PCM_Source_GetPeaks/);
+    assert.match(HANDLER, /PCM_Source_Destroy/);
+    assert.match(HANDLER, /RENDER_OUTPUT_ALL_ZERO = "VERIFY_FAILED"/);
+    assert.match(HANDLER, /if measurement\.is_silent == true then return \{ failure = \{ code = "RENDER_OUTPUT_ALL_ZERO"/);
     assert.match(HANDLER, /d31_pcm_sample/);
     assert.match(HANDLER, /measured_peak_linear/);
     assert.match(HANDLER, /measured_rms_linear/);
     assert.match(HANDLER, /silence_classification = all_zero and "all_zero" or "non_silent"/);
-    assert.match(HANDLER, /measurement_status = "unavailable"/);
+    assert.doesNotMatch(HANDLER, /measurement_status = "unavailable"/);
     assert.match(HANDLER, /d31_get_string\(project, "RENDER_FORMAT"\) ~= format\.config/);
     assert.match(HANDLER, /requested_format = request\.params\.format/);
     assert.match(HANDLER, /target_identity = target\.ref or target\.label/);
@@ -204,10 +327,10 @@ describe("Alpha3.2 D31 render-targets bridge route", () => {
 
     const preflight = HANDLER.indexOf("local preflight_ok, preflight_error = d31_preflight(request, outputs)");
     const firstAction = HANDLER.indexOf("local action_ok = call_reaper(\"Main_OnCommandEx\", D31_ACTION_ID, 0, project)");
-    const restore = HANDLER.indexOf("local settings_restored, failed_settings = d31_restore_settings(project, settings)");
-    const failureReturn = HANDLER.indexOf("if not call_ok then return d31_error(\"INTERNAL_ERROR\"");
+    const rejectAllZero = HANDLER.indexOf("if measurement.is_silent == true then return { failure = { code = \"RENDER_OUTPUT_ALL_ZERO\"");
+    const finish = HANDLER.indexOf("local finished_outcome, finish_error = d31_finish_render_attempt");
     assert.ok(preflight >= 0 && preflight < firstAction, "collision preflight occurs before the first audited action");
-    assert.ok(firstAction >= 0 && firstAction < restore, "restoration runs after any action attempt");
-    assert.ok(restore >= 0 && restore < failureReturn, "unexpected render failure returns only after restoration");
+    assert.ok(firstAction >= 0 && firstAction < finish, "restoration closure runs after any action attempt");
+    assert.ok(firstAction < rejectAllZero && rejectAllZero < finish, "all-zero output enters the protected failure path before restoration");
   });
 });
