@@ -641,6 +641,7 @@ export async function executeAlpha3_3B1cItemsApplyMacro({
       request,
       executeAtomic,
       projectIndexRuntime,
+      artifactWriter,
       now,
       monoNow,
       startedAt,
@@ -1798,11 +1799,13 @@ async function executeRemoveSilencePlan({ request, input = request.input, execut
 }
 
 function audioBatchChange(row, index, dryRun) {
-  const mutationStatus = dryRun ? "not_run" : row.mutation?.status ?? (row.status === "applied" ? "completed" : "failed");
+  const nativeStatus = typeof row.status === "string" ? row.status.toLowerCase() : null;
+  const mutationStatus = dryRun ? "not_run" : row.mutation?.status ?? (nativeStatus === "applied" ? "completed" : "failed");
   const readbackStatus = dryRun ? "not_run" : row.live_readback?.status ?? row.readback_status ?? "passed";
   return compactObject({
+    ...row,
     id: row.id ?? `audio-${index + 1}`,
-    status: dryRun ? "planned" : row.status ?? (mutationStatus === "completed" && readbackStatus === "passed" ? "applied" : "failed"),
+    status: dryRun ? "planned" : (mutationStatus === "completed" && readbackStatus === "passed" ? "ok" : nativeStatus ?? "failed"),
     mutation: { status: mutationStatus },
     live_readback: { status: readbackStatus },
     index_maintenance: { status: dryRun ? "skipped" : "pending", scopes: [] },
@@ -1811,7 +1814,6 @@ function audioBatchChange(row, index, dryRun) {
     owner_track_ref: row.owner_track_ref,
     plan_hash: row.plan_hash,
     readback: row.aggregate_readback ?? row.readback,
-    ...row,
   });
 }
 
@@ -1869,10 +1871,6 @@ function compactAudioBatchReadback(rows, mode) {
   return values.map((row) => {
     const keptRefs = Array.isArray(row.kept_item_refs) ? row.kept_item_refs : [];
     const deletedRefs = Array.isArray(row.deleted_item_refs) ? row.deleted_item_refs : [];
-    // Small batches remain fully inspectable. Larger batches keep one scalar
-    // readback row per target; the transport result/evidence root retains the
-    // complete GUID arrays returned by the REAPER-side verifier.
-    if (values.length <= 8 && keptRefs.length + deletedRefs.length <= 32) return row;
     if (mode === "normalize_level") {
       return compactObject({
         target_order: row.target_order,
@@ -1890,13 +1888,23 @@ function compactAudioBatchReadback(rows, mode) {
       target_order: row.target_order,
       item_ref: row.item_ref,
       owner_track_ref: row.owner_track_ref,
+      adjacency: row.adjacency,
       status: row.status,
       changed: row.changed,
+      readback_status: row.readback_status,
       source_media_deleted: row.source_media_deleted,
       silence_segment_count: row.silence_segment_count,
+      split_count: row.split_count,
       delete_count: row.delete_count,
-      kept_item_count: keptRefs.length,
-      deleted_item_count: deletedRefs.length,
+      kept_item_count: integerOr(row.kept_item_count, keptRefs.length),
+      deleted_item_count: integerOr(row.deleted_item_count, deletedRefs.length),
+      ...(values.length <= 8 ? {
+        item_count_before: row.item_count_before,
+        item_count_after: row.item_count_after,
+        removed_duration_seconds: row.removed_duration_seconds,
+        remaining_duration_seconds: row.remaining_duration_seconds,
+        plan_hash: row.plan_hash,
+      } : {}),
     });
   });
 }

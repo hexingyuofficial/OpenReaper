@@ -609,6 +609,52 @@ describe("Layer 4B template execution harness contract", () => {
     assert.ok(result.budget.response_bytes <= FOUNDATION_BRIDGE_DEFAULT_BUDGET.max_response_bytes);
   });
 
+  it("keeps high-fragment native aggregate GUIDs in summary without duplicating top-level refs", async () => {
+    const descriptor = makeDescriptor();
+    const bridgeExecutor = new FakeFoundationBridge();
+    const rows = Array.from({ length: 3 }, (_, rowIndex) => ({
+      target_order: rowIndex + 1,
+      item_ref: `item:guid:{AUDIO-BATCH-${rowIndex + 1}}`,
+      owner_track_ref: "track:guid:{AUDIO-BATCH-TRACK}",
+      status: "APPLIED",
+      kept_item_refs: Array.from({ length: 141 }, (_, index) =>
+        `item:guid:{AUDIO-BATCH-${rowIndex + 1}-KEPT-${String(index + 1).padStart(3, "0")}}`),
+      deleted_item_refs: Array.from({ length: 140 }, (_, index) =>
+        `item:guid:{AUDIO-BATCH-${rowIndex + 1}-DELETED-${String(index + 1).padStart(3, "0")}}`),
+      split_count: 280,
+      delete_count: 140,
+      source_media_deleted: false,
+    }));
+    let bridgeBytes = 0;
+
+    const result = await executeTemplate({
+      descriptor,
+      input: { name: "High Fragment Batch" },
+      context: context(),
+      executor: (request) => {
+        const bridgeResult = structuredClone(bridgeExecutor.dispatch(request));
+        bridgeResult.result.summary = {
+          target_count: rows.length,
+          returned_target_count: rows.length,
+          aggregate_readback: rows,
+          native_counters: { aggregate_readback_count: rows.length },
+          transport_call_count: 1,
+          readback_status: "passed",
+        };
+        bridgeResult.result.refs = [];
+        bridgeResult.budget.response_bytes = Buffer.byteLength(JSON.stringify(bridgeResult), "utf8");
+        bridgeBytes = bridgeResult.budget.response_bytes;
+        return bridgeResult;
+      },
+    });
+
+    assert.equal(bridgeBytes <= FOUNDATION_BRIDGE_DEFAULT_BUDGET.max_response_bytes, true);
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.deepEqual(result.result.summary.aggregate_readback, rows);
+    assert.deepEqual(result.result.refs, []);
+    assert.equal(result.budget.response_bytes <= FOUNDATION_BRIDGE_DEFAULT_BUDGET.max_response_bytes, true);
+  });
+
   it("still projects target refs without exact aggregate count evidence", async () => {
     const descriptor = makeDescriptor();
     const bridgeExecutor = new FakeFoundationBridge();

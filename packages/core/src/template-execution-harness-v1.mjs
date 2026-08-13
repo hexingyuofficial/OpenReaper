@@ -875,6 +875,18 @@ function aggregateBatchCollectionKeys(summary) {
   if (!isPlainObject(summary)) return keys;
 
   if (
+    Array.isArray(summary.aggregate_readback)
+    && summary.transport_call_count === 1
+    && summary.returned_target_count === summary.aggregate_readback.length
+    && summary.native_counters?.aggregate_readback_count === summary.aggregate_readback.length
+  ) {
+    // Native aggregate rows may contain hundreds of already-verified fragment
+    // GUIDs. Keep them in summary/evidence, but do not duplicate them as
+    // top-level Template refs and turn a successful write into a budget error.
+    keys.add("aggregate_readback");
+  }
+
+  if (
     Array.isArray(summary.rows)
     && summary.rows.length > 1
     && isPlainObject(summary.batch_timings)

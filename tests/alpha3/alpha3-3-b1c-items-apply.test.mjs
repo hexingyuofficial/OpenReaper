@@ -733,6 +733,57 @@ describe("Alpha3.3-B1c executable macro.items.apply", () => {
     }
   });
 
+  it("projects a three-target high-fragment Silence success without post-write RESPONSE_TOO_LARGE", async () => {
+    const items = Array.from({ length: 3 }, (_, index) => item(
+      itemRef(`{HIGH-FRAGMENT-${index + 1}}`),
+      index * 280,
+      279,
+      { silence_segment_count: 140, silence_seconds: 70 },
+    )).map((entry) => ({ ...entry, track_ref: "track:guid:{HIGH-FRAGMENT-TRACK}" }));
+    let evidenceInput = null;
+    const bridge = new FakeFoundationBridge(items, {
+      batchTargetRefs: items.map((entry) => entry.item_ref.ref),
+      omitBatchOutputRefs: true,
+      batchNativeStatus: "APPLIED",
+    });
+    const result = await executeAlpha3_3B1cItemsApplyMacro({
+      request: request({
+        mode: "remove_silence",
+        target: "exact",
+        target_refs: [items[1].item_ref.ref],
+        adjacent_audio: "both",
+        silence_scope: "internal",
+        silence_threshold_dbfs: -40,
+        min_silence_ms: 200,
+        dry_run: false,
+      }),
+      executeAtomic: bridge.executeAtomic,
+      artifactWriter: async (input) => {
+        evidenceInput = input;
+        return { ref: "artifact:items:audio_batch_evidence:art_high_fragment", inline_readback: false };
+      },
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(bridge.calls[0].budget.max_response_bytes, 65_536);
+    assert.equal(bridge.lastBatchResponseBytes <= bridge.calls[0].budget.max_response_bytes, true);
+    assert.equal(result.result.data.aggregate_readback_count, 3, JSON.stringify(result));
+    assert.equal(result.result.changes.every((change) => change.status === "ok"), true);
+    assert.equal(result.result.data.plan_hash, "fake-s3-plan-hash");
+    assert.equal(result.result.data.undo_opened, true);
+    assert.equal(result.result.data.undo_closed, true);
+    assert.equal(evidenceInput.rows.length, 3);
+    assert.equal(evidenceInput.rows[0].kept_item_refs.length, 141);
+    assert.equal(evidenceInput.rows[0].deleted_item_refs.length, 140);
+    assert.equal(evidenceInput.publicReadback[0].kept_item_count, 141);
+    assert.equal(evidenceInput.publicReadback[0].deleted_item_count, 140);
+    assert.equal(evidenceInput.publicReadback[0].split_count, 280);
+    assert.equal("kept_item_refs" in evidenceInput.publicReadback[0], false);
+    assert.equal(result.budget.actual_bytes <= result.budget.max_bytes, true);
+    assert.deepEqual(validateMacroExecutionEnvelope(result), { valid: true, errors: [] });
+  });
+
   it("projects stale bridge zero-write truth for audio batches", async () => {
     const calls = [];
     const result = await executeAlpha3_3B1cItemsApplyMacro({
@@ -1292,7 +1343,9 @@ class FakeFoundationBridge {
     if (id === "template.items.split_item_by_silence" && input.batch === true) {
       if (this.options.analysisCoverageIncomplete) return failure(id, "ITEM_APPLY_ANALYSIS_COVERAGE_INCOMPLETE", "Fake batch analysis coverage is incomplete.");
       if (this.options.allSilent) return failure(id, "ITEM_APPLY_ALL_SILENT_BLOCKED", "Fake batch retained an all-silent Item without mutation.");
-      const targetRefs = (Array.isArray(refs) ? refs : []).filter((ref) => ref?.kind === "item");
+      const targetRefs = Array.isArray(this.options.batchTargetRefs)
+        ? this.options.batchTargetRefs.map(exactItemObject)
+        : (Array.isArray(refs) ? refs : []).filter((ref) => ref?.kind === "item");
       const aggregateReadback = [];
       const outputRefs = [];
       for (const targetRef of targetRefs) {
@@ -1322,7 +1375,7 @@ class FakeFoundationBridge {
         aggregateReadback.push({
           item_ref: entry.item_ref.ref,
           owner_track_ref: entry.track_ref,
-          status: "applied",
+          status: this.options.batchNativeStatus ?? "applied",
           mutation: { status: "completed" },
           live_readback: { status: "passed" },
           kept_item_refs: keptRefs,
@@ -1339,7 +1392,7 @@ class FakeFoundationBridge {
         });
         outputRefs.push(...keptRefs.map(exactItemObject));
       }
-      return execution(id, {
+      const batchExecution = execution(id, {
         target_count: aggregateReadback.length,
         returned_target_count: aggregateReadback.length,
         aggregate_readback: aggregateReadback,
@@ -1349,7 +1402,12 @@ class FakeFoundationBridge {
         transport_call_count: 1,
         undo_opened: true,
         undo_closed: true,
-      }, outputRefs);
+      }, this.options.omitBatchOutputRefs ? [] : outputRefs);
+      this.lastBatchResponseBytes = Buffer.byteLength(JSON.stringify(batchExecution), "utf8");
+      if (this.options.enforceResponseBudget && this.lastBatchResponseBytes > budget.max_response_bytes) {
+        return failure(id, "RESPONSE_TOO_LARGE", "Fake complete audio batch response exceeded its child budget.");
+      }
+      return batchExecution;
     }
     if (id === "template.items.list_items_on_track") {
       const trackReference = refs.track_ref;
