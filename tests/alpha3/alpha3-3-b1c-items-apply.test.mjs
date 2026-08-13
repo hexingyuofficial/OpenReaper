@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -25,6 +26,12 @@ import {
   CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS,
   createCallTemplateRuntime,
 } from "../../packages/mcp-server/src/call-template-runtime-v1.mjs";
+import {
+  createAudioBatchArtifactWriter,
+} from "../../packages/mcp-server/src/audio-batch-artifact-writer-v1.mjs";
+import {
+  createGetStateArtifactRuntime,
+} from "../../packages/mcp-server/src/get-state-runtime-v1.mjs";
 import {
   MACRO_CONTRACT_CEILINGS,
   validateMacroExecutionEnvelope,
@@ -782,6 +789,117 @@ describe("Alpha3.3-B1c executable macro.items.apply", () => {
     assert.equal("kept_item_refs" in evidenceInput.publicReadback[0], false);
     assert.equal(result.budget.actual_bytes <= result.budget.max_bytes, true);
     assert.deepEqual(validateMacroExecutionEnvelope(result), { valid: true, errors: [] });
+  });
+
+  it("persists and publicly retrieves complete high-fragment Silence evidence as bounded chunks", async () => {
+    const artifactRoot = mkdtempSync(path.join(os.tmpdir(), "openreaper-audio-batch-artifacts-"));
+    try {
+      const rows = Array.from({ length: 3 }, (_, targetIndex) => ({
+        target_order: targetIndex + 1,
+        item_ref: `item:guid:{HIGH-FRAGMENT-${targetIndex + 1}}`,
+        owner_track_ref: "track:guid:{UNICODE-TRACK}",
+        status: "completed",
+        changed: true,
+        plan_hash: "alpha33_silence_batch:521353494",
+        kept_item_refs: Array.from(
+          { length: 141 },
+          (_, fragmentIndex) => `item:guid:{${String(targetIndex + 1).padStart(8, "0")}-${String(fragmentIndex + 1).padStart(4, "0")}-4ABC-8DEF-${String(fragmentIndex + 1).padStart(12, "0")}}`,
+        ),
+        deleted_item_refs: Array.from(
+          { length: 140 },
+          (_, fragmentIndex) => `item:guid:{${String(targetIndex + 1).padStart(8, "9")}-${String(fragmentIndex + 1).padStart(4, "0")}-4DEF-8ABC-${String(fragmentIndex + 1).padStart(12, "9")}}`,
+        ),
+      }));
+      const publicReadback = rows.map((row) => ({
+        item_ref: row.item_ref,
+        owner_track_ref: row.owner_track_ref,
+        status: row.status,
+        kept_item_count: row.kept_item_refs.length,
+        deleted_item_count: row.deleted_item_refs.length,
+      }));
+      const summary = {
+        target_count: rows.length,
+        returned_target_count: rows.length,
+        aggregate_readback: rows,
+        plan_hash: "alpha33_silence_batch:521353494",
+        batch_timings: { total_ms: 21_706 },
+        native_counters: { mutation_count: 420, readback_count: 843 },
+        undo_opened: true,
+        undo_closed: true,
+      };
+      const writer = createAudioBatchArtifactWriter({
+        artifactRoot,
+        now: () => new Date("2026-08-13T12:34:56.789Z"),
+      });
+      const written = await writer({
+        request: {
+          request_id: "high-fragment-real-writer",
+          macro_id: "macro.items.apply",
+          refs: { source_ref: "file:path:C:\\用户\\音频素材.wav" },
+        },
+        input: { mode: "remove_silence", silence_scope: "all" },
+        execution: {
+          ok: true,
+          execution: { status: "completed" },
+          request: { id: "high-fragment-real-writer" },
+          template: { id: "template.items.split_item_by_silence" },
+        },
+        summary,
+        rows,
+        publicReadback,
+      });
+
+      assert.equal(written.storage, "chunked_manifest");
+      assert.equal(written.inline_readback, false);
+      assert.equal(written.chunk_count > 1, true);
+      assert.equal(written.chunk_refs.length, written.chunk_count);
+
+      const runtime = createGetStateArtifactRuntime({ artifactRoot });
+      const manifestResponse = await runtime.get_state({
+        scope: "artifact",
+        artifact_ref: written.ref,
+        view: "payload",
+      });
+      assert.equal(manifestResponse.ok, true, JSON.stringify(manifestResponse));
+      assert.equal(manifestResponse.budget.response_bytes <= 65_536, true);
+      const manifest = manifestResponse.result.artifact.payload;
+      assert.equal(manifest.encoding, "json_utf8_base64_chunks");
+      assert.equal(manifest.chunk_count, written.chunk_count);
+      assert.equal(manifest.result.plan_hash, summary.plan_hash);
+      assert.deepEqual(manifest.result.undo, { opened: true, closed: true });
+
+      const chunks = [];
+      for (const descriptor of manifest.chunks) {
+        const response = await runtime.get_state({
+          scope: "artifact",
+          artifact_ref: descriptor.ref,
+          view: "payload",
+        });
+        assert.equal(response.ok, true, JSON.stringify(response));
+        assert.equal(response.budget.response_bytes <= 65_536, true);
+        const payload = response.result.artifact.payload;
+        const bytes = Buffer.from(payload.data, "base64");
+        assert.equal(bytes.length, descriptor.bytes);
+        assert.equal(createHash("sha256").update(bytes).digest("hex"), descriptor.sha256);
+        chunks.push(bytes);
+      }
+
+      const completeBytes = Buffer.concat(chunks);
+      assert.equal(completeBytes.length, manifest.complete_payload_bytes);
+      assert.equal(
+        createHash("sha256").update(completeBytes).digest("hex"),
+        manifest.complete_payload_sha256,
+      );
+      const completePayload = JSON.parse(completeBytes.toString("utf8"));
+      assert.deepEqual(completePayload.result.aggregate_readback, rows);
+      assert.equal(completePayload.request.refs.source_ref, "file:path:C:\\用户\\音频素材.wav");
+      assert.equal(
+        readdirSync(path.join(artifactRoot, "items", "audio_batch_evidence")).length,
+        written.chunk_count + 1,
+      );
+    } finally {
+      rmSync(artifactRoot, { recursive: true, force: true });
+    }
   });
 
   it("projects stale bridge zero-write truth for audio batches", async () => {

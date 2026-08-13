@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
 import {
+  ARTIFACT_STATE_STORE_BUDGETS,
   artifactIdFromCommandId,
   formatArtifactRef,
 } from "../../core/src/artifact-state-store-v1.mjs";
@@ -10,8 +11,18 @@ import {
 } from "../../core/src/artifact-state-store-live-helper-v1.mjs";
 
 export const AUDIO_BATCH_ARTIFACT_SCHEMA = "items.audio_batch_evidence.v1";
+export const AUDIO_BATCH_ARTIFACT_MANIFEST_SCHEMA = "items.audio_batch_evidence_manifest.v1";
+export const AUDIO_BATCH_ARTIFACT_CHUNK_SCHEMA = "items.audio_batch_evidence_chunk.v1";
 export const AUDIO_BATCH_ARTIFACT_SCOPE = "audio_batch_evidence";
 export const AUDIO_BATCH_ARTIFACT_CONTRACT = "openreaper.audio_batch_evidence.v1";
+
+const AUDIO_BATCH_ARTIFACT_CHUNK_BYTES = 40_000;
+const AUDIO_BATCH_ARTIFACT_ENCODING = "json_utf8_base64_chunks";
+const AUDIO_BATCH_ARTIFACT_PRODUCER = Object.freeze({
+  kind: "template",
+  id: "template.items.split_item_by_silence",
+  pack: "items",
+});
 
 let fallbackSequence = 0;
 
@@ -62,14 +73,10 @@ export function createAudioBatchArtifactWriter({ artifactRoot, now = () => new D
         },
       },
     };
-    const envelope = createArtifactStateStoreEnvelope({
+    const envelopeInput = {
       ref,
       schema: AUDIO_BATCH_ARTIFACT_SCHEMA,
-      producer: {
-        kind: "template",
-        id: "template.items.split_item_by_silence",
-        pack: "items",
-      },
+      producer: AUDIO_BATCH_ARTIFACT_PRODUCER,
       created_at: safeIso(now),
       summary: {
         contract: AUDIO_BATCH_ARTIFACT_CONTRACT,
@@ -82,7 +89,19 @@ export function createAudioBatchArtifactWriter({ artifactRoot, now = () => new D
         undo_closed: normalizedSummary.undo_closed === true,
       },
       payload,
-    });
+    };
+
+    if (jsonBytes(payload) > ARTIFACT_STATE_STORE_BUDGETS.payload_max_bytes) {
+      return writeChunkedAudioBatchEvidence({
+        artifactRoot,
+        artifactId,
+        envelopeInput,
+        aggregateReadback,
+        compactReadback,
+      });
+    }
+
+    const envelope = createArtifactStateStoreEnvelope(envelopeInput);
     const written = await writeArtifactStateStoreEnvelope({ artifactRoot, envelope });
     return Object.freeze({
       ref: written.ref,
@@ -93,6 +112,110 @@ export function createAudioBatchArtifactWriter({ artifactRoot, now = () => new D
         && Buffer.byteLength(JSON.stringify(compactReadback), "utf8") <= 12_000,
     });
   };
+}
+
+async function writeChunkedAudioBatchEvidence({
+  artifactRoot,
+  artifactId,
+  envelopeInput,
+  aggregateReadback,
+  compactReadback,
+}) {
+  const completeBytes = Buffer.from(JSON.stringify(envelopeInput.payload), "utf8");
+  const chunkBuffers = splitBuffer(completeBytes, AUDIO_BATCH_ARTIFACT_CHUNK_BYTES);
+  const chunkDescriptors = [];
+
+  for (let index = 0; index < chunkBuffers.length; index += 1) {
+    const bytes = chunkBuffers[index];
+    const chunkId = childArtifactId(artifactId, index);
+    const chunkRef = formatArtifactRef({
+      owner_pack: "items",
+      scope: AUDIO_BATCH_ARTIFACT_SCOPE,
+      id: chunkId,
+    });
+    const sha256 = hashBytes(bytes);
+    const chunkPayload = {
+      contract: AUDIO_BATCH_ARTIFACT_CONTRACT,
+      encoding: "base64",
+      manifest_ref: envelopeInput.ref,
+      chunk_index: index,
+      chunk_count: chunkBuffers.length,
+      byte_start: index * AUDIO_BATCH_ARTIFACT_CHUNK_BYTES,
+      byte_end_exclusive: (index * AUDIO_BATCH_ARTIFACT_CHUNK_BYTES) + bytes.length,
+      bytes: bytes.length,
+      sha256,
+      data: bytes.toString("base64"),
+    };
+    const chunkEnvelope = createArtifactStateStoreEnvelope({
+      ref: chunkRef,
+      schema: AUDIO_BATCH_ARTIFACT_CHUNK_SCHEMA,
+      producer: AUDIO_BATCH_ARTIFACT_PRODUCER,
+      created_at: envelopeInput.created_at,
+      summary: {
+        contract: AUDIO_BATCH_ARTIFACT_CONTRACT,
+        manifest_ref: envelopeInput.ref,
+        chunk_index: index,
+        chunk_count: chunkBuffers.length,
+        bytes: bytes.length,
+        sha256,
+      },
+      payload: chunkPayload,
+    });
+    const written = await writeArtifactStateStoreEnvelope({ artifactRoot, envelope: chunkEnvelope });
+    chunkDescriptors.push(Object.freeze({
+      ref: written.ref,
+      chunk_index: index,
+      byte_start: chunkPayload.byte_start,
+      byte_end_exclusive: chunkPayload.byte_end_exclusive,
+      bytes: bytes.length,
+      sha256,
+    }));
+  }
+
+  const manifestPayload = {
+    contract: AUDIO_BATCH_ARTIFACT_CONTRACT,
+    encoding: AUDIO_BATCH_ARTIFACT_ENCODING,
+    complete_payload_bytes: completeBytes.length,
+    complete_payload_sha256: hashBytes(completeBytes),
+    chunk_count: chunkDescriptors.length,
+    chunks: chunkDescriptors,
+    result: {
+      plan_hash: envelopeInput.summary.plan_hash,
+      target_count: envelopeInput.summary.target_count,
+      returned_target_count: envelopeInput.summary.returned_target_count,
+      aggregate_readback_count: envelopeInput.summary.aggregate_readback_count,
+      total_ms: envelopeInput.summary.total_ms,
+      undo_closed: envelopeInput.summary.undo_closed,
+      batch_timings: cloneJson(envelopeInput.payload.result.batch_timings),
+      native_counters: cloneJson(envelopeInput.payload.result.native_counters),
+      undo: cloneJson(envelopeInput.payload.result.undo),
+    },
+  };
+  const manifestEnvelope = createArtifactStateStoreEnvelope({
+    ...envelopeInput,
+    schema: AUDIO_BATCH_ARTIFACT_MANIFEST_SCHEMA,
+    summary: {
+      ...envelopeInput.summary,
+      storage: "chunked_manifest",
+      complete_payload_bytes: completeBytes.length,
+      complete_payload_sha256: manifestPayload.complete_payload_sha256,
+      chunk_count: chunkDescriptors.length,
+    },
+    payload: manifestPayload,
+  });
+  const written = await writeArtifactStateStoreEnvelope({ artifactRoot, envelope: manifestEnvelope });
+  return Object.freeze({
+    ref: written.ref,
+    path: written.path,
+    bytes: written.bytes,
+    aggregate_readback_count: aggregateReadback.length,
+    inline_readback: false,
+    storage: "chunked_manifest",
+    complete_payload_bytes: completeBytes.length,
+    complete_payload_sha256: manifestPayload.complete_payload_sha256,
+    chunk_count: chunkDescriptors.length,
+    chunk_refs: Object.freeze(chunkDescriptors.map((entry) => entry.ref)),
+  });
 }
 
 function artifactIdFor(commandId, now) {
@@ -119,6 +242,33 @@ function artifactIdFor(commandId, now) {
     .digest("hex")
     .slice(0, 6);
   return `art_${stamp}_${sequence}_${digest}`;
+}
+
+function childArtifactId(parentId, index) {
+  const match = /^art_([0-9]{17})_([0-9]{3})_[a-f0-9]{6}$/.exec(parentId);
+  if (!match) throw new Error("Audio batch parent artifact id is invalid.");
+  const sequence = String((Number(match[2]) + index + 1) % 1_000).padStart(3, "0");
+  const digest = createHash("sha256")
+    .update(`${parentId}:chunk:${index}`)
+    .digest("hex")
+    .slice(0, 6);
+  return `art_${match[1]}_${sequence}_${digest}`;
+}
+
+function splitBuffer(value, maxBytes) {
+  const chunks = [];
+  for (let offset = 0; offset < value.length; offset += maxBytes) {
+    chunks.push(value.subarray(offset, Math.min(offset + maxBytes, value.length)));
+  }
+  return chunks;
+}
+
+function hashBytes(value) {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function jsonBytes(value) {
+  return Buffer.byteLength(JSON.stringify(value), "utf8");
 }
 
 function cloneJson(value) {
