@@ -2180,6 +2180,7 @@ local function validate_request(request)
   end
   local operation_key = request.operation.family .. ":" .. request.operation.name
   local recipe_undo_transaction_operation = is_recipe_undo_transaction_operation(operation_key)
+  local recipe_undo_transaction_id = recipe_undo_transaction_flag(request)
   local artifacts_allowed_for_operation = ARTIFACT_PRODUCING_OPERATIONS[operation_key] == true
   local a2_render_operation = operation_key == "run_job:render.region_wav"
   local safe_write_a_operation = safe_write_a_capability(request, operation_key)
@@ -2210,13 +2211,17 @@ local function validate_request(request)
   if ACTIVE_RECIPE_UNDO_TRANSACTION and not recipe_undo_transaction_operation
       and request.operation.family ~= "query_state" and request.operation.family ~= "artifact_metadata"
       and request.pack.risk ~= "read" then
-    local transaction_id = recipe_undo_transaction_flag(request)
+    local transaction_id = recipe_undo_transaction_id
     if transaction_id ~= ACTIVE_RECIPE_UNDO_TRANSACTION.id then
       return false, "An active Recipe Undo transaction rejects unrelated or mismatched project writes."
     end
     if not active_recipe_undo_project_matches() then
       return false, "The active project changed during the Recipe Undo transaction."
     end
+  end
+  if recipe_undo_transaction_id and not recipe_undo_transaction_operation
+      and not ACTIVE_RECIPE_UNDO_TRANSACTION then
+    return false, "A stale Recipe transaction child cannot execute after its Whole-Recipe Undo scope closed."
   end
   if recipe_undo_transaction_operation then
     if request.pack.id ~= "core" or request.pack.capability ~= "recipe.undo.transaction" or request.pack.risk ~= "write" then
@@ -39124,6 +39129,17 @@ local function dispatch_recipe_undo_transaction(request)
       mutations_may_have_happened = params.mutation_truth ~= "not_run",
     }, false)
   end
+  local rollback_requested = params.disposition == "rollback" and params.mutation_truth ~= "not_run"
+  local rollback_attempted = false
+  local rollback_proven = false
+  if rollback_requested then
+    local can_undo = { call_reaper("Undo_CanUndo2", active.project) }
+    if can_undo[1] == true and can_undo[2] == active.label then
+      rollback_attempted = true
+      local rolled_back = { call_reaper("Undo_DoUndo2", active.project) }
+      rollback_proven = rolled_back[1] == true and rolled_back[2] == 1
+    end
+  end
   return {
     contract = "openreaper.recipe_undo_transaction.v1",
     action = "end",
@@ -39132,7 +39148,10 @@ local function dispatch_recipe_undo_transaction(request)
     mutation_truth = params.mutation_truth,
     opened = true,
     closed = true,
-    verified = true,
+    verified = not rollback_requested or rollback_proven,
+    rollback_requested = rollback_requested,
+    rollback_attempted = rollback_attempted,
+    rollback_proven = rollback_proven,
     readback_status = "passed",
   }
 end
@@ -40506,6 +40525,15 @@ if not TRANSPORT_DIR then
 elseif not reaper or type(reaper.defer) ~= "function" or type(reaper.EnumerateFiles) ~= "function" then
   log("required REAPER defer/file APIs are unavailable; bridge loop not started.")
 else
+  if type(reaper.atexit) == "function" then
+    reaper.atexit(function()
+      local active = ACTIVE_RECIPE_UNDO_TRANSACTION
+      if active then
+        call_reaper("Undo_EndBlock2", active.project, active.label, -1)
+        ACTIVE_RECIPE_UNDO_TRANSACTION = nil
+      end
+    end)
+  end
   local claims_ok, claims_error = ensure_directory(CLAIMS_DIR)
   if not claims_ok then
     log("could not initialize durable request claims: " .. tostring(claims_error))

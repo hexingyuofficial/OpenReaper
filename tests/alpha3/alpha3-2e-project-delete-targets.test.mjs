@@ -75,6 +75,65 @@ describe("Alpha3.2-E project delete_targets planner", () => {
     assert.equal(plan.safety.raw_action_lua_shell_ui, false);
   });
 
+  it("canonicalizes omitted zero counts and key order without weakening exact target confirmation", () => {
+    const preview = planAlpha3_2EProjectDeleteTargetsMacro({
+      refs: {
+        items: ["item:guid:{ITEM-B}", "item:guid:{ITEM-A}"],
+        tracks: ["track:guid:{TRACK-A}"],
+      },
+      dry_run: true,
+    });
+    const plan = planAlpha3_2EProjectDeleteTargetsMacro({
+      refs: {
+        tracks: ["track:guid:{TRACK-A}"],
+        items: ["item:guid:{ITEM-B}", "item:guid:{ITEM-A}"],
+      },
+      dry_run: false,
+      confirm_scope: {
+        target_hash: preview.required_confirm_scope.target_hash,
+        expected_counts: { items: 2, tracks: 1 },
+        token: preview.required_confirm_scope.token,
+      },
+    });
+    assert.equal(plan.ok, true);
+    assert.equal(plan.preview.total_count, 3);
+  });
+
+  it("binds destructive confirmation to the exact project and Bridge generation", () => {
+    const binding = {
+      project_ref: "project:path:/tmp/confirmed.rpp",
+      bridge_owner: "owner:confirmed",
+      bridge_generation: 7,
+    };
+    const preview = planAlpha3_2EProjectDeleteTargetsMacro({
+      refs: { items: ["item:guid:{ITEM-A}"] },
+      dry_run: true,
+    }, { confirmation_context: binding });
+    assert.deepEqual(preview.required_confirm_scope.runtime_binding, {
+      bridge_owner: "owner:confirmed",
+      bridge_generation: 7,
+      project_ref: "project:path:/tmp/confirmed.rpp",
+    });
+
+    const changedGeneration = planAlpha3_2EProjectDeleteTargetsMacro({
+      refs: preview.preview.refs_by_kind,
+      dry_run: false,
+      confirm_scope: preview.required_confirm_scope,
+    }, { confirmation_context: { ...binding, bridge_generation: 8 } });
+    assert.equal(changedGeneration.ok, false);
+    assert.equal(changedGeneration.blockers.some((entry) => entry.code === "CONFIRM_SCOPE_RUNTIME_MISMATCH"), true);
+    assert.deepEqual(changedGeneration.child_requests, []);
+
+    const changedProject = planAlpha3_2EProjectDeleteTargetsMacro({
+      refs: preview.preview.refs_by_kind,
+      dry_run: false,
+      confirm_scope: preview.required_confirm_scope,
+    }, { confirmation_context: { ...binding, project_ref: "project:path:/tmp/other.rpp" } });
+    assert.equal(changedProject.ok, false);
+    assert.equal(changedProject.blockers.some((entry) => entry.code === "CONFIRM_SCOPE_RUNTIME_MISMATCH"), true);
+    assert.deepEqual(changedProject.child_requests, []);
+  });
+
   it("collapses Track/Track-FX overlap and emits remaining FX deletes in descending owner-slot order", () => {
     const preview = planAlpha3_2EProjectDeleteTargetsMacro({
       refs: {
@@ -130,6 +189,21 @@ describe("Alpha3.2-E project delete_targets planner", () => {
     assert.equal(mismatch.ok, false);
     assert.equal(mismatch.blockers.some((blocker) => blocker.code === "CONFIRM_SCOPE_COUNTS_MISMATCH"), true);
     assert.deepEqual(mismatch.child_requests, []);
+
+    for (const expected_counts of [
+      { items: 1, unknown: 0 },
+      { items: -1 },
+      { items: 1.5 },
+    ]) {
+      const invalid = planAlpha3_2EProjectDeleteTargetsMacro({
+        refs: preview.preview.refs_by_kind,
+        dry_run: false,
+        confirm_scope: { ...preview.required_confirm_scope, expected_counts },
+      });
+      assert.equal(invalid.ok, false);
+      assert.equal(invalid.blockers.some((entry) => entry.code === "CONFIRM_SCOPE_COUNTS_MISMATCH"), true);
+      assert.deepEqual(invalid.child_requests, []);
+    }
   });
 
   it("rejects unsupported target kinds, filesystem deletion, selectors, duplicates, and malformed refs", () => {

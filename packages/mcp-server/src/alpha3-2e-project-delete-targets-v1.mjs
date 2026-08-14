@@ -59,7 +59,7 @@ export function planAlpha3_2EProjectDeleteTargetsMacro(input = {}, requestPostur
   const dryRun = normalized.dry_run !== false;
   const collapsed = collapseOverlappingTargets(targetSet.targets);
   const preview = buildPreview(collapsed.targets, targetSet.targets, collapsed.rows);
-  const confirmation = confirmationFor(preview);
+  const confirmation = confirmationFor(preview, requestPosture.confirmation_context);
 
   if (blockers.length > 0) return blockedPlan(blockers, preview, confirmation);
   if (preview.total_count === 0) {
@@ -368,12 +368,14 @@ function emptyPreview() {
   return buildPreview({ tracks: [], items: [], markers: [], regions: [], fx: [] });
 }
 
-function confirmationFor(preview) {
+function confirmationFor(preview, confirmationContext = null) {
+  const runtimeBinding = normalizeConfirmationRuntimeBinding(confirmationContext);
   return deepFreeze({
     token: preview.confirmation_token,
     target_hash: preview.target_hash,
     expected_counts: preview.target_counts_by_kind,
     delete_policy: ALLOWED_DELETE_POLICY,
+    ...(runtimeBinding ? { runtime_binding: runtimeBinding } : {}),
   });
 }
 
@@ -382,10 +384,57 @@ function validateConfirmation(confirmScope, expected, preview) {
   const blockers = [];
   if (confirmScope.token !== expected.token) blockers.push(blocker("CONFIRM_SCOPE_TOKEN_MISMATCH", "confirm_scope.token does not match the latest preview token.", { required: expected.token }));
   if (confirmScope.target_hash !== expected.target_hash) blockers.push(blocker("CONFIRM_SCOPE_HASH_MISMATCH", "confirm_scope.target_hash does not match the latest preview target hash.", { required: expected.target_hash }));
-  if (!deepEqual(confirmScope.expected_counts, expected.expected_counts)) blockers.push(blocker("CONFIRM_SCOPE_COUNTS_MISMATCH", "confirm_scope.expected_counts does not match the latest preview counts.", { required: expected.expected_counts, actual: confirmScope.expected_counts ?? null }));
+  const normalizedCounts = normalizeConfirmationCounts(confirmScope.expected_counts);
+  if (!normalizedCounts.ok || !deepEqual(normalizedCounts.counts, expected.expected_counts)) {
+    blockers.push(blocker("CONFIRM_SCOPE_COUNTS_MISMATCH", "confirm_scope.expected_counts does not match the latest preview counts.", {
+      required: expected.expected_counts,
+      actual: confirmScope.expected_counts ?? null,
+      ...(normalizedCounts.reason ? { reason: normalizedCounts.reason } : {}),
+    }));
+  }
+  if (expected.runtime_binding && !deepEqual(confirmScope.runtime_binding, expected.runtime_binding)) {
+    blockers.push(blocker("CONFIRM_SCOPE_RUNTIME_MISMATCH", "confirm_scope.runtime_binding does not match the current project and Bridge generation.", {
+      required: expected.runtime_binding,
+      actual: confirmScope.runtime_binding ?? null,
+      zero_write: true,
+    }));
+  }
   if (confirmScope.delete_policy !== undefined && confirmScope.delete_policy !== ALLOWED_DELETE_POLICY) blockers.push(blocker("DELETE_POLICY_UNSUPPORTED", "confirm_scope.delete_policy must remain project_objects_only."));
   if (preview.total_count === 0) blockers.push(blocker("DELETE_TARGETS_EMPTY", "No targets were previewed for deletion."));
   return blockers;
+}
+
+function normalizeConfirmationRuntimeBinding(value) {
+  if (!isPlainObject(value)) return null;
+  const bridgeOwner = typeof value.bridge_owner === "string" && value.bridge_owner !== ""
+    ? value.bridge_owner
+    : null;
+  const bridgeGeneration = Number.isSafeInteger(value.bridge_generation) && value.bridge_generation >= 1
+    ? value.bridge_generation
+    : null;
+  if (!bridgeOwner || bridgeGeneration === null) return null;
+  return {
+    bridge_owner: bridgeOwner,
+    bridge_generation: bridgeGeneration,
+    ...(typeof value.project_ref === "string" && value.project_ref.startsWith("project:")
+      ? { project_ref: value.project_ref }
+      : {}),
+  };
+}
+
+function normalizeConfirmationCounts(value) {
+  if (!isPlainObject(value)) return { ok: false, counts: null, reason: "expected_counts_not_object" };
+  const unknownKinds = Object.keys(value).filter((kind) => !SUPPORTED_REF_KINDS.includes(kind));
+  if (unknownKinds.length > 0) return { ok: false, counts: null, reason: "expected_counts_unknown_kind" };
+  const counts = {};
+  for (const kind of SUPPORTED_REF_KINDS) {
+    const count = value[kind] ?? 0;
+    if (!Number.isSafeInteger(count) || count < 0) {
+      return { ok: false, counts: null, reason: "expected_counts_invalid_count" };
+    }
+    counts[kind] = count;
+  }
+  return { ok: true, counts };
 }
 
 function buildMutationRequests(targets) {

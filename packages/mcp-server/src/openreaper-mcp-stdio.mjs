@@ -890,10 +890,10 @@ function createStdioRecipeDispatchers({ callTemplateRuntime, artifactRuntime, ca
     macro: callTemplateStage,
     template: callTemplateStage,
     get_state: typeof artifactRuntime?.get_state === "function"
-      ? async ({ inputs }) => artifactRuntime.get_state({
+      ? async ({ inputs, signal, deadline, performance }) => artifactRuntime.get_state({
           ...inputs,
           budget: { max_response_bytes: CALL_RECIPE_STAGE_BUDGET.max_response_bytes },
-        })
+        }, { signal, deadline, performance })
       : null,
     checkpoint: async ({ stage, revision }) => {
       const declaration = revision.draft?.checkpoints?.find((item) => (
@@ -923,6 +923,7 @@ export function createStdioRecipeUndoController({ liveBridge, callContext }) {
   const dispatch = liveBridge?.executor?.dispatch;
   const allocate = callContext?.allocate;
   const transactionTimeoutMs = 60_000;
+  const activeHandles = new Set();
 
   async function send(operation, request, { retry = 0 } = {}) {
     if (typeof dispatch !== "function" || typeof allocate !== "function") {
@@ -949,6 +950,7 @@ export function createStdioRecipeUndoController({ liveBridge, callContext }) {
         project_ref: request.project_ref,
         label: request.label,
         ...(operation === "end" ? { mutation_truth: request.mutation_truth } : {}),
+        ...(operation === "end" ? { disposition: request.disposition } : {}),
       },
       refs: [],
       undo: { mode: "required", label: request.label, flags: ["recipe_transaction_control"] },
@@ -986,7 +988,7 @@ export function createStdioRecipeUndoController({ liveBridge, callContext }) {
 
   async function reconcileNotRun(error, request) {
     const active = error?.details?.active_transaction;
-    if (!provenNotRunRecipeUndoConflict(error, request)) throw error;
+    if (!provenNotRunRecipeUndoConflict(error, request, activeHandles)) throw error;
     try {
       const reconciled = await send("reconcile_not_run", {
         handle: active.transaction_id,
@@ -1022,6 +1024,7 @@ export function createStdioRecipeUndoController({ liveBridge, callContext }) {
         opened = await send("begin", request, { retry: 1 });
       }
       const { result, summary, handle } = opened;
+      activeHandles.add(handle);
       return {
         ok: summary.opened === true && summary.verified === true,
         opened: summary.opened === true,
@@ -1032,12 +1035,15 @@ export function createStdioRecipeUndoController({ liveBridge, callContext }) {
     },
     async end(request) {
       const { result, summary, handle } = await send("end", request);
+      activeHandles.delete(handle);
       return {
         ok: summary.closed === true && summary.verified === true,
         closed: summary.closed === true,
         verified: summary.verified === true,
         handle,
         project_ref: request.project_ref,
+        rollback_attempted: summary.rollback_attempted === true,
+        rollback_proven: summary.rollback_proven === true,
         evidence_refs: [`bridge:${result.id}`],
       };
     },
@@ -1067,7 +1073,7 @@ function recipeUndoControllerError(result, {
   return error;
 }
 
-function provenNotRunRecipeUndoConflict(error, request) {
+function provenNotRunRecipeUndoConflict(error, request, activeHandles = new Set()) {
   const active = error?.details?.active_transaction;
   return error?.code === "QUEUE_CONFLICT"
     && error?.details?.outcome === "not_run"
@@ -1084,7 +1090,8 @@ function provenNotRunRecipeUndoConflict(error, request) {
     && active.generation === error?.expected_generation
     && active.active_project_matches === true
     && active.mutation_may_have_happened === false
-    && active.close_outcome_unknown !== true;
+    && active.close_outcome_unknown !== true
+    && !activeHandles.has(active.transaction_id);
 }
 
 function recipeUndoBridgeRequestId(context, operation) {

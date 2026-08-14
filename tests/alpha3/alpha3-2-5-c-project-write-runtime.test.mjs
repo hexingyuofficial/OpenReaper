@@ -1205,6 +1205,52 @@ describe("Alpha3.2.5-C executable project-write Macros", () => {
     assert.equal(completed.recovery, null);
   });
 
+  it("invalidates a delete preview before mutation after Bridge generation rotation", async () => {
+    const calls = [];
+    const projectIndexRuntime = {
+      identity: {
+        project_ref: "project:path:/tmp/delete-confirmation.rpp",
+        bridge_owner: "owner:delete-confirmation",
+        bridge_generation: 4,
+      },
+      status: () => ({ snapshot_id: "snapshot:delete-confirmation", revision: 1 }),
+      invalidateScopes: () => ({ ok: true, status: "scopes_invalidated", scopes: [] }),
+    };
+    const preview = await executeAlpha3_2_5CProjectWriteMacro({
+      request: {
+        id: "macro.project.delete_targets",
+        input: { refs: { items: ["item:guid:{ITEM}"] }, dry_run: true },
+        context: { expected_owner: "owner:delete-confirmation", expected_generation: 4 },
+      },
+      executeAtomic: fakeAtomic(calls),
+      projectIndexRuntime,
+      now: () => new Date(NOW),
+    });
+    assert.equal(preview.ok, true, JSON.stringify(preview));
+    assert.deepEqual(preview.result.data.required_confirm_scope.runtime_binding, {
+      bridge_owner: "owner:delete-confirmation",
+      bridge_generation: 4,
+      project_ref: "project:path:/tmp/delete-confirmation.rpp",
+    });
+
+    calls.length = 0;
+    const blocked = await executeAlpha3_2_5CProjectWriteMacro({
+      request: {
+        ...preview.result.data.executable_retry,
+        context: { expected_owner: "owner:delete-confirmation", expected_generation: 5 },
+      },
+      executeAtomic: fakeAtomic(calls),
+      projectIndexRuntime: {
+        ...projectIndexRuntime,
+        identity: { ...projectIndexRuntime.identity, bridge_generation: 5 },
+      },
+      now: () => new Date(NOW),
+    });
+    assert.equal(blocked.ok, false);
+    assert.equal(blocked.error.code, "CONFIRM_SCOPE_RUNTIME_MISMATCH");
+    assert.deepEqual(calls, []);
+  });
+
   it("keeps exact FX deletion applied when live absence readback passes and invalidates only legal index scopes", async () => {
     const fxRef = "fx:track:guid:{TRACK}:1";
     const preview = planAlpha3_2EProjectDeleteTargetsMacro({ refs: { fx: [fxRef] }, dry_run: true });

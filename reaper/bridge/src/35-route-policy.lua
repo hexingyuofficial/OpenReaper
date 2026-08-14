@@ -666,6 +666,7 @@ local function validate_request(request)
   end
   local operation_key = request.operation.family .. ":" .. request.operation.name
   local recipe_undo_transaction_operation = is_recipe_undo_transaction_operation(operation_key)
+  local recipe_undo_transaction_id = recipe_undo_transaction_flag(request)
   local artifacts_allowed_for_operation = ARTIFACT_PRODUCING_OPERATIONS[operation_key] == true
   local a2_render_operation = operation_key == "run_job:render.region_wav"
   local safe_write_a_operation = safe_write_a_capability(request, operation_key)
@@ -696,13 +697,17 @@ local function validate_request(request)
   if ACTIVE_RECIPE_UNDO_TRANSACTION and not recipe_undo_transaction_operation
       and request.operation.family ~= "query_state" and request.operation.family ~= "artifact_metadata"
       and request.pack.risk ~= "read" then
-    local transaction_id = recipe_undo_transaction_flag(request)
+    local transaction_id = recipe_undo_transaction_id
     if transaction_id ~= ACTIVE_RECIPE_UNDO_TRANSACTION.id then
       return false, "An active Recipe Undo transaction rejects unrelated or mismatched project writes."
     end
     if not active_recipe_undo_project_matches() then
       return false, "The active project changed during the Recipe Undo transaction."
     end
+  end
+  if recipe_undo_transaction_id and not recipe_undo_transaction_operation
+      and not ACTIVE_RECIPE_UNDO_TRANSACTION then
+    return false, "A stale Recipe transaction child cannot execute after its Whole-Recipe Undo scope closed."
   end
   if recipe_undo_transaction_operation then
     if request.pack.id ~= "core" or request.pack.capability ~= "recipe.undo.transaction" or request.pack.risk ~= "write" then

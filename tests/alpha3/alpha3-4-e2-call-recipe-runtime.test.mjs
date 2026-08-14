@@ -508,7 +508,15 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
         },
         async end(request) {
           undoCalls.push(request);
-          return { ok: true, closed: true, verified: true, handle: request.handle, project_ref: request.project_ref };
+          return {
+            ok: true,
+            closed: true,
+            verified: true,
+            handle: request.handle,
+            project_ref: request.project_ref,
+            rollback_attempted: request.disposition === "rollback",
+            rollback_proven: request.disposition === "rollback",
+          };
         },
       },
       dispatchers: {
@@ -552,7 +560,15 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
         },
         async end(request) {
           undoCalls.push(request);
-          return { ok: true, closed: true, verified: true, handle: request.handle, project_ref: request.project_ref };
+          return {
+            ok: true,
+            closed: true,
+            verified: true,
+            handle: request.handle,
+            project_ref: request.project_ref,
+            rollback_attempted: request.disposition === "rollback",
+            rollback_proven: request.disposition === "rollback",
+          };
         },
       },
       dispatchers: {
@@ -751,7 +767,15 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
         },
         async end(request) {
           undoCalls.push(request);
-          return { ok: true, closed: true, verified: true, handle: request.handle, project_ref: request.project_ref };
+          return {
+            ok: true,
+            closed: true,
+            verified: true,
+            handle: request.handle,
+            project_ref: request.project_ref,
+            rollback_attempted: request.disposition === "rollback",
+            rollback_proven: request.disposition === "rollback",
+          };
         },
       },
       dispatchers: {
@@ -865,6 +889,102 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
     assert.equal(failed.recovery.strategy, "inspect_and_repair");
     assert.equal(failed.resume_safe, false);
     assert.equal(endCalls, 1);
+  });
+
+  it("emergency-closes Whole-Recipe Undo once when a dispatcher result throws during normalization", async () => {
+    const undoCalls = [];
+    const { runtime } = makeRuntime({
+      undoController: {
+        async begin(request) {
+          undoCalls.push(request);
+          return { ok: true, opened: true, handle: "recipe-undo-throwing-result", project_ref: request.project_ref };
+        },
+        async end(request) {
+          undoCalls.push(request);
+          return {
+            ok: true,
+            closed: true,
+            verified: true,
+            handle: request.handle,
+            project_ref: request.project_ref,
+            rollback_attempted: true,
+            rollback_proven: true,
+          };
+        },
+      },
+      dispatchers: {
+        macro: async () => macroEnvelope({ project_summary: { name: "Dialog" } }),
+        template: async () => Object.defineProperty({}, "contract", {
+          get() { throw new Error("fixture result getter failed"); },
+        }),
+      },
+    });
+    const saved = await saveFixture(runtime);
+    const failed = await runtime.call_recipe({
+      operation: "run",
+      ...exactIdentity(saved),
+      inputs: { track_name: "Dialog" },
+    });
+
+    assert.equal(failed.ok, false, JSON.stringify(failed));
+    assert.equal(failed.error.details.recipe_undo_emergency_close, true);
+    assert.equal(failed.error.details.recipe_undo_status, "closed");
+    assert.equal(failed.execution_truth.mutation, "unknown");
+    assert.equal(failed.undo.status, "closed");
+    assert.deepEqual(undoCalls.map((call) => call.operation), ["begin", "end"]);
+    assert.equal(undoCalls[1].mutation_truth, "unknown");
+  });
+
+  it("bounds a never-resolving stage by deadline, closes Undo, and permits the next run", async () => {
+    const undoCalls = [];
+    let blockTemplate = true;
+    const { runtime } = makeRuntime({
+      undoController: {
+        async begin(request) {
+          undoCalls.push(request);
+          return { ok: true, opened: true, handle: `recipe-undo-deadline-${undoCalls.length}`, project_ref: request.project_ref };
+        },
+        async end(request) {
+          undoCalls.push(request);
+          return {
+            ok: true,
+            closed: true,
+            verified: true,
+            handle: request.handle,
+            project_ref: request.project_ref,
+            rollback_attempted: request.disposition === "rollback",
+            rollback_proven: request.disposition === "rollback",
+          };
+        },
+      },
+      dispatchers: {
+        macro: async () => macroEnvelope({ project_summary: { name: "Dialog" } }),
+        template: async () => blockTemplate
+          ? new Promise(() => {})
+          : templateEnvelope({ track_ref: "track:index:0" }),
+      },
+    });
+    const saved = await saveFixture(runtime);
+    const request = {
+      operation: "run",
+      ...exactIdentity(saved),
+      inputs: { track_name: "Dialog" },
+    };
+    const startedAt = Date.now();
+    const timedOut = await runtime.call_recipe({ ...request, deadline_ms: 20 });
+
+    assert.equal(timedOut.ok, false, JSON.stringify(timedOut));
+    assert.equal(timedOut.error.details.deadline_exceeded, true);
+    assert.equal(timedOut.execution_truth.mutation, "applied_unverified");
+    assert.equal(timedOut.undo.status, "closed");
+    assert.ok(Date.now() - startedAt < 500);
+    assert.deepEqual(undoCalls.map((call) => call.operation), ["begin", "end"]);
+    assert.equal(undoCalls[1].mutation_truth, "unknown");
+
+    blockTemplate = false;
+    const next = await runtime.call_recipe(request);
+    assert.equal(next.ok, true, JSON.stringify(next));
+    assert.deepEqual(undoCalls.map((call) => call.operation), ["begin", "end", "begin", "end"]);
   });
 
   it("fails the declaring stage when verified readback omits a declared output", async () => {

@@ -146,6 +146,7 @@ export async function executeAlpha3_2_5CProjectWriteMacro({
     idempotency_key_present: effectiveRequest.idempotency_key !== undefined,
     selector_internal_confirmation: effectiveRequest !== request,
     selector_internal_batch: effectiveRequest !== request,
+    confirmation_context: projectWriteConfirmationContext(effectiveRequest, projectIndexRuntime),
   });
   if (plan.ok !== true) {
     const message = program.entry.macro_id === ALPHA3_2E_ROUTING_APPLY_MACRO_ID
@@ -390,6 +391,26 @@ function createProjectWriteState(request) {
     layoutTrackReadbackRows: new Map(), markerRegionReadbackRows: new Map(), routingReadbackRows: new Map(), routingResolvedSends: new Map(), routingReusedRows: new Set(),
     routingResolverCache: request?.id === ALPHA3_2E_ROUTING_APPLY_MACRO_ID ? new Set() : null, readbackEvidenceRefs: [], layoutPreflightTracks: null,
     layoutPreflightFolders: null, layoutMatchedRows: new Map(), writeAttempted: false, writeExecuted: false, sqlite: sqliteEvidence(), indexUpdate: null, selectorDelete: null,
+  };
+}
+
+function projectWriteConfirmationContext(request, projectIndexRuntime) {
+  const context = object(request?.context) ? request.context : {};
+  if (
+    typeof context.expected_owner !== "string"
+    || context.expected_owner === ""
+    || !Number.isSafeInteger(context.expected_generation)
+    || context.expected_generation < 1
+  ) {
+    return null;
+  }
+  const projectRef = projectIndexRuntime?.identity?.project_ref;
+  return {
+    bridge_owner: context.expected_owner,
+    bridge_generation: context.expected_generation,
+    ...(typeof projectRef === "string" && projectRef.startsWith("project:")
+      ? { project_ref: projectRef }
+      : {}),
   };
 }
 

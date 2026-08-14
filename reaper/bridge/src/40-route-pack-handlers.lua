@@ -1223,6 +1223,17 @@ local function dispatch_recipe_undo_transaction(request)
       mutations_may_have_happened = params.mutation_truth ~= "not_run",
     }, false)
   end
+  local rollback_requested = params.disposition == "rollback" and params.mutation_truth ~= "not_run"
+  local rollback_attempted = false
+  local rollback_proven = false
+  if rollback_requested then
+    local can_undo = { call_reaper("Undo_CanUndo2", active.project) }
+    if can_undo[1] == true and can_undo[2] == active.label then
+      rollback_attempted = true
+      local rolled_back = { call_reaper("Undo_DoUndo2", active.project) }
+      rollback_proven = rolled_back[1] == true and rolled_back[2] == 1
+    end
+  end
   return {
     contract = "openreaper.recipe_undo_transaction.v1",
     action = "end",
@@ -1231,7 +1242,10 @@ local function dispatch_recipe_undo_transaction(request)
     mutation_truth = params.mutation_truth,
     opened = true,
     closed = true,
-    verified = true,
+    verified = not rollback_requested or rollback_proven,
+    rollback_requested = rollback_requested,
+    rollback_attempted = rollback_attempted,
+    rollback_proven = rollback_proven,
     readback_status = "passed",
   }
 end

@@ -373,6 +373,15 @@ if not TRANSPORT_DIR then
 elseif not reaper or type(reaper.defer) ~= "function" or type(reaper.EnumerateFiles) ~= "function" then
   log("required REAPER defer/file APIs are unavailable; bridge loop not started.")
 else
+  if type(reaper.atexit) == "function" then
+    reaper.atexit(function()
+      local active = ACTIVE_RECIPE_UNDO_TRANSACTION
+      if active then
+        call_reaper("Undo_EndBlock2", active.project, active.label, -1)
+        ACTIVE_RECIPE_UNDO_TRANSACTION = nil
+      end
+    end)
+  end
   local claims_ok, claims_error = ensure_directory(CLAIMS_DIR)
   if not claims_ok then
     log("could not initialize durable request claims: " .. tostring(claims_error))

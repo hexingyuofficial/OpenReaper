@@ -71,6 +71,29 @@ describe("Alpha4 Shard B exact Recipe Undo reconciliation", () => {
     assert.deepEqual(bridge.seen.map((request) => request.params.action), ["begin", "reconcile_not_run"]);
   });
 
+  it("never reconciles a not_run transaction that still has a live local lease", async () => {
+    const bridge = makeBridge();
+    const controller = makeController(bridge);
+    const first = await controller.begin(beginRequest("run-live-a"));
+    assert.equal(first.ok, true);
+
+    await assert.rejects(
+      controller.begin(beginRequest("run-live-b")),
+      (error) => error.code === "QUEUE_CONFLICT"
+        && error.outcome === "not_run"
+        && error.reconciliation_required === true,
+    );
+    assert.deepEqual(bridge.seen.map((request) => request.params.action), ["begin", "begin"]);
+
+    await controller.end({
+      handle: first.handle,
+      project_ref: PROJECT_REF,
+      label: "OpenReaper Recipe: recipe.run-live-a",
+      mutation_truth: "not_run",
+    });
+    assert.deepEqual(bridge.seen.map((request) => request.params.action), ["begin", "begin", "end"]);
+  });
+
   it("executes the product Lua exact-match, mutation marker, and one-close fail-closed rules", () => {
     const routeSource = readFileSync(
       new URL("../../../reaper/bridge/src/40-route-pack-handlers.lua", import.meta.url),
@@ -85,6 +108,16 @@ describe("Alpha4 Shard B exact Recipe Undo reconciliation", () => {
       routeSource,
       /if phase_may_mutate == true and ACTIVE_RECIPE_UNDO_TRANSACTION[\s\S]*ACTIVE_RECIPE_UNDO_TRANSACTION\.mutation_may_have_happened = true\n  end\n  local ok, summary/,
     );
+    const policySource = readFileSync(
+      new URL("../../../reaper/bridge/src/35-route-policy.lua", import.meta.url),
+      "utf8",
+    );
+    assert.match(policySource, /A stale Recipe transaction child cannot execute after its Whole-Recipe Undo scope closed\./);
+    const loopSource = readFileSync(
+      new URL("../../../reaper/bridge/src/90-file-transport-loop.lua", import.meta.url),
+      "utf8",
+    );
+    assert.match(loopSource, /reaper\.atexit\(function\(\)[\s\S]*Undo_EndBlock2/);
 
     runLua(`
 local ACTIVE_OWNER = "${OWNER}"
@@ -93,7 +126,9 @@ local ACTIVE_RECIPE_UNDO_TRANSACTION = nil
 local current_project = {}
 local current_path = "/tmp/alpha4-b-reconcile.rpp"
 local end_calls = 0
+local undo_calls = 0
 local end_succeeds = true
+local current_undo_label = nil
 
 local function is_object(value) return type(value) == "table" end
 local function is_string(value) return type(value) == "string" and value ~= "" end
@@ -104,7 +139,9 @@ end
 local function call_reaper(name, ...)
   if name == "EnumProjects" then return true, current_project, current_path end
   if name == "Undo_BeginBlock2" then return true end
-  if name == "Undo_EndBlock2" then end_calls = end_calls + 1; return end_succeeds end
+  if name == "Undo_EndBlock2" then end_calls = end_calls + 1; current_undo_label = select(2, ...); return end_succeeds end
+  if name == "Undo_CanUndo2" then return true, current_undo_label end
+  if name == "Undo_DoUndo2" then undo_calls = undo_calls + 1; return true, 1 end
   return false
 end
 local function active_recipe_undo_project_matches()
@@ -126,7 +163,7 @@ end
 
 ${productBlock}
 
-local function request(action, transaction_id, label, owner, generation, session_id)
+local function request(action, transaction_id, label, owner, generation, session_id, disposition, mutation_truth)
   return {
     client = { session_id = session_id or "session-a" },
     bridge = { expected_owner = owner or ACTIVE_OWNER, expected_generation = generation or ACTIVE_GENERATION },
@@ -135,6 +172,8 @@ local function request(action, transaction_id, label, owner, generation, session
       transaction_id = transaction_id,
       project_ref = "${PROJECT_REF}",
       label = label,
+      disposition = disposition,
+      mutation_truth = mutation_truth,
     },
     pack = { risk = "write" },
     undo = { flags = { "recipe_transaction:" .. transaction_id } },
@@ -175,6 +214,17 @@ assert(end_calls == 2)
 local _, no_second_close = dispatch_recipe_undo_transaction(request("reconcile_not_run", "tx-write", "Write label", ACTIVE_OWNER, ACTIVE_GENERATION, "session-b"))
 assert(no_second_close.code == "QUEUE_CONFLICT")
 assert(end_calls == 2)
+
+ACTIVE_RECIPE_UNDO_TRANSACTION = nil
+end_succeeds = true
+assert(dispatch_recipe_undo_transaction(request("begin", "tx-rollback", "Rollback label")))
+ACTIVE_RECIPE_UNDO_TRANSACTION.mutation_may_have_happened = true
+local rolled_back = dispatch_recipe_undo_transaction(request("end", "tx-rollback", "Rollback label", ACTIVE_OWNER, ACTIVE_GENERATION, "session-a", "rollback", "applied"))
+assert(rolled_back and rolled_back.closed == true and rolled_back.verified == true)
+assert(rolled_back.rollback_requested == true)
+assert(rolled_back.rollback_attempted == true)
+assert(rolled_back.rollback_proven == true)
+assert(undo_calls == 1)
 return true
 `);
   });
@@ -279,6 +329,19 @@ function makeBridge({ active: initialActive = null, mode = null } = {}) {
         closed: true,
       }));
     }
+    if (action === "end") {
+      const ended = active;
+      active = null;
+      const rollback = request.params.disposition === "rollback"
+        && request.params.mutation_truth !== "not_run";
+      return this.okEnvelope(request, startedAt, undoSummary(request, {
+        action,
+        transactionId: ended?.transaction_id ?? request.params.transaction_id,
+        opened: true,
+        closed: true,
+        rollback,
+      }));
+    }
     active = {
       transaction_id: request.params.transaction_id,
       project_ref: request.params.project_ref,
@@ -299,7 +362,7 @@ function makeBridge({ active: initialActive = null, mode = null } = {}) {
   return bridge;
 }
 
-function undoSummary(request, { action, transactionId, opened, closed }) {
+function undoSummary(request, { action, transactionId, opened, closed, rollback = false }) {
   return {
     summary: {
       contract: "openreaper.recipe_undo_transaction.v1",
@@ -309,6 +372,9 @@ function undoSummary(request, { action, transactionId, opened, closed }) {
       opened,
       closed,
       verified: true,
+      rollback_requested: rollback,
+      rollback_attempted: rollback,
+      rollback_proven: rollback,
       readback_status: "passed",
     },
     refs: [],

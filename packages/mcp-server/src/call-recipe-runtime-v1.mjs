@@ -221,8 +221,14 @@ export function createAuthoritativeRuntimeFactsProvider(options = {}) {
 export async function callRecipe(request = {}, options = {}) {
   const startedAt = Date.now();
   const performance = createExecutionPerformance();
+  const recipeEmergencyState = {
+    undo: defaultRecipeUndoTruth(),
+    mutationTruth: "not_applied",
+    telemetry: null,
+    emergencyCloseAttempted: false,
+  };
   let deadline = null;
-  let runtimeOptions = { ...options, performance };
+  let runtimeOptions = { ...options, performance, recipeEmergencyState };
   try {
     if (!isPlainObject(request)) {
       throw new CallRecipeRuntimeError("call_recipe request must be an object.", "PARAMS_INVALID");
@@ -255,7 +261,13 @@ export async function callRecipe(request = {}, options = {}) {
       );
     }
     deadline = createExecutionDeadline({ deadlineMs, signal: options.signal });
-    runtimeOptions = { ...options, signal: deadline.signal, deadline, performance };
+    runtimeOptions = {
+      ...options,
+      signal: deadline.signal,
+      deadline,
+      performance,
+      recipeEmergencyState,
+    };
     const budget = normalizeCallRecipeBudget(request.budget, { operation });
     if (["save", "delete", "run", "resume"].includes(operation)) {
       assertMutationResponseBudget(budget, operation);
@@ -293,6 +305,15 @@ export async function callRecipe(request = {}, options = {}) {
       { operation },
     );
   } catch (error) {
+    if (recipeEmergencyState.undo?.status === "open") {
+      recipeEmergencyState.emergencyCloseAttempted = true;
+      recipeEmergencyState.undo = await measureRecipeUndoCall(performance, () => closeRecipeUndo(
+        runtimeOptions.undoController,
+        recipeEmergencyState.undo,
+        recipeEmergencyState.mutationTruth,
+        "rollback",
+      ));
+    }
     const response = finalizeError(error, request, runtimeOptions, startedAt);
     return enforceCallRecipeResponseBudget(
       attachRecipeExecutionPerformance(response, performance, Date.now() - startedAt),
@@ -830,6 +851,8 @@ async function opRun(request, options, { startedAt, resume, budget }) {
   const provenPartialChanges = [...(resumeState?.proven_partial_changes ?? [])];
   const telemetry = createRunTelemetry(resumeState?.telemetry);
   telemetry.performance = options.performance;
+  options.recipeEmergencyState.telemetry = telemetry;
+  options.recipeEmergencyState.mutationTruth = summarizeMutationTruth(telemetry, evidenceItems);
   const attempt = (resumeState?.attempt_count ?? 0) + 1;
   try {
     preflightRecipeInputRefs(revision.draft, bindingValues, inputs);
@@ -864,6 +887,7 @@ async function opRun(request, options, { startedAt, resume, budget }) {
     stages: stages.filter((stage) => !completed.has(stage.id)),
     projectRef: runtimeFacts.project_identity,
   }));
+  options.recipeEmergencyState.undo = undo;
   if (undo.status === "open_failed" || undo.status === "open_unknown") {
     const openUnknown = undo.status === "open_unknown";
     const mutationTruth = openUnknown ? "unknown" : "not_applied";
@@ -906,7 +930,7 @@ async function opRun(request, options, { startedAt, resume, budget }) {
 
     if (requestExecutionInactive(options.signal, options.deadline)) {
       const mutationTruth = summarizeMutationTruth(telemetry, evidenceItems);
-      undo = await measureRecipeUndoCall(options.performance, () => closeRecipeUndo(options.undoController, undo, mutationTruth));
+      undo = await closeTrackedRecipeUndo(options, undo, mutationTruth);
       return failPartial({
         operation: resume ? "resume" : "run",
         revision,
@@ -939,7 +963,7 @@ async function opRun(request, options, { startedAt, resume, budget }) {
     const dispatcher = selectDispatcher(dispatchers, stage.kind);
     if (typeof dispatcher !== "function") {
       const mutationTruth = summarizeMutationTruth(telemetry, evidenceItems);
-      undo = await measureRecipeUndoCall(options.performance, () => closeRecipeUndo(options.undoController, undo, mutationTruth));
+      undo = await closeTrackedRecipeUndo(options, undo, mutationTruth);
       return failPartial({
         operation: resume ? "resume" : "run",
         revision,
@@ -1000,7 +1024,7 @@ async function opRun(request, options, { startedAt, resume, budget }) {
     }
     if (hydratedStage.ok !== true) {
       const mutationTruth = summarizeMutationTruth(telemetry, evidenceItems);
-      undo = await measureRecipeUndoCall(options.performance, () => closeRecipeUndo(options.undoController, undo, mutationTruth));
+      undo = await closeTrackedRecipeUndo(options, undo, mutationTruth);
       return failPartial({
         operation: resume ? "resume" : "run",
         revision,
@@ -1031,8 +1055,9 @@ async function opRun(request, options, { startedAt, resume, budget }) {
     const transportCallsBeforeStage = executionPerformanceCounter(options.performance, "transport_call_count");
     const batchesBeforeStage = executionPerformanceCounter(options.performance, "batch_count");
     const stageStartedAt = Date.now();
+    if (stage.risk !== "read") options.recipeEmergencyState.mutationTruth = "unknown";
     try {
-      outcome = await dispatcher({
+      const dispatched = await dispatchRecipeStageWithinDeadline(dispatcher, {
         stage,
         revision,
         inputs: stageInputs,
@@ -1042,7 +1067,9 @@ async function opRun(request, options, { startedAt, resume, budget }) {
         signal: options.signal,
         deadline: options.deadline,
         performance: options.performance,
-      });
+      }, options.deadline);
+      outcome = dispatched.outcome;
+      dispatcherThrew = dispatched.deadlineExpired;
     } catch (error) {
       dispatcherThrew = true;
       outcome = {
@@ -1097,13 +1124,14 @@ async function opRun(request, options, { startedAt, resume, budget }) {
         readback_count: stageTelemetry.readback_count,
       },
     }));
+    options.recipeEmergencyState.mutationTruth = summarizeMutationTruth(telemetry, evidenceItems);
 
     if (Array.isArray(normalized.proven_changes)) {
       provenPartialChanges.push(...normalized.proven_changes);
     }
     if (requestExecutionInactive(options.signal, options.deadline)) {
       const mutationTruth = summarizeMutationTruth(telemetry, evidenceItems);
-      undo = await measureRecipeUndoCall(options.performance, () => closeRecipeUndo(options.undoController, undo, mutationTruth));
+      undo = await closeTrackedRecipeUndo(options, undo, mutationTruth);
       return failPartial({
         operation: resume ? "resume" : "run",
         revision,
@@ -1133,7 +1161,7 @@ async function opRun(request, options, { startedAt, resume, budget }) {
     }
     if (!normalized.ok || normalized.verified !== true) {
       const mutationTruth = summarizeMutationTruth(telemetry, evidenceItems);
-      undo = await measureRecipeUndoCall(options.performance, () => closeRecipeUndo(options.undoController, undo, mutationTruth));
+      undo = await closeTrackedRecipeUndo(options, undo, mutationTruth);
       return failPartial({
         operation: resume ? "resume" : "run",
         revision,
@@ -1200,7 +1228,7 @@ async function opRun(request, options, { startedAt, resume, budget }) {
       });
     } catch (error) {
       const mutationTruth = summarizeMutationTruth(telemetry, evidenceItems);
-      undo = await measureRecipeUndoCall(options.performance, () => closeRecipeUndo(options.undoController, undo, mutationTruth));
+      undo = await closeTrackedRecipeUndo(options, undo, mutationTruth);
       return failPartial({
         operation: resume ? "resume" : "run",
         revision,
@@ -1230,7 +1258,7 @@ async function opRun(request, options, { startedAt, resume, budget }) {
   }
 
   const successMutationTruth = summarizeMutationTruth(telemetry, evidenceItems);
-  undo = await measureRecipeUndoCall(options.performance, () => closeRecipeUndo(options.undoController, undo, successMutationTruth));
+  undo = await closeTrackedRecipeUndo(options, undo, successMutationTruth, "commit");
   if (undo.status === "close_unknown") {
     return failPartial({
       operation: resume ? "resume" : "run",
@@ -2240,7 +2268,7 @@ async function beginRecipeUndo(controller, {
   }
 }
 
-async function closeRecipeUndo(controller, undo, mutationTruth) {
+async function closeRecipeUndo(controller, undo, mutationTruth, disposition = "commit") {
   if (!controller || undo?.status === "not_bound") return undo ?? defaultRecipeUndoTruth();
   if (undo?.status !== "open") return undo;
   const request = freeze({
@@ -2254,9 +2282,11 @@ async function closeRecipeUndo(controller, undo, mutationTruth) {
     // not_run/applied/unknown wire vocabulary. Keep that internal ABI stable
     // while the public Recipe result reports the more precise Alpha4 truth.
     mutation_truth: recipeUndoWireMutationTruth(mutationTruth),
+    disposition,
   });
   try {
     const result = await controller.end(request);
+    const rollbackRequired = disposition === "rollback" && mutationTruth !== "not_applied";
     if (
       !isPlainObject(result)
       || result.ok !== true
@@ -2264,8 +2294,9 @@ async function closeRecipeUndo(controller, undo, mutationTruth) {
       || result.verified !== true
       || result.handle !== undo.handle
       || result.project_ref !== undo.project_ref
+      || (rollbackRequired && result.rollback_proven !== true)
     ) {
-      return recipeUndoCloseUnknown(undo, "Recipe Undo end returned no exact close proof.");
+      return recipeUndoCloseUnknown(undo, "Recipe Undo end returned no exact close proof.", result);
     }
     return freeze({
       ...undo,
@@ -2276,10 +2307,73 @@ async function closeRecipeUndo(controller, undo, mutationTruth) {
         ...(undo.evidence_refs ?? []),
         ...(result.evidence_refs ?? []),
       ]),
+      rollback_attempted: result.rollback_attempted === true,
+      rollback_proven: result.rollback_proven === true,
     });
   } catch (error) {
     return recipeUndoCloseUnknown(undo, boundedText(error?.message, 160));
   }
+}
+
+async function closeTrackedRecipeUndo(options, undo, mutationTruth, disposition = "rollback") {
+  const closed = await measureRecipeUndoCall(options.performance, () => closeRecipeUndo(
+    options.undoController,
+    undo,
+    mutationTruth,
+    disposition,
+  ));
+  options.recipeEmergencyState.undo = closed;
+  options.recipeEmergencyState.mutationTruth = mutationTruth;
+  return closed;
+}
+
+async function dispatchRecipeStageWithinDeadline(dispatcher, payload, deadline) {
+  const remainingMs = deadline?.remainingMs?.() ?? null;
+  if (remainingMs === null) {
+    return { outcome: await dispatcher(payload), deadlineExpired: false };
+  }
+  if (remainingMs < 1) {
+    return {
+      outcome: recipeStageDeadlineOutcome(payload.stage, deadline),
+      deadlineExpired: true,
+    };
+  }
+
+  let timer = null;
+  const dispatched = Promise.resolve().then(() => dispatcher(payload)).then((outcome) => ({
+    outcome,
+    deadlineExpired: false,
+  }));
+  const expired = new Promise((resolve) => {
+    timer = setTimeout(() => resolve({
+      outcome: recipeStageDeadlineOutcome(payload.stage, deadline),
+      deadlineExpired: true,
+    }), remainingMs);
+    timer.unref?.();
+  });
+  try {
+    return await Promise.race([dispatched, expired]);
+  } finally {
+    if (timer !== null) clearTimeout(timer);
+  }
+}
+
+function recipeStageDeadlineOutcome(stage, deadline) {
+  return {
+    ok: false,
+    verified: false,
+    status: "failed",
+    summary: `Recipe stage ${stage.id} exceeded the execution deadline.`,
+    error: {
+      code: "STAGE_FAILED",
+      message: `Recipe stage ${stage.id} exceeded the execution deadline.`,
+      details: mergeDeadlineDetails(deadline, {
+        request_cancelled: true,
+        mutation_truth: stage.risk === "read" ? "not_applied" : "unknown",
+        zero_write: stage.risk === "read",
+      }),
+    },
+  };
 }
 
 function recipeUndoWireMutationTruth(mutationTruth) {
@@ -2306,12 +2400,14 @@ function recipeUndoFailure(status, label, projectRef, error) {
   });
 }
 
-function recipeUndoCloseUnknown(undo, message) {
+function recipeUndoCloseUnknown(undo, message, result = null) {
   return freeze({
     ...undo,
     status: "close_unknown",
     proven: false,
     closed: false,
+    rollback_attempted: result?.rollback_attempted === true,
+    rollback_proven: result?.rollback_proven === true,
     error: { message: message || "Recipe Undo close outcome is unknown." },
   });
 }
@@ -2624,6 +2720,9 @@ function recipeRecoveryTruth(resumeSafe, mutationTruth, undo) {
       required_action: "reconcile_exact_not_run_transaction_before_retry",
     });
   }
+  if (undo?.rollback_proven === true) {
+    return freeze({ strategy: "no_recovery_needed", rollback_claimed: true, outcome: "rolled_back" });
+  }
   if (mutationTruth === "not_applied") {
     return freeze({ strategy: "no_recovery_needed", rollback_claimed: false, outcome: "not_applied" });
   }
@@ -2714,6 +2813,14 @@ function finalizeError(error, request, options, startedAt) {
   const status = code === "TRUST_INVALID" || code === "PREFLIGHT_FAILED" || code === "INLINE_EXECUTION_FORBIDDEN"
     ? "blocked"
     : "failed";
+  const emergency = options.recipeEmergencyState;
+  const emergencyDetails = emergency?.emergencyCloseAttempted === true
+    ? {
+        recipe_undo_emergency_close: true,
+        recipe_undo_status: emergency.undo?.status ?? "unknown",
+        mutation_truth: emergency.mutationTruth ?? "unknown",
+      }
+    : {};
   const response = freeze({
     contract: CALL_RECIPE_RUNTIME_CONTRACT,
     ok: false,
@@ -2722,7 +2829,9 @@ function finalizeError(error, request, options, startedAt) {
     error: {
       code,
       message: mapped.message,
-      details: mapped.details ?? undefined,
+      details: isPlainObject(mapped.details) || Object.keys(emergencyDetails).length > 0
+        ? { ...(isPlainObject(mapped.details) ? mapped.details : {}), ...emergencyDetails }
+        : undefined,
     },
     resume_safe: false,
     next_call: operation === "run" || operation === "resume"
@@ -2735,9 +2844,10 @@ function finalizeError(error, request, options, startedAt) {
   return operation === "run" || operation === "resume"
     ? withRunExecutionTruth(response, {
         startedAt,
-        telemetry: Object.assign(createRunTelemetry(), { performance: options.performance ?? null }),
-        undo: defaultRecipeUndoTruth(),
-        mutationTruth: "not_applied",
+        telemetry: emergency?.telemetry
+          ?? Object.assign(createRunTelemetry(), { performance: options.performance ?? null }),
+        undo: emergency?.undo ?? defaultRecipeUndoTruth(),
+        mutationTruth: emergency?.mutationTruth ?? "not_applied",
       })
     : response;
 }
