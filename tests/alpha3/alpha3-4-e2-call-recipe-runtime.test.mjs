@@ -602,6 +602,55 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
     assert.deepEqual(undoCalls.map((call) => call.operation), ["begin", "end"]);
   });
 
+  it("reuses a saved exact-project Recipe across fresh generations without relaxing project or owner trust", async () => {
+    const draft = makeTwoMacroDraft();
+    draft.portability = {
+      ...draft.portability,
+      bridge_generation: "generation:runtime_bound",
+    };
+    let projectIdentity = draft.portability.project_identity;
+    let bridgeOwner = draft.portability.bridge_owner;
+    let generation = "1";
+    const dispatches = [];
+    const { runtime } = makeRuntime({
+      facts: (revision) => ({
+        ...completeFacts(revision, draft),
+        project_identity: projectIdentity,
+        bridge_owner: bridgeOwner,
+        bridge_generation: generation,
+      }),
+      dispatchers: {
+        macro: async ({ stage }) => {
+          dispatches.push({ stage_id: stage.id, generation });
+          return macroEnvelope(stage.id === "inventory_checkpoint"
+            ? { returned_count: 1 }
+            : { project_ref: projectIdentity });
+        },
+      },
+    });
+    const saved = await saveFixture(runtime, draft);
+    assert.equal(saved.ok, true, JSON.stringify(saved));
+    const identity = exactIdentity(saved);
+
+    const first = await runtime.call_recipe({ operation: "run", ...identity, inputs: { operation: "inspect" } });
+    assert.equal(first.ok, true, JSON.stringify(first));
+    generation = "2";
+    const reconnected = await runtime.call_recipe({ operation: "run", ...identity, inputs: { operation: "inspect" } });
+    assert.equal(reconnected.ok, true, JSON.stringify(reconnected));
+    assert.deepEqual(dispatches.map((entry) => entry.generation), ["1", "1", "2", "2"]);
+
+    projectIdentity = "project:tab:fixture-b";
+    const projectDrift = await runtime.call_recipe({ operation: "run", ...identity, inputs: { operation: "inspect" } });
+    assert.equal(projectDrift.ok, false, JSON.stringify(projectDrift));
+    assert.equal(projectDrift.error.code, "TRUST_INVALID");
+    projectIdentity = draft.portability.project_identity;
+    bridgeOwner = "owner:other";
+    const ownerDrift = await runtime.call_recipe({ operation: "run", ...identity, inputs: { operation: "inspect" } });
+    assert.equal(ownerDrift.ok, false, JSON.stringify(ownerDrift));
+    assert.equal(ownerDrift.error.code, "TRUST_INVALID");
+    assert.equal(dispatches.length, 4);
+  });
+
   it("stops after the active stage and closes Whole-Recipe Undo when the caller cancels", async () => {
     const controller = new AbortController();
     const undoCalls = [];
@@ -1304,8 +1353,6 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
     const draft = structuredClone(makeDraft());
     draft.portability = {
       ...draft.portability,
-      project_identity: "project:runtime_bound",
-      bridge_owner: "bridge:runtime_bound",
       bridge_generation: "generation:runtime_bound",
     };
     const { runtime } = makeRuntime({
@@ -1315,14 +1362,10 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
         return factsCalls === 1
           ? {
               ...facts,
-              project_identity: "project:tab:fixture-a",
-              bridge_owner: "owner:fixture-a",
               bridge_generation: "1",
             }
           : {
               ...facts,
-              project_identity: "project:tab:fixture-b",
-              bridge_owner: "owner:fixture-b",
               bridge_generation: "2",
             };
       },

@@ -50,8 +50,11 @@ Item 套同一固定清理计划。”Recipe 保存固定计划，批处理 Macr
 处理全部 63 个目标，不能发 63 次调用。该 Macro 上限为 64 时，1-64（包括
 63）都合法，65 必须在 mutation 前失败。终态 evidence 保留后，如只用一次，
 用完整 saved identity 和 `confirm=true` 执行 `delete`；如需长期保存，省略
-`delete`，重连后用 `list/get` 找回同一精确 revision 再运行。inline 或未保存
-draft 永远不能执行。
+`delete`，重连后用 `list/get` 找回同一精确 revision 再运行。保存 draft 时保持
+精确 `project_identity` 和 `bridge_owner`，但使用
+`bridge_generation="generation:runtime_bound"`：fresh run 会在重连后绑定当前
+generation，resume 仍锁定失败运行原来的 generation。inline 或未保存 draft
+永远不能执行。
 
 升级后，如果某个被保留的用户 Recipe revision 与当前 dependency catalog
 不再一致，`list_recipes` 会将它标记为 `REVISION_STALE`，同时保持官方 Recipe

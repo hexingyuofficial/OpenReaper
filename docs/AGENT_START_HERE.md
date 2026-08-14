@@ -68,7 +68,10 @@ do not generate 63 calls. Where that Macro has the 64-target limit, 1-64 is
 valid and 65 must fail before mutation. After terminal evidence is retained,
 call `delete` with the exact saved identity and `confirm=true`. To keep the same
 Recipe, omit `delete`; after reconnect rediscover it with `list/get` and run the
-exact revision again. Never execute an inline or unsaved draft.
+exact revision again. In a saved draft, keep exact `project_identity` and
+`bridge_owner`, but use `bridge_generation="generation:runtime_bound"`: a fresh
+run binds the current generation after reconnect, while resume remains bound to
+the failed run's generation. Never execute an inline or unsaved draft.
 
 Search Recipes with the user's original words, then exact-expand the selected
 id using `list_recipes` fields `steps`, `assertions`, and `recovery`. The two

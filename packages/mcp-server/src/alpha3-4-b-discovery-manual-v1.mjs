@@ -383,7 +383,7 @@ export function createAlpha345RecipeLifecycleManual() {
     portability: {
       project_identity: "COPY_ACTIVE_PROJECT_REF",
       bridge_owner: "COPY_PING_BRIDGE_OWNER",
-      bridge_generation: "COPY_PING_BRIDGE_GENERATION_AS_STRING",
+      bridge_generation: "generation:runtime_bound",
       platform: "darwin",
     },
   };
@@ -392,7 +392,7 @@ export function createAlpha345RecipeLifecycleManual() {
     authoring_rule: "Build a declarative macro-first recipe.executable.draft.v1 from exact dependency manuals. Template stages require one accepted typed fallback reason. Never include raw Lua, Action, shell, SQL, UI, hardware, or a model-supplied execution graph.",
     authoring_steps: [
       "Exact-expand the chosen Macro and copy executable_recipe_dependency id/version/risk/descriptor_hash/capabilities without guessing.",
-      "Read ping for Bridge owner/generation and use the public open-project inventory Template fallback for one exact active project_ref.",
+      "Read ping for the exact Bridge owner and use the public open-project inventory Template fallback for one exact active project_ref; keep bridge_generation as generation:runtime_bound.",
       "Replace every COPY_ value in minimal_draft_template, validate, save an immutable revision, then run only the returned exact identity.",
     ],
     stage_output_rule: "Never invent a Macro output port. For a first one-stage Recipe, bind only evidence_ref, which the Recipe runtime derives from accepted Macro evidence. Add other stage outputs only when their exact public result field is proven.",
@@ -408,6 +408,7 @@ export function createAlpha345RecipeLifecycleManual() {
       delete: { tool: "call_recipe", arguments: { operation: "delete", ...identity, confirm: true }, executable_now: false, complete_from: "saved/listed exact identity" },
     },
     run_rule: "A saved Recipe executes through one public call_recipe run. The Agent never replays stages or targets and never supplies runtime_facts or a caller-selected run_id.",
+    reconnect_rule: "For a fresh saved-Recipe run, generation:runtime_bound binds only bridge_generation to the current authoritative generation after reconnect. Exact project_identity and bridge_owner remain locked; resume remains locked to the failed run's original generation.",
     failure_rule: "Follow the returned exact next_call. Resume only when resume_safe is true and the latest verified checkpoint identity is present; otherwise inspect evidence and report applied/not-run/unknown truth.",
     official_and_user_rule: "Official Recipes and user-authored or forked Recipes share validate/save/list/get/run/reconnect, server-owned trust, retained evidence, and whole-Recipe Undo truth.",
   });

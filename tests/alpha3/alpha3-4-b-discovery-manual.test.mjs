@@ -177,6 +177,10 @@ test("Alpha3.45 Recipe manual covers seven operations, temporary/persistent reus
   assert.deepEqual(lifecycle.minimal_draft_template.stages[0].outputs, ["evidence_ref"]);
   assert.deepEqual(lifecycle.minimal_draft_template.outputs, [{ id: "evidence_ref", type: "string", required: true }]);
   assert.equal(lifecycle.minimal_draft_template.preflight.forbids_inline_execution, true);
+  assert.equal(lifecycle.minimal_draft_template.portability.bridge_generation, "generation:runtime_bound");
+  assert.match(lifecycle.reconnect_rule, /fresh saved-Recipe run/u);
+  assert.match(lifecycle.reconnect_rule, /Exact project_identity and bridge_owner remain locked/u);
+  assert.match(lifecycle.reconnect_rule, /resume remains locked/u);
   assert.match(lifecycle.failure_rule, /resume_safe/u);
   for (const operation of lifecycle.operations) {
     assert.equal(lifecycle.request_examples[operation].arguments.operation, operation);
