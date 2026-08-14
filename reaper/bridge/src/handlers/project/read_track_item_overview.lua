@@ -112,6 +112,17 @@ local function d10_overview_track_name(track)
   return bounded_string(ok and first_string(name) or "", 80)
 end
 
+local function d10_overview_track_selected(track)
+  local ok, selected = call_reaper("IsTrackSelected", track)
+  if not ok then
+    error("REAPER IsTrackSelected API is required for truthful Track selection reads.")
+  end
+  if type(selected) == "boolean" then return selected end
+  if selected == 0 then return false end
+  if selected == 1 then return true end
+  error("REAPER IsTrackSelected returned an invalid Track selection value.")
+end
+
 local function d10_overview_item_guid(item)
   local ok_sws, guid = call_reaper("BR_GetMediaItemGUID", item)
   if ok_sws and type(guid) == "string" and guid ~= "" then
@@ -223,6 +234,7 @@ local function d10_overview_track_summary(track, max_items_per_track)
     track_ref = d10_overview_track_ref_string(track),
     index = d10_overview_track_index(track),
     name = d10_overview_track_name(track),
+    selected = d10_overview_track_selected(track),
     items = items,
     items_truncated = item_count == nil or item_count > #items,
   }

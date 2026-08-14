@@ -350,11 +350,28 @@ local function read_item_summary_value(item, include_take_summary)
     )
   end
 
+  local reverse = nil
+  local ok_source, source = call_reaper("GetMediaItemTake_Source", take)
+  if ok_source and source then
+    local ok_section, available, _, _, reversed = call_reaper("PCM_Source_GetSectionInfo", source)
+    if ok_section then
+      reverse = available == true and (reversed == true or reversed == 1) or false
+    end
+  end
+  local ok_take_fx, take_fx_count_raw = call_reaper("TakeFX_GetCount", take)
+  local take_fx_count = ok_take_fx and read_item_summary_finite_number(first_number(take_fx_count_raw)) or nil
+  if take_fx_count ~= nil and (take_fx_count < 0 or take_fx_count ~= math.floor(take_fx_count)) then
+    take_fx_count = nil
+  end
+
   summary.take_volume_db = take_volume_db
   summary.take_pan = take_pan
   summary.take_pitch_semitones = take_pitch_semitones
   summary.playrate = playrate
   summary.preserve_pitch = ppitch == 1
+  summary.reverse = reverse == nil and JSON_NULL or reverse
+  summary.take_fx_count = take_fx_count == nil and JSON_NULL or take_fx_count
+  summary.has_take_fx = take_fx_count == nil and JSON_NULL or take_fx_count > 0
   return summary
 end
 

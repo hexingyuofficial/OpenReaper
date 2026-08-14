@@ -637,7 +637,7 @@ describe("Alpha3.2.5-C executable controls", () => {
     assert.deepEqual(validateMacroExecutionEnvelope(response), { valid: true, errors: [] });
   });
 
-  it("lets exact_parameters select a third-party FX without injecting stock_plugin=true", async () => {
+  it("lets exact_parameters select an owner-scoped third-party FX without injecting stock_plugin=true", async () => {
     const calls = [];
     const values = new Map();
     const response = await executeAlpha3_2_5CControlMacro({
@@ -645,7 +645,7 @@ describe("Alpha3.2.5-C executable controls", () => {
         id: "macro.set_stock_plugin_controls",
         input: {
           mode: "exact_parameters",
-          selector: { plugin_id: "snapheap" },
+          selector: { owner_ref: "track:guid:{TRACK-A}", plugin_id: "snapheap" },
           dry_run: true,
           changes: [{ id: "mix", param_index: 0, normalized_value: 0.5 }],
         },
@@ -658,6 +658,7 @@ describe("Alpha3.2.5-C executable controls", () => {
     assert.equal(response.ok, true, JSON.stringify(response));
     assert.equal(response.execution.status, "dry_run_completed");
     assert.equal(response.sqlite.used, true);
+    assert.equal(calls.some((call) => call.id === "template.fx.list_track_fx_chain"), true);
     assert.equal(calls.some((call) => call.id === "template.fx.set_fx_parameter_normalized"), false);
   });
 });
@@ -772,6 +773,25 @@ function stockAtomic(calls, values) {
     }
     if (id === "template.tracks.resolve_track_ref") {
       return execution(id, { track_ref: input.track_ref, name: "Lead Vocal" });
+    }
+    if (id === "template.fx.list_track_fx_chain") {
+      const ownerRef = typeof refs.track_ref === "string" ? refs.track_ref : refs.track_ref?.ref;
+      const result = execution(id, {
+        owner_ref: ownerRef,
+        track_ref: ownerRef,
+        fx_count: 1,
+        fx: [{
+          ref: `fx:${ownerRef}:0`,
+          owner_ref: ownerRef,
+          plugin_name: "VST3: Snap Heap (Kilohearts)",
+          plugin_id: "snapheap",
+          slot_index: 0,
+          bypassed: false,
+        }],
+        truncated: false,
+      });
+      result.result.project_index_observation = { ok: true, blockers: [] };
+      return result;
     }
     if (id === "template.fx.resolve_fx_ref") {
       return execution(id, { fx_ref: `fx:${refs.track_ref.ref}:${input.slot_index}` });

@@ -717,7 +717,7 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
         max_pitch_semitones: 2,
       },
       limit: 1,
-      fields: ["item_ref", "track_ref", "active", "source_kind", "playrate", "pitch_semitones", "reverse", "has_take_fx", "payload_ref"],
+      fields: ["item_ref", "track_ref", "active", "source_kind", "playrate", "pitch_semitones", "preserve_pitch", "reverse", "has_take_fx", "payload_ref"],
     }, { projectIndex });
     const secondPage = planAlpha3C3ProjectIndexQueryMacro("macro.query_takes", {
       scope: "tracks",
@@ -753,8 +753,9 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
       source_kind: "wav",
       playrate: 1,
       pitch_semitones: 0,
-      reverse: false,
-      has_take_fx: false,
+      preserve_pitch: true,
+      reverse: null,
+      has_take_fx: null,
       payload_ref: "artifact:takes:1",
     });
     assert.equal(firstPage.freshness.status, "fresh");
@@ -1814,6 +1815,7 @@ function takesProjectIndex() {
         source_ref: "media:file:{KICK}",
         playrate: 1,
         pitch_semitones: 0,
+        preserve_pitch: true,
       },
       {
         ref: "take:guid:{TAKE-2}",

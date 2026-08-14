@@ -1796,7 +1796,7 @@ function projectReadback(templateId, readback, projectRef) {
         tracks: readback.truncated === true ? "paged" : "complete",
         items: readback.item_coverage_status,
         selected_items: readback.selected_items_truncated === true ? "bounded" : "selected_only",
-      });
+      }, { requireTrackSelection: true });
     case "template.project.create_observation_bundle": {
       const map = projectMapPayload(readback.project_map ?? readback.overview ?? {}, projectRef, readback.coverage);
       const markerSource = Array.isArray(readback.markers_regions?.items)
@@ -1846,8 +1846,19 @@ function automationProjection(readback) {
   return { scopes: { automation: rows }, coverage: { automation: coverage } };
 }
 
-function projectMapPayload(overview, projectRef, coverage = {}) {
+function projectMapPayload(overview, projectRef, coverage = {}, options = {}) {
   if (!isObject(overview)) return { blocker: { code: "ARTIFACT_PAYLOAD_INVALID", message: "Project map artifact payload is missing overview rows." } };
+  if (options.requireTrackSelection === true) {
+    const invalidSelectionRow = arrayOf(overview.tracks).find((row) => typeof row?.selected !== "boolean");
+    if (invalidSelectionRow) {
+      return {
+        blocker: {
+          code: "TRACK_SELECTION_TRUTH_REQUIRED",
+          message: "Track overview readback omitted strict boolean TCP selection truth; the observation was not indexed.",
+        },
+      };
+    }
+  }
   const tracks = mapTracks(overview.tracks, projectRef);
   const declaredTrackCount = nonNegativeIntegerOrNull(overview.track_count);
   const projectedTrackCoverage = normalizeCoverage(coverage.tracks, overview.truncated ? "paged" : "complete");
@@ -1962,11 +1973,23 @@ function mapTakesFromItems(rows) {
     const itemRef = canonicalRefFrom(item, ["ref", "item_ref"], "item");
     const trackRef = canonicalRefFrom(item, ["track_ref", "owner_ref"], "track");
     const nested = arrayOf(item?.takes);
-    if (nested.length === 0 && isCanonicalRef(item?.active_take_ref, "take")) nested.push({ take_ref: item.active_take_ref, active: true, name: item.active_take_name });
+    if (nested.length === 0 && isCanonicalRef(item?.active_take_ref, "take")) nested.push({
+      take_ref: item.active_take_ref,
+      track_ref: trackRef,
+      active: true,
+      name: item.active_take_name,
+      pitch_semitones: item.take_pitch_semitones,
+      playrate: item.playrate,
+      preserve_pitch: item.preserve_pitch,
+      reverse: item.reverse,
+      take_fx_count: item.take_fx_count,
+      has_take_fx: item.has_take_fx,
+    });
     for (const take of nested) {
       const ref = canonicalRefFrom(take, ["ref", "take_ref"], "take");
       if (!ref || !itemRef) continue;
-      takes.push({ ref, owner_ref: itemRef, item_ref: itemRef, track_ref: canonicalRefFrom(take, ["track_ref"], "track") ?? trackRef, active: take.active === true || take.is_active === true, selected: take.selected === true, source_kind: stringOrNull(take.source_kind), source_ref: canonicalRefFrom(take, ["source_ref", "file_ref"]), pitch_semitones: finiteOrNull(take.pitch_semitones ?? take.pitch), playrate: finiteOrNull(take.playrate ?? take.play_rate), reverse: take.reverse === true || take.reversed === true, has_take_fx: take.has_take_fx === true || Number.isInteger(take.fx_count) && take.fx_count > 0, summary: compactObject(take) });
+      const takeFxCount = integerOrNull(take.take_fx_count ?? take.fx_count);
+      takes.push({ ref, owner_ref: itemRef, item_ref: itemRef, track_ref: canonicalRefFrom(take, ["track_ref"], "track") ?? trackRef, active: take.active === true || take.is_active === true, selected: take.selected === true, source_kind: stringOrNull(take.source_kind), source_ref: canonicalRefFrom(take, ["source_ref", "file_ref"]), pitch_semitones: finiteOrNull(take.pitch_semitones ?? take.pitch), playrate: finiteOrNull(take.playrate ?? take.play_rate), preserve_pitch: booleanOrNull(take.preserve_pitch), reverse: booleanOrNull(take.reverse ?? take.reversed), has_take_fx: booleanOrNull(take.has_take_fx) ?? (takeFxCount === null ? null : takeFxCount > 0), summary: compactObject(take) });
     }
   }
   return dedupeRows(takes);

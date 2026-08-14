@@ -65,6 +65,8 @@ describe("Alpha3.4-D1 read_item_summary native truth", () => {
     assert.match(BRIDGE_SOURCE, /volume_db/);
     assert.match(BRIDGE_SOURCE, /take_pitch_semitones/);
     assert.match(BRIDGE_SOURCE, /preserve_pitch/);
+    assert.match(BRIDGE_SOURCE, /PCM_Source_GetSectionInfo/);
+    assert.match(BRIDGE_SOURCE, /TakeFX_GetCount/);
   });
 
   it("returns Item volume and Active-Take control facts with authoritative take GUID", () => {
@@ -72,6 +74,10 @@ describe("Alpha3.4-D1 read_item_summary native truth", () => {
 local item = {}
 local take = {}
 local track = {}
+local source_available = true
+local section_available = true
+local reversed = true
+local take_fx_count = 2
 call_reaper = function(name, ...)
   local args = { ... }
   if name == "GetSelectedMediaItem" then return true, item end
@@ -95,6 +101,9 @@ call_reaper = function(name, ...)
   if name == "GetActiveTake" then return true, take end
   if name == "GetSetMediaItemTakeInfo_String" and args[2] == "GUID" then return true, true, "{TAKE-D1}" end
   if name == "GetTakeName" then return true, "Lead" end
+  if name == "GetMediaItemTake_Source" then return source_available, source_available and {} or nil end
+  if name == "PCM_Source_GetSectionInfo" then return true, section_available, 0, 4, reversed end
+  if name == "TakeFX_GetCount" then return take_fx_count ~= nil, take_fx_count end
   if name == "GetMediaItemTakeInfo_Value" then
     take_property_gets = take_property_gets + 1
     local values = {
@@ -132,8 +141,33 @@ assert(summary.take_pan == -0.5)
 assert(summary.take_pitch_semitones == 2)
 assert(summary.playrate == 1.5)
 assert(summary.preserve_pitch == true)
+assert(summary.reverse == true)
+assert(summary.take_fx_count == 2)
+assert(summary.has_take_fx == true)
 assert(writes == 0)
 assert(take_property_gets == 5)
+
+section_available = false
+take_fx_count = 0
+summary, failure = read_item_summary({
+  refs = json_array({ { kind = "item", ref = "item:selected:0", identity = { scheme = "selected", value = "0" } } }),
+  params = { include_take_summary = true },
+})
+assert(failure == nil)
+assert(summary.reverse == false)
+assert(summary.take_fx_count == 0)
+assert(summary.has_take_fx == false)
+
+source_available = false
+take_fx_count = nil
+summary, failure = read_item_summary({
+  refs = json_array({ { kind = "item", ref = "item:selected:0", identity = { scheme = "selected", value = "0" } } }),
+  params = { include_take_summary = true },
+})
+assert(failure == nil)
+assert(summary.reverse == JSON_NULL)
+assert(summary.take_fx_count == JSON_NULL)
+assert(summary.has_take_fx == JSON_NULL)
 `);
   });
 
@@ -172,6 +206,9 @@ assert(summary.take_volume_db == -150)
 assert(summary.preserve_pitch == false)
 assert(summary.take_pan == 0)
 assert(summary.take_pitch_semitones == 0)
+assert(summary.reverse == JSON_NULL)
+assert(summary.take_fx_count == JSON_NULL)
+assert(summary.has_take_fx == JSON_NULL)
 `);
   });
 

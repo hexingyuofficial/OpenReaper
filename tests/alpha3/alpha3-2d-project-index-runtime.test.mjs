@@ -692,6 +692,46 @@ describe("Alpha3.2-D Product Project Index runtime", () => {
     }
   });
 
+  it("rejects Track overview rows without strict TCP selection truth before index mutation", async () => {
+    const fixture = await makeFixture();
+    try {
+      const runtime = await openRuntime(fixture);
+      const identity = runtimeIdentity(runtime);
+      assertObserved(runtime, execution("template.tracks.list_tracks", identity, {
+        tracks: [{ track_ref: "track:guid:{SAFE}", name: "Safe", selected: true }],
+        track_count: 1,
+      }));
+      const before = JSON.stringify(runtime.adapter.snapshot());
+
+      for (const selected of [undefined, 0, "false", null]) {
+        const track = { track_ref: "track:guid:{TCP}", name: "TCP" };
+        if (selected !== undefined) track.selected = selected;
+        const rejected = runtime.observeSuccessfulTemplateExecution(execution(
+          "template.project.read_track_item_overview",
+          identity,
+          {
+            project_ref: identity.project_ref,
+            track_count: 1,
+            tracks: [track],
+            item_count: 0,
+            items: [],
+            selected_items: [],
+            truncated: false,
+            items_truncated: false,
+            selected_items_truncated: false,
+          },
+        ));
+        assert.equal(rejected.ok, false);
+        assert.equal(rejected.status, "invalid_readback");
+        assert.equal(rejected.blockers[0].code, "TRACK_SELECTION_TRUTH_REQUIRED");
+        assert.equal(JSON.stringify(runtime.adapter.snapshot()), before);
+      }
+      runtime.close();
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
   it("projects active_take_ref into a canonical active take row", async () => {
     const fixture = await makeFixture();
     try {
@@ -703,6 +743,12 @@ describe("Alpha3.2-D Product Project Index runtime", () => {
         take_count: 1,
         active_take_ref: "take:guid:{K1}",
         active_take_name: "Kick take",
+        take_pitch_semitones: 3,
+        playrate: 0.75,
+        preserve_pitch: false,
+        reverse: true,
+        take_fx_count: 0,
+        has_take_fx: false,
       }));
 
       const take = runtime.adapter.snapshot().rows.takes[0];
@@ -711,6 +757,11 @@ describe("Alpha3.2-D Product Project Index runtime", () => {
       assert.equal(take.owner_ref, "item:guid:{I1}");
       assert.equal(take.track_ref, "track:guid:{T1}");
       assert.equal(take.active, true);
+      assert.equal(take.pitch_semitones, 3);
+      assert.equal(take.playrate, 0.75);
+      assert.equal(take.preserve_pitch, false);
+      assert.equal(take.reverse, true);
+      assert.equal(take.has_take_fx, false);
       runtime.close();
     } finally {
       await fixture.cleanup();

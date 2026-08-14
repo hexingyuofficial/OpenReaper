@@ -740,6 +740,7 @@ describe("Alpha3 C3 Project SQLite Index store helpers", () => {
           source_kind: "wav",
           playrate: 1,
           pitch_semitones: 0,
+          preserve_pitch: false,
         },
         {
           ref: "take:guid:{TAKE-2}",
@@ -757,13 +758,16 @@ describe("Alpha3 C3 Project SQLite Index store helpers", () => {
       scope: "takes",
       limit: 10,
       filters: { has_take_fx: true },
-      fields: ["item_ref", "track_ref", "active", "reverse", "has_take_fx", "payload_ref"],
+      fields: ["item_ref", "track_ref", "active", "preserve_pitch", "reverse", "has_take_fx", "payload_ref"],
     }, { projectIndex: index });
 
     assert.equal(result.operation, "replace_takes");
     assert.equal(snapshot.rows.takes.length, 2);
     assert.equal(snapshot.rows.takes[1].item_ref, "item:guid:{ITEM-2}");
     assert.equal(snapshot.rows.takes[0].payload_ref, "artifact:takes:map");
+    assert.equal(snapshot.rows.takes[0].preserve_pitch, false);
+    assert.equal(snapshot.rows.takes[0].reverse, null);
+    assert.equal(snapshot.rows.takes[0].has_take_fx, null);
     assert.equal(snapshot.freshness_scopes.takes.status, "fresh");
     assert.equal(snapshot.freshness_scopes.takes.coverage_status, "paged");
     assert.equal(projectIndexScopeIsFreshEnough(snapshot, "takes"), true);
@@ -774,6 +778,7 @@ describe("Alpha3 C3 Project SQLite Index store helpers", () => {
       item_ref: "item:guid:{ITEM-2}",
       track_ref: "track:guid:{B}",
       active: true,
+      preserve_pitch: null,
       reverse: true,
       has_take_fx: true,
       payload_ref: "artifact:takes:map",

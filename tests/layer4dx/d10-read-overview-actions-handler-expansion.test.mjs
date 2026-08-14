@@ -76,6 +76,7 @@ reaper.GetTrack = function(project, index) assert(project == 0); return tracks[i
 reaper.GetTrackGUID = function(track) return track.guid end
 reaper.GetMediaTrackInfo_Value = function(track, key) assert(key == "IP_TRACKNUMBER"); return track.index + 1 end
 reaper.GetTrackName = function(track) return true, track.name end
+reaper.IsTrackSelected = function(track) return track.index == 1 end
 reaper.CountTrackMediaItems = function(track)
   if track.index == 0 then return 2 end
   if track.index == 1 then return 4 end
@@ -92,6 +93,7 @@ reaper.GetTrackNumSends = function(track, category)
   if track.index == 1 then return 0 end
   return -1
 end
+reaper.CountSelectedMediaItems = function(project) assert(project == 0); return 0 end
 `;
 
 describe("D10 read overview/actions live handler expansion", () => {
@@ -170,6 +172,7 @@ describe("D10 read overview/actions live handler expansion", () => {
     assert.match(PROJECT_HANDLER_SOURCE, /CountTracks/);
     assert.match(PROJECT_HANDLER_SOURCE, /CountMediaItems/);
     assert.match(PROJECT_HANDLER_SOURCE, /GetTrackMediaItem/);
+    assert.match(PROJECT_HANDLER_SOURCE, /IsTrackSelected/);
     assert.match(PROJECT_HANDLER_SOURCE, /track_cursor = d10_overview_bounded_offset/);
     assert.match(PROJECT_HANDLER_SOURCE, /item_cursor = d10_overview_bounded_offset/);
     assert.match(PROJECT_HANDLER_SOURCE, /call_reaper\("GetMediaItem", 0, index\)/);
@@ -208,6 +211,38 @@ assert(summary.tracks[3].send_count == nil)
 assert(summary.tracks[3].items_truncated == true)
 assert(#send_categories == 3)
 for _, category in ipairs(send_categories) do assert(category == 0) end
+`;
+    const state = lauxlib.luaL_newstate();
+    lualib.luaL_openlibs(state);
+    const status = lauxlib.luaL_loadstring(
+      state,
+      to_luastring(`${LUA_COUNT_PRELUDE}\n${PROJECT_HANDLER_SOURCE}\n${assertions}`),
+    );
+    const loadMessage = status === lua.LUA_OK ? "D10 Lua loaded" : to_jsstring(lua.lua_tostring(state, -1));
+    assert.equal(status, lua.LUA_OK, loadMessage);
+    const callStatus = lua.lua_pcall(state, 0, 0, 0);
+    const callMessage = callStatus === lua.LUA_OK ? "D10 Lua executed" : to_jsstring(lua.lua_tostring(state, -1));
+    assert.equal(callStatus, lua.LUA_OK, callMessage);
+  });
+
+  it("reports TCP-only Track selection while no Item is selected and rejects unknown selection truth", () => {
+    const assertions = String.raw`
+local summary = select(1, read_track_item_overview({
+  params = { include_track_items = false, include_selected_items = true, max_tracks = 8 },
+  budget = { max_items = 64, max_response_bytes = 65536, max_inline_value_bytes = 4096 },
+}))
+assert(summary.tracks[1].selected == false)
+assert(summary.tracks[2].selected == true)
+assert(summary.tracks[3].selected == false)
+assert(#summary.selected_items == 0)
+
+reaper.IsTrackSelected = function() return "unknown" end
+local ok, failure = pcall(read_track_item_overview, {
+  params = { include_track_items = false, include_selected_items = false, max_tracks = 8 },
+  budget = { max_items = 64, max_response_bytes = 65536, max_inline_value_bytes = 4096 },
+})
+assert(ok == false)
+assert(tostring(failure):find("invalid Track selection value", 1, true) ~= nil)
 `;
     const state = lauxlib.luaL_newstate();
     lualib.luaL_openlibs(state);
