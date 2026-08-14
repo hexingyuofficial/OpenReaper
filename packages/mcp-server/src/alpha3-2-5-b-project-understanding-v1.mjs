@@ -32,6 +32,7 @@ const ROUTING_GRAPH_ID = "template.routing.read_project_routing_graph";
 const AUTOMATION_INVENTORY_ID = "template.automation.list_project_envelopes";
 const MAX_HYDRATION_CALLS = 16;
 const MAX_EXACT_SELECTOR_REFS = 100;
+const MAX_COMPLETE_FX_TRACKS = 64;
 const MAX_RESULT_DATA_BYTES = 18_000;
 const MINIMUM_PUBLIC_QUERY_BUDGET = 2_048;
 const PROJECT_INDEX_HYDRATION_TRACK_LIMIT = 32;
@@ -731,7 +732,9 @@ async function hydrateForQuery({
   const forceRefresh = refreshPolicy === "required" || refreshPolicy === "force_read_only_refresh";
   if (refreshPolicy === "never") return emptyHydration("Refresh policy forbids live hydration.");
   const exactSelectorRefreshRequired = exactSelectorRefreshRequests(request, projectIndexRuntime).length > 0;
-  if (plan.ok && !forceColdBundle && !forceRefresh && !exactSelectorRefreshRequired) {
+  const completeProjectFxRefresh = request.input?.entity === "fx"
+    && exactFxOwnerRefs(request).length === 0;
+  if (plan.ok && !forceColdBundle && !forceRefresh && !exactSelectorRefreshRequired && !completeProjectFxRefresh) {
     return emptyHydration("Matching fresh SQLite rows were reused.");
   }
   if (typeof executeAtomic !== "function") {
@@ -748,7 +751,9 @@ async function hydrateForQuery({
   const objectRefs = new Map();
   let logicalRefresh = null;
   let revisionProbeCount = 0;
-  if (forceRefresh && !forceColdBundle) {
+  let fxOwnerRefresh = null;
+  let liveTrackRows = [];
+  if ((forceRefresh && !forceColdBundle) || completeProjectFxRefresh) {
     const scope = refreshScopeForEntity(request.input?.entity);
     if (scope && typeof projectIndexRuntime?.invalidateScopes === "function") {
       const invalidation = projectIndexRuntime.invalidateScopes({
@@ -764,8 +769,9 @@ async function hydrateForQuery({
       }
     }
   }
-  const completeTracks = request.input?.entity === "tracks"
-    && (forceColdBundle || forceRefresh || plan.ok !== true);
+  const completeTracks = (request.input?.entity === "tracks"
+    && (forceColdBundle || forceRefresh || plan.ok !== true))
+    || completeProjectFxRefresh;
   const completeItems = request.input?.entity === "items"
     && exactSelectorRequestedRefs(request).length === 0
     && (forceColdBundle || forceRefresh || plan.ok !== true);
@@ -787,6 +793,7 @@ async function hydrateForQuery({
     evidenceRefs.push(...cold.evidenceRefs);
     logicalRefresh = cold.logicalRefresh ?? null;
     revisionProbeCount += cold.revisionProbeCount ?? 0;
+    liveTrackRows = cold.liveTrackRows ?? [];
   } else if (completeItems) {
     const cold = await runCompleteItemRefresh({
       request,
@@ -844,6 +851,35 @@ async function hydrateForQuery({
     evidenceRefs.push(...cold.evidenceRefs);
   }
 
+  if (completeProjectFxRefresh) {
+    const completeFx = await runCompleteTrackFxRefresh({
+      request,
+      projectIndexRuntime,
+      executeAtomic,
+      expectedRevision: logicalRefresh?.observed_revision ?? expectedRevision,
+      expectedTrackCount: logicalRefresh?.declared_track_count,
+      liveTrackRows,
+      now,
+    });
+    if (!completeFx.ok) return mergeHydrationResults({
+      ok: true,
+      executions,
+      artifactRefs,
+      evidenceRefs,
+      blockers: [],
+      error: null,
+      logicalRefresh,
+      revisionProbeCount,
+      fxOwnerRefresh,
+      summary: "Completed authoritative Track enumeration before FX hydration.",
+    }, completeFx);
+    executions.push(...completeFx.executions);
+    artifactRefs.push(...completeFx.artifactRefs);
+    evidenceRefs.push(...completeFx.evidenceRefs);
+    revisionProbeCount += completeFx.revisionProbeCount ?? 0;
+    fxOwnerRefresh = completeFx.fxOwnerRefresh;
+  }
+
   const exactSelectorRequests = exactSelectorRefreshRequests(request, projectIndexRuntime);
   if (exactSelectorRequests.length > 0) {
     const exact = await runHydrationRequests({
@@ -853,18 +889,24 @@ async function hydrateForQuery({
       executeAtomic,
       seen,
       objectRefs,
+      validateExecution: request.input?.entity === "fx"
+        ? ({ execution, child }) => validateFxChainExecution(execution, hydrationOwnerRef(child?.refs))
+        : null,
     });
-    if (!exact.ok) return mergeHydrationResults({
-      ok: true,
-      executions,
-      artifactRefs,
-      evidenceRefs,
-      blockers: [],
-      error: null,
-      logicalRefresh,
-      revisionProbeCount,
-      summary: "Completed earlier Project Index hydration.",
-    }, exact);
+    if (!exact.ok) {
+      if (request.input?.entity === "fx") markFxScopeStale(projectIndexRuntime, now);
+      return mergeHydrationResults({
+        ok: true,
+        executions,
+        artifactRefs,
+        evidenceRefs,
+        blockers: [],
+        error: null,
+        logicalRefresh,
+        revisionProbeCount,
+        summary: "Completed earlier Project Index hydration.",
+      }, exact);
+    }
     executions.push(...exact.executions);
     artifactRefs.push(...exact.artifactRefs);
     evidenceRefs.push(...exact.evidenceRefs);
@@ -933,6 +975,7 @@ async function hydrateForQuery({
     error: null,
     logicalRefresh,
     revisionProbeCount,
+    fxOwnerRefresh,
     summary: executions.length > 0
       ? `Executed ${executions.length} bounded read-only Project Index refresh call(s).`
       : "Matching fresh SQLite rows were reused.",
@@ -942,6 +985,18 @@ async function hydrateForQuery({
 function exactSelectorRefreshRequests(request, projectIndexRuntime) {
   const entity = request.input?.entity;
   const requested = exactSelectorRequestedRefs(request);
+  if (entity === "fx") {
+    return requested.map((ownerRef) => ({
+      id: ownerRef.startsWith("track:")
+        ? "template.fx.list_track_fx_chain"
+        : "template.fx.list_take_fx_chain",
+      input: { include_preset: false },
+      refs: ownerRef.startsWith("track:")
+        ? { track_ref: ownerRef }
+        : { take_ref: ownerRef },
+      read_only: true,
+    }));
+  }
   const scopeStatus = projectIndexRuntime?.adapter?.snapshot?.().freshness_scopes?.[entity]?.status;
   const refs = scopeStatus === "fresh" || scopeStatus === "fresh_enough"
     ? exactSelectorMissingRefs(request, projectIndexRuntime)
@@ -966,6 +1021,7 @@ function exactSelectorRefreshRequests(request, projectIndexRuntime) {
 
 function exactSelectorMissingRefs(request, projectIndexRuntime) {
   const entity = request.input?.entity;
+  if (entity === "fx") return [];
   const requested = exactSelectorRequestedRefs(request);
   if (requested.length === 0) return [];
   const indexed = new Set((projectIndexRuntime?.adapter?.snapshot?.().rows?.[entity] ?? [])
@@ -976,11 +1032,31 @@ function exactSelectorMissingRefs(request, projectIndexRuntime) {
 
 function exactSelectorRequestedRefs(request) {
   const entity = request.input?.entity;
+  if (entity === "fx") return exactFxOwnerRefs(request);
   if (entity !== "items" && entity !== "takes") return [];
   const prefix = entity === "items" ? "item:guid:" : "take:guid:";
   return unique(Array.isArray(request.input?.selectors?.refs)
     ? request.input.selectors.refs.filter((ref) => typeof ref === "string" && ref.startsWith(prefix))
     : []).slice(0, MAX_EXACT_SELECTOR_REFS);
+}
+
+function exactFxOwnerRefs(request) {
+  const selectors = isObject(request.input?.selectors) ? request.input.selectors : {};
+  const filters = isObject(request.input?.filters) ? request.input.filters : {};
+  const candidates = [
+    ...arrayOf(selectors.refs),
+    selectors.ref,
+    selectors.owner_ref,
+    ...arrayOf(selectors.owner_refs),
+    filters.owner_ref,
+    ...arrayOf(filters.owner_refs),
+  ];
+  return unique(candidates.flatMap((value) => {
+    if (typeof value !== "string") return [];
+    if (/^(?:track|take):guid:\{[^{}\r\n]{1,128}\}$/u.test(value)) return [value];
+    const fxMatch = /^fx:((?:track|take):guid:\{[^{}\r\n]{1,128}\}):[0-9]+$/u.exec(value);
+    return fxMatch ? [fxMatch[1]] : [];
+  })).slice(0, MAX_EXACT_SELECTOR_REFS);
 }
 
 function mergeHydrationResults(primary, supplemental) {
@@ -993,6 +1069,7 @@ function mergeHydrationResults(primary, supplemental) {
       evidenceRefs: unique([...(primary.evidenceRefs ?? []), ...(supplemental.evidenceRefs ?? [])]),
       logicalRefresh: primary.logicalRefresh ?? null,
       revisionProbeCount: (primary.revisionProbeCount ?? 0) + (supplemental.revisionProbeCount ?? 0),
+      fxOwnerRefresh: primary.fxOwnerRefresh ?? supplemental.fxOwnerRefresh ?? null,
     };
   }
   const executions = [...(primary.executions ?? []), ...(supplemental.executions ?? [])];
@@ -1005,6 +1082,7 @@ function mergeHydrationResults(primary, supplemental) {
     error: null,
     logicalRefresh: primary.logicalRefresh ?? supplemental.logicalRefresh ?? null,
     revisionProbeCount: (primary.revisionProbeCount ?? 0) + (supplemental.revisionProbeCount ?? 0),
+    fxOwnerRefresh: primary.fxOwnerRefresh ?? supplemental.fxOwnerRefresh ?? null,
     summary: `${primary.summary} ${supplemental.summary}`,
   };
 }
@@ -1164,6 +1242,7 @@ async function runCompleteTrackRefresh({
       blockers: [],
       error: null,
       revisionProbeCount,
+      liveTrackRows: arrayOf(projectIndexRuntime.adapter?.snapshot?.()?.rows?.tracks),
       logicalRefresh: {
         status: "committed",
         transaction_id: transactionId,
@@ -1186,6 +1265,160 @@ async function runCompleteTrackRefresh({
     [],
     { executions, artifactRefs, evidenceRefs },
   );
+}
+
+async function runCompleteTrackFxRefresh({
+  request,
+  projectIndexRuntime,
+  executeAtomic,
+  expectedRevision,
+  expectedTrackCount,
+  liveTrackRows,
+  now = () => new Date(),
+}) {
+  const tracks = uniqueRowsByRef(liveTrackRows);
+  const invalidTrack = tracks.find((track) =>
+    typeof track?.ref !== "string"
+    || !track.ref.startsWith("track:")
+    || track.ref.length > 256,
+  );
+  if (invalidTrack || !Number.isInteger(expectedTrackCount) || tracks.length !== expectedTrackCount) {
+    return hydrationFailure(
+      "PROJECT_INDEX_FX_OWNER_COUNT_UNAVAILABLE",
+      "Project-wide FX hydration requires a complete live Track enumeration before reading FX chains.",
+      [{
+        code: "PROJECT_INDEX_FX_OWNER_COUNT_UNAVAILABLE",
+        message: "The Track overview did not provide a complete live Track enumeration; no definitive FX result was produced.",
+        recoverable: true,
+        details: {
+          declared_track_count: Number.isInteger(expectedTrackCount) ? expectedTrackCount : null,
+          enumerated_track_count: tracks.length,
+          invalid_track_ref: invalidTrack?.ref ?? null,
+        },
+      }],
+    );
+  }
+
+  const owners = tracks.map((track) => track.ref);
+  const facts = {
+    requested_track_count: tracks.length,
+    visited_track_count: tracks.length,
+    hydrated_owner_count: 0,
+    omitted_owner_count: 0,
+    coverage_status: "pending",
+  };
+  if (owners.length > MAX_COMPLETE_FX_TRACKS) {
+    return {
+      ...hydrationFailure(
+        "PROJECT_INDEX_FX_OWNER_LIMIT_EXCEEDED",
+        `Complete project FX hydration found ${owners.length} live Tracks, above the bounded limit of ${MAX_COMPLETE_FX_TRACKS}; no definitive FX result was produced.`,
+        [{
+          code: "PROJECT_INDEX_FX_OWNER_LIMIT_EXCEEDED",
+          message: "Query exact FX owners or reduce the project size before retrying project-wide FX hydration.",
+          recoverable: true,
+          details: { ...facts, live_track_count: owners.length, max_live_tracks: MAX_COMPLETE_FX_TRACKS },
+        }],
+      ),
+      fxOwnerRefresh: { ...facts, live_track_count: owners.length, coverage_status: "incomplete" },
+    };
+  }
+
+  const refreshed = await runHydrationRequests({
+    requests: owners.map((ownerRef) => ({
+      id: "template.fx.list_track_fx_chain",
+      input: { include_preset: false },
+      refs: { track_ref: ownerRef },
+      read_only: true,
+    })),
+    request,
+    projectIndexRuntime,
+    executeAtomic,
+    validateExecution: ({ execution, child }) => validateFxChainExecution(execution, hydrationOwnerRef(child?.refs)),
+  });
+  if (!refreshed.ok) {
+    markFxScopeStale(projectIndexRuntime, now);
+    return {
+      ...refreshed,
+      fxOwnerRefresh: { ...facts, live_track_count: owners.length, coverage_status: "incomplete" },
+    };
+  }
+
+  const postRevision = await runRevisionProbe({ request, projectIndexRuntime, executeAtomic });
+  const incompleteFacts = { ...facts, live_track_count: owners.length, coverage_status: "incomplete" };
+  if (!postRevision.ok) {
+    markFxScopeStale(projectIndexRuntime, now);
+    return {
+      ...hydrationFailure(postRevision.error.code, postRevision.error.message, postRevision.blockers, refreshed),
+      revisionProbeCount: 1,
+      fxOwnerRefresh: incompleteFacts,
+    };
+  }
+  const observedRevision = revisionKey(postRevision);
+  if (observedRevision !== expectedRevision) {
+    markFxScopeStale(projectIndexRuntime, now);
+    return {
+      ...hydrationFailure(
+        "PROJECT_INDEX_REFRESH_REVISION_CHANGED",
+        "REAPER changed while Track FX owners were being read; the mixed FX snapshot was discarded.",
+        [{
+          code: "PROJECT_INDEX_REFRESH_REVISION_CHANGED",
+          message: `Expected ${expectedRevision}, observed ${String(observedRevision)} after FX hydration.`,
+          recoverable: true,
+        }],
+        refreshed,
+      ),
+      revisionProbeCount: 1,
+      fxOwnerRefresh: incompleteFacts,
+    };
+  }
+
+  const snapshot = projectIndexRuntime.adapter?.snapshot?.();
+  const ownerSet = new Set(owners);
+  const rows = arrayOf(snapshot?.rows?.fx).filter((row) => ownerSet.has(row?.owner_ref));
+  const replace = projectIndexRuntime.adapter?.replaceFx?.({
+    snapshot_id: snapshot?.snapshot_id,
+    observed_at: safeNowIso(now),
+    source_template_id: "template.fx.list_track_fx_chain",
+    projectRef: projectIndexRuntime.identity?.project_ref,
+    bridgeOwner: projectIndexRuntime.identity?.bridge_owner,
+    bridgeGeneration: projectIndexRuntime.identity?.bridge_generation,
+    sessionId: projectIndexRuntime.session_id,
+    rows,
+    coverage_status: "complete",
+    freshness_status: "fresh",
+  });
+  if (replace?.ok === false || typeof projectIndexRuntime.adapter?.replaceFx !== "function") {
+    markFxScopeStale(projectIndexRuntime, now);
+    return hydrationFailure(
+      replace?.blockers?.[0]?.code ?? "PROJECT_INDEX_FX_AGGREGATE_COMMIT_FAILED",
+      replace?.blockers?.[0]?.message ?? "The complete FX aggregate could not be committed.",
+      replace?.blockers ?? [],
+      refreshed,
+    );
+  }
+
+  const positiveOwnerCount = new Set(rows.map((row) => row.owner_ref).filter(Boolean)).size;
+  return {
+    ok: true,
+    executions: refreshed.executions,
+    artifactRefs: unique([...(refreshed.artifactRefs ?? []), ...(postRevision.artifactRefs ?? [])]),
+    evidenceRefs: unique([...(refreshed.evidenceRefs ?? []), ...(postRevision.evidenceRefs ?? [])]),
+    blockers: [],
+    error: null,
+    revisionProbeCount: 1,
+    fxOwnerRefresh: {
+      ...facts,
+      positive_owner_count: positiveOwnerCount,
+      hydrated_owner_count: owners.length,
+      returned_fx_row_count: rows.length,
+      coverage_status: "complete",
+    },
+    summary: `Read ${owners.length} live Track FX owner chain(s) after covering ${tracks.length} live Tracks.`,
+  };
+}
+
+function markFxScopeStale(projectIndexRuntime, now) {
+  return projectIndexRuntime.invalidateScopes?.({ scopes: ["fx"], observed_at: safeNowIso(now) });
 }
 
 async function runCompleteItemRefresh(options) {
@@ -1655,7 +1888,15 @@ async function runRevisionProbe({ request, projectIndexRuntime, executeAtomic })
   };
 }
 
-async function runHydrationRequests({ requests, request, projectIndexRuntime, executeAtomic, seen = new Set(), objectRefs = new Map() }) {
+async function runHydrationRequests({
+  requests,
+  request,
+  projectIndexRuntime,
+  executeAtomic,
+  seen = new Set(),
+  objectRefs = new Map(),
+  validateExecution = null,
+}) {
   const executions = [];
   const artifactRefs = [];
   const evidenceRefs = [];
@@ -1695,6 +1936,16 @@ async function runHydrationRequests({ requests, request, projectIndexRuntime, ex
         evidenceRefs,
       });
     }
+    if (typeof validateExecution === "function") {
+      const validation = validateExecution({ execution, child: internalChild, request });
+      if (validation?.ok === false) {
+        return hydrationFailure(validation.code, validation.message, validation.blockers ?? [], {
+          executions,
+          artifactRefs,
+          evidenceRefs,
+        });
+      }
+    }
     rememberHydrationObjectRefs(objectRefs, execution);
     const observation = execution?.result?.project_index_observation;
     if (observation?.ok !== true) {
@@ -1717,6 +1968,52 @@ async function runHydrationRequests({ requests, request, projectIndexRuntime, ex
       ? `Executed ${executions.length} bounded read-only Project Index refresh call(s).`
       : "No new refresh dependency was required.",
   };
+}
+
+function validateFxChainExecution(execution, expectedOwnerRef) {
+  const readback = executionReadback(execution);
+  const fxArrayPresent = Array.isArray(readback?.fx);
+  const rows = arrayOf(readback?.fx);
+  const ownerRef = readback?.owner_ref ?? readback?.track_ref ?? readback?.take_ref ?? null;
+  const fxCount = readback?.fx_count;
+  const complete = typeof ownerRef === "string"
+    && (!expectedOwnerRef || ownerRef === expectedOwnerRef)
+    && fxArrayPresent
+    && Number.isInteger(fxCount)
+    && fxCount >= 0
+    && fxCount === rows.length
+    && rows.every((row) => isObject(row) && row.owner_ref === ownerRef)
+    && readback?.truncated !== true;
+  if (complete) return { ok: true };
+  const details = {
+    expected_owner_ref: expectedOwnerRef ?? null,
+    observed_owner_ref: ownerRef,
+    declared_fx_count: Number.isInteger(fxCount) ? fxCount : null,
+    returned_fx_count: rows.length,
+    fx_array_present: fxArrayPresent,
+    mismatched_row_count: rows.filter((row) => !isObject(row) || row.owner_ref !== ownerRef).length,
+    truncated: readback?.truncated === true,
+  };
+  return {
+    ok: false,
+    code: "PROJECT_INDEX_FX_CHAIN_COVERAGE_INCOMPLETE",
+    message: "A live FX owner chain was incomplete or did not match the requested owner; no definitive FX result was produced.",
+    blockers: [{
+      code: "PROJECT_INDEX_FX_CHAIN_COVERAGE_INCOMPLETE",
+      message: "Restore a complete exact FX-chain readback before retrying this query.",
+      recoverable: true,
+      details,
+    }],
+  };
+}
+
+function hydrationOwnerRef(refs) {
+  const values = [refs?.track_ref, refs?.take_ref, refs?.owner_ref, refs?.[0]];
+  for (const value of values) {
+    if (typeof value === "string") return value;
+    if (isObject(value) && typeof value.ref === "string") return value.ref;
+  }
+  return null;
 }
 
 function materializeHydrationRefs(refs, objectRefs) {
@@ -2226,6 +2523,7 @@ function hydrationEvidence(hydration) {
     artifact_refs: hydration.artifactRefs,
     revision_probe_count: hydration.revisionProbeCount ?? 0,
     logical_refresh: hydration.logicalRefresh ?? null,
+    fx_owner_refresh: hydration.fxOwnerRefresh ?? null,
   };
 }
 
@@ -2592,6 +2890,9 @@ function emptyHydration(summary) {
     evidenceRefs: [],
     blockers: [],
     error: null,
+    logicalRefresh: null,
+    revisionProbeCount: 0,
+    fxOwnerRefresh: null,
     summary,
   };
 }
@@ -2813,6 +3114,16 @@ function doctorStatusToken(value) {
 
 function unique(values) {
   return [...new Set(Array.isArray(values) ? values : [])];
+}
+
+function arrayOf(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function uniqueRowsByRef(rows) {
+  return [...new Map(arrayOf(rows)
+    .filter((row) => isObject(row) && typeof row.ref === "string")
+    .map((row) => [row.ref, row])).values()];
 }
 
 function clone(value) {

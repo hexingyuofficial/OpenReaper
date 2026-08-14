@@ -1145,6 +1145,224 @@ describe("Alpha3.2.5-B executable project understanding", () => {
     }
   });
 
+  it("finds FX on Track 17 after complete Track coverage without coupling hydration to the public limit", async () => {
+    const fixture = await makeFixture();
+    const trackNames = Array.from({ length: 21 }, (_, index) => `Dialogue ${index + 1}`);
+    const ownerRef = "track:guid:{TRACK-17}";
+    const state = {
+      revision: 21,
+      trackName: trackNames[0],
+      trackNames,
+      calls: [],
+      atomicRequests: [],
+      fxOwnerRefs: [],
+      omitTrackFxCount: true,
+      liveTrackFxChains: new Map([[ownerRef, [{ name: "VST: ReaEQ (Cockos)" }]]]),
+    };
+    let indexRuntime;
+    try {
+      indexRuntime = await openIndex(fixture);
+      const runtime = createRuntime({ fixture, indexRuntime, state });
+      const result = await runtime.call_template({
+        id: "macro.project.query",
+        input: { entity: "fx", fields: ["ref", "owner_ref", "plugin_name"], refresh_policy: "if_stale", limit: 1 },
+        context: callContext(1, "fx-complete-client"),
+      });
+
+      assert.equal(result.ok, true, JSON.stringify(result));
+      assert.equal(result.result.data.rows.length, 1);
+      assert.equal(result.result.data.rows[0].owner_ref, ownerRef);
+      assert.equal(result.result.data.rows[0].plugin_name, "VST: ReaEQ (Cockos)");
+      assert.deepEqual(result.result.data.refresh.fx_owner_refresh, {
+        requested_track_count: 21,
+        visited_track_count: 21,
+        hydrated_owner_count: 21,
+        omitted_owner_count: 0,
+        coverage_status: "complete",
+        positive_owner_count: 1,
+        returned_fx_row_count: 1,
+      });
+      assert.equal(state.fxOwnerRefs.length, 21);
+      assert.equal(state.fxOwnerRefs.some((ref) => ref.ref === ownerRef), true);
+      assert.equal(indexRuntime.adapter.snapshot().rows.tracks.length, 21);
+      assert.equal(indexRuntime.adapter.snapshot().freshness_scopes.fx.coverage_status, "complete");
+    } finally {
+      indexRuntime?.close();
+      await fixture.cleanup();
+    }
+  });
+
+  it("re-reads an exact Track FX chain across add, rename, and remove without revision or generation rotation", async () => {
+    const fixture = await makeFixture();
+    const ownerRef = "track:guid:{TRACK-1}";
+    const state = {
+      revision: 9,
+      trackName: "Voice",
+      calls: [],
+      fxOwnerRefs: [],
+      liveTrackFxChains: new Map([[ownerRef, []]]),
+    };
+    let indexRuntime;
+    try {
+      indexRuntime = await openIndex(fixture);
+      const runtime = createRuntime({ fixture, indexRuntime, state });
+      const input = {
+        entity: "fx",
+        fields: ["ref", "owner_ref", "plugin_name"],
+        filters: { owner_ref: ownerRef },
+        refresh_policy: "if_stale",
+        limit: 4,
+      };
+      const query = (requestId) => runtime.call_template({
+        id: "macro.project.query",
+        input,
+        context: callContext(requestId, "fx-exact-client"),
+      });
+
+      const empty = await query(1);
+      assert.equal(empty.ok, true, JSON.stringify(empty));
+      assert.deepEqual(empty.result.data.rows, []);
+
+      state.liveTrackFxChains.set(ownerRef, [{ name: "VST: ReaEQ (Cockos)" }]);
+      const added = await query(2);
+      assert.equal(added.ok, true, JSON.stringify(added));
+      assert.equal(added.result.data.rows[0].plugin_name, "VST: ReaEQ (Cockos)");
+
+      state.liveTrackFxChains.set(ownerRef, [{ name: "VST: ReaComp (Cockos)" }]);
+      const renamed = await query(3);
+      assert.equal(renamed.ok, true, JSON.stringify(renamed));
+      assert.equal(renamed.result.data.rows[0].plugin_name, "VST: ReaComp (Cockos)");
+
+      state.liveTrackFxChains.set(ownerRef, []);
+      const removed = await query(4);
+      assert.equal(removed.ok, true, JSON.stringify(removed));
+      assert.deepEqual(removed.result.data.rows, []);
+      assert.equal(state.fxOwnerRefs.length, 4);
+      assert.equal(state.fxOwnerRefs.every((ref) => ref.ref === ownerRef), true);
+      assert.equal(indexRuntime.adapter.snapshot().rows.fx.length, 0);
+    } finally {
+      indexRuntime?.close();
+      await fixture.cleanup();
+    }
+  });
+
+  it("fails closed on an incomplete FX chain and leaves the FX scope stale", async () => {
+    const fixture = await makeFixture();
+    const ownerRef = "track:guid:{TRACK-1}";
+    const state = {
+      revision: 12,
+      trackName: "Voice",
+      calls: [],
+      fxOwnerRefs: [],
+      liveTrackFxChains: new Map([[ownerRef, [{ name: "VST: ReaEQ (Cockos)" }]]]),
+      fxReadbackOverrides: new Map([[ownerRef, { fx_count: 2, truncated: true }]]),
+    };
+    let indexRuntime;
+    try {
+      indexRuntime = await openIndex(fixture);
+      const runtime = createRuntime({ fixture, indexRuntime, state });
+      const result = await runtime.call_template({
+        id: "macro.project.query",
+        input: { entity: "fx", fields: ["ref", "owner_ref", "plugin_name"], refresh_policy: "if_stale", limit: 4 },
+        context: callContext(1, "fx-incomplete-client"),
+      });
+
+      assert.equal(result.ok, false, JSON.stringify(result));
+      assert.equal(result.error.code, "PROJECT_INDEX_FX_CHAIN_COVERAGE_INCOMPLETE");
+      assert.equal(indexRuntime.adapter.snapshot().freshness_scopes.fx.status, "stale");
+    } finally {
+      indexRuntime?.close();
+      await fixture.cleanup();
+    }
+  });
+
+  it("does not treat a missing FX row array as a complete empty owner chain", async () => {
+    const fixture = await makeFixture();
+    const ownerRef = "track:guid:{TRACK-1}";
+    const state = {
+      revision: 12,
+      trackName: "Voice",
+      calls: [],
+      fxOwnerRefs: [],
+      liveTrackFxChains: new Map([[ownerRef, []]]),
+      fxReadbackOverrides: new Map([[ownerRef, { fx_count: 0, omit_fx: true }]]),
+    };
+    let indexRuntime;
+    try {
+      indexRuntime = await openIndex(fixture);
+      const runtime = createRuntime({ fixture, indexRuntime, state });
+      const result = await runtime.call_template({
+        id: "macro.project.query",
+        input: { entity: "fx", fields: ["ref", "owner_ref", "plugin_name"], refresh_policy: "if_stale", limit: 4 },
+        context: callContext(1, "fx-missing-array-client"),
+      });
+
+      assert.equal(result.ok, false, JSON.stringify(result));
+      assert.equal(result.error.code, "PROJECT_INDEX_FX_CHAIN_COVERAGE_INCOMPLETE");
+      assert.equal(result.blockers[0]?.details?.fx_array_present, false);
+      assert.equal(indexRuntime.adapter.snapshot().freshness_scopes.fx.status, "stale");
+    } finally {
+      indexRuntime?.close();
+      await fixture.cleanup();
+    }
+  });
+
+  it("marks an exact Track FX scope stale when the live owner read fails", async () => {
+    const fixture = await makeFixture();
+    const ownerRef = "track:guid:{TRACK-1}";
+    const state = {
+      revision: 13,
+      trackName: "Voice",
+      calls: [],
+      fxOwnerRefs: [],
+      liveTrackFxChains: new Map([[ownerRef, [{ name: "VST: ReaEQ (Cockos)" }]]]),
+      fxReadFailureRefs: new Set(),
+    };
+    let indexRuntime;
+    try {
+      indexRuntime = await openIndex(fixture);
+      const runtime = createRuntime({ fixture, indexRuntime, state });
+      const input = { entity: "fx", fields: ["ref", "owner_ref", "plugin_name"], filters: { owner_ref: ownerRef }, limit: 4 };
+      assert.equal((await runtime.call_template({ id: "macro.project.query", input, context: callContext(1, "fx-failure-client") })).ok, true);
+
+      state.fxReadFailureRefs.add(ownerRef);
+      const failed = await runtime.call_template({ id: "macro.project.query", input, context: callContext(2, "fx-failure-client") });
+      assert.equal(failed.ok, false, JSON.stringify(failed));
+      assert.equal(indexRuntime.adapter.snapshot().freshness_scopes.fx.status, "stale");
+    } finally {
+      indexRuntime?.close();
+      await fixture.cleanup();
+    }
+  });
+
+  it("fails project-wide FX coverage above 64 Tracks before owner reads", async () => {
+    const fixture = await makeFixture();
+    const state = {
+      revision: 14,
+      trackName: "Voice",
+      calls: [],
+      fxOwnerRefs: [],
+    };
+    let indexRuntime;
+    try {
+      indexRuntime = await openIndex(fixture);
+      const runtime = createRuntime({ fixture, indexRuntime, state });
+      state.trackNames = Array.from({ length: 65 }, (_, index) => `Track ${index + 1}`);
+      state.fxOwnerRefs = [];
+      const oversized = await runtime.call_template({
+        id: "macro.project.query",
+        input: { entity: "fx", fields: ["ref", "owner_ref", "plugin_name"], refresh_policy: "force_read_only_refresh", limit: 4 },
+        context: callContext(1, "fx-65-client"),
+      });
+      assert.equal(oversized.ok, false, JSON.stringify(oversized));
+      assert.equal(oversized.error.code, "PROJECT_INDEX_FX_OWNER_LIMIT_EXCEEDED");
+      assert.deepEqual(state.fxOwnerRefs, []);
+    } finally {
+      indexRuntime?.close();
+      await fixture.cleanup();
+    }
+  });
+
   it("materializes live track object refs across staged FX hydration", async () => {
     const fixture = await makeFixture();
     const state = { revision: 1, trackName: "Source", calls: [], fxOwnerRefs: [] };
@@ -1441,26 +1659,41 @@ function createRuntime({ fixture, indexRuntime, state }) {
           coverage: { internally_complete: true, retained_count: names.length },
         };
         response.result.readback = response.result.summary;
-      } else if (request.operation.name === "fx.list_track_chain") {
+      } else if (request.operation.name === "fx.list_track_chain" || request.operation.name === "fx.list_take_chain") {
+        state.fxOwnerRefs ??= [];
         state.fxOwnerRefs.push(...request.refs.map((ref) => ({ kind: ref.kind, ref: ref.ref })));
+        const ownerRef = request.refs[0]?.ref;
+        if (state.fxReadFailureRefs?.has(ownerRef)) {
+          return structuredClone(fake.dispatch({
+            ...request,
+            params: { ...request.params, force_error: "FX_CHAIN_READ_FAILED" },
+          }));
+        }
+        const trackOwner = request.operation.name === "fx.list_track_chain";
+        const fallback = trackOwner && ownerRef === "track:guid:{TRACK-1}" && !state.liveTrackFxChains
+          ? [{ name: "VST: ReaComp (Cockos)", enabled: true }]
+          : [];
+        const chain = structuredClone((trackOwner ? state.liveTrackFxChains : state.liveTakeFxChains)?.get(ownerRef) ?? fallback);
+        const override = state.fxReadbackOverrides?.get(ownerRef) ?? {};
         response.result.summary = {
-          owner_ref: "track:guid:{TRACK-1}",
-          track_ref: "track:guid:{TRACK-1}",
-          fx_count: 1,
-          fx: [{
-            fx_ref: "fx:track:guid:{TRACK-1}:0",
-            owner_ref: "track:guid:{TRACK-1}",
-            slot_index: 0,
-            name: "VST: ReaComp (Cockos)",
-            enabled: true,
-          }],
+          owner_ref: ownerRef,
+          ...(trackOwner ? { track_ref: ownerRef } : { take_ref: ownerRef }),
+          fx_count: override.fx_count ?? chain.length,
+          ...(typeof override.truncated === "boolean" ? { truncated: override.truncated } : {}),
+          ...(!override.omit_fx ? { fx: chain.map((fx, slotIndex) => ({
+            fx_ref: `fx:${ownerRef}:${slotIndex}`,
+            owner_ref: ownerRef,
+            slot_index: slotIndex,
+            name: fx.name,
+            enabled: fx.enabled !== false,
+          })) } : {}),
         };
         response.result.readback = response.result.summary;
-        response.result.refs = [{
+        response.result.refs = chain.map((_, slotIndex) => ({
           kind: "fx",
-          ref: "fx:track:guid:{TRACK-1}:0",
-          identity: { scheme: "track_fx", value: "track:guid:{TRACK-1}:0" },
-        }];
+          ref: `fx:${ownerRef}:${slotIndex}`,
+          identity: { scheme: "track_fx", value: `${ownerRef}:${slotIndex}` },
+        }));
       } else if (request.operation.name === "items.read_item_summary") {
         const itemRef = request.refs[0]?.ref;
         if (state.itemReadFailureRefs?.has(itemRef)) {
@@ -1515,8 +1748,9 @@ function createRuntime({ fixture, indexRuntime, state }) {
             state.trackNames ?? [state.trackName],
             execution?.result?.readback?.track_cursor ?? 0,
             execution?.result?.readback?.returned_track_count ?? 32,
+            state,
           )
-        : projectMapPayload(indexRuntime.identity.project_ref, state.trackNames ?? [state.trackName]),
+        : projectMapPayload(indexRuntime.identity.project_ref, state.trackNames ?? [state.trackName], state),
     }),
     live: {
       opted_in: true,
@@ -1527,8 +1761,8 @@ function createRuntime({ fixture, indexRuntime, state }) {
   });
 }
 
-function observationBundlePayload(projectRef, trackNames, trackCursor = 0, maxTracks = 32) {
-  const projectMap = projectOverview(projectRef, trackNames, trackCursor, maxTracks);
+function observationBundlePayload(projectRef, trackNames, trackCursor = 0, maxTracks = 32, state = {}) {
+  const projectMap = projectOverview(projectRef, trackNames, trackCursor, maxTracks, state);
   return {
     project_ref: projectRef,
     project_map: projectMap,
@@ -1548,10 +1782,10 @@ function observationBundlePayload(projectRef, trackNames, trackCursor = 0, maxTr
   };
 }
 
-function projectMapPayload(projectRef, trackNames) {
+function projectMapPayload(projectRef, trackNames, state = {}) {
   return {
     project_ref: projectRef,
-    overview: projectOverview(projectRef, trackNames),
+    overview: projectOverview(projectRef, trackNames, 0, 32, state),
     coverage: {
       tracks: "complete_page",
       track_items: "bounded_per_track",
@@ -1560,7 +1794,7 @@ function projectMapPayload(projectRef, trackNames) {
   };
 }
 
-function projectOverview(projectRef, trackNames, trackCursor = 0, maxTracks = 32) {
+function projectOverview(projectRef, trackNames, trackCursor = 0, maxTracks = 32, state = {}) {
   const names = Array.isArray(trackNames) ? trackNames : [trackNames];
   const end = Math.min(names.length, trackCursor + maxTracks);
   return {
@@ -1577,6 +1811,11 @@ function projectOverview(projectRef, trackNames, trackCursor = 0, maxTracks = 32
         track_ref: `track:guid:{TRACK-${index + 1}}`,
         name,
         index,
+        ...(!state.omitTrackFxCount ? {
+          fx_count: state.liveTrackFxChains
+            ? state.liveTrackFxChains.get(`track:guid:{TRACK-${index + 1}}`)?.length ?? 0
+            : Array.isArray(state.fxOwnerRefs) && index === 0 ? 1 : 0,
+        } : {}),
         items: index === 0 ? [{
           item_ref: "item:guid:{ITEM-1}",
           track_ref: "track:guid:{TRACK-1}",
