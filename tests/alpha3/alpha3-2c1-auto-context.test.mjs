@@ -332,6 +332,26 @@ describe("Alpha3.2-C1 server-managed call context", () => {
     assert.deepEqual(seen, [7, 8]);
   });
 
+  it("can return the authoritative identity together with the exact probe used to derive it", async () => {
+    const manager = deterministicManager({
+      env: {
+        OPENREAPER_LIVE_BRIDGE_OWNER: "installed-owner",
+        OPENREAPER_LIVE_BRIDGE_GENERATION: "1",
+      },
+    });
+    const probe = readyProbe("installed-owner", 12);
+    const resolved = await resolveAuthoritativeBridgeIdentity({
+      callContext: manager,
+      liveBridge: {
+        configured: true,
+        executor: { probeLiveness: async () => probe },
+      },
+      returnProbe: true,
+    });
+    assert.deepEqual(resolved.identity, { owner: "installed-owner", generation: 12 });
+    assert.strictEqual(resolved.probe, probe);
+  });
+
   it("retries a generation mismatch once only when the complete result proves zero-write", async () => {
     const manager = deterministicManager({
       env: {

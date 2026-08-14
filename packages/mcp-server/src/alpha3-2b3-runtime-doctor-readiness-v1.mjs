@@ -95,10 +95,10 @@ export async function composeAlpha3_2B3RuntimeDoctorReadiness(options = {}) {
   }
   if (options.now !== undefined) probeOptions.now = options.now;
 
-  let rawProbe;
-  if (liveBridge?.configured && typeof liveBridge.executor?.probeLiveness === "function") {
+  let rawProbe = options.rawProbe;
+  if (rawProbe === undefined && liveBridge?.configured && typeof liveBridge.executor?.probeLiveness === "function") {
     rawProbe = await liveBridge.executor.probeLiveness(probeOptions);
-  } else {
+  } else if (rawProbe === undefined) {
     rawProbe = await probeLiveBridgeLiveness(probeOptions);
   }
 

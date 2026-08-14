@@ -155,8 +155,14 @@ async function main() {
     {},
     async () => {
       let authoritativeIdentity;
+      let authoritative;
       try {
-        authoritativeIdentity = await resolveAuthoritativeBridgeIdentity({ callContext, liveBridge });
+        authoritative = await resolveAuthoritativeBridgeIdentity({
+          callContext,
+          liveBridge,
+          returnProbe: true,
+        });
+        authoritativeIdentity = authoritative.identity;
         await projectIndexBinding?.activate(authoritativeIdentity);
       } catch (error) {
         if (!(error instanceof Alpha3_2C1CallContextError)) throw error;
@@ -175,6 +181,7 @@ async function main() {
       return callContext.runWithIdentity(authoritativeIdentity, async () => {
         const runtimeReadiness = await composeAlpha3_2B3RuntimeDoctorReadiness({
           liveBridge,
+          rawProbe: authoritative.probe,
           env: {
             ...process.env,
             OPENREAPER_LIVE_BRIDGE_OWNER: authoritativeIdentity.owner,
@@ -685,10 +692,10 @@ function normalizeCallTemplateToolRequest(request, context) {
   };
 }
 
-export async function resolveAuthoritativeBridgeIdentity({ callContext, liveBridge, forceFresh = false }) {
+export async function resolveAuthoritativeBridgeIdentity({ callContext, liveBridge, forceFresh = false, returnProbe = false }) {
   const installed = callContext?.identity;
   if (!installed || liveBridge?.configured !== true || typeof liveBridge?.executor?.probeLiveness !== "function") {
-    return installed;
+    return returnProbe ? Object.freeze({ identity: installed, probe: null }) : installed;
   }
   const probeMethod = forceFresh !== true && typeof liveBridge.executor.probeLeasedLiveness === "function"
     ? liveBridge.executor.probeLeasedLiveness
@@ -708,9 +715,10 @@ export async function resolveAuthoritativeBridgeIdentity({ callContext, liveBrid
     && Number.isSafeInteger(observed?.active_generation)
     && observed.active_generation >= 1
   ) {
-    return Object.freeze({ owner: observed.active_owner, generation: observed.active_generation });
+    const identity = Object.freeze({ owner: observed.active_owner, generation: observed.active_generation });
+    return returnProbe ? Object.freeze({ identity, probe }) : identity;
   }
-  return installed;
+  return returnProbe ? Object.freeze({ identity: installed, probe }) : installed;
 }
 
 export async function callTemplateWithAuthoritativeIdentity({ request, signal, callContext, runtime, liveBridge, projectIndexBinding = null }) {

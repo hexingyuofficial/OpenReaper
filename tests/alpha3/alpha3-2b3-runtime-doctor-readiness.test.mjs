@@ -209,6 +209,36 @@ describe("Alpha3.2-B3 runtime / doctor live readiness", () => {
     assert.equal(serialized.length < 8_192, true);
   });
 
+  it("reuses a supplied verified probe without issuing a second liveness read", async () => {
+    const fixture = await makeTransportFixture();
+    const renderRoot = await mkdtemp(path.join(os.tmpdir(), "openreaper-b3-reused-probe-render-"));
+    let probeCalls = 0;
+    const rawProbe = {
+      configured: true,
+      status: LIVE_BRIDGE_LIVENESS_STATUS.READY,
+      heartbeat: {
+        observed: {
+          active_owner: "openreaper-alpha",
+          active_generation: 4,
+          age_ms: 0,
+          interval_ms: 500,
+        },
+      },
+    };
+    const readiness = await composeAlpha3_2B3RuntimeDoctorReadiness({
+      env: runtimeEnv(fixture.root, renderRoot, { OPENREAPER_LIVE_BRIDGE_GENERATION: "4" }),
+      liveBridge: {
+        configured: true,
+        config: { transport_dir: fixture.root },
+        executor: { probeLiveness: async () => { probeCalls += 1; return rawProbe; } },
+      },
+      rawProbe,
+    });
+    assert.equal(probeCalls, 0);
+    assert.equal(readiness.bridge.status, LIVE_BRIDGE_LIVENESS_STATUS.READY);
+    assert.equal(readiness.bridge.observed.generation, 4);
+  });
+
   it("enforces directional transport permissions while preserving exact B1 status and bounded projection", async () => {
     const fixture = await makeTransportFixture();
     const renderRoot = await mkdtemp(path.join(os.tmpdir(), "openreaper-b3-render-"));
