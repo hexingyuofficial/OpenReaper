@@ -174,6 +174,31 @@ normalization 计算。这是 source/item/take pre-FX normalization，不是 pos
 输出标准化。同样适用 64 Item 上限、溢出 zero-write、一次 native batch、一次
 读回和一次 Undo。
 
+## Recipe 与保存的批处理例程
+
+面向用户可以把 Recipe 理解成 Routine / 批处理例程：一个自己保存的、声明式的
+小程序。标题和 summary 说明“这是干什么的”，dependencies 说明用了哪些已接受的
+Macro，stages 说明固定要做什么。Agent 在运行前选择依赖并绑定输入，运行后只解释
+REAPER 的聚合读回；不会在对话里逐阶段、逐目标循环。
+
+一个 Macro 已经覆盖完整的有界任务时用 Macro；同一固定计划要处理很多精确目标、
+有有序阶段，或要断线后保存复用时用 Recipe；需要判断、教学或动态调整时用 Skill。
+
+临时一次性用法可以直接这样告诉 Agent：“为当前精确选中的音频 Item 创建一个临时
+Recipe：把这一套固定对白清理计划一次批量应用到全部目标。”Agent 应从精确
+dependency manual 复制依赖事实，替换所有占位值，然后只执行一次
+`validate`、`save`、`run`。批处理会在一次调用里处理 63 个 Item，不能发 63 次调用。
+`save` 会把不可变的用户 Recipe revision 存入配置好的 Recipe store，断线后用
+`list_recipes` 找回。要复用就保留精确 revision；只用一次则在终态 evidence 保留后
+只删除这个精确 revision。对于 64-target Macro，1 到 64 都合法；65 必须在 mutation
+前返回 zero-write。
+
+阶段内的 `for_each` 表示把目标组编译成一次批处理，`once` 表示一次共享操作。只有
+后阶段确实依赖前阶段的验证结果时才等待；最终通过一次 refresh 让完整结果一起可见，
+而不是让用户看到一个个半成品。当前 0.1.0 对外真正可执行的临时路径仍是保存式的
+`validate -> save -> run`；精确 Recipe manual 尚未暴露 `run_transient` 前，Agent
+不得自行调用这个名字。
+
 ## 授权与安全
 
 OpenReaper 不应该要求你为每个小型可撤销步骤逐次授权。好的流程是一次有界授权，

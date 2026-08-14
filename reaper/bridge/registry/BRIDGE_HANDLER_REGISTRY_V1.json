@@ -1426,6 +1426,22 @@
       ]
     },
     {
+      "template_id": "template.analysis.analyze_items_batch",
+      "operation": {
+        "family": "run_job",
+        "name": "analysis.analyze_items_batch"
+      },
+      "pack": "analysis",
+      "risk": "read",
+      "route": "d27-analysis-audio-handlers",
+      "handler_file": "analysis/d27_item_audio_analysis.lua",
+      "handler_export": "analyze_items_batch",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dr/bridge-handler-registry.test.mjs"
+      ]
+    },
+    {
       "template_id": "template.analysis.measure_item_rms",
       "operation": {
         "family": "run_job",

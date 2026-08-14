@@ -1,5 +1,5 @@
 -- OpenReaper generated live bridge.
--- Handler registry: reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json (241 registered template handler row(s); 0 legacy_monolith row(s); 241 extracted handler row(s); 91 handler module file(s)).
+-- Handler registry: reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json (242 registered template handler row(s); 0 legacy_monolith row(s); 242 extracted handler row(s); 91 handler module file(s)).
 
 -- OpenReaper 4D.x minimal live bridge loop.
 -- Manual REAPER-side script: polls file transport requests and writes
@@ -2888,10 +2888,10 @@ __openreaper_register_handler_module("core/read_template_catalog_summary.lua", f
 -- Extracted Wave 1A handler: template.core.read_template_catalog_summary.
 
 local READ_TEMPLATE_CATALOG_SUMMARY_COUNTS = {
-  template_count = 241,
+  template_count = 242,
   by_pack = {
     actions = 8,
-    analysis = 7,
+    analysis = 8,
     automation = 23,
     core = 3,
     fx = 19,
@@ -2907,12 +2907,12 @@ local READ_TEMPLATE_CATALOG_SUMMARY_COUNTS = {
   },
   by_risk = {
     destructive = 15,
-    read = 82,
+    read = 83,
     safe = 13,
     write = 131,
   },
   by_lifecycle = {
-    experimental = 241,
+    experimental = 242,
   },
   by_entity_kind = {
     action = 4,
@@ -2937,6 +2937,7 @@ local READ_TEMPLATE_CATALOG_SUMMARY_COUNTS = {
     grid = 2,
     hardware_output = 4,
     item = 23,
+    item_analysis_batch = 1,
     item_layer_report = 1,
     last_result = 1,
     loop_candidates = 1,
@@ -2999,10 +3000,10 @@ local READ_TEMPLATE_CATALOG_SUMMARY_COUNTS = {
 }
 
 local READ_TEMPLATE_CATALOG_SUMMARY_LIVE_HANDLER_COUNTS = {
-  template_count = 241,
+  template_count = 242,
   by_pack = {
     actions = 8,
-    analysis = 7,
+    analysis = 8,
     automation = 23,
     core = 3,
     fx = 19,
@@ -7620,10 +7621,10 @@ local function d13_items_set_exact_selection(request)
   if mode ~= "replace" and mode ~= "add" and mode ~= "remove" then
     return d13_items_error("PARAMS_INVALID", "Exact Item selection mode must be replace, add, or remove.", { zero_write = true })
   end
-  if not tokens or #tokens < 1 or #tokens > 64 then
-    return d13_items_error("SELECTION_LIMIT_EXCEEDED", "Exact Item selection requires 1-64 canonical Item GUID refs.", {
+  if not tokens or #tokens < 1 or #tokens > 128 then
+    return d13_items_error("SELECTION_LIMIT_EXCEEDED", "Exact Item selection requires 1-128 canonical Item GUID refs.", {
       requested_count = tokens and #tokens or 0,
-      maximum = 64,
+      maximum = 128,
       zero_write = true,
     })
   end
@@ -7674,10 +7675,10 @@ local function d13_items_set_exact_selection(request)
     all[#all + 1] = { item = item, item_ref = item_ref, before = selected == true, after = should_select }
     if should_select then expected[#expected + 1] = item_ref end
   end
-  if #expected > 64 then
-    return d13_items_error("SELECTION_LIMIT_EXCEEDED", "The compiled final selection exceeds 64 Items; zero_write=true.", {
+  if #expected > 128 then
+    return d13_items_error("SELECTION_LIMIT_EXCEEDED", "The compiled final selection exceeds 128 Items; zero_write=true.", {
       selected_count = #expected,
-      maximum = 64,
+      maximum = 128,
       zero_write = true,
     })
   end
@@ -7884,7 +7885,8 @@ local function d13_items_set_take_value(request, key, value)
   return d13_items_write_summary(request, item)
 end
 
-local D13_ITEMS_SET_ITEM_TAKE_CONTROLS_BATCH_MAX_ROWS = 64
+local D13_ITEMS_SET_ITEM_TAKE_CONTROLS_BATCH_MAX_ROWS = 128
+local D13_ITEMS_SET_ITEM_TAKE_CONTROLS_BATCH_MAX_TAKE_ROWS = 64
 local D13_ITEMS_SET_ITEM_TAKE_CONTROLS_BATCH_CHUNK_SIZE = 8
 local D13_ITEMS_BATCH_CONTINUATION_CONTRACT = "openreaper.bridge.internal_continuation.v1"
 
@@ -7995,7 +7997,11 @@ local function d13_items_batch_validate_fields(row, row_index)
   local item_fields = item or {}
   local take_fields = take or {}
   local allowed_item_fields = {
+    position_seconds = true,
     volume_db = true,
+    muted = true,
+    locked = true,
+    loop_source = true,
     length_seconds = true,
     fade_in_seconds = true,
     fade_out_seconds = true,
@@ -8018,6 +8024,10 @@ local function d13_items_batch_validate_fields(row, row_index)
     end
     if key == "volume_db" then
       item_values[key] = d13_items_bounded_db(value)
+    elseif key == "muted" or key == "locked" or key == "loop_source" then
+      item_values[key] = type(value) == "boolean" and value or nil
+    elseif key == "position_seconds" then
+      item_values[key] = d13_items_batch_number(value, 0)
     elseif key == "length_seconds" then
       item_values[key] = d13_items_batch_number(value, 0.000001)
     else
@@ -8102,6 +8112,11 @@ end
 
 local function d13_items_batch_values_match(actual, expected)
   return d13_items_finite_number(actual) and math.abs(actual - expected) <= 0.000001
+end
+
+local function d13_items_batch_native_bool(value)
+  if value == nil then return nil end
+  return value and 1 or 0
 end
 
 local function d13_items_batch_live_item_map(required_refs)
@@ -8209,11 +8224,15 @@ local function d13_items_batch_mutate_chunk(state)
     if take_values.preserve_pitch ~= nil then
       preserve_pitch_value = take_values.preserve_pitch and 1 or 0
     end
-    local ok = set_item("D_VOL", item_values.volume_db and d13_items_db_to_linear(item_values.volume_db) or nil)
+    local ok = set_item("D_POSITION", item_values.position_seconds)
+      and set_item("D_VOL", item_values.volume_db and d13_items_db_to_linear(item_values.volume_db) or nil)
       and set_item("D_LENGTH", item_values.length_seconds)
       and set_item("D_FADEINLEN", item_values.fade_in_seconds)
       and set_item("D_FADEOUTLEN", item_values.fade_out_seconds)
       and set_item("D_SNAPOFFSET", item_values.snap_offset_seconds)
+      and set_item("B_MUTE", d13_items_batch_native_bool(item_values.muted))
+      and set_item("C_LOCK", d13_items_batch_native_bool(item_values.locked))
+      and set_item("B_LOOPSRC", d13_items_batch_native_bool(item_values.loop_source))
     if ok and row.take then
       ok = set_take("D_VOL", take_values.volume_db and d13_items_db_to_linear(take_values.volume_db) or nil)
         and set_take("D_PAN", take_values.pan)
@@ -8264,12 +8283,24 @@ local function d13_items_batch_aggregate_readback(request, state)
     local matches = item_identity == row.item_ref and (not row.take_ref or take_identity == row.take_ref)
     local expected = row.item_values
     local actual_item_native = {
+      position_seconds = d13_items_batch_read_value("item", row.item, "D_POSITION"),
       volume = d13_items_batch_read_value("item", row.item, "D_VOL"),
       length_seconds = d13_items_batch_read_value("item", row.item, "D_LENGTH"),
       fade_in_seconds = d13_items_batch_read_value("item", row.item, "D_FADEINLEN"),
       fade_out_seconds = d13_items_batch_read_value("item", row.item, "D_FADEOUTLEN"),
-      snap_offset_seconds = d13_items_batch_read_value("item", row.item, "D_SNAPOFFSET"),
     }
+    if expected.snap_offset_seconds ~= nil then
+      actual_item_native.snap_offset_seconds = d13_items_batch_read_value("item", row.item, "D_SNAPOFFSET")
+    end
+    if expected.muted ~= nil then
+      actual_item_native.muted = d13_items_batch_read_value("item", row.item, "B_MUTE")
+    end
+    if expected.locked ~= nil then
+      actual_item_native.locked = d13_items_batch_read_value("item", row.item, "C_LOCK")
+    end
+    if expected.loop_source ~= nil then
+      actual_item_native.loop_source = d13_items_batch_read_value("item", row.item, "B_LOOPSRC")
+    end
     local actual_take_native = row.take and {
       volume = d13_items_batch_read_value("take", row.take, "D_VOL"),
       pan = d13_items_batch_read_value("take", row.take, "D_PAN"),
@@ -8278,11 +8309,15 @@ local function d13_items_batch_aggregate_readback(request, state)
       preserve_pitch = d13_items_batch_read_value("take", row.take, "B_PPITCH"),
     } or nil
     local actual_item = {
+      position_seconds = actual_item_native.position_seconds,
       volume_db = d13_items_linear_to_db(actual_item_native.volume),
       length_seconds = actual_item_native.length_seconds,
       fade_in_seconds = actual_item_native.fade_in_seconds,
       fade_out_seconds = actual_item_native.fade_out_seconds,
       snap_offset_seconds = actual_item_native.snap_offset_seconds,
+      muted = actual_item_native.muted == nil and nil or actual_item_native.muted ~= 0,
+      locked = actual_item_native.locked == nil and nil or actual_item_native.locked ~= 0,
+      loop_source = actual_item_native.loop_source == nil and nil or actual_item_native.loop_source ~= 0,
     }
     local actual_take = actual_take_native and {
       volume_db = d13_items_linear_to_db(actual_take_native.volume),
@@ -8292,6 +8327,7 @@ local function d13_items_batch_aggregate_readback(request, state)
       preserve_pitch = actual_take_native.preserve_pitch == nil and nil or actual_take_native.preserve_pitch == 1,
     } or nil
     local checks = {
+      { expected = expected.position_seconds, actual = actual_item_native.position_seconds },
       { expected = expected.volume_db and d13_items_db_to_linear(expected.volume_db), actual = actual_item_native.volume },
       { expected = expected.length_seconds, actual = actual_item_native.length_seconds },
       { expected = expected.fade_in_seconds, actual = actual_item_native.fade_in_seconds },
@@ -8300,6 +8336,12 @@ local function d13_items_batch_aggregate_readback(request, state)
     }
     for check_index = 1, #checks do
       if checks[check_index].expected ~= nil and not d13_items_batch_values_match(checks[check_index].actual, checks[check_index].expected) then matches = false end
+    end
+    for _, boolean_field in ipairs({ "muted", "locked", "loop_source" }) do
+      if expected[boolean_field] ~= nil then
+        local actual = actual_item_native[boolean_field]
+        if actual == nil or (actual ~= 0) ~= expected[boolean_field] then matches = false end
+      end
     end
     if actual_take_native then
       if row.take_values.volume_db ~= nil and not d13_items_batch_values_match(actual_take_native.volume, d13_items_db_to_linear(row.take_values.volume_db)) then matches = false end
@@ -8366,7 +8408,7 @@ local function d13_items_set_item_take_controls_batch(request, resume_continuati
     })
   end
   if not is_json_array(batch) or #batch < 1 or #batch > D13_ITEMS_SET_ITEM_TAKE_CONTROLS_BATCH_MAX_ROWS then
-    return d13_items_batch_error("BATCH_LIMIT_EXCEEDED", "D13 Item/Take batch accepts 1-64 rows.", nil, {
+    return d13_items_batch_error("BATCH_LIMIT_EXCEEDED", "D13 Item batch accepts 1-128 rows; Take-control rows remain limited to 64.", nil, {
       row_count = is_json_array(batch) and #batch or 0,
       max_rows = D13_ITEMS_SET_ITEM_TAKE_CONTROLS_BATCH_MAX_ROWS,
       zero_write = true,
@@ -8399,6 +8441,20 @@ local function d13_items_set_item_take_controls_batch(request, resume_continuati
     seen_items[normalized.item_ref] = true
     required_item_refs[normalized.item_ref] = true
     normalized_rows[#normalized_rows + 1] = normalized
+  end
+  local take_row_count = 0
+  for index = 1, #normalized_rows do
+    if next(normalized_rows[index].take) ~= nil then
+      take_row_count = take_row_count + 1
+    end
+  end
+  if #normalized_rows > D13_ITEMS_SET_ITEM_TAKE_CONTROLS_BATCH_MAX_TAKE_ROWS and take_row_count > 0 then
+    return d13_items_batch_error("BATCH_LIMIT_EXCEEDED", "Take-control batches accept 1-64 rows; row 65 is zero-write.", nil, {
+      row_count = #normalized_rows,
+      take_row_count = take_row_count,
+      max_take_rows = D13_ITEMS_SET_ITEM_TAKE_CONTROLS_BATCH_MAX_TAKE_ROWS,
+      zero_write = true,
+    })
   end
   local live_items, scan_failure, project_scan_item_count = d13_items_batch_live_item_map(required_item_refs)
   if not live_items then return nil, scan_failure end
@@ -10934,6 +10990,7 @@ local D27_FROZEN_ERROR_CODES = {
   RESPONSE_TOO_LARGE = true,
   IDEMPOTENCY_CONFLICT = true,
   QUEUE_CONFLICT = true,
+  BATCH_LIMIT_EXCEEDED = true,
   BRIDGE_NOT_RUNNING = true,
   BRIDGE_TIMEOUT = true,
   BRIDGE_OWNER_MISMATCH = true,
@@ -12243,6 +12300,288 @@ local function d27_split_object_ref(kind, ref)
   }
 end
 
+local function d27_analysis_batch_targets(request, params)
+  local maximum = 128
+  local limit = d27_analysis_number(params.limit)
+  if limit == nil or limit < 1 or limit > maximum or limit ~= math.floor(limit) then
+    return nil, d27_analysis_error("PARAMS_INVALID", "Item analysis batch limit must be an integer from 1 to 128.", {
+      zero_write = true,
+    })
+  end
+  local target = params.target or "selected"
+  local tokens = json_array({})
+  if target == "exact" then
+    if is_json_array(request.refs) then
+      for index = 1, #request.refs do
+        local ref = request.refs[index]
+        if is_object(ref) and ref.kind == "item" and is_string(ref.ref) then tokens[#tokens + 1] = ref.ref end
+      end
+    end
+    if is_json_array(params.target_refs) then
+      for index = 1, #params.target_refs do tokens[#tokens + 1] = params.target_refs[index] end
+    end
+    if #tokens < 1 or #tokens > limit or #tokens > maximum then
+      return nil, d27_analysis_error("BATCH_LIMIT_EXCEEDED", "Exact Item analysis batch requires 1-128 targets within limit; zero_write=true.", {
+        target_count = #tokens,
+        limit = limit,
+        maximum = maximum,
+        zero_write = true,
+      })
+    end
+  elseif target == "selected" then
+    local ok_count, raw_count = call_reaper("CountSelectedMediaItems", 0)
+    local count = ok_count and math.floor(first_number(raw_count) or -1) or -1
+    if count < 1 then
+      return nil, d27_analysis_error("ITEM_NOT_FOUND", "Selected Item analysis batch requires at least one selected Item.", { zero_write = true })
+    end
+    if count > limit or count > maximum then
+      return nil, d27_analysis_error("BATCH_LIMIT_EXCEEDED", "Selected Item analysis batch exceeds the bounded limit; zero_write=true.", {
+        target_count = count,
+        limit = limit,
+        maximum = maximum,
+        zero_write = true,
+      })
+    end
+    for index = 0, count - 1 do tokens[#tokens + 1] = "selected:" .. tostring(index) end
+  else
+    return nil, d27_analysis_error("PARAMS_INVALID", "Item analysis batch target must be selected or exact.", { zero_write = true })
+  end
+
+  local rows = {}
+  local seen = {}
+  for index = 1, #tokens do
+    local token = tokens[index]
+    if not is_string(token) then
+      return nil, d27_analysis_error("REF_INVALID", "Item analysis batch target refs must be strings.", { target_order = index, zero_write = true })
+    end
+    local item = d27_analysis_resolve_item_token(token)
+    local item_ref = item and d27_split_item_ref(item) or nil
+    if not item or not item_ref then
+      return nil, d27_analysis_error("ITEM_NOT_FOUND", "Item analysis batch could not resolve an exact Item identity.", {
+        target_order = index,
+        target_ref = token,
+        zero_write = true,
+      })
+    end
+    if seen[item_ref] then
+      return nil, d27_analysis_error("REF_INVALID", "Item analysis batch rejects duplicate Item targets.", {
+        target_order = index,
+        item_ref = item_ref,
+        zero_write = true,
+      })
+    end
+    seen[item_ref] = true
+    rows[#rows + 1] = { item = item, item_ref = item_ref, object_ref = d27_split_object_ref("item", item_ref) }
+  end
+  return rows, nil, target
+end
+
+local function d27_analysis_batch_base_row(summary)
+  return {
+    item_ref = summary.item_ref,
+    track_ref = summary.track_ref,
+    active_take_ref = summary.active_take_ref,
+    take_count = summary.take_count or 0,
+    placement = {
+      position_seconds = summary.position_seconds,
+      length_seconds = summary.length_seconds,
+      end_seconds = summary.position_seconds + summary.length_seconds,
+      snap_offset_seconds = summary.snap_offset_seconds,
+      fade_in_seconds = summary.fade_in_seconds,
+      fade_out_seconds = summary.fade_out_seconds,
+    },
+    take = {
+      name = summary.active_take_name,
+      volume_db = summary.take_volume_db,
+      pan = summary.take_pan,
+      pitch_semitones = summary.take_pitch_semitones,
+      playrate = summary.playrate,
+      preserve_pitch = summary.preserve_pitch,
+      reverse = summary.reverse,
+      take_fx_count = summary.take_fx_count,
+    },
+    measurements = {},
+    measurement_basis = json_array({ "reaper_item_take_state" }),
+    artifact_refs = json_array({}),
+    truncated = false,
+  }
+end
+
+local function d27_analysis_batch_add_audio(row, context, range)
+  local levels, levels_failure = d27_analysis_measure_levels(context, range)
+  if not levels then return nil, levels_failure end
+  row.measurements.rms = {
+    measurement_basis = "source_media_calculate_normalization",
+    analyzed_start_seconds = range.start_seconds,
+    analyzed_end_seconds = range.end_seconds,
+    duration_seconds = range.duration_seconds,
+    sample_rate = context.sample_rate,
+    channels = context.channels,
+    sample_frames = math.floor(range.duration_seconds * context.sample_rate),
+    rms_dbfs = levels.rms_dbfs,
+    rms_linear = levels.rms_linear,
+    lufs_i = levels.lufs_i,
+    truncated = context.input_range_clamped or range.duration_limited,
+  }
+  row.measurement_basis[#row.measurement_basis + 1] = "source_media_calculate_normalization"
+
+  local peaks, peaks_failure = d27_analysis_peak_scan(context, range)
+  if not peaks then return nil, peaks_failure end
+  local source_peak = d27_analysis_normalization_metric(context, peaks.start_seconds, peaks.end_seconds, 2, "source_sample_peak")
+  local true_peak = d27_analysis_normalization_metric(context, peaks.start_seconds, peaks.end_seconds, 3, "source_true_peak")
+  row.measurements.sample_peaks = {
+    measurement_basis = "active_take_native_peak_blocks",
+    analyzed_start_seconds = peaks.start_seconds,
+    analyzed_end_seconds = peaks.end_seconds,
+    duration_seconds = peaks.duration_seconds,
+    sample_rate = context.sample_rate,
+    channels = context.channels,
+    sample_frames = peaks.sample_frames,
+    abs_peak_dbfs = peaks.abs_peak_dbfs,
+    abs_peak_linear = peaks.abs_peak_linear,
+    positive_peak_linear = peaks.positive_peak_linear,
+    negative_peak_linear = peaks.negative_peak_linear,
+    source_sample_peak_dbfs = source_peak and source_peak.value_db or nil,
+    true_peak_dbfs = true_peak and true_peak.value_db or nil,
+    true_peak_available = true_peak ~= nil,
+    coverage = peaks.coverage,
+    truncated = peaks.truncated,
+  }
+  row.measurement_basis[#row.measurement_basis + 1] = "active_take_native_peak_blocks"
+  row.truncated = row.truncated or row.measurements.rms.truncated or peaks.truncated
+  return row, nil
+end
+
+local function d27_analysis_batch_add_timing(row, context, range)
+  local scan, scan_failure = d27_analysis_sample_scan(context, range, { detect_silence = true, detect_transients = true })
+  if not scan then return nil, scan_failure end
+  row.measurements.silence = {
+    measurement_basis = "active_take_audio_accessor_pre_fx_samples",
+    analyzed_start_seconds = scan.coverage.analyzed_start_seconds,
+    analyzed_end_seconds = scan.coverage.analyzed_end_seconds,
+    duration_seconds = scan.coverage.analyzed_end_seconds - scan.coverage.analyzed_start_seconds,
+    sample_rate = context.sample_rate,
+    channels = context.channels,
+    sample_frames = scan.coverage.analyzed_sample_frames,
+    segment_count = #scan.silence_segments,
+    total_silence_seconds = scan.total_silence_seconds,
+    total_detected = scan.total_silence_segments,
+    returned_count = #scan.silence_segments,
+    threshold_dbfs = scan.threshold_dbfs,
+    coverage = scan.coverage,
+    truncated = scan.truncated,
+  }
+  row.measurements.transients = {
+    measurement_basis = "active_take_audio_accessor_pre_fx_samples",
+    analyzed_start_seconds = scan.coverage.analyzed_start_seconds,
+    analyzed_end_seconds = scan.coverage.analyzed_end_seconds,
+    duration_seconds = scan.coverage.analyzed_end_seconds - scan.coverage.analyzed_start_seconds,
+    sample_rate = context.sample_rate,
+    channels = context.channels,
+    sample_frames = scan.coverage.analyzed_sample_frames,
+    transient_count = #scan.transients,
+    total_detected = scan.total_transients,
+    first_transient_time = #scan.transients > 0 and scan.transients[1].time_seconds or 0,
+    last_transient_time = #scan.transients > 0 and scan.transients[#scan.transients].time_seconds or 0,
+    transient_delta_linear = scan.transient_delta_linear,
+    coverage = scan.coverage,
+    truncated = scan.truncated,
+  }
+  row.measurement_basis[#row.measurement_basis + 1] = "active_take_audio_accessor_pre_fx_samples"
+  row.truncated = row.truncated or scan.truncated
+  return row, nil
+end
+
+local function analyze_items_batch(request)
+  local started = os.clock()
+  local params = is_object(request.params) and request.params or {}
+  local profile = params.profile or "quick"
+  if not ({ quick = true, audio = true, timing = true, full = true })[profile] then
+    return nil, d27_analysis_error("PARAMS_INVALID", "Item analysis batch profile must be quick, audio, timing, or full.", { zero_write = true })
+  end
+  local targets, target_failure, target_scope = d27_analysis_batch_targets(request, params)
+  if not targets then return nil, target_failure end
+  local preflight_ms = (os.clock() - started) * 1000
+  local analysis_started = os.clock()
+  local rows = json_array({})
+  local plan_facts = json_array({})
+  local refs = json_array({})
+  local item_refs = json_array({})
+  for index = 1, #targets do
+    local target = targets[index]
+    local child_request = {
+      refs = json_array({ target.object_ref }),
+      params = {
+        include_take_summary = true,
+        start_seconds = params.start_seconds,
+        end_seconds = params.end_seconds,
+      },
+      budget = request.budget,
+    }
+    local summary, summary_failure = read_item_summary(child_request)
+    if not summary then return nil, summary_failure end
+    if summary.item_ref ~= target.item_ref then
+      return nil, d27_analysis_error("REF_INVALID", "Item analysis batch summary identity changed during readback.", { target_order = index, zero_write = true })
+    end
+    local row = d27_analysis_batch_base_row(summary)
+    if profile ~= "quick" then
+      local context, context_failure = d27_analysis_context(child_request)
+      if not context then return nil, context_failure end
+      local range, range_failure = d27_analysis_limited_range(context, D27_DEFAULT_MAX_ANALYSIS_SECONDS)
+      if not range then return nil, range_failure end
+      if profile == "audio" or profile == "full" then
+        local _, audio_failure = d27_analysis_batch_add_audio(row, context, range)
+        if audio_failure then return nil, audio_failure end
+      end
+      if profile == "timing" or profile == "full" then
+        local _, timing_failure = d27_analysis_batch_add_timing(row, context, range)
+        if timing_failure then return nil, timing_failure end
+      end
+    end
+    if #rows < 8 then rows[#rows + 1] = row end
+    if params.include_plan_facts == true then
+      plan_facts[#plan_facts + 1] = {
+        item_ref = row.item_ref,
+        track_ref = row.track_ref,
+        active_take_ref = row.active_take_ref,
+        position_seconds = row.placement.position_seconds,
+        length_seconds = row.placement.length_seconds,
+        end_seconds = row.placement.end_seconds,
+        snap_offset_seconds = row.placement.snap_offset_seconds,
+        fade_in_seconds = row.placement.fade_in_seconds,
+        fade_out_seconds = row.placement.fade_out_seconds,
+        volume_db = summary.volume_db,
+        muted = summary.muted,
+        locked = summary.locked,
+        loop_source = summary.loop_source,
+      }
+    end
+    refs[#refs + 1] = target.object_ref
+    item_refs[#item_refs + 1] = target.item_ref
+  end
+  local analysis_ms = (os.clock() - analysis_started) * 1000
+  return {
+    profile = profile,
+    target_scope = target_scope,
+    target_count = #targets,
+    returned_target_count = #targets,
+    sample_count = #rows,
+    items_truncated = #targets > #rows,
+    item_refs = item_refs,
+    items = rows,
+    plan_facts = plan_facts,
+    mutation_occurred = false,
+    batch_timings = {
+      preflight_ms = preflight_ms,
+      analysis_ms = analysis_ms,
+      total_ms = (os.clock() - started) * 1000,
+      transport_call_count = 1,
+      native_readback_count = #targets,
+      runner = "d27_native_item_analysis_batch",
+    },
+  }, nil, json_array({}), json_array({}), refs
+end
+
 local function d27_split_number(item, key)
   local ok, value = call_reaper("GetMediaItemInfo_Value", item, key)
   value = ok and d27_analysis_number(first_number(value)) or nil
@@ -13340,7 +13679,7 @@ alpha33_silence_batch = function(request)
   }, nil, json_array({}), json_array({}), json_array({})
 end
 return {
-  exports = { measure_item_rms = measure_item_rms, measure_item_peaks = measure_item_peaks, detect_item_silence = detect_item_silence, detect_item_transients = detect_item_transients, alpha33_split_item_by_silence = alpha33_split_item_by_silence },
+  exports = { analyze_items_batch = analyze_items_batch, measure_item_rms = measure_item_rms, measure_item_peaks = measure_item_peaks, detect_item_silence = detect_item_silence, detect_item_transients = detect_item_transients, alpha33_split_item_by_silence = alpha33_split_item_by_silence },
   shared = {  },
 }
 end)
@@ -27144,7 +27483,7 @@ local function e3_media_set_item_source(track, path_value, position, start_perce
   return item, nil, attachment
 end
 
-local E3_MEDIA_BATCH_MAX_ROWS = 64
+local E3_MEDIA_BATCH_MAX_ROWS = 128
 local E3_MEDIA_BATCH_CHUNK_SIZE = 8
 
 local function e3_media_batch_error(code, message, row_index, details, recoverable)
@@ -27188,7 +27527,7 @@ local function e3_media_batch_prepare(request)
   local params = is_object(request.params) and request.params or {}
   local batch = params.batch
   if not is_json_array(batch) or #batch < 1 or #batch > E3_MEDIA_BATCH_MAX_ROWS then
-    return nil, e3_media_handler_error("BATCH_LIMIT_EXCEEDED", "E3 media batch accepts 1-64 rows.", {
+    return nil, e3_media_handler_error("BATCH_LIMIT_EXCEEDED", "E3 media batch accepts 1-128 rows.", {
       row_count = is_json_array(batch) and #batch or 0,
       max_rows = E3_MEDIA_BATCH_MAX_ROWS,
       zero_write = true,
@@ -39480,6 +39819,10 @@ local ALLOWED_OPERATIONS = {
   ["run_job:analysis.create_loop_qa_report"] = {
     pack = "analysis",
     handler = OPENREAPER_HANDLER_EXPORTS.create_loop_qa_report,
+  },
+  ["run_job:analysis.analyze_items_batch"] = {
+    pack = "analysis",
+    handler = OPENREAPER_HANDLER_EXPORTS.analyze_items_batch,
   },
   ["run_job:analysis.measure_item_rms"] = {
     pack = "analysis",

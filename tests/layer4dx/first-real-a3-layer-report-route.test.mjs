@@ -296,6 +296,7 @@ describe("First-Real-Fixture-A A3 layer report route", () => {
       .map((match) => `run_job:${match[1]}`))]
       .sort();
     assert.deepEqual(runJobKeys, [
+      "run_job:analysis.analyze_items_batch",
       "run_job:analysis.create_loop_qa_report",
       "run_job:analysis.detect_loop_candidates",
       "run_job:analysis.detect_item_silence",

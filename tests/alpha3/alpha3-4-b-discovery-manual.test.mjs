@@ -198,11 +198,15 @@ test("Alpha3.45 Recipe manual covers seven operations, temporary/persistent reus
   assert.deepEqual(product.temporary_one_off.map((step) => step.split(" ")[0]), ["validate", "save", "run", "delete"]);
   assert.match(product.persistent_reuse.join(" "), /reconnect/u);
   assert.match(product.temporary_recipe_example.authoring_source, /minimal_draft_template/u);
+  assert.match(product.temporary_recipe_example.copy_paste_agent_request, /one batch/u);
+  assert.match(product.temporary_recipe_example.copy_paste_agent_request, /Validate, save, run once/u);
   assert.match(product.temporary_recipe_example.execution, /validate -> save -> run once/u);
   assert.match(product.temporary_recipe_example.keep_it, /Omit delete/u);
   assert.match(product.temporary_recipe_example.discard_it, /confirm=true/u);
   assert.match(product.temporary_recipe_example.target_limit, /including 63/u);
   assert.match(product.temporary_recipe_example.target_limit, /65 must fail before mutation/u);
+  assert.match(product.storage_rule, /immutable user-owned executable revision/u);
+  assert.match(product.storage_rule, /list_recipes/u);
   assert.match(product.system_model, /same general Recipe system/u);
   assert.deepEqual(product.shared_lifecycle, ["validate", "save", "list", "get", "run", "reconnect", "trust", "evidence", "whole-Recipe Undo"]);
   assert.match(lifecycle.official_and_user_rule, /share validate\/save\/list\/get\/run\/reconnect/u);

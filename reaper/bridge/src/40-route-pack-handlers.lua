@@ -1575,6 +1575,10 @@ local ALLOWED_OPERATIONS = {
     pack = "analysis",
     handler = create_loop_qa_report,
   },
+  ["run_job:analysis.analyze_items_batch"] = {
+    pack = "analysis",
+    handler = analyze_items_batch,
+  },
   ["run_job:analysis.measure_item_rms"] = {
     pack = "analysis",
     handler = measure_item_rms,

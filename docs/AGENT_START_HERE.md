@@ -61,17 +61,27 @@ targets while the Recipe runs.
 For a temporary Recipe, read
 `product_surface.recipe_productization.lifecycle.minimal_draft_template`, exact-
 expand each dependency, copy its id/version/risk/descriptor hash/capabilities,
-replace every `COPY_` value, then call `validate -> save -> run`. Example:
-"apply one fixed dialogue cleanup plan to 63 selected audio Items." The Recipe
-holds the fixed plan and the batch Macro handles all 63 targets in one stage;
-do not generate 63 calls. Where that Macro has the 64-target limit, 1-64 is
-valid and 65 must fail before mutation. After terminal evidence is retained,
-call `delete` with the exact saved identity and `confirm=true`. To keep the same
-Recipe, omit `delete`; after reconnect rediscover it with `list/get` and run the
-exact revision again. In a saved draft, keep exact `project_identity` and
+replace every `COPY_` value, then call `validate -> save -> run`. Short request:
+"Create a temporary Recipe for the current exact selected audio Items: apply
+one fixed dialogue cleanup plan to all targets in one batch." The Recipe holds
+the plan and the Macro handles all targets; do not generate 63 calls. Where that
+Macro has the 64-target limit, 1-64 is valid and 65 must fail before mutation.
+After terminal evidence, `delete` only the exact identity with `confirm=true`;
+otherwise omit `delete`, and later find the saved revision with `list/get`.
+In a saved draft, keep exact `project_identity` and
 `bridge_owner`, but use `bridge_generation="generation:runtime_bound"`: a fresh
 run binds the current generation after reconnect, while resume remains bound to
 the failed run's generation. Never execute an inline or unsaved draft.
+
+Think of a Recipe as a small saved program: its title and summary say what the
+saved thing is, its dependencies say which accepted Macros it uses, and its
+stages say what is repeated. In a phase blueprint, `for_each` means one compiled
+batch over the supplied target group and `once` means one shared operation;
+targets in a phase are never public Agent calls. Use ordered phases only when a
+later phase depends on the earlier verified result, and expect one final
+readback/Undo boundary. The current 0.1.0 executable path is the frozen
+`validate -> save -> run` path above; do not invent or call `run_transient` until
+an exact Recipe manual exposes that operation.
 
 Search Recipes with the user's original words, then exact-expand the selected
 id using `list_recipes` fields `steps`, `assertions`, and `recovery`. The two

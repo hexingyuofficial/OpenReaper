@@ -29,6 +29,7 @@ import {
 import { createDiscoveryCatalog } from "../../packages/mcp-server/src/discovery-menu-v1.mjs";
 
 const ALLOWLIST = Object.freeze([
+  "template.analysis.analyze_items_batch",
   "template.analysis.measure_item_rms",
   "template.analysis.measure_item_peaks",
   "template.analysis.detect_item_silence",
@@ -66,6 +67,16 @@ describe("Wave 1A analysis template descriptors", () => {
       assert.equal(descriptor.risk, "read");
       assert.equal(descriptor.bridge.operation_family, "run_job");
       assert.equal(descriptor.bridge.idempotency, "none");
+      if (descriptor.id === "template.analysis.analyze_items_batch") {
+        assert.equal(descriptor.refs.input[0].kind, "item");
+        assert.equal(descriptor.refs.input[0].required, false);
+        assert.equal(descriptor.refs.output[0].kind, "item");
+        assert.equal(descriptor.artifacts.mode, "none");
+        assert.equal(descriptor.expectedDelta.kind, "read");
+        assert.equal(descriptor.verification.mode, "none");
+        assert.equal(descriptor.examples.length > 0, true);
+        continue;
+      }
       assert.equal(descriptor.refs.input.length, 1);
       assert.equal(descriptor.refs.input[0].kind, "item");
       assert.equal(descriptor.refs.output[0].kind, "artifact");
@@ -138,7 +149,7 @@ describe("Wave 1A analysis template descriptors", () => {
       () => createTemplateCatalog({ templates: [templates[0], templates[0]] }),
       (error) =>
         error instanceof TemplateCatalogValidationError &&
-        /Duplicate template id: template\.analysis\.measure_item_rms/.test(error.errors.join("\n")),
+        /Duplicate template id: template\.analysis\.analyze_items_batch/.test(error.errors.join("\n")),
     );
 
     const discovery = createTemplateCatalogDiscovery(catalog, createDiscoveryCatalog);
@@ -185,21 +196,24 @@ describe("Wave 1A analysis template descriptors", () => {
     const item = createObjectRef("item", { scheme: "guid", value: "{ITEM-ANALYSIS}" });
 
     for (const [index, descriptor] of createWave1AAnalysisTemplates().entries()) {
+      const aggregate = descriptor.id === "template.analysis.analyze_items_batch";
       const request = buildTemplateBridgeRequest({
         descriptor,
-        input: index === 0 ? { start_seconds: 0, end_seconds: 1.25 } : {},
-        refs: { item_ref: item },
+        input: aggregate
+          ? { profile: "quick", target: "selected", limit: 8 }
+          : index === 1 ? { start_seconds: 0, end_seconds: 1.25 } : {},
+        refs: aggregate ? {} : { item_ref: item },
         context: context({ request_sequence: index + 1 }),
       });
 
       assert.equal(request.operation.family, "run_job", descriptor.id);
       assert.equal(request.pack.id, "analysis", descriptor.id);
       assert.equal(request.pack.risk, "read", descriptor.id);
-      assert.equal(request.artifacts.allow, true, descriptor.id);
+      assert.equal(request.artifacts.allow, !aggregate, descriptor.id);
       assert.equal(request.undo.mode, "none", descriptor.id);
       assert.equal(request.verification.mode, "none", descriptor.id);
       assert.equal("idempotency_key" in request, false, descriptor.id);
-      assert.deepEqual(request.refs, [item], descriptor.id);
+      assert.deepEqual(request.refs, aggregate ? [] : [item], descriptor.id);
     }
   });
 
@@ -207,6 +221,34 @@ describe("Wave 1A analysis template descriptors", () => {
     const item = createObjectRef("item", { scheme: "guid", value: "{ITEM-SMOKE}" });
 
     for (const [index, descriptor] of createWave1AAnalysisTemplates().entries()) {
+      if (descriptor.id === "template.analysis.analyze_items_batch") {
+        const bridge = new FakeFoundationBridge();
+        const result = await executeTemplate({
+          descriptor,
+          input: { profile: "quick", target: "selected", limit: 8 },
+          refs: {},
+          context: context({ request_sequence: index + 1 }),
+          executor: (request) => bridge.okEnvelope(request, "2026-07-02T00:00:00.000Z", {
+            summary: {
+              profile: "quick",
+              target_scope: "selected",
+              target_count: 0,
+              item_refs: [],
+              items: [],
+              batch_timings: { total_ms: 1 },
+              mutation_occurred: false,
+            },
+            refs: [],
+            artifacts: [],
+            jobs: [],
+            last_result: { updated: false, refs: [], truncated: false },
+          }),
+        });
+        assert.equal(result.ok, true, descriptor.id);
+        assert.deepEqual(result.result.artifacts, [], descriptor.id);
+        assert.deepEqual(result.result.refs, [], descriptor.id);
+        continue;
+      }
       const artifact = analysisArtifactForDescriptor(descriptor, index + 1);
       const bridge = new FakeFoundationBridge();
       const result = await executeTemplate({
@@ -259,7 +301,8 @@ describe("Wave 1A analysis template descriptors", () => {
   });
 
   it("rejects undeclared inputs and missing item refs before fake dispatch", async () => {
-    const descriptor = createWave1AAnalysisTemplates()[0];
+    const descriptor = createWave1AAnalysisTemplates()
+      .find((entry) => entry.id === "template.analysis.measure_item_rms");
     const bridge = new FakeFoundationBridge();
     const invalidInput = await executeTemplate({
       descriptor,

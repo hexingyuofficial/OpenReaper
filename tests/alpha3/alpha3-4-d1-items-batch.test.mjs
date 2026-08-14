@@ -786,7 +786,7 @@ describe("Alpha3.4-D1 upper items batch set_item_take_controls", () => {
       projectIndexRuntime: fakeIndex(),
     });
     assert.equal(blocked.ok, false);
-    assert.equal(blocked.error.code, "ITEM_APPLY_BATCH_CHANGES_INVALID");
+    assert.equal(blocked.error.code, "ITEM_APPLY_BATCH_TAKE_LIMIT_EXCEEDED");
     assert.equal(calls.length, 0);
   });
 
@@ -869,14 +869,14 @@ describe("Alpha3.4-D1 upper items batch set_item_take_controls", () => {
     assert.equal(inlineDetailBytes(success) <= 24_576, true, `success inline bytes=${inlineDetailBytes(success)}`);
     assert.deepEqual(validateMacroExecutionEnvelope(success), { valid: true, errors: [] });
   });
-  it("keeps mode list and exact public counts 6/15/241/91", () => {
+  it("keeps mode list and exact public counts 6/15/242/91", () => {
     assert.equal(ALPHA3_3_B1C_ITEMS_APPLY_MODES.includes("set_item_take_controls"), true);
     assert.equal(OPENREAPER_PUBLIC_TOOL_IDS.length, 6);
     assert.equal(ALPHA3_3_B1_VISIBLE_EXECUTABLE_IDS.length, 15);
-    assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 241);
+    assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 242);
     const registry = loadBridgeHandlerRegistry({ cwd: ROOT });
     validateBridgeHandlerRegistry({ cwd: ROOT, registry });
-    assert.equal(registry.entries.length, 241);
+    assert.equal(registry.entries.length, 242);
     assert.equal(new Set(registry.entries.map((entry) => entry.handler_file)).size, 91);
     assert.equal(countLua(path.join(ROOT, "reaper/bridge/src/handlers")), 91);
     assert.equal(ALPHA3_3_B1C_ITEMS_APPLY_REGISTRY.ids.includes(ALPHA3_3_B1C_ITEMS_APPLY_MACRO_ID), true);

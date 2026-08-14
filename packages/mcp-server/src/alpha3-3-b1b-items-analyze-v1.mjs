@@ -16,6 +16,7 @@ export const ALPHA3_3_B1B_ITEMS_ANALYZE_PROFILES = deepFreeze([
   "full",
 ]);
 export const ALPHA3_3_B1B_ITEMS_ANALYZE_TEMPLATE_IDS = deepFreeze([
+  "template.analysis.analyze_items_batch",
   "template.items.resolve_item_ref",
   "template.items.read_item_summary",
   "template.items.list_selected_items",
@@ -26,13 +27,15 @@ export const ALPHA3_3_B1B_ITEMS_ANALYZE_TEMPLATE_IDS = deepFreeze([
 ]);
 
 const RESOLVE_ITEM_ID = "template.items.resolve_item_ref";
+const ANALYZE_BATCH_ID = "template.analysis.analyze_items_batch";
 const READ_ITEM_ID = "template.items.read_item_summary";
 const LIST_SELECTED_ID = "template.items.list_selected_items";
 const RMS_ID = "template.analysis.measure_item_rms";
 const PEAKS_ID = "template.analysis.measure_item_peaks";
 const SILENCE_ID = "template.analysis.detect_item_silence";
 const TRANSIENTS_ID = "template.analysis.detect_item_transients";
-const MAX_TARGETS = 8;
+const MAX_TARGETS = 128;
+const INLINE_ITEM_SAMPLE_MAX = 8;
 const INPUT_FIELDS = new Set([
   "profile",
   "target",
@@ -162,26 +165,26 @@ export function createAlpha3_3B1bItemsAnalyzeExactManual() {
       ],
       required_readiness: [
         "The managed OpenReaper live bridge must be connected.",
-        "Use selected Items or provide at most eight exact/canonical Item refs or resolvable selected/index/guid tokens.",
+        "Use selected Items or provide at most 128 exact/canonical Item refs or resolvable selected/index/guid tokens.",
       ],
       input_shape: {
         profile: "quick | audio | timing | full; defaults to quick.",
         target: "selected; used when no exact refs or target_refs are supplied.",
-        target_refs: "Optional array of at most eight canonical Item refs or selected/index/guid tokens.",
+        target_refs: "Optional array of at most 128 canonical Item refs or selected/index/guid tokens.",
         refs: "Optional call_template refs.item_ref or refs.item_refs object refs.",
         range: "Optional item-local {start_seconds,end_seconds}; valid only for audio, timing, and full.",
-        limit: "1-8; defaults to 4 for selected Items.",
+        limit: "1-128; defaults to 4 for selected Items.",
         channel_policy: "combined only in B1b.",
-        output: "compact | artifact_when_large; metric artifacts are always returned when produced.",
+        output: "compact | artifact_when_large; large native batches return bounded inline samples plus the complete exact Item-ref list.",
       },
       preflight_steps: [
         "Validate profile, range, target count, and combined-channel policy before any live child call.",
-        "Resolve selected or exact targets through accepted Item read Templates.",
+        "Resolve the complete selected or exact target set inside one accepted native analysis batch.",
       ],
       underlying_actions: ALPHA3_3_B1B_ITEMS_ANALYZE_TEMPLATE_IDS,
       readback_steps: [
-        "Read an exact Item summary for every returned target.",
-        "For each requested metric, require a matching item_ref, measurement_basis, analyzed range, coverage/truncation facts, and artifact ref.",
+        "Read an exact Item summary for every returned target in one aggregate Bridge response.",
+        "For each requested metric, require a matching item_ref, measurement_basis, analyzed range, and coverage/truncation facts.",
       ],
       success_criteria: [
         "Every returned row is bound to a canonical live Item ref and contains no mutation changes.",
@@ -201,7 +204,7 @@ export function createAlpha3_3B1bItemsAnalyzeExactManual() {
       dry_run_shape: {
         supported: false,
         behavior: "The Macro is read-only and executes bounded live reads directly.",
-        output: ["macro_execution", "item_rows", "measurement_basis", "artifact_refs", "typed_blockers"],
+        output: ["macro_execution", "bounded_item_samples", "complete_item_refs", "measurement_basis", "typed_blockers"],
       },
       resume_or_retry_policy: {
         resume_from: "target resolution for the same live bridge generation",
@@ -247,39 +250,47 @@ export async function executeAlpha3_3B1bItemsAnalyzeMacro({
     return failureEnvelope({ entry, request, startedAt, now, stages, state, code: "ITEM_ANALYSIS_LIVE_EXECUTOR_REQUIRED", message: "macro.items.analyze requires the managed OpenReaper live executor." });
   }
 
-  const targets = await resolveTargets({ request, input: normalized.input, executeAtomic, state });
-  if (!targets.ok) {
-    pushStage(stages, "items-analyze-targets", "live_ref_resolve", "blocked", targets.message, state.evidenceRefs);
-    return failureEnvelope({ entry, request, startedAt, now, stages, state, code: targets.code, message: targets.message, blockers: targets.blockers, data: targetCoverageData(state) });
+  const execution = await executeAtomic({
+    id: ANALYZE_BATCH_ID,
+    input: compactObject({
+      profile: normalized.input.profile,
+      target: normalized.input.target_refs.length > 0 || collectItemObjectRefs(request.refs).length > 0 ? "exact" : "selected",
+      target_refs: normalized.input.target_refs,
+      limit: normalized.input.limit,
+      ...rangeInput(normalized.input.range),
+    }),
+    refs: request.refs ?? {},
+    budget: CHILD_BUDGET,
+  });
+  collectExecutionEvidence(state, execution);
+  if (execution?.ok !== true) {
+    const failure = atomicFailure(execution, ANALYZE_BATCH_ID);
+    pushStage(stages, "items-analyze-targets", "live_ref_resolve", "blocked", failure.message, state.evidenceRefs);
+    return failureEnvelope({ entry, request, startedAt, now, stages, state, code: failure.code, message: failure.message, blockers: failure.blockers, data: targetCoverageData(state) });
   }
-  pushStage(stages, "items-analyze-targets", "live_ref_resolve", "completed", `Resolved ${targets.refs.length} Item target(s).`, state.evidenceRefs);
-
-  const metricIds = PROFILE_TEMPLATES[normalized.input.profile];
-  for (const [index, itemRef] of targets.refs.entries()) {
-    const row = await analyzeOneItem({ itemRef, index, input: normalized.input, executeAtomic, state });
-    if (!row.ok) {
-      pushStage(stages, "items-analyze-read-facts", "template_execute", state.rows.length > 0 ? "completed" : "failed", `Completed ${state.rows.length} Item fact row(s) before failure.`, state.evidenceRefs);
-      if (metricIds.length > 0) pushStage(stages, "items-analyze-measure", "template_execute", "failed", row.message, state.evidenceRefs);
-      return failureEnvelope({
-        entry,
-        request,
-        startedAt,
-        now,
-        stages,
-        state,
-        status: state.rows.length > 0 ? "partial_failure" : "failed",
-        code: row.code,
-        message: row.message,
-        blockers: row.blockers,
-        data: resultData(normalized.input, state),
-      });
-    }
-    state.rows.push(row.data);
+  const summary = executionSummary(execution);
+  const rows = Array.isArray(summary.items) ? summary.items : [];
+  const itemRefs = uniqueStrings(Array.isArray(summary.item_refs) ? summary.item_refs : rows.map((row) => row?.item_ref));
+  const targetCount = integerOr(summary.target_count, rows.length);
+  const expectedSamples = Math.min(targetCount, INLINE_ITEM_SAMPLE_MAX);
+  if (targetCount < 1 || rows.length !== expectedSamples || itemRefs.length !== targetCount || targetCount > MAX_TARGETS) {
+    const failure = failed("ITEM_ANALYSIS_BATCH_READBACK_INVALID", "Native Item analysis batch did not return complete exact refs and the bounded row sample.");
+    pushStage(stages, "items-analyze-targets", "live_ref_resolve", "failed", failure.message, state.evidenceRefs);
+    return failureEnvelope({ entry, request, startedAt, now, stages, state, code: failure.code, message: failure.message, blockers: failure.blockers, data: targetCoverageData(state) });
   }
+  state.targetScope = summary.target_scope === "selected" ? "selected" : "exact";
+  state.totalTargetCount = targetCount;
+  state.returnedTargetCount = targetCount;
+  state.targetsTruncated = false;
+  state.rows = rows.map((row) => clone(row));
+  state.itemRefs = itemRefs;
+  state.batchTimings = isPlainObject(summary.batch_timings) ? clone(summary.batch_timings) : {};
+  state.canonicalRefs.push(...itemRefs);
+  pushStage(stages, "items-analyze-targets", "live_ref_resolve", "completed", `Resolved ${targetCount} exact Item target(s) inside one native batch.`, state.evidenceRefs);
 
   pushStage(stages, "items-analyze-read-facts", "template_execute", "completed", `Read ${state.rows.length} exact Item summary row(s).`, state.evidenceRefs);
-  if (metricIds.length > 0) {
-    pushStage(stages, "items-analyze-measure", "template_execute", "completed", `Completed ${metricIds.length} requested metric family/families per Item.`, state.evidenceRefs);
+  if (PROFILE_TEMPLATES[normalized.input.profile].length > 0) {
+    pushStage(stages, "items-analyze-measure", "template_execute", "completed", `Completed ${PROFILE_TEMPLATES[normalized.input.profile].length} requested metric family/families per Item in the same native batch.`, state.evidenceRefs);
   } else {
     pushStage(stages, "items-analyze-measure", "template_execute", "skipped", "profile=quick requires no audio metric Template.", []);
   }
@@ -578,6 +589,7 @@ function finalizeEnvelope(envelope) {
 }
 
 function resultData(input, state) {
+  const itemSample = state.rows.slice(0, INLINE_ITEM_SAMPLE_MAX);
   return {
     profile: input.profile,
     supported_profiles: ALPHA3_3_B1B_ITEMS_ANALYZE_PROFILES,
@@ -590,7 +602,11 @@ function resultData(input, state) {
     returned_target_count: state.returnedTargetCount,
     targets_truncated: state.targetsTruncated,
     measurement_basis: uniqueStrings(state.rows.flatMap((row) => row.measurement_basis)),
-    items: clone(state.rows),
+    item_refs: clone(state.itemRefs),
+    items: clone(itemSample),
+    items_sampled: itemSample.length,
+    items_truncated: state.totalTargetCount > itemSample.length,
+    batch_timings: clone(state.batchTimings),
     mutation: { occurred: false, changes: 0 },
   };
 }
@@ -612,6 +628,8 @@ function createState() {
     returnedTargetCount: 0,
     targetsTruncated: false,
     rows: [],
+    itemRefs: [],
+    batchTimings: {},
     canonicalRefs: [],
     artifactRefs: [],
     evidenceRefs: [],

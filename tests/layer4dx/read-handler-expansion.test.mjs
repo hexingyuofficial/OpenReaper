@@ -236,13 +236,13 @@ describe("4D.x Wave 1A read-handler expansion", () => {
         operation,
       );
     }
-    assert.match(BRIDGE_SOURCE, /template_count = 241/);
+    assert.match(BRIDGE_SOURCE, /template_count = 242/);
     assert.doesNotMatch(BRIDGE_SOURCE, /template_count = 119/);
     assert.doesNotMatch(BRIDGE_SOURCE, /experimental = 119/);
     assert.match(BRIDGE_SOURCE, /accepted_runtime_template_count = template_count/);
     assert.match(BRIDGE_SOURCE, /live_supported_template_count = live_supported_template_count/);
     assert.match(BRIDGE_SOURCE, /catalog_count_semantics = "template_count is the accepted runtime catalog count; live_supported_template_count is the current bridge handler row count\."/);
-    assert.match(BRIDGE_SOURCE, /READ_TEMPLATE_CATALOG_SUMMARY_LIVE_HANDLER_COUNTS = \{[\s\S]*?template_count = 241/);
+    assert.match(BRIDGE_SOURCE, /READ_TEMPLATE_CATALOG_SUMMARY_LIVE_HANDLER_COUNTS = \{[\s\S]*?template_count = 242/);
     assert.match(BRIDGE_SOURCE, /live_supported_by_pack = pack and read_template_catalog_summary_count_for_key/);
 
     for (const code of [
@@ -280,6 +280,7 @@ describe("4D.x Wave 1A read-handler expansion", () => {
     assert.deepEqual(
       [...new Set([...BRIDGE_SOURCE.matchAll(/\["run_job:([^"]+)"\]\s*=/g)].map((match) => match[1]))].sort(),
       [
+        "analysis.analyze_items_batch",
         "analysis.create_loop_qa_report",
         "analysis.detect_loop_candidates",
         "analysis.detect_item_silence",

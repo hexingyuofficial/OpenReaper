@@ -525,10 +525,10 @@ local function d13_items_set_exact_selection(request)
   if mode ~= "replace" and mode ~= "add" and mode ~= "remove" then
     return d13_items_error("PARAMS_INVALID", "Exact Item selection mode must be replace, add, or remove.", { zero_write = true })
   end
-  if not tokens or #tokens < 1 or #tokens > 64 then
-    return d13_items_error("SELECTION_LIMIT_EXCEEDED", "Exact Item selection requires 1-64 canonical Item GUID refs.", {
+  if not tokens or #tokens < 1 or #tokens > 128 then
+    return d13_items_error("SELECTION_LIMIT_EXCEEDED", "Exact Item selection requires 1-128 canonical Item GUID refs.", {
       requested_count = tokens and #tokens or 0,
-      maximum = 64,
+      maximum = 128,
       zero_write = true,
     })
   end
@@ -579,10 +579,10 @@ local function d13_items_set_exact_selection(request)
     all[#all + 1] = { item = item, item_ref = item_ref, before = selected == true, after = should_select }
     if should_select then expected[#expected + 1] = item_ref end
   end
-  if #expected > 64 then
-    return d13_items_error("SELECTION_LIMIT_EXCEEDED", "The compiled final selection exceeds 64 Items; zero_write=true.", {
+  if #expected > 128 then
+    return d13_items_error("SELECTION_LIMIT_EXCEEDED", "The compiled final selection exceeds 128 Items; zero_write=true.", {
       selected_count = #expected,
-      maximum = 64,
+      maximum = 128,
       zero_write = true,
     })
   end
@@ -789,7 +789,8 @@ local function d13_items_set_take_value(request, key, value)
   return d13_items_write_summary(request, item)
 end
 
-local D13_ITEMS_SET_ITEM_TAKE_CONTROLS_BATCH_MAX_ROWS = 64
+local D13_ITEMS_SET_ITEM_TAKE_CONTROLS_BATCH_MAX_ROWS = 128
+local D13_ITEMS_SET_ITEM_TAKE_CONTROLS_BATCH_MAX_TAKE_ROWS = 64
 local D13_ITEMS_SET_ITEM_TAKE_CONTROLS_BATCH_CHUNK_SIZE = 8
 local D13_ITEMS_BATCH_CONTINUATION_CONTRACT = "openreaper.bridge.internal_continuation.v1"
 
@@ -900,7 +901,11 @@ local function d13_items_batch_validate_fields(row, row_index)
   local item_fields = item or {}
   local take_fields = take or {}
   local allowed_item_fields = {
+    position_seconds = true,
     volume_db = true,
+    muted = true,
+    locked = true,
+    loop_source = true,
     length_seconds = true,
     fade_in_seconds = true,
     fade_out_seconds = true,
@@ -923,6 +928,10 @@ local function d13_items_batch_validate_fields(row, row_index)
     end
     if key == "volume_db" then
       item_values[key] = d13_items_bounded_db(value)
+    elseif key == "muted" or key == "locked" or key == "loop_source" then
+      item_values[key] = type(value) == "boolean" and value or nil
+    elseif key == "position_seconds" then
+      item_values[key] = d13_items_batch_number(value, 0)
     elseif key == "length_seconds" then
       item_values[key] = d13_items_batch_number(value, 0.000001)
     else
@@ -1007,6 +1016,11 @@ end
 
 local function d13_items_batch_values_match(actual, expected)
   return d13_items_finite_number(actual) and math.abs(actual - expected) <= 0.000001
+end
+
+local function d13_items_batch_native_bool(value)
+  if value == nil then return nil end
+  return value and 1 or 0
 end
 
 local function d13_items_batch_live_item_map(required_refs)
@@ -1114,11 +1128,15 @@ local function d13_items_batch_mutate_chunk(state)
     if take_values.preserve_pitch ~= nil then
       preserve_pitch_value = take_values.preserve_pitch and 1 or 0
     end
-    local ok = set_item("D_VOL", item_values.volume_db and d13_items_db_to_linear(item_values.volume_db) or nil)
+    local ok = set_item("D_POSITION", item_values.position_seconds)
+      and set_item("D_VOL", item_values.volume_db and d13_items_db_to_linear(item_values.volume_db) or nil)
       and set_item("D_LENGTH", item_values.length_seconds)
       and set_item("D_FADEINLEN", item_values.fade_in_seconds)
       and set_item("D_FADEOUTLEN", item_values.fade_out_seconds)
       and set_item("D_SNAPOFFSET", item_values.snap_offset_seconds)
+      and set_item("B_MUTE", d13_items_batch_native_bool(item_values.muted))
+      and set_item("C_LOCK", d13_items_batch_native_bool(item_values.locked))
+      and set_item("B_LOOPSRC", d13_items_batch_native_bool(item_values.loop_source))
     if ok and row.take then
       ok = set_take("D_VOL", take_values.volume_db and d13_items_db_to_linear(take_values.volume_db) or nil)
         and set_take("D_PAN", take_values.pan)
@@ -1169,12 +1187,24 @@ local function d13_items_batch_aggregate_readback(request, state)
     local matches = item_identity == row.item_ref and (not row.take_ref or take_identity == row.take_ref)
     local expected = row.item_values
     local actual_item_native = {
+      position_seconds = d13_items_batch_read_value("item", row.item, "D_POSITION"),
       volume = d13_items_batch_read_value("item", row.item, "D_VOL"),
       length_seconds = d13_items_batch_read_value("item", row.item, "D_LENGTH"),
       fade_in_seconds = d13_items_batch_read_value("item", row.item, "D_FADEINLEN"),
       fade_out_seconds = d13_items_batch_read_value("item", row.item, "D_FADEOUTLEN"),
-      snap_offset_seconds = d13_items_batch_read_value("item", row.item, "D_SNAPOFFSET"),
     }
+    if expected.snap_offset_seconds ~= nil then
+      actual_item_native.snap_offset_seconds = d13_items_batch_read_value("item", row.item, "D_SNAPOFFSET")
+    end
+    if expected.muted ~= nil then
+      actual_item_native.muted = d13_items_batch_read_value("item", row.item, "B_MUTE")
+    end
+    if expected.locked ~= nil then
+      actual_item_native.locked = d13_items_batch_read_value("item", row.item, "C_LOCK")
+    end
+    if expected.loop_source ~= nil then
+      actual_item_native.loop_source = d13_items_batch_read_value("item", row.item, "B_LOOPSRC")
+    end
     local actual_take_native = row.take and {
       volume = d13_items_batch_read_value("take", row.take, "D_VOL"),
       pan = d13_items_batch_read_value("take", row.take, "D_PAN"),
@@ -1183,11 +1213,15 @@ local function d13_items_batch_aggregate_readback(request, state)
       preserve_pitch = d13_items_batch_read_value("take", row.take, "B_PPITCH"),
     } or nil
     local actual_item = {
+      position_seconds = actual_item_native.position_seconds,
       volume_db = d13_items_linear_to_db(actual_item_native.volume),
       length_seconds = actual_item_native.length_seconds,
       fade_in_seconds = actual_item_native.fade_in_seconds,
       fade_out_seconds = actual_item_native.fade_out_seconds,
       snap_offset_seconds = actual_item_native.snap_offset_seconds,
+      muted = actual_item_native.muted == nil and nil or actual_item_native.muted ~= 0,
+      locked = actual_item_native.locked == nil and nil or actual_item_native.locked ~= 0,
+      loop_source = actual_item_native.loop_source == nil and nil or actual_item_native.loop_source ~= 0,
     }
     local actual_take = actual_take_native and {
       volume_db = d13_items_linear_to_db(actual_take_native.volume),
@@ -1197,6 +1231,7 @@ local function d13_items_batch_aggregate_readback(request, state)
       preserve_pitch = actual_take_native.preserve_pitch == nil and nil or actual_take_native.preserve_pitch == 1,
     } or nil
     local checks = {
+      { expected = expected.position_seconds, actual = actual_item_native.position_seconds },
       { expected = expected.volume_db and d13_items_db_to_linear(expected.volume_db), actual = actual_item_native.volume },
       { expected = expected.length_seconds, actual = actual_item_native.length_seconds },
       { expected = expected.fade_in_seconds, actual = actual_item_native.fade_in_seconds },
@@ -1205,6 +1240,12 @@ local function d13_items_batch_aggregate_readback(request, state)
     }
     for check_index = 1, #checks do
       if checks[check_index].expected ~= nil and not d13_items_batch_values_match(checks[check_index].actual, checks[check_index].expected) then matches = false end
+    end
+    for _, boolean_field in ipairs({ "muted", "locked", "loop_source" }) do
+      if expected[boolean_field] ~= nil then
+        local actual = actual_item_native[boolean_field]
+        if actual == nil or (actual ~= 0) ~= expected[boolean_field] then matches = false end
+      end
     end
     if actual_take_native then
       if row.take_values.volume_db ~= nil and not d13_items_batch_values_match(actual_take_native.volume, d13_items_db_to_linear(row.take_values.volume_db)) then matches = false end
@@ -1271,7 +1312,7 @@ local function d13_items_set_item_take_controls_batch(request, resume_continuati
     })
   end
   if not is_json_array(batch) or #batch < 1 or #batch > D13_ITEMS_SET_ITEM_TAKE_CONTROLS_BATCH_MAX_ROWS then
-    return d13_items_batch_error("BATCH_LIMIT_EXCEEDED", "D13 Item/Take batch accepts 1-64 rows.", nil, {
+    return d13_items_batch_error("BATCH_LIMIT_EXCEEDED", "D13 Item batch accepts 1-128 rows; Take-control rows remain limited to 64.", nil, {
       row_count = is_json_array(batch) and #batch or 0,
       max_rows = D13_ITEMS_SET_ITEM_TAKE_CONTROLS_BATCH_MAX_ROWS,
       zero_write = true,
@@ -1304,6 +1345,20 @@ local function d13_items_set_item_take_controls_batch(request, resume_continuati
     seen_items[normalized.item_ref] = true
     required_item_refs[normalized.item_ref] = true
     normalized_rows[#normalized_rows + 1] = normalized
+  end
+  local take_row_count = 0
+  for index = 1, #normalized_rows do
+    if next(normalized_rows[index].take) ~= nil then
+      take_row_count = take_row_count + 1
+    end
+  end
+  if #normalized_rows > D13_ITEMS_SET_ITEM_TAKE_CONTROLS_BATCH_MAX_TAKE_ROWS and take_row_count > 0 then
+    return d13_items_batch_error("BATCH_LIMIT_EXCEEDED", "Take-control batches accept 1-64 rows; row 65 is zero-write.", nil, {
+      row_count = #normalized_rows,
+      take_row_count = take_row_count,
+      max_take_rows = D13_ITEMS_SET_ITEM_TAKE_CONTROLS_BATCH_MAX_TAKE_ROWS,
+      zero_write = true,
+    })
   end
   local live_items, scan_failure, project_scan_item_count = d13_items_batch_live_item_map(required_item_refs)
   if not live_items then return nil, scan_failure end

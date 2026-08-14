@@ -473,7 +473,7 @@ local function e3_media_set_item_source(track, path_value, position, start_perce
   return item, nil, attachment
 end
 
-local E3_MEDIA_BATCH_MAX_ROWS = 64
+local E3_MEDIA_BATCH_MAX_ROWS = 128
 local E3_MEDIA_BATCH_CHUNK_SIZE = 8
 
 local function e3_media_batch_error(code, message, row_index, details, recoverable)
@@ -517,7 +517,7 @@ local function e3_media_batch_prepare(request)
   local params = is_object(request.params) and request.params or {}
   local batch = params.batch
   if not is_json_array(batch) or #batch < 1 or #batch > E3_MEDIA_BATCH_MAX_ROWS then
-    return nil, e3_media_handler_error("BATCH_LIMIT_EXCEEDED", "E3 media batch accepts 1-64 rows.", {
+    return nil, e3_media_handler_error("BATCH_LIMIT_EXCEEDED", "E3 media batch accepts 1-128 rows.", {
       row_count = is_json_array(batch) and #batch or 0,
       max_rows = E3_MEDIA_BATCH_MAX_ROWS,
       zero_write = true,

@@ -155,7 +155,7 @@ describe("Wave 1A items template descriptors", () => {
         } else if (descriptor.id === "template.items.set_exact_selection") {
           assert.deepEqual(descriptor.refs.input, [], descriptor.id);
           assert.equal(descriptor.inputSchema.properties.item_refs.type, "array", descriptor.id);
-          assert.equal(descriptor.inputSchema.properties.item_refs.maxItems, 64, descriptor.id);
+          assert.equal(descriptor.inputSchema.properties.item_refs.maxItems, 128, descriptor.id);
         } else {
           assert.equal(descriptor.refs.input[0].kind, "item", descriptor.id);
         }

@@ -56,6 +56,14 @@ Item 套同一固定清理计划。”Recipe 保存固定计划，批处理 Macr
 generation，resume 仍锁定失败运行原来的 generation。inline 或未保存 draft
 永远不能执行。
 
+把 Recipe 想成一个自己保存的小程序：标题和 summary 说明“这是什么”，依赖说明
+用了哪些已接受的 Macro，stage 说明要重复什么。阶段蓝图中，`for_each` 表示把
+目标组编译成一次批处理，`once` 表示共享操作；Agent 不能把目标拆成一条条公开
+调用。只有后阶段依赖前阶段的读回结果时才使用有序阶段，并以一次聚合读回和一次
+Undo 结束。当前 0.1.0 真正可执行的临时路径仍是上面的冻结
+`validate -> save -> run`；在精确 Recipe manual 没有暴露 `run_transient` 之前，
+不要自行发明或调用这个 operation。
+
 升级后，如果某个被保留的用户 Recipe revision 与当前 dependency catalog
 不再一致，`list_recipes` 会将它标记为 `REVISION_STALE`，同时保持官方 Recipe
 和其他有效 Recipe 可用。不要自动改写或执行 stale revision；提示用户需要

@@ -129,6 +129,9 @@ describe("Wave 2A media template descriptors", () => {
       "preserve_selection",
     ]);
     assert.deepEqual(Object.keys(importBatch.inputSchema.properties), ["batch", "preserve_selection"]);
+    assert.equal(importBatch.inputSchema.properties.batch.minItems, 1);
+    assert.equal(importBatch.inputSchema.properties.batch.maxItems, 128);
+    assert.deepEqual(importBatch.inputSchema.properties.batch.items.required, ["id", "position_seconds"]);
     assert.deepEqual(importBatch.refs.input.map((entry) => entry.kind), ["file", "track"]);
     assert.deepEqual(importBatch.refs.output.map((entry) => entry.kind), ["item", "take", "file"]);
     assert.equal(importBatch.bridge.capability, "media.import_files_batch");

@@ -191,6 +191,36 @@ REAPER's native normalization calculation. This is source/item/take pre-FX
 normalization, not post-FX output normalization. The same 64-Item maximum,
 zero-write overflow rule, one native batch, one readback, and one Undo apply.
 
+## Recipes And Saved Routines
+
+User-facing language may call a Recipe a Routine: it is a small saved,
+declarative batch program. The title and summary explain what a saved Routine is;
+its dependencies name accepted Macros, and its stages describe the fixed work.
+The Agent chooses and binds the plan before execution, then reports aggregate
+REAPER readback. It does not run a stage or target in a chat loop.
+
+Use a Macro when one existing Macro covers the complete bounded task. Use a
+Recipe when the same fixed plan should run over many exact targets, has ordered
+stages, or should be saved and reused after reconnect. Use a Skill when the work
+needs judgment, teaching, or adaptation.
+
+For a quick one-off, say: "Create a temporary Recipe for the current exact
+selected audio Items: apply one fixed dialogue cleanup plan to all targets in
+one batch." The Agent copies the exact dependency manual, replaces every
+placeholder, then runs `validate`, `save`, and `run` once. The batch handles all
+63 Items in one call; it must not make 63 calls. `save` puts an immutable
+user-owned revision in the configured Recipe store, where `list_recipes` can
+find it after reconnect. Keep the exact revision to reuse it, or delete only
+that revision after terminal evidence is retained. Counts 1 through 64 are
+valid for a 64-target Macro; 65 must fail before mutation with zero-write truth.
+
+Within a phase, `for_each` means one compiled batch over a target group and
+`once` means one shared operation. Later phases wait only for verified results
+they actually depend on. The user sees the completed batch after one final
+refresh, rather than partial objects appearing one by one. The current 0.1.0
+public temporary path is the saved `validate -> save -> run` ABI; an agent must
+not invent `run_transient` until the exact Recipe manual exposes it.
+
 ## Authorization And Safety
 
 OpenReaper should not ask you to approve every small reversible step. A good

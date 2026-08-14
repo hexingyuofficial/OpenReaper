@@ -1,10 +1,10 @@
 -- Extracted Wave 1A handler: template.core.read_template_catalog_summary.
 
 local READ_TEMPLATE_CATALOG_SUMMARY_COUNTS = {
-  template_count = 241,
+  template_count = 242,
   by_pack = {
     actions = 8,
-    analysis = 7,
+    analysis = 8,
     automation = 23,
     core = 3,
     fx = 19,
@@ -20,12 +20,12 @@ local READ_TEMPLATE_CATALOG_SUMMARY_COUNTS = {
   },
   by_risk = {
     destructive = 15,
-    read = 82,
+    read = 83,
     safe = 13,
     write = 131,
   },
   by_lifecycle = {
-    experimental = 241,
+    experimental = 242,
   },
   by_entity_kind = {
     action = 4,
@@ -50,6 +50,7 @@ local READ_TEMPLATE_CATALOG_SUMMARY_COUNTS = {
     grid = 2,
     hardware_output = 4,
     item = 23,
+    item_analysis_batch = 1,
     item_layer_report = 1,
     last_result = 1,
     loop_candidates = 1,
@@ -112,10 +113,10 @@ local READ_TEMPLATE_CATALOG_SUMMARY_COUNTS = {
 }
 
 local READ_TEMPLATE_CATALOG_SUMMARY_LIVE_HANDLER_COUNTS = {
-  template_count = 241,
+  template_count = 242,
   by_pack = {
     actions = 8,
-    analysis = 7,
+    analysis = 8,
     automation = 23,
     core = 3,
     fx = 19,

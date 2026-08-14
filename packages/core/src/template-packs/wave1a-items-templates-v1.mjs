@@ -197,7 +197,7 @@ export const WAVE1A_ITEMS_TEMPLATES = deepFreeze([
     bridge: bridge({ capability: "items.set_exact_selection" }),
     inputSchema: objectSchema({
       mode: { type: "string", enum: ["replace", "add", "remove"] },
-      item_refs: { type: "array", minItems: 1, maxItems: 64, items: { type: "string" } },
+      item_refs: { type: "array", minItems: 1, maxItems: 128, items: { type: "string" } },
     }, ["mode", "item_refs"]),
     outputSchema: objectSchema({
       mode: { type: "string" },

@@ -23,6 +23,8 @@ const ROOT = new URL("../..", import.meta.url);
 const SMOKE_SCRIPT = "scripts/smoke-template-runtime-live.mjs";
 const BRIDGE_SCRIPT_PATH = fileURLToPath(new URL("../../reaper/bridge/openreaper-live-bridge.lua", import.meta.url));
 const BRIDGE_SOURCE = readFileSync(BRIDGE_SCRIPT_PATH, "utf8");
+const E3_HANDLER_SOURCE_PATH = fileURLToPath(new URL("../../reaper/bridge/src/handlers/media/e3_media_route.lua", import.meta.url));
+const E3_HANDLER_SOURCE = readFileSync(E3_HANDLER_SOURCE_PATH, "utf8");
 const E3_FLAG = "--media-route";
 const E3_OPT_IN_ENV = "OPENREAPER_E3_MEDIA_ROUTE_LIVE_SMOKE";
 const E3_FOLDER_ROOT_ENV = "OPENREAPER_E3_MEDIA_FOLDER_ROOT";
@@ -237,6 +239,14 @@ describe("E3 media live handler expansion", () => {
     assert.doesNotMatch(BRIDGE_SOURCE, /\["run_action:/);
     assert.doesNotMatch(BRIDGE_SOURCE, /InsertMedia|Main_OnCommand(?!Ex)|MIDIEditor_OnCommand|ExecProcess|CF_ShellExecute|os\.execute|io\.popen|loadstring|dofile|require\s*\(|REAPER\.app/);
     assert.doesNotMatch(BRIDGE_SOURCE, /LIVE_SMOKE_MATRIX|list_recipes|recipes\/|call_recipe/);
+  });
+
+  it("keeps the source E3 native batch cap at 128 with a typed zero-write overflow guard", () => {
+    assert.match(E3_HANDLER_SOURCE, /local E3_MEDIA_BATCH_MAX_ROWS = 128/);
+    assert.match(E3_HANDLER_SOURCE, /E3 media batch accepts 1-128 rows/);
+    assert.match(E3_HANDLER_SOURCE, /#batch > E3_MEDIA_BATCH_MAX_ROWS/);
+    assert.match(E3_HANDLER_SOURCE, /zero_write = true/);
+    assert.match(E3_HANDLER_SOURCE, /local function import_files_batch\(request, preflight_only\)/);
   });
 });
 

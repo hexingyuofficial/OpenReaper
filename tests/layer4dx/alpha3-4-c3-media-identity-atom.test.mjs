@@ -118,11 +118,11 @@ describe("Alpha3.4-C3 media canonical identity atom", () => {
   it("keeps public counts and embeds full-path identity helpers in generated bridge", () => {
     assert.equal(WAVE2A_MEDIA_TEMPLATE_IDS.length, 7);
     assert.equal(createWave2AMediaTemplates().length, 7);
-    assert.equal(REGISTRY.entries.length, 241);
+    assert.equal(REGISTRY.entries.length, 242);
     assert.equal(new Set(REGISTRY.entries.map((entry) => entry.handler_file)).size, 91);
     const registry = loadBridgeHandlerRegistry({ cwd: ROOT.pathname });
     validateBridgeHandlerRegistry({ cwd: ROOT.pathname, registry });
-    assert.equal(registry.entries.length, 241);
+    assert.equal(registry.entries.length, 242);
     assert.equal(new Set(registry.entries.map((entry) => entry.handler_file)).size, 91);
     assert.match(BRIDGE_SOURCE, /function READ_B_MEDIA\.is_absolute_path/);
     assert.match(BRIDGE_SOURCE, /function READ_B_MEDIA\.file_ref_bytes/);

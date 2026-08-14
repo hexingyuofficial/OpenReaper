@@ -723,6 +723,7 @@ export const CALL_TEMPLATE_RUNTIME_D23_FX_DISCOVERY_READ_TEMPLATE_IDS = deepFree
 ]);
 
 export const CALL_TEMPLATE_RUNTIME_D27_ANALYSIS_AUDIO_TEMPLATE_IDS = deepFreeze([
+  "template.analysis.analyze_items_batch",
   "template.analysis.measure_item_rms",
   "template.analysis.measure_item_peaks",
   "template.analysis.detect_item_silence",
@@ -841,6 +842,7 @@ const CALL_TEMPLATE_RUNTIME_ALPHA3_4_D3_PROJECT_SWITCHING_TEMPLATE_IDS = deepFre
 ]);
 
 const CALL_TEMPLATE_RUNTIME_ALPHA4_BATCH_TEMPLATE_IDS = deepFreeze([
+  "template.analysis.analyze_items_batch",
   "template.items.set_item_take_controls_batch",
   "template.items.set_exact_selection",
   "template.fx.set_reaeq_bands",

@@ -63,6 +63,14 @@ function rows(count) {
   }));
 }
 
+function itemOnlyRows(count) {
+  return Array.from({ length: count }, (_, index) => ({
+    id: `i${String(index + 1).padStart(3, "0")}`,
+    item_ref: itemRef(index + 1),
+    item: { position_seconds: index * 2, muted: index % 2 === 0 },
+  }));
+}
+
 function fullControlRows(count) {
   return Array.from({ length: count }, (_, index) => {
     const suffix = String(index + 1).padStart(12, "0");
@@ -494,11 +502,106 @@ describe("Alpha4 D Item/Take batch contract seam", () => {
     });
 
     assert.equal(response.ok, false);
-    assert.equal(response.error.code, "ITEM_APPLY_BATCH_CHANGES_INVALID");
+    assert.equal(response.error.code, "ITEM_APPLY_BATCH_TAKE_LIMIT_EXCEEDED");
     // The current public envelope does not project zero_write for this
     // validation branch; the existing mock seam proves it by observing no
     // resolver, mutation, readback, or index call.
     assert.equal(executor.calls.length, 0);
+  });
+
+  it("accepts 128 Item-only rows but rejects row 129 before native dispatch", async () => {
+    for (const count of [8, 32, 64, 128]) {
+      const inputRows = itemOnlyRows(count);
+      const native = makeNativeBatchExecutor();
+      const response = await executeAlpha3_3B1cItemsApplyMacro({
+        request: request({ mode: "set_item_take_controls", dry_run: false, changes: inputRows }, BUDGET),
+        executeAtomic: native.executeAtomic,
+      });
+      assert.equal(response.ok, true, `${count}:${JSON.stringify(response.error)}`);
+      assert.equal(native.calls.length, 1);
+      assert.equal(native.calls[0].input.batch.length, count);
+    }
+
+    const calls = [];
+    const blocked = await executeAlpha3_3B1cItemsApplyMacro({
+      request: request({ mode: "set_item_take_controls", dry_run: false, changes: itemOnlyRows(129) }, BUDGET),
+      executeAtomic: Object.assign(async (child) => { calls.push(child); return execution(child.id, {}); }, { supportsItemTakeControlsBatch: true }),
+    });
+    assert.equal(blocked.ok, false);
+    assert.equal(blocked.error.code, "ITEM_APPLY_BATCH_CHANGES_INVALID");
+    assert.equal(calls.length, 0);
+  });
+
+  it("sequences 128 exact Items through one aggregate preflight and one native mutation batch", async () => {
+    const refs = Array.from({ length: 128 }, (_, index) => itemRef(index + 1));
+    const calls = [];
+    const executeAtomic = async (child) => {
+      calls.push(child);
+      if (child.id === "template.analysis.analyze_items_batch") {
+        return execution(child.id, {
+          target_scope: "exact",
+          target_count: refs.length,
+          plan_facts: refs.map((item_ref, index) => ({
+            item_ref,
+            track_ref: "track:guid:{D-TRACK}",
+            active_take_ref: takeRef(index + 1),
+            position_seconds: index,
+            length_seconds: 1,
+            end_seconds: index + 1,
+            snap_offset_seconds: 0,
+            fade_in_seconds: 0,
+            fade_out_seconds: 0,
+          })),
+        });
+      }
+      assert.equal(child.id, "template.items.set_item_take_controls_batch");
+      return execution(child.id, {
+        rows: child.input.batch.map((row) => ({
+          ...row,
+          status: "applied",
+          mutation: { status: "completed" },
+          live_readback: { status: "passed" },
+          fields: { item: row.item },
+        })),
+      });
+    };
+    executeAtomic.supportsItemTakeControlsBatch = true;
+    const response = await executeAlpha3_3B1cItemsApplyMacro({
+      request: request({
+        mode: "sequence_with_gap",
+        target: "exact",
+        target_refs: refs,
+        gap_seconds: 1,
+        dry_run: false,
+      }, BUDGET),
+      executeAtomic,
+    });
+    assert.equal(response.ok, true, JSON.stringify(response.error));
+    assert.deepEqual(calls.map((call) => call.id), [
+      "template.analysis.analyze_items_batch",
+      "template.items.set_item_take_controls_batch",
+    ]);
+    assert.equal(calls[1].input.batch.length, 128);
+    assert.equal(calls[1].input.batch[0].item.position_seconds, 0);
+    assert.equal(calls[1].input.batch[127].item.position_seconds, 254);
+    assert.equal(response.result.changes.length, 8);
+    assert.deepEqual(
+      response.result.changes.map((change) => change.item_ref),
+      [...refs.slice(0, 4), ...refs.slice(-4)],
+    );
+    assert.equal(response.result.data.outcome.mutation.completed_count, 128);
+    assert.equal(response.result.data.outcome.live_readback.passed_count, 128);
+    assert.deepEqual(response.result.data.change_projection, {
+      mode: "bounded_inline_samples",
+      complete_count: 128,
+      inline_sample_count: 8,
+      inline_sample_limit: 8,
+      complete_target_refs_in_canonical_refs: true,
+      native_evidence_refs: [
+        "template.analysis.analyze_items_batch",
+        "template.items.set_item_take_controls_batch",
+      ],
+    });
   });
 
   it("keeps preflight failure zero-write and reports mutation/readback failure truth", async () => {
@@ -535,23 +638,13 @@ describe("Alpha4 D Item/Take batch contract seam", () => {
     );
   });
 
-  it("asserts official, user, and fork Recipe sources retain the same generic macro dependency contract", () => {
+  it("keeps retired official Item Recipe drafts out of the active two-Recipe catalog", () => {
     const drafts = createAlpha345OfficialExecutableRecipeRevisions({ catalog: recipeContractCatalog() });
     const itemDrafts = drafts
       .map((revision) => revision.draft)
       .filter((draft) => draft.stages.some((stage) => stage.dependency.id === ALPHA3_3_B1C_ITEMS_APPLY_MACRO_ID));
-    assert.equal(itemDrafts.length, 2);
-    for (const draft of itemDrafts) {
-      const controls = draft.stages.find((stage) => stage.id === "controls");
-      assert.equal(controls.dependency.id, ALPHA3_3_B1C_ITEMS_APPLY_MACRO_ID);
-      assert.equal(controls.kind, "macro");
-      const fork = structuredClone(draft);
-      fork.id = `recipe.user.forked_${draft.id.split(".").at(-1)}`;
-      assert.deepEqual(
-        fork.stages.map((stage) => [stage.id, stage.kind, stage.dependency.id, stage.inputs, stage.outputs]),
-        draft.stages.map((stage) => [stage.id, stage.kind, stage.dependency.id, stage.inputs, stage.outputs]),
-      );
-    }
+    assert.equal(drafts.length, 2);
+    assert.equal(itemDrafts.length, 0);
   });
 
   it("routes an explicit user deadline through the existing call_template cancellation seam", async () => {

@@ -165,7 +165,7 @@ async function createInstalledFixture(root, overrides = {}) {
     build_time_utc: "2026-07-18T00:00:00.000Z",
     source_tree_clean: true,
     accepted_macro_count: 15,
-    accepted_template_count: 241,
+    accepted_template_count: 242,
     bridge_handler_count: 91,
     ...overrides,
   })}\n`, "utf8");

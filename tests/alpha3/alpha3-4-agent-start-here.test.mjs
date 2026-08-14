@@ -169,7 +169,7 @@ test("canonical AGENT_START_HERE markers project under 16 KiB with exact 15 Macr
   assert.match(instructions, /validate -> save -> run/u);
   assert.match(instructions, /do not generate 63 calls/u);
   assert.match(instructions, /65 must fail before mutation/u);
-  assert.match(instructions, /To keep the same\s+Recipe, omit `delete`/u);
+  assert.match(instructions, /otherwise omit `delete`, and later find the saved revision/u);
   assert.match(instructions, /bridge_generation="generation:runtime_bound"/u);
   assert.match(instructions, /fresh\s+run binds the current generation after reconnect/u);
   assert.match(instructions, /resume remains bound to\s+the failed run's generation/u);

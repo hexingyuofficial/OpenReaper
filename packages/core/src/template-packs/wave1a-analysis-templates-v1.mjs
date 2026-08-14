@@ -1,6 +1,7 @@
 import { TEMPLATE_DESCRIPTOR_CONTRACT } from "../template-descriptor-v1.mjs";
 
 export const WAVE1A_ANALYSIS_TEMPLATE_IDS = Object.freeze([
+  "template.analysis.analyze_items_batch",
   "template.analysis.measure_item_rms",
   "template.analysis.measure_item_peaks",
   "template.analysis.detect_item_silence",
@@ -8,6 +9,60 @@ export const WAVE1A_ANALYSIS_TEMPLATE_IDS = Object.freeze([
 ]);
 
 export const WAVE1A_ANALYSIS_TEMPLATES = deepFreeze([
+  {
+    contract: TEMPLATE_DESCRIPTOR_CONTRACT,
+    id: "template.analysis.analyze_items_batch",
+    title: "Analyze Items batch",
+    summary: "Read compact Item/take truth and optional native audio metrics for 1-128 exact or selected Items in one aggregate batch.",
+    pack: "analysis",
+    lifecycle: "experimental",
+    risk: "read",
+    entity_kind: "item_analysis_batch",
+    tags: ["analysis", "audio", "items", "batch", "aggregate"],
+    bridge: {
+      operation_family: "run_job",
+      operation_name: "analysis.analyze_items_batch",
+      capability: "analysis.analyze_items_batch",
+      idempotency: "none",
+      timeout_ms: 120_000,
+    },
+    inputSchema: objectSchema({
+      profile: { type: "string", enum: ["quick", "audio", "timing", "full"] },
+      target: { type: "string", enum: ["selected", "exact"] },
+      target_refs: { type: "array", minItems: 1, maxItems: 128, items: { type: "string" } },
+      limit: { type: "integer", minimum: 1, maximum: 128 },
+      include_plan_facts: { type: "boolean" },
+      start_seconds: { type: "number" },
+      end_seconds: { type: "number" },
+    }, ["profile", "target", "limit"]),
+    outputSchema: objectSchema({
+      profile: { type: "string" },
+      target_scope: { type: "string" },
+      target_count: { type: "integer" },
+      item_refs: { type: "array" },
+      items: { type: "array" },
+      plan_facts: { type: "array" },
+      batch_timings: { type: "object" },
+      mutation_occurred: { const: false },
+    }, ["profile", "target_scope", "target_count", "item_refs", "items", "batch_timings", "mutation_occurred"]),
+    refs: {
+      input: [{ name: "item_ref", kind: "item", required: false, summary: "Optional exact Item refs analyzed by the batch." }],
+      output: [{ name: "item_ref", kind: "item", required: false, summary: "Complete exact Item refs represented by the aggregate rows." }],
+    },
+    artifacts: { mode: "none", input: [], output: [] },
+    expectedDelta: {
+      kind: "read",
+      summary: "Reads bounded Item/take and native source/pre-FX analysis truth without mutation.",
+      entities: [{ entity_kind: "item", action: "read", summary: "Complete target Item rows are read once and returned as aggregate truth." }],
+      idempotent: true,
+    },
+    verification: { mode: "none", checks: [] },
+    examples: [{
+      name: "quick_selected_items_batch",
+      summary: "Read up to 128 selected Item/take summaries in one native batch.",
+      input: { profile: "quick", target: "selected", limit: 128 },
+    }],
+  },
   analysisArtifactDescriptor({
     id: "template.analysis.measure_item_rms",
     title: "Measure item RMS",

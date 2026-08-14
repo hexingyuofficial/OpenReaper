@@ -103,11 +103,11 @@ describe("Alpha3.2.5-F product truth", () => {
       executable_recipe_catalog_contract: "recipe.executable.dependency_catalog.v1",
       executable_recipe_catalog_hash: facts.executable_recipe_catalog_hash,
       accepted_macro_count: 15,
-      accepted_template_count: 241,
+      accepted_template_count: 242,
       bridge_handler_count: 91,
     });
     assert.match(facts.executable_recipe_catalog_hash, /^[a-f0-9]{64}$/u);
-    assert.equal(handlerRegistry.entries.length, 241);
+    assert.equal(handlerRegistry.entries.length, 242);
     assert.equal(new Set(handlerRegistry.entries.map((entry) => entry.handler_file)).size, 91);
   });
 

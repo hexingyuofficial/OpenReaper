@@ -37,7 +37,7 @@ describe("Alpha3.3 media.place_assets registered Macro", () => {
     assert.deepEqual(ALPHA3_3_MEDIA_PLACEMENT_MODES, ["explicit", "sequence_on_one_track", "stack_on_separate_tracks", "columns", "append_after_existing"]);
     assert.deepEqual(ALPHA3_3_MEDIA_TRACK_POLICIES, ["existing_track", "one_shared_new_track", "one_new_track_per_asset", "explicit_per_asset"]);
     const [item] = createAlpha3_2EMediaPlaceAssetsMacroDiscoveryItems();
-    assert.equal(item.input_schema.properties.assets.maxItems, 8);
+    assert.equal(item.input_schema.properties.assets.maxItems, 128);
     assert.equal(item.input_schema.properties.page_size.maximum, 25);
     assert.equal(item.implementation_status, "executable");
     assert.deepEqual(ALPHA3_3_MEDIA_PLACE_ASSETS_REGISTRY.get(ALPHA3_2E_MEDIA_PLACE_ASSETS_MACRO_ID).dependencies.runtime_capabilities, [MEDIA_EXPLORER_DATABASE_SEARCH_CAPABILITY]);
@@ -166,6 +166,76 @@ describe("Alpha3.3 media.place_assets registered Macro", () => {
     assert.equal(fixture.items[1].length_seconds, 1);
     assert.deepEqual(index.scopes, ["tracks", "items", "takes", "media"]);
     assert.equal(response.result.changes.every((row) => row.live_readback.take_name), true);
+  });
+
+  it("runs 8/32/64/128 sequence rows through one native media batch with bounded aggregate readback", async () => {
+    for (const count of [8, 32, 64, 128]) {
+      const files = Object.fromEntries(Array.from({ length: count }, (_, index) => [`/asset-${index}.wav`, 1]));
+      const fixture = mediaFixture({ files, tracks: { [TRACK_A]: [] } });
+      const response = await executeAlpha3_3MediaPlaceAssetsMacro({
+        request: request({
+          assets: Array.from({ length: count }, (_, index) => ({ id: `asset-${index}`, path: `/asset-${index}.wav` })),
+          placement: { mode: "sequence_on_one_track", start_seconds: 1, gap_seconds: 0.25 },
+          track_policy: "existing_track",
+          track_ref: TRACK_A,
+          dry_run: false,
+        }),
+        executeAtomic: fixture.execute,
+      });
+      assert.equal(response.ok, true, `${count}: ${JSON.stringify(response)}`);
+      const batchCalls = fixture.calls.filter((call) => call.id === "template.media.import_files_batch");
+      assert.equal(batchCalls.length, 1, `${count} rows must use one native batch call`);
+      assert.equal(batchCalls[0].input.batch.length, count);
+      assert.equal(response.result.changes.length, Math.min(count, 8));
+      assert.equal(response.result.changes.every((change) => change.status === "applied"), true);
+      assert.equal(response.result.data.batch_timings.rows, count);
+      assert.equal(response.result.data.batch_timings.native_mutation_count, count);
+      assert.equal(response.result.data.batch_timings.native_readback_count, count);
+      assert.equal(response.result.data.layout.length, Math.min(count, 8));
+      const layoutRows = response.result.data.output_projection === "bounded_batch_v1"
+        ? response.result.data.layout.map(([id, position_seconds, target_ref, duration_seconds]) => ({ id, position_seconds, target_ref, duration_seconds }))
+        : response.result.data.layout;
+      assert.equal(layoutRows[0].position_seconds, 1);
+      assert.equal(layoutRows.at(-1).position_seconds, 1 + (count - 1) * 1.25);
+      assert.equal(response.result.data.selected_sources.length, Math.min(count, 8));
+      if (response.result.data.output_projection === "bounded_batch_v1") {
+        assert.equal(response.result.data.complete_selected_source_count, count);
+        assert.equal(response.result.data.complete_layout_count, count);
+        assert.equal(response.result.data.inline_sample_limit, 8);
+        assert.deepEqual(response.result.data.selected_sources_columns, ["id", "source_file_ref"]);
+        assert.equal(response.result.data.selected_sources[0][1], "file:path:/asset-0.wav");
+        assert.deepEqual(response.result.data.layout_columns, ["id", "position_seconds", "target_ref", "duration_seconds"]);
+        assert.equal(layoutRows.every((row) => row.target_ref === TRACK_A && row.duration_seconds === 1), true);
+        assert.equal(response.result.data.selected_sources.every(([id, source]) => source === `file:path:/${id}.wav`), true);
+      } else {
+        assert.equal(response.result.data.selected_sources[0].source_file_ref, "file:path:/asset-0.wav");
+      }
+      assert.equal(response.result.data.source_media_deleted, false);
+      assert.equal(response.budget.actual_bytes <= response.budget.max_bytes, true);
+    }
+  });
+
+  it("rejects 129 assets as a typed zero-write before executeAtomic", async () => {
+    let executeAtomicCalls = 0;
+    const response = await executeAlpha3_3MediaPlaceAssetsMacro({
+      request: request({
+        assets: Array.from({ length: 129 }, (_, index) => ({ id: `asset-${index}`, path: `/asset-${index}.wav` })),
+        placement: { mode: "sequence_on_one_track" },
+        track_policy: "existing_track",
+        track_ref: TRACK_A,
+        dry_run: false,
+      }),
+      executeAtomic: async () => {
+        executeAtomicCalls += 1;
+      },
+    });
+    assert.equal(response.ok, false);
+    assert.equal(response.error.code, "MEDIA_ASSETS_INVALID");
+    assert.match(response.error.message, /1-128/);
+    assert.equal(response.error.details.zero_write, true);
+    assert.equal(response.blockers[0].details.zero_write, true);
+    assert.equal(executeAtomicCalls, 0);
+    assert.equal(response.execution.status, "blocked");
   });
 
   it("rejects explicit same-Track overlaps against existing Items before media mutation", async () => {
@@ -353,7 +423,7 @@ describe("Alpha3.3 media.place_assets registered Macro", () => {
     for (const [input, code] of [
       [{ folder_ref: "folder:path:/tmp", assets: [{ path: "/a.wav", track_ref: TRACK_A, position_seconds: 0 }] }, "MEDIA_FOLDER_APPROVAL_UNPROVEN"],
       [{ assets: [{ path: "/dev/audio", track_ref: TRACK_A, position_seconds: 0 }] }, "MEDIA_SOURCE_PATH_UNSAFE"],
-      [{ assets: Array.from({ length: 9 }, (_, index) => ({ path: `/${index}.wav`, track_ref: TRACK_A, position_seconds: 0 })) }, "MEDIA_ASSETS_INVALID"],
+      [{ assets: Array.from({ length: 129 }, (_, index) => ({ path: `/${index}.wav`, track_ref: TRACK_A, position_seconds: 0 })) }, "MEDIA_ASSETS_INVALID"],
       [{ assets: [{ path: "/a.wav", track_ref: TRACK_A, position_seconds: 0, delete_source_media: true }] }, "MEDIA_SOURCE_DELETE_FORBIDDEN"],
       [{ assets: [{ path: "/a.wav", track_ref: TRACK_A }], placement: { mode: "stack_on_separate_tracks" }, track_policy: "existing_track", track_ref: TRACK_A }, "MEDIA_STACK_SEPARATE_TRACKS_REQUIRED"],
     ]) {

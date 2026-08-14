@@ -40,9 +40,9 @@ describe("D15 items source/phase live handler expansion", () => {
   it("registers exactly the bounded D15 items source/phase batch", () => {
     const registry = loadBridgeHandlerRegistry({ cwd: ROOT.pathname });
     validateBridgeHandlerRegistry({ cwd: ROOT.pathname, registry });
-    assert.equal(registry.entries.length, 241);
+    assert.equal(registry.entries.length, 242);
     assert.equal(new Set(registry.entries.map((entry) => entry.handler_file)).size, 91);
-    assert.match(BRIDGE_SOURCE, /template_count = 241/);
+    assert.match(BRIDGE_SOURCE, /template_count = 242/);
     assert.deepEqual(
       registry.entries
         .filter((entry) => entry.route === "d15-items-source-phase-handlers")

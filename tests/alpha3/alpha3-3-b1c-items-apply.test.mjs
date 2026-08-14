@@ -145,7 +145,7 @@ describe("Alpha3.3-B1c executable macro.items.apply", () => {
     assert.equal(entry.dependencies.template_ids.includes("template.items.set_active_take"), true);
     assert.equal(entry.dependencies.template_ids.includes("template.items.move_item_to_track"), true);
     assert.equal(JSON.stringify(entry.input_schema).includes("steps"), false);
-    assert.equal(entry.input_schema.properties.active_take_assignments.maxItems, 8);
+    assert.equal(entry.input_schema.properties.active_take_assignments.maxItems, 64);
 
     const discovery = createAlpha3_3B1cItemsApplyDiscoveryItems({ liveRunnableNow: true })[0];
     assert.deepEqual(discovery.supported_modes, ALPHA3_3_B1C_ITEMS_APPLY_MODES);
@@ -331,7 +331,7 @@ describe("Alpha3.3-B1c executable macro.items.apply", () => {
         (error) => ({ error }),
       );
       const first = await waitForBridgeRequest(transportDir);
-      assert.equal(first.request.pack.capability, "items.resolve_item_ref");
+      assert.equal(first.request.pack.capability, "analysis.analyze_items_batch");
       controller.abort("fixture timeout");
       await new Promise((resolve) => setTimeout(resolve, 50));
       const response = new ItemsApplyRuntimeBridge().dispatch(first.request);
@@ -1276,7 +1276,7 @@ describe("Alpha3.3-B1c executable macro.items.apply", () => {
       { mode: "set_active_take", target: "selected", active_take_assignments: [{ item_ref: ITEM_A.ref, take_ref: TAKE_A1.ref }], dry_run: false },
       { mode: "set_active_take", active_take_assignments: [{ item_ref: ITEM_A.ref, take_ref: TAKE_A1.ref }, { item_ref: ITEM_A.ref, take_ref: TAKE_A0.ref }], dry_run: false },
       { mode: "set_active_take", active_take_assignments: [{ item_ref: ITEM_A.ref, take_ref: "take:selected:0" }], dry_run: false },
-      { mode: "set_active_take", active_take_assignments: Array.from({ length: 9 }, (_, index) => ({ item_ref: `item:guid:{ITEM-${index}}`, take_ref: `take:guid:{TAKE-${index}}` })), dry_run: false },
+      { mode: "set_active_take", active_take_assignments: Array.from({ length: 65 }, (_, index) => ({ item_ref: `item:guid:{ITEM-${index}}`, take_ref: `take:guid:{TAKE-${index}}` })), dry_run: false },
       { mode: "set_active_take", dry_run: false },
     ];
     for (const input of invalidInputs) {

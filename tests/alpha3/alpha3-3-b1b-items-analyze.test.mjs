@@ -1,11 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import {
-  FakeFoundationBridge,
-  createArtifactRef,
-  createObjectRef,
-} from "../../packages/core/src/foundation-bridge-v1.mjs";
+import { FakeFoundationBridge, createArtifactRef, createObjectRef } from "../../packages/core/src/foundation-bridge-v1.mjs";
 import {
   ALPHA3_3_B1B_ITEMS_ANALYZE_MACRO_ID,
   ALPHA3_3_B1B_ITEMS_ANALYZE_PROFILES,
@@ -43,7 +39,7 @@ describe("Alpha3.3-B1b items.analyze", () => {
     assert.deepEqual(discovery.held_profiles, ["compare", "midi", "loop"]);
   });
 
-  it("executes full analysis for an exact resolvable Item with canonical facts, basis, artifacts, and no mutation", async () => {
+  it("executes full analysis for an exact Item in one native aggregate call", async () => {
     const bridge = new AnalysisBridge();
     const runtime = createRuntime(bridge);
     const result = await runtime.call_template({
@@ -88,38 +84,44 @@ describe("Alpha3.3-B1b items.analyze", () => {
     ].sort());
     assert.equal(result.result.data.items[0].measurements.rms.lufs_i, -14);
     assert.equal(result.result.data.items[0].measurements.sample_peaks.true_peak_available, true);
-    assert.equal(result.result.artifact_refs.length, 4);
+    assert.equal(result.result.artifact_refs.length, 0);
+    assert.equal(result.result.data.batch_timings.runner, "d27_native_item_analysis_batch");
     assert.equal(result.budget.actual_bytes <= result.budget.max_bytes, true);
 
-    assert.deepEqual(bridge.seen.map((request) => request.pack.capability), [
-      "items.resolve_item_ref",
-      "items.read_item_summary",
-      "analysis.measure_item_rms",
-      "analysis.measure_item_peaks",
-      "analysis.detect_item_silence",
-      "analysis.detect_item_transients",
-    ]);
+    assert.deepEqual(bridge.seen.map((request) => request.pack.capability), ["analysis.analyze_items_batch"]);
   });
 
-  it("uses a bounded selected-Item selector for quick facts and reports selection truncation", async () => {
-    const bridge = new AnalysisBridge({ selectedCount: 3 });
-    const runtime = createRuntime(bridge);
-    const result = await runtime.call_template({
-      id: ALPHA3_3_B1B_ITEMS_ANALYZE_MACRO_ID,
-      input: { profile: "quick", target: "selected", limit: 1 },
-      context: context(2),
-    });
+  it("accepts 8/32/64/128 selected Items with bounded samples in one native call", async () => {
+    for (const count of [8, 32, 64, 128]) {
+      const bridge = new AnalysisBridge({ selectedCount: count });
+      const result = await createRuntime(bridge).call_template({
+        id: ALPHA3_3_B1B_ITEMS_ANALYZE_MACRO_ID,
+        input: { profile: "quick", target: "selected", limit: count },
+        context: context(2 + count),
+      });
+      assert.equal(result.ok, true, JSON.stringify(result));
+      assert.equal(result.result.data.target_scope, "selected");
+      assert.equal(result.result.data.total_target_count, count);
+      assert.equal(result.result.data.returned_target_count, count);
+      assert.equal(result.result.data.item_refs.length, count);
+      assert.equal(result.result.data.items.length, Math.min(count, 8));
+      assert.equal(result.result.data.items_truncated, count > 8);
+      assert.deepEqual(result.result.data.items[0].measurements, {});
+      assert.deepEqual(bridge.seen.map((request) => request.pack.capability), ["analysis.analyze_items_batch"]);
+    }
+  });
 
-    assert.equal(result.ok, true, JSON.stringify(result));
-    assert.equal(result.result.data.target_scope, "selected");
-    assert.equal(result.result.data.total_target_count, 3);
-    assert.equal(result.result.data.returned_target_count, 1);
-    assert.equal(result.result.data.targets_truncated, true);
-    assert.deepEqual(result.result.data.items[0].measurements, {});
-    assert.deepEqual(bridge.seen.map((request) => request.pack.capability), [
-      "items.list_selected_items",
-      "items.read_item_summary",
-    ]);
+  it("rejects row 129 before live dispatch", async () => {
+    const bridge = new AnalysisBridge();
+    const result = await createRuntime(bridge).call_template({
+      id: ALPHA3_3_B1B_ITEMS_ANALYZE_MACRO_ID,
+      input: { profile: "quick", target_refs: Array.from({ length: 129 }, (_, index) => `item:guid:{OVER-${index}}`), limit: 128 },
+      context: context(129),
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.error.code, "ITEM_ANALYSIS_TARGET_LIMIT_EXCEEDED");
+    assert.equal(result.result.data.mutation?.occurred ?? false, false);
+    assert.equal(bridge.seen.length, 0);
   });
 
   it("fails held profiles, unsupported channel policy, and unused quick ranges before dispatch", async () => {
@@ -167,6 +169,26 @@ class AnalysisBridge extends FakeFoundationBridge {
 }
 
 function emitted(capability, request, selectedCount) {
+  if (capability === "analysis.analyze_items_batch") {
+    const count = request.params.target === "selected"
+      ? selectedCount
+      : Math.max(1, request.params.target_refs?.length ?? 0);
+    const allRows = Array.from({ length: count }, (_, index) => analysisBatchRow(index, request.params.profile));
+    const rows = allRows.slice(0, 8);
+    const refs = allRows.map((row, index) => createObjectRef("item", { scheme: "guid", value: index === 0 ? "{ALPHA33-B1B-ITEM}" : `{ALPHA33-B1B-ITEM-${index}}` }, { ref: row.item_ref }));
+    return output(refs, {
+      profile: request.params.profile,
+      target_scope: request.params.target,
+      target_count: count,
+      returned_target_count: count,
+      item_refs: allRows.map((row) => row.item_ref),
+      items: rows,
+      sample_count: rows.length,
+      items_truncated: count > rows.length,
+      mutation_occurred: false,
+      batch_timings: { runner: "d27_native_item_analysis_batch", transport_call_count: 1, native_readback_count: count },
+    });
+  }
   if (capability === "items.resolve_item_ref") {
     return output([ITEM_OBJECT], { item_ref: ITEM_REF, track_ref: TRACK_REF, position_seconds: 1, length_seconds: 2 });
   }
@@ -252,6 +274,37 @@ function emitted(capability, request, selectedCount) {
     });
   }
   return output([], {});
+}
+
+function analysisBatchRow(index, profile) {
+  const itemRef = index === 0 ? ITEM_REF : `item:guid:{ALPHA33-B1B-ITEM-${index}}`;
+  const trackRef = index === 0 ? TRACK_REF : `track:guid:{ALPHA33-B1B-TRACK-${index}}`;
+  const takeRef = index === 0 ? TAKE_REF : `take:guid:{ALPHA33-B1B-TAKE-${index}}`;
+  const measurements = {};
+  const basis = ["reaper_item_take_state"];
+  const common = { analyzed_start_seconds: 0, analyzed_end_seconds: 2, duration_seconds: 2, sample_rate: 48_000, channels: 2, sample_frames: 96_000, truncated: false };
+  if (["audio", "full"].includes(profile)) {
+    measurements.rms = { ...common, measurement_basis: "source_media_calculate_normalization", rms_dbfs: -12, rms_linear: 0.2511886, lufs_i: -14 };
+    measurements.sample_peaks = { ...common, measurement_basis: "active_take_native_peak_blocks", abs_peak_dbfs: -1, abs_peak_linear: 0.8912509, positive_peak_linear: 0.8912509, negative_peak_linear: -0.75, source_sample_peak_dbfs: -1.2, true_peak_dbfs: -0.8, true_peak_available: true };
+    basis.push("source_media_calculate_normalization", "active_take_native_peak_blocks");
+  }
+  if (["timing", "full"].includes(profile)) {
+    measurements.silence = { ...common, measurement_basis: "active_take_audio_accessor_pre_fx_samples", segment_count: 1, total_silence_seconds: 0.2, total_detected: 1, returned_count: 1, threshold_dbfs: -60 };
+    measurements.transients = { ...common, measurement_basis: "active_take_audio_accessor_pre_fx_samples", transient_count: 2, total_detected: 2, first_transient_time: 0.15, last_transient_time: 1.2 };
+    basis.push("active_take_audio_accessor_pre_fx_samples");
+  }
+  return {
+    item_ref: itemRef,
+    track_ref: trackRef,
+    active_take_ref: takeRef,
+    take_count: 1,
+    placement: { position_seconds: index, length_seconds: 2, end_seconds: index + 2, snap_offset_seconds: 0.05, fade_in_seconds: 0.01, fade_out_seconds: 0.02 },
+    take: { name: "Analysis take", volume_db: -1, pan: 0, reverse: false },
+    measurements,
+    measurement_basis: basis,
+    artifact_refs: [],
+    truncated: false,
+  };
 }
 
 function analysisOutput(capability, schema, readback) {

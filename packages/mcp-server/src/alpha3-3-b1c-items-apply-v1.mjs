@@ -30,7 +30,11 @@ export const ALPHA3_3_B1C_ITEMS_APPLY_MODES = deepFreeze([
   "create_variations",
 ]);
 export const ALPHA3_3_B1C_ITEMS_BATCH_ITEM_FIELDS = deepFreeze([
+  "position_seconds",
   "volume_db",
+  "muted",
+  "locked",
+  "loop_source",
   "length_seconds",
   "fade_in_seconds",
   "fade_out_seconds",
@@ -44,7 +48,9 @@ export const ALPHA3_3_B1C_ITEMS_BATCH_TAKE_FIELDS = deepFreeze([
   "preserve_pitch",
 ]);
 export const ALPHA3_3_B1C_ITEMS_BATCH_ROW_ID_PATTERN = /^[A-Za-z0-9_-]{1,12}$/u;
-export const ALPHA3_3_B1C_ITEMS_BATCH_MAX_ROWS = 64;
+export const ALPHA3_3_B1C_ITEMS_BATCH_MAX_ROWS = 128;
+export const ALPHA3_3_B1C_ITEMS_BATCH_MAX_TAKE_ROWS = 64;
+export const ALPHA3_3_B1C_ITEMS_VARIATION_MAX_ROWS = 64;
 export const ALPHA3_3_B1C_ITEMS_APPLY_HELD_MODES = deepFreeze([
   "set_snap_offset_to_onset",
   "normalize_peak",
@@ -74,6 +80,7 @@ export const ALPHA3_3_B1C_ITEMS_APPLY_HELD_PROPERTY_FIELDS = deepFreeze([
   "pitch_shift_mode",
 ]);
 export const ALPHA3_3_B1C_ITEMS_APPLY_TEMPLATE_IDS = deepFreeze([
+  "template.analysis.analyze_items_batch",
   "template.items.resolve_item_ref",
   "template.items.read_item_summary",
   "template.items.list_selected_items",
@@ -103,6 +110,7 @@ export const ALPHA3_3_B1C_ITEMS_APPLY_TEMPLATE_IDS = deepFreeze([
 ]);
 
 const RESOLVE_ITEM_ID = "template.items.resolve_item_ref";
+const ANALYZE_ITEMS_BATCH_ID = "template.analysis.analyze_items_batch";
 const READ_ITEM_ID = "template.items.read_item_summary";
 const LIST_SELECTED_ID = "template.items.list_selected_items";
 const SET_EXACT_SELECTION_ID = "template.items.set_exact_selection";
@@ -125,10 +133,11 @@ const SPLIT_BY_SILENCE_ID = "template.items.split_item_by_silence";
 const LIST_TRACK_ITEMS_ID = "template.items.list_items_on_track";
 const COPY_ITEM_TO_TRACK_ID = "template.items.copy_item_to_track";
 const SET_TAKE_START_IN_SOURCE_ID = "template.items.set_take_start_in_source";
-const MAX_TARGETS = 8;
+const MAX_TARGETS = 128;
 const AUDIO_BATCH_MAX_TARGETS = 64;
 const AUDIO_BATCH_RELEASE_GATE_MS = 30000;
-const DEFAULT_TARGET_LIMIT = 4;
+const DEFAULT_TARGET_LIMIT = 128;
+const AGGREGATE_INLINE_SAMPLE_LIMIT = 8;
 const POSITION_TOLERANCE = 0.000001;
 const MIN_RESPONSE_BUDGET = 2_048;
 const INPUT_FIELDS = new Set([
@@ -187,7 +196,7 @@ const REGISTRY_ENTRY = deepFreeze({
     properties: {
       mode: { type: "string", enum: ALPHA3_3_B1C_ITEMS_APPLY_MODES },
       target: { type: "string", enum: ["selected", "exact"] },
-      target_refs: { type: "array", maxItems: AUDIO_BATCH_MAX_TARGETS, items: { type: "string" } },
+      target_refs: { type: "array", maxItems: MAX_TARGETS, items: { type: "string" } },
       selection_mode: { type: "string", enum: ["replace", "add", "remove"] },
       adjacent_audio: { type: "string", enum: ["left", "right", "both"] },
       changes: {
@@ -205,7 +214,11 @@ const REGISTRY_ENTRY = deepFreeze({
               type: "object",
               additionalProperties: false,
               properties: {
+                position_seconds: { type: "number", minimum: 0 },
                 volume_db: { type: "number", minimum: -120, maximum: 24 },
+                muted: { type: "boolean" },
+                locked: { type: "boolean" },
+                loop_source: { type: "boolean" },
                 length_seconds: { type: "number", exclusiveMinimum: 0 },
                 fade_in_seconds: { type: "number", minimum: 0 },
                 fade_out_seconds: { type: "number", minimum: 0 },
@@ -230,7 +243,7 @@ const REGISTRY_ENTRY = deepFreeze({
       variations: {
         type: "array",
         minItems: 1,
-        maxItems: ALPHA3_3_B1C_ITEMS_BATCH_MAX_ROWS,
+        maxItems: ALPHA3_3_B1C_ITEMS_VARIATION_MAX_ROWS,
         items: {
           type: "object",
           additionalProperties: false,
@@ -244,7 +257,7 @@ const REGISTRY_ENTRY = deepFreeze({
           required: ["id", "source_item_ref", "target_track_ref", "position_seconds"],
         },
       },
-      limit: { type: "integer", minimum: 1, maximum: AUDIO_BATCH_MAX_TARGETS },
+      limit: { type: "integer", minimum: 1, maximum: MAX_TARGETS },
       dry_run: { type: "boolean" },
       anchor_seconds: { type: "number", minimum: 0 },
       gap_seconds: { type: "number", minimum: 0 },
@@ -262,7 +275,7 @@ const REGISTRY_ENTRY = deepFreeze({
       active_take_assignments: {
         type: "array",
         minItems: 1,
-        maxItems: MAX_TARGETS,
+        maxItems: ALPHA3_3_B1C_ITEMS_BATCH_MAX_TAKE_ROWS,
         items: {
           type: "object",
           additionalProperties: false,
@@ -652,14 +665,24 @@ export async function executeAlpha3_3B1cItemsApplyMacro({
     });
   }
 
-  const targets = await resolveTargets({ request, input: normalized.input, executeAtomic, state });
-  if (!targets.ok) {
-    pushStage(stages, "items-apply-targets", "live_ref_resolve", "blocked", targets.message, state.evidenceRefs);
-    return failureEnvelope({ entry, request, startedAt, now, stages, state, activeBudget, code: targets.code, message: targets.message, blockers: targets.blockers, data: targetData(state) });
+  const useConsolidatedNative = executeAtomic.supportsItemTakeControlsBatch === true
+    && isConsolidatedNativeItemMode(normalized.input.mode);
+  state.aggregateProjection = useConsolidatedNative;
+  let facts;
+  if (useConsolidatedNative) {
+    facts = await readConsolidatedNativePlanFacts({ request, input: normalized.input, executeAtomic, state });
+    if (facts.ok) {
+      pushStage(stages, "items-apply-targets", "live_ref_resolve", "completed", `Resolved ${facts.rows.length} exact live Item target(s) in one native batch.`, state.evidenceRefs);
+    }
+  } else {
+    const targets = await resolveTargets({ request, input: normalized.input, executeAtomic, state });
+    if (!targets.ok) {
+      pushStage(stages, "items-apply-targets", "live_ref_resolve", "blocked", targets.message, state.evidenceRefs);
+      return failureEnvelope({ entry, request, startedAt, now, stages, state, activeBudget, code: targets.code, message: targets.message, blockers: targets.blockers, data: targetData(state) });
+    }
+    pushStage(stages, "items-apply-targets", "live_ref_resolve", "completed", `Resolved ${targets.refs.length} exact live Item target(s).`, state.evidenceRefs);
+    facts = await readTargetFacts({ targets: targets.refs, assignments: targets.assignments, input: normalized.input, request, executeAtomic, state });
   }
-  pushStage(stages, "items-apply-targets", "live_ref_resolve", "completed", `Resolved ${targets.refs.length} exact live Item target(s).`, state.evidenceRefs);
-
-  const facts = await readTargetFacts({ targets: targets.refs, assignments: targets.assignments, input: normalized.input, request, executeAtomic, state });
   if (!facts.ok) {
     pushStage(stages, "items-apply-preflight", "template_execute", "failed", facts.message, state.evidenceRefs);
     return failureEnvelope({ entry, request, startedAt, now, stages, state, activeBudget, code: facts.code, message: facts.message, blockers: facts.blockers, data: targetData(state) });
@@ -688,6 +711,8 @@ export async function executeAlpha3_3B1cItemsApplyMacro({
   let executionFailure = null;
   if (normalized.input.mode === "remove_silence") {
     executionFailure = await executeRemoveSilencePlan({ plan, request, executeAtomic, state });
+  } else if (useConsolidatedNative) {
+    executionFailure = await executeConsolidatedNativeItemPlan({ plan, request, executeAtomic, state });
   } else if (["set_properties", "set_active_take", "stack_on_existing_tracks"].includes(normalized.input.mode)) {
     executionFailure = await executePropertyPlan({ plan, request, executeAtomic, state });
   } else if (["apply_fades", "trim_exact", "set_take_playback", "set_snap_offset"].includes(normalized.input.mode)) {
@@ -762,6 +787,82 @@ export async function executeAlpha3_3B1cItemsApplyMacro({
     summary: `Applied and verified ${state.changes.length} Item change row(s).`,
     data: resultData(normalized.input, state),
   });
+}
+
+function isConsolidatedNativeItemMode(mode) {
+  return [
+    "align_starts",
+    "align_ends",
+    "sequence_with_gap",
+    "distribute_evenly",
+    "move_to_anchor",
+    "set_properties",
+    "apply_fades",
+    "trim_exact",
+    "set_snap_offset",
+  ].includes(mode);
+}
+
+async function executeConsolidatedNativeItemPlan({ plan, request, executeAtomic, state }) {
+  const rowsByRef = new Map();
+  for (const operation of plan.operations) {
+    const itemRef = operation.item_ref?.ref;
+    if (!isExactGuidRef(itemRef, "item")) {
+      return { ...failed("ITEM_APPLY_EXACT_TARGET_REQUIRED", "Native Item batch requires exact item:guid identities."), phase: "mutation" };
+    }
+    let row = rowsByRef.get(itemRef);
+    if (!row) {
+      row = {
+        id: `i${String(rowsByRef.size + 1).padStart(3, "0")}`,
+        item_ref: itemRef,
+        item: {},
+      };
+      rowsByRef.set(itemRef, row);
+    }
+    if (operation.kind === "move_item" || operation.kind === "align_onset") {
+      row.item.position_seconds = operation.requested_value;
+    } else if (operation.kind === "set_property") {
+      row.item[operation.field] = operation.requested_value;
+    } else if (operation.kind === "set_item_fades") {
+      Object.assign(row.item, operation.requested_value);
+    } else if (operation.kind === "trim_item") {
+      row.item.length_seconds = operation.requested_value;
+    } else if (operation.kind === "set_snap_offset") {
+      row.item.snap_offset_seconds = operation.requested_value;
+    } else {
+      return { ...failed("ITEM_APPLY_NATIVE_PLAN_UNSUPPORTED", `Native Item batch cannot compile ${operation.kind}.`), phase: "mutation" };
+    }
+  }
+  const rows = [...rowsByRef.values()];
+  if (rows.length < 1 || rows.length > ALPHA3_3_B1C_ITEMS_BATCH_MAX_ROWS) {
+    return { ...failed("ITEM_APPLY_BATCH_CHANGES_INVALID", "Native Item batch must contain 1-128 unique Item rows."), phase: "mutation" };
+  }
+
+  let execution;
+  try {
+    execution = await runAtomic(executeAtomic, request, {
+      id: SET_ITEM_TAKE_CONTROLS_BATCH_ID,
+      input: { batch: rows, dry_run: false },
+      refs: {},
+    });
+  } catch (error) {
+    return executionError(error, SET_ITEM_TAKE_CONTROLS_BATCH_ID, "mutation");
+  }
+  collectExecutionEvidence(state, execution);
+  if (execution?.ok !== true) {
+    return { ...atomicFailure(execution, SET_ITEM_TAKE_CONTROLS_BATCH_ID), phase: "mutation" };
+  }
+  const summary = executionSummary(execution);
+  const returned = Array.isArray(summary.rows) ? summary.rows : Array.isArray(summary.changes) ? summary.changes : [];
+  if (returned.length !== rows.length) {
+    return { ...failed("ITEM_APPLY_BATCH_READBACK_INVALID", `Native Item batch returned ${returned.length} row(s) for ${rows.length} requested row(s).`), phase: "readback" };
+  }
+  state.changes = rows.map((row, index) => normalizeNativeBatchChange(row, returned[index], false));
+  const failedRow = state.changes.find((change) => change.status !== "applied" || change.live_readback?.status !== "passed");
+  if (failedRow) {
+    return { ...failed("ITEM_APPLY_BATCH_READBACK_INVALID", `Native Item batch row ${failedRow.id} did not return aggregate passed truth.`), phase: "readback" };
+  }
+  return null;
 }
 
 async function executeSetItemTakeControlsBatchNative({
@@ -1110,6 +1211,71 @@ async function readTargetFacts({ targets, assignments = [], input, request, exec
     rows.push(row);
   }
   return { ok: true, rows };
+}
+
+async function readConsolidatedNativePlanFacts({ request, input, executeAtomic, state }) {
+  const directRefs = collectItemObjectRefs(request.refs);
+  const exactTargetCount = directRefs.length + input.target_refs.length;
+  const effectiveLimit = request.input?.limit === undefined && exactTargetCount > 0
+    ? exactTargetCount
+    : input.limit;
+  if (exactTargetCount > effectiveLimit || exactTargetCount > MAX_TARGETS) {
+    return failed("ITEM_APPLY_TARGET_LIMIT_EXCEEDED", `Exact Item targets exceed the bounded write limit of ${effectiveLimit}.`);
+  }
+  let execution;
+  try {
+    execution = await runAtomic(executeAtomic, request, {
+      id: ANALYZE_ITEMS_BATCH_ID,
+      input: {
+        profile: "quick",
+        target: exactTargetCount > 0 ? "exact" : "selected",
+        target_refs: input.target_refs,
+        limit: effectiveLimit,
+        include_plan_facts: true,
+      },
+      refs: request.refs ?? {},
+    });
+  } catch (error) {
+    return executionError(error, ANALYZE_ITEMS_BATCH_ID, "preflight");
+  }
+  collectExecutionEvidence(state, execution);
+  if (execution?.ok !== true) return atomicFailure(execution, ANALYZE_ITEMS_BATCH_ID);
+  const summary = executionSummary(execution);
+  const rows = Array.isArray(summary.plan_facts) ? summary.plan_facts : [];
+  const targetCount = integerOr(summary.target_count, rows.length);
+  if (targetCount < 1 || targetCount > MAX_TARGETS || rows.length !== targetCount) {
+    return failed("ITEM_APPLY_BATCH_PREFLIGHT_INVALID", "Native Item plan preflight did not return one complete lightweight fact row per target.");
+  }
+  const seen = new Set();
+  const facts = [];
+  for (const [index, row] of rows.entries()) {
+    if (!isExactGuidRef(row?.item_ref, "item") || seen.has(row.item_ref)) {
+      return failed("ITEM_APPLY_BATCH_PREFLIGHT_INVALID", "Native Item plan preflight returned a missing, malformed, or duplicate exact Item identity.");
+    }
+    if (!Number.isFinite(row.position_seconds) || row.position_seconds < 0
+      || !Number.isFinite(row.length_seconds) || row.length_seconds < 0) {
+      return failed("ITEM_APPLY_ITEM_FACTS_INVALID", `${row.item_ref} did not return finite non-negative position and length facts.`);
+    }
+    seen.add(row.item_ref);
+    facts.push({
+      item_ref: exactGuidObjectRef("item", row.item_ref),
+      source_track_ref: stringOrNull(row.track_ref),
+      position_seconds: row.position_seconds,
+      length_seconds: row.length_seconds,
+      end_seconds: Number.isFinite(row.end_seconds) ? row.end_seconds : row.position_seconds + row.length_seconds,
+      active_take_ref: stringOrNull(row.active_take_ref),
+      snap_offset_seconds: finiteOrNull(row.snap_offset_seconds),
+      fade_in_seconds: finiteOrNull(row.fade_in_seconds),
+      fade_out_seconds: finiteOrNull(row.fade_out_seconds),
+      target_order: index,
+    });
+  }
+  state.targetScope = summary.target_scope === "selected" ? "selected" : "exact";
+  state.totalTargetCount = targetCount;
+  state.returnedTargetCount = targetCount;
+  state.targetsTruncated = false;
+  state.canonicalRefs.push(...facts.map((row) => row.item_ref.ref));
+  return { ok: true, rows: facts };
 }
 
 function buildOperationPlan(input, facts) {
@@ -2213,8 +2379,8 @@ function normalizeCreateVariationsInput(input) {
   const unknown = Object.keys(input).filter((field) => !allowed.has(field));
   if (unknown.length > 0) return failed("ITEM_APPLY_VARIATIONS_FIELDS_INVALID", `create_variations accepts only mode, variations, and dry_run; unsupported field(s): ${unknown.join(", ")}.`);
   if (typeof input.dry_run !== "undefined" && typeof input.dry_run !== "boolean") return failed("ITEM_APPLY_REQUEST_INVALID", "dry_run must be boolean.");
-  if (!Array.isArray(input.variations) || input.variations.length < 1 || input.variations.length > ALPHA3_3_B1C_ITEMS_BATCH_MAX_ROWS) {
-    return failed("ITEM_APPLY_VARIATIONS_INVALID", `variations must contain 1-${ALPHA3_3_B1C_ITEMS_BATCH_MAX_ROWS} rows.`);
+  if (!Array.isArray(input.variations) || input.variations.length < 1 || input.variations.length > ALPHA3_3_B1C_ITEMS_VARIATION_MAX_ROWS) {
+    return failed("ITEM_APPLY_VARIATIONS_INVALID", `variations must contain 1-${ALPHA3_3_B1C_ITEMS_VARIATION_MAX_ROWS} rows.`);
   }
   const ids = new Set();
   const variations = [];
@@ -2746,6 +2912,12 @@ function normalizeSetItemTakeControlsInput(input) {
       take: take.value,
     });
   }
+  if (rows.length > ALPHA3_3_B1C_ITEMS_BATCH_MAX_TAKE_ROWS && rows.some((row) => row.take !== null)) {
+    return failed(
+      "ITEM_APPLY_BATCH_TAKE_LIMIT_EXCEEDED",
+      `Take-control batches accept at most ${ALPHA3_3_B1C_ITEMS_BATCH_MAX_TAKE_ROWS} rows; row 65 is zero-write.`,
+    );
+  }
   return {
     ok: true,
     input: {
@@ -2766,11 +2938,25 @@ function normalizeBatchItemFields(value, index) {
     return failed("ITEM_APPLY_BATCH_ITEM_FIELDS_INVALID", `changes[${index}].item has unsupported field(s): ${unknown.join(", ")}.`);
   }
   const normalized = {};
+  if (value.position_seconds !== undefined) {
+    if (!Number.isFinite(value.position_seconds) || value.position_seconds < 0) {
+      return failed("ITEM_APPLY_POSITION_INVALID", `changes[${index}].item.position_seconds must be a non-negative finite number.`);
+    }
+    normalized.position_seconds = value.position_seconds;
+  }
   if (value.volume_db !== undefined) {
     if (!Number.isFinite(value.volume_db) || value.volume_db < -120 || value.volume_db > 24) {
       return failed("ITEM_APPLY_PROPERTY_INVALID", `changes[${index}].item.volume_db must be a finite number from -120 to 24.`);
     }
     normalized.volume_db = value.volume_db;
+  }
+  for (const field of ["muted", "locked", "loop_source"]) {
+    if (value[field] !== undefined) {
+      if (typeof value[field] !== "boolean") {
+        return failed("ITEM_APPLY_PROPERTY_INVALID", `changes[${index}].item.${field} must be boolean.`);
+      }
+      normalized[field] = value[field];
+    }
   }
   if (value.length_seconds !== undefined) {
     if (!Number.isFinite(value.length_seconds) || value.length_seconds <= 0) {
@@ -3152,8 +3338,8 @@ function normalizeInput(input) {
   if (mode === "select_exact") {
     const unsupported = Object.keys(input).filter((field) => !["mode", "target_refs", "selection_mode", "dry_run"].includes(field));
     if (unsupported.length > 0) return failed("ITEM_APPLY_REQUEST_INVALID", `select_exact does not accept field(s): ${unsupported.join(", ")}.`);
-    if (targetRefs.length < 1 || targetRefs.length > AUDIO_BATCH_MAX_TARGETS || targetRefs.some((ref) => !isExactGuidRef(ref, "item")) || new Set(targetRefs).size !== targetRefs.length) {
-      return failed("ITEM_APPLY_EXACT_TARGET_REQUIRED", "select_exact requires 1-64 unique canonical item:guid:{GUID} refs.");
+    if (targetRefs.length < 1 || targetRefs.length > MAX_TARGETS || targetRefs.some((ref) => !isExactGuidRef(ref, "item")) || new Set(targetRefs).size !== targetRefs.length) {
+      return failed("ITEM_APPLY_EXACT_TARGET_REQUIRED", "select_exact requires 1-128 unique canonical item:guid:{GUID} refs.");
     }
     selectionMode = input.selection_mode ?? "replace";
     if (!["replace", "add", "remove"].includes(selectionMode)) return failed("ITEM_APPLY_SELECTION_MODE_INVALID", "selection_mode must be replace, add, or remove.");
@@ -3284,8 +3470,8 @@ function normalizeInput(input) {
 }
 
 function normalizeActiveTakeAssignments(value) {
-  if (!Array.isArray(value) || value.length < 1 || value.length > MAX_TARGETS) {
-    return failed("ITEM_APPLY_ACTIVE_TAKE_ASSIGNMENTS_INVALID", `active_take_assignments must contain 1-${MAX_TARGETS} rows.`);
+  if (!Array.isArray(value) || value.length < 1 || value.length > ALPHA3_3_B1C_ITEMS_BATCH_MAX_TAKE_ROWS) {
+    return failed("ITEM_APPLY_ACTIVE_TAKE_ASSIGNMENTS_INVALID", `active_take_assignments must contain 1-${ALPHA3_3_B1C_ITEMS_BATCH_MAX_TAKE_ROWS} rows.`);
   }
   const assignments = [];
   const seenItems = new Set();
@@ -3308,7 +3494,7 @@ function isAudioBatchMode(mode) {
 }
 
 function maxTargetsForMode(mode) {
-  return isAudioBatchMode(mode) || mode === "select_exact" ? AUDIO_BATCH_MAX_TARGETS : MAX_TARGETS;
+  return isAudioBatchMode(mode) ? AUDIO_BATCH_MAX_TARGETS : MAX_TARGETS;
 }
 
 function normalizeTrackAssignments(value) {
@@ -3471,7 +3657,9 @@ function buildSuccessEnvelope({ entry, request, startedAt, completedAt, stages, 
             includeControlTruth: activeBudget > MIN_RESPONSE_BUDGET && !isAudioBatchMode(projectedData?.mode),
             audioBatchSummary: isAudioBatchMode(projectedData?.mode) && projectedData?.returned_target_count > 8,
           })
-        : clone(state.changes).slice(0, MACRO_CONTRACT_CEILINGS.change_max_count),
+        : state.aggregateProjection
+          ? projectAggregateItemSamples(state.changes)
+          : clone(state.changes).slice(0, MACRO_CONTRACT_CEILINGS.change_max_count),
       verification: {
         status: "passed",
         evidence_refs: useCompact
@@ -3517,7 +3705,9 @@ function failureEnvelope({ entry, request, startedAt, now, stages, state, active
             includeControlTruth: activeBudget > MIN_RESPONSE_BUDGET && !isAudioBatchMode(projectedData?.mode),
             audioBatchSummary: isAudioBatchMode(projectedData?.mode) && projectedData?.returned_target_count > 8,
           })
-        : clone(state.changes).slice(0, MACRO_CONTRACT_CEILINGS.change_max_count),
+        : state.aggregateProjection
+          ? projectAggregateItemSamples(state.changes)
+          : clone(state.changes).slice(0, MACRO_CONTRACT_CEILINGS.change_max_count),
       verification: {
         status: verified ? "passed" : status === "partial_failure" ? "failed" : "not_required",
         evidence_refs: useCompact
@@ -3590,6 +3780,16 @@ function projectCompactBatchChanges(changes, { includeControlTruth = false, audi
       position_seconds: Number.isFinite(change.position_seconds) ? change.position_seconds : undefined,
     });
   });
+}
+
+function projectAggregateItemSamples(changes) {
+  const rows = Array.isArray(changes) ? changes : [];
+  if (rows.length <= AGGREGATE_INLINE_SAMPLE_LIMIT) return clone(rows);
+  const edgeCount = Math.floor(AGGREGATE_INLINE_SAMPLE_LIMIT / 2);
+  return clone([
+    ...rows.slice(0, edgeCount),
+    ...rows.slice(-edgeCount),
+  ]);
 }
 
 function compactVariationTakeFxCopy(value) {
@@ -3752,14 +3952,19 @@ function finalizeEnvelope(envelope) {
       if (result.budget.actual_bytes <= result.budget.max_bytes) break;
       // Reclaim only optional prose/evidence. Never drop rows or failure code/fields.
       result.recovery = null;
-      if (result.result?.summary) result.result.summary = String(result.result.summary).slice(0, 24);
-      if (result.error?.message) result.error.message = String(result.error.message).slice(0, 24);
+      if (result.error?.code) {
+        result.result.summary = result.error.code;
+        result.error = {
+          code: result.error.code,
+          ...(result.error.details?.zero_write === true ? { details: { zero_write: true } } : {}),
+        };
+      } else if (result.result?.summary) {
+        result.result.summary = String(result.result.summary).slice(0, 24);
+      }
       if (Array.isArray(result.blockers)) {
-        result.blockers = result.blockers.slice(0, 1).map((entry) => ({
+        result.blockers = result.blockers.slice(0, 1).map((entry) => compactObject({
           code: entry.code,
-          message: String(entry.message ?? "").slice(0, 24),
-          recoverable: entry.recoverable !== false,
-          ...(entry.details?.zero_write === true ? { details: { zero_write: true } } : {}),
+          details: entry.details?.zero_write === true ? { zero_write: true } : undefined,
         }));
       }
       if (Array.isArray(result.result?.changes)) {
@@ -3787,7 +3992,9 @@ function finalizeEnvelope(envelope) {
     result.budget.actual_bytes = Buffer.byteLength(JSON.stringify(result), "utf8");
   }
   const validation = validateMacroExecutionEnvelope(result);
-  if (!validation.valid) throw new TypeError(`Invalid Alpha3.3-B1c items.apply envelope: ${validation.errors.join("; ")}`);
+  if (!validation.valid) {
+    throw new TypeError(`Invalid Alpha3.3-B1c items.apply envelope (${result.budget.actual_bytes}/${result.budget.max_bytes} bytes): ${validation.errors.join("; ")}`);
+  }
   return deepFreeze(result);
 }
 
@@ -3812,6 +4019,16 @@ function resultData(input, state) {
       live_readback: { status: completed.length > 0 && passed.length === completed.length ? "passed" : passed.length > 0 ? "partial" : input.dry_run ? "not_run" : "not_passed", passed_count: passed.length, total_count: completed.length },
       index_maintenance: { status: indexStatuses.length === 1 ? indexStatuses[0] : indexStatuses.length > 1 ? "mixed" : "not_run", scopes: indexStatuses.length > 0 ? uniqueStrings(completed.flatMap((change) => change.index_maintenance.scopes)) : [] },
     },
+    ...(state.aggregateProjection ? {
+      change_projection: {
+        mode: "bounded_inline_samples",
+        complete_count: state.changes.length,
+        inline_sample_count: Math.min(state.changes.length, AGGREGATE_INLINE_SAMPLE_LIMIT),
+        inline_sample_limit: AGGREGATE_INLINE_SAMPLE_LIMIT,
+        complete_target_refs_in_canonical_refs: state.canonicalRefs.length >= state.totalTargetCount,
+        native_evidence_refs: uniqueStrings(state.evidenceRefs),
+      },
+    } : {}),
   };
 }
 
@@ -3838,6 +4055,7 @@ function createState() {
     audioBatchEvidence: null,
     sqlite: null,
     batchMode: false,
+    aggregateProjection: false,
     calls: emptyCalls(),
     timings: emptyTimings(),
   };

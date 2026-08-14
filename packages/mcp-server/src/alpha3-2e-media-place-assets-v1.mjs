@@ -64,7 +64,7 @@ const READ_ITEM_ID = "template.items.read_item_summary";
 const LIST_REGIONS_ID = "template.project.list_markers_regions";
 const CREATE_REGION_ID = "template.project.create_region";
 const READ_RESOURCE_PATHS_ID = "template.system.read_resource_paths";
-const MAX_ASSETS = 8;
+const MAX_ASSETS = 128;
 const MAX_TRACK_ITEMS = 128;
 const MAX_PATH_BYTES = 4_096;
 const MEDIA_FILE_REF_PREFIX = "file:path:";
@@ -209,8 +209,8 @@ export function createAlpha3_3MediaPlaceAssetsExactManual() {
     action_manual: {
       when_to_use: [
         "Use search_library to query the active REAPER Media Explorer databases with stable bounded pagination before choosing explicit file paths.",
-        "Use place_assets to import up to eight explicit files through explicit, sequence_on_one_track, stack_on_separate_tracks, columns, or append_after_existing placement.",
-        "Use relink_sources to change the source of up to eight exact take:guid refs after probing each explicit replacement path.",
+        "Use place_assets to import 1-128 explicit files through explicit, sequence_on_one_track, stack_on_separate_tracks, columns, or append_after_existing placement; one accepted request becomes one native media batch when its selection policy is uniform.",
+        "Use relink_sources to change the source of 1-128 exact take:guid refs after probing each explicit replacement path.",
       ],
       when_not_to_use: [
         "Do not scan arbitrary folders outside REAPER's own Media Explorer database registry, delete/move/overwrite source files, silently substitute another asset, or address hardware/device media paths.",
@@ -227,8 +227,8 @@ export function createAlpha3_3MediaPlaceAssetsExactManual() {
       input_shape: {
         mode: "place_assets (default) | relink_sources | search_library",
         search_library: "{query, database_ids?, page_size?:1-25, cursor?}; returns compact candidates with path/file_ref, duration, format facts, availability, total, and next_cursor.",
-        assets: "1-8 unique rows. Placement rows require id/path and policy-specific track fields; relink rows require id/path/exact take_ref.",
-        placement: "{mode: explicit | sequence_on_one_track | stack_on_separate_tracks | columns | append_after_existing, start_seconds?, gap_seconds?, column_gap_seconds?, columns?, align_basis:'item_start'}; top-level gap/columns aliases remain accepted.",
+        assets: "1-128 unique rows. Placement rows require id/path and policy-specific track fields; relink rows require id/path/exact take_ref.",
+        placement: "{mode: explicit | sequence_on_one_track | stack_on_separate_tracks | columns | append_after_existing, start_seconds?, gap_seconds?, column_gap_seconds?, columns?, align_basis:'item_start'}; top-level gap/columns aliases remain accepted; columns is 1-128.",
         track_policy: "existing_track | one_shared_new_track | one_new_track_per_asset | explicit_per_asset",
         new_track: "For new-track policies: bounded name (shared) or name_prefix plus optional starting_index.",
         dry_run: "Defaults true and still runs complete probe/preflight/layout without mutation.",
@@ -240,6 +240,7 @@ export function createAlpha3_3MediaPlaceAssetsExactManual() {
         "Every imported Item is independently read and must match exact source, Track, position, and probed/section duration before that asset is applied.",
         "Every relinked exact Take is independently read and must report the exact probed replacement file_ref before applied.",
         "Per-asset mutation, live readback, and Project Index maintenance remain separate; dispatch success alone never marks applied.",
+        "Batches above eight assets use output_projection bounded_batch_v1: selected_sources and layout are complete row arrays described by their adjacent *_columns fields, preserving exact source_file_ref and Track/time placement truth within the public envelope ceiling.",
       ],
       success_criteria: [
         "Every search page stays bound to one database snapshot, reports the full match total, and marks each returned path available or unavailable from current disk state.",
@@ -1007,7 +1008,7 @@ function normalizeInput(raw, posture = {}) {
   const mode = raw.mode ?? "place_assets";
   if (!ALPHA3_3_MEDIA_PLACE_ASSETS_MODES.includes(mode)) return failed("MEDIA_MODE_UNSUPPORTED", `mode must be ${ALPHA3_3_MEDIA_PLACE_ASSETS_MODES.join(" or ")}.`);
   if (mode === "search_library") return normalizeLibrarySearchInput(raw);
-  if (raw.folder_ref !== undefined || raw.folder_selection !== undefined) return failed("MEDIA_FOLDER_APPROVAL_UNPROVEN", "Current folder:path listing does not prove an approved-folder identity boundary; supply up to eight explicit asset paths.");
+  if (raw.folder_ref !== undefined || raw.folder_selection !== undefined) return failed("MEDIA_FOLDER_APPROVAL_UNPROVEN", "Current folder:path listing does not prove an approved-folder identity boundary; supply 1-128 explicit asset paths.");
   if (!Array.isArray(raw.assets) || raw.assets.length < 1 || raw.assets.length > MAX_ASSETS) return failed("MEDIA_ASSETS_INVALID", `assets must contain 1-${MAX_ASSETS} rows.`);
   if (raw.dry_run !== undefined && typeof raw.dry_run !== "boolean") return failed("MEDIA_INPUT_INVALID", "dry_run must be boolean.");
   if (raw.compact_response !== undefined && typeof raw.compact_response !== "boolean") return failed("MEDIA_INPUT_INVALID", "compact_response must be boolean.");
@@ -1075,7 +1076,7 @@ function normalizePlacement(raw) {
   const gap = source.gap_seconds ?? raw.gap_seconds ?? 0;
   const columnGap = source.column_gap_seconds ?? raw.column_gap_seconds ?? gap;
   const columns = source.columns ?? raw.columns ?? 2;
-  if (!finiteNonNegative(start) || !finiteNonNegative(gap) || !finiteNonNegative(columnGap) || !integerRange(columns, 1, MAX_ASSETS)) return failed("MEDIA_PLACEMENT_INVALID", "Placement start/gaps must be finite >=0 and columns must be 1-8.");
+  if (!finiteNonNegative(start) || !finiteNonNegative(gap) || !finiteNonNegative(columnGap) || !integerRange(columns, 1, MAX_ASSETS)) return failed("MEDIA_PLACEMENT_INVALID", "Placement start/gaps must be finite >=0 and columns must be 1-128.");
   return { ok: true, value: { mode, start_seconds: start, gap_seconds: gap, column_gap_seconds: columnGap, columns, align_basis: "item_start" } };
 }
 
@@ -1390,6 +1391,71 @@ function resultData(input, state) {
   return { mode: input.mode, placement_mode: input.placement.mode, track_policy: input.track_policy, asset_count: input.assets.length, setup_mutation_count: setupChanges(state).length, ...(state.batchTimings ? { batch_timings: clone(state.batchTimings) } : {}), selected_sources: state.operations.map((operation) => ({ id: operation.id, source_file_ref: operation.file_ref, path: operation.path })), layout: state.operations.map((operation) => ({ id: operation.id, position_seconds: operation.position_seconds, target_ref: operation.take_ref ?? operation.target_track_ref ?? operation.target_track_key, duration_seconds: operation.import_length_seconds ?? null })), source_media_deleted: false, arbitrary_folder_scan: false, sqlite_write_authority: false, outcome: { mutation: { status: mutated.some((change) => change.mutation.status === "unknown_or_partial") ? "unknown_or_partial" : mutated.length ? "completed" : "not_run", completed_count: mutated.filter((change) => change.mutation.status === "completed").length, unknown_or_partial_count: mutated.filter((change) => change.mutation.status === "unknown_or_partial").length, total_count: state.changes.length }, live_readback: { status: applied.length === mutated.length && mutated.length ? "passed" : applied.length ? "partial" : "not_run", passed_count: applied.length, total_count: mutated.length }, index_maintenance: { status: indexStatuses.length === 1 ? indexStatuses[0] : indexStatuses.length > 1 ? "mixed" : "not_run", scopes: uniqueStrings(mutated.flatMap((change) => change.index_maintenance?.scopes ?? [])) } } };
 }
 
+function isLargeMediaBatch(data) {
+  return isObject(data)
+    && (Number.isInteger(data.asset_count) && data.asset_count > 8
+      || Number.isInteger(data.batch_timings?.rows) && data.batch_timings.rows > 8);
+}
+
+function compactMediaStages(stages) {
+  return (Array.isArray(stages) ? stages : []).map((stage) => ({
+    id: stage.id,
+    kind: stage.kind,
+    status: stage.status,
+    evidence_refs: uniqueStrings(stage.evidence_refs).slice(0, 1),
+  }));
+}
+
+function compactMediaChanges(changes) {
+  const rows = Array.isArray(changes) ? changes : [];
+  const assetRows = rows.filter((change) => change.mode !== "setup");
+  const ordered = assetRows.length > 0 ? [...assetRows, ...rows.filter((change) => change.mode === "setup")] : rows;
+  return boundedMediaSamples(ordered).map((change) => compact({
+    asset_id: change.asset_id,
+    change_id: change.change_id,
+    related_asset_id: change.related_asset_id,
+    status: change.status,
+    live_readback: { status: change.live_readback?.status ?? "not_run" },
+  }));
+}
+
+function boundedMediaSamples(rows, limit = 8) {
+  if (rows.length <= limit) return rows;
+  const selected = new Set();
+  const output = [];
+  const add = (index) => {
+    if (index < 0 || index >= rows.length || selected.has(index) || output.length >= limit) return;
+    selected.add(index);
+    output.push({ index, row: rows[index] });
+  };
+  for (let index = 0; index < 3; index += 1) add(index);
+  for (const [index, row] of rows.entries()) {
+    if (typeof row?.status === "string" && !["applied", "planned", "not_run"].includes(row.status)) add(index);
+  }
+  for (let index = rows.length - 3; index < rows.length; index += 1) add(index);
+  for (let index = 3; output.length < limit && index < rows.length - 3; index += 1) add(index);
+  return output.sort((left, right) => left.index - right.index).map((entry) => entry.row);
+}
+
+function compactMediaResultData(data) {
+  const value = isObject(data) ? data : {};
+  const selectedSources = Array.isArray(value.selected_sources) ? value.selected_sources : [];
+  const layout = Array.isArray(value.layout) ? value.layout : [];
+  return {
+    ...value,
+    output_projection: "bounded_batch_v1",
+    complete_selected_source_count: selectedSources.length,
+    complete_layout_count: layout.length,
+    inline_sample_limit: 8,
+    selected_sources_columns: ["id", "source_file_ref"],
+    selected_sources: boundedMediaSamples(selectedSources)
+      .map((row) => [row.id, row.source_file_ref]),
+    layout_columns: ["id", "position_seconds", "target_ref", "duration_seconds"],
+    layout: boundedMediaSamples(layout)
+      .map((row) => [row.id, row.position_seconds, row.target_ref, row.duration_seconds]),
+  };
+}
+
 function searchResultData(page) {
   return {
     mode: "search_library",
@@ -1426,7 +1492,35 @@ function emptySearchData(input) {
 function createState() { return { operations: [], changes: [], canonicalRefs: [], evidenceRefs: [], trackObjects: new Map(), createdTracks: new Map(), beforeRegions: [], batchTimings: null, sqlite: sqliteEvidence() }; }
 
 function successEnvelope({ entry, request, startedAt, now, stages, state, activeBudget, status = "completed", summary, data }) { return finalizeEnvelope(buildSuccessEnvelope({ entry, request, startedAt, completedAt: safeNowIso(now), stages, state, activeBudget, status, summary, data })); }
-function buildSuccessEnvelope({ entry, request, startedAt, completedAt, stages, state, activeBudget, status, summary, data }) { return { contract: MACRO_EXECUTION_CONTRACT, ok: true, macro: macroIdentity(entry), request: requestSummary(request), execution: { status, started_at: startedAt, completed_at: completedAt, stage_count: stages.length, stages }, sqlite: state.sqlite, result: { summary, canonical_refs: uniqueStrings(state.canonicalRefs), changes: clone(state.changes), verification: { status: "passed", evidence_refs: uniqueStrings(state.evidenceRefs) }, data }, blockers: [], error: null, recovery: null, budget: { max_bytes: activeBudget, actual_bytes: 0, truncated: false, artifact_fallback: false } }; }
+function buildSuccessEnvelope({ entry, request, startedAt, completedAt, stages, state, activeBudget, status, summary, data }) {
+  const compactBatch = isLargeMediaBatch(data);
+  const projectedData = compactBatch ? compactMediaResultData(data) : data;
+  return {
+    contract: MACRO_EXECUTION_CONTRACT,
+    ok: true,
+    macro: macroIdentity(entry),
+    request: requestSummary(request),
+    execution: {
+      status,
+      started_at: startedAt,
+      completed_at: completedAt,
+      stage_count: stages.length,
+      stages: compactBatch ? compactMediaStages(stages) : stages,
+    },
+    sqlite: state.sqlite,
+    result: {
+      summary,
+      canonical_refs: uniqueStrings(state.canonicalRefs).slice(0, MACRO_CONTRACT_CEILINGS.canonical_ref_max_count),
+      changes: compactBatch ? compactMediaChanges(state.changes) : clone(state.changes),
+      verification: { status: "passed", evidence_refs: compactBatch ? uniqueStrings(state.evidenceRefs).slice(0, 1) : uniqueStrings(state.evidenceRefs) },
+      data: projectedData,
+    },
+    blockers: [],
+    error: null,
+    recovery: null,
+    budget: { max_bytes: activeBudget, actual_bytes: 0, truncated: false, artifact_fallback: false },
+  };
+}
 function failureEnvelope({ entry, request, startedAt, now, stages, state, activeBudget, status = "blocked", code, message, blockers = [], data = {} }) {
   const failure = boundedFailureDetails(
     { code, message, blockers },
@@ -1451,7 +1545,37 @@ function failureEnvelope({ entry, request, startedAt, now, stages, state, active
 function buildFailureEnvelope({ entry, request, startedAt, completedAt, stages, state, activeBudget, status = "blocked", code, message, blockers = [], data = {} }) {
   const mutated = state.changes.filter((change) => ["completed", "unknown_or_partial"].includes(change.mutation?.status));
   const verified = mutated.length > 0 && mutated.every((change) => change.live_readback?.status === "passed");
-  return { contract: MACRO_EXECUTION_CONTRACT, ok: false, macro: macroIdentity(entry), request: requestSummary(request), execution: { status, started_at: startedAt, completed_at: completedAt, stage_count: stages.length, stages }, sqlite: state.sqlite, result: { summary: message, canonical_refs: uniqueStrings(state.canonicalRefs), changes: clone(state.changes), verification: { status: verified ? "passed" : status === "partial_failure" ? "failed" : "not_required", evidence_refs: status === "partial_failure" ? uniqueStrings(state.evidenceRefs) : [] }, data }, blockers: (blockers?.length ? blockers : [blocker(code, message)]).slice(0, MACRO_CONTRACT_CEILINGS.blocker_max_count), error: { code, message, recoverable: true }, recovery: { undo_policy: entry.undo_policy, partial_changes_possible: status === "partial_failure", source_media_deleted: false, action: status === "partial_failure" ? "Keep rows proved by live readback and inspect unverified assets before retrying." : "Fix the typed source/target/coverage blocker and retry once." }, budget: { max_bytes: activeBudget, actual_bytes: 0, truncated: false, artifact_fallback: false } };
+  const compactBatch = isLargeMediaBatch(data);
+  const zeroWrite = status === "blocked" && state.changes.length === 0;
+  const projectedData = compactBatch ? compactMediaResultData(data) : data;
+  const projectedBlockers = (blockers?.length ? blockers : [blocker(code, message)])
+    .slice(0, MACRO_CONTRACT_CEILINGS.blocker_max_count)
+    .map((entry) => zeroWrite ? { ...entry, details: { ...(entry.details ?? {}), zero_write: true } } : entry);
+  return {
+    contract: MACRO_EXECUTION_CONTRACT,
+    ok: false,
+    macro: macroIdentity(entry),
+    request: requestSummary(request),
+    execution: {
+      status,
+      started_at: startedAt,
+      completed_at: completedAt,
+      stage_count: stages.length,
+      stages: compactBatch ? compactMediaStages(stages) : stages,
+    },
+    sqlite: state.sqlite,
+    result: {
+      summary: message,
+      canonical_refs: uniqueStrings(state.canonicalRefs).slice(0, MACRO_CONTRACT_CEILINGS.canonical_ref_max_count),
+      changes: compactBatch ? compactMediaChanges(state.changes) : clone(state.changes),
+      verification: { status: verified ? "passed" : status === "partial_failure" ? "failed" : "not_required", evidence_refs: status === "partial_failure" ? uniqueStrings(state.evidenceRefs).slice(0, MACRO_CONTRACT_CEILINGS.evidence_ref_max_count) : [] },
+      data: projectedData,
+    },
+    blockers: projectedBlockers,
+    error: { code, message, recoverable: true, ...(zeroWrite ? { details: { zero_write: true } } : {}) },
+    recovery: { undo_policy: entry.undo_policy, partial_changes_possible: status === "partial_failure", source_media_deleted: false, action: status === "partial_failure" ? "Keep rows proved by live readback and inspect unverified assets before retrying." : "Fix the typed source/target/coverage blocker and retry once." },
+    budget: { max_bytes: activeBudget, actual_bytes: 0, truncated: false, artifact_fallback: false },
+  };
 }
 function finalizeFailureEnvelope(envelope) {
   const originalSummary = envelope.result.summary;

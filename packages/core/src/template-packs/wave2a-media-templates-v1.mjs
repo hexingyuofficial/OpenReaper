@@ -255,12 +255,27 @@ export const WAVE2A_MEDIA_TEMPLATES = deepFreeze([
   commandDescriptor({
     id: "template.media.import_files_batch",
     title: "Import media files batch",
-    summary: "Import a bounded batch of media files through one typed native queue and one Undo scope.",
+    summary: "Import 1-128 media files through one typed native queue and one Undo scope with bounded aggregate readback.",
     entity_kind: "media_file",
     tags: ["media", "import", "batch", "track"],
     bridge: bridge({ capability: "media.import_files_batch" }),
     inputSchema: objectSchema({
-      batch: { type: "array" },
+      batch: {
+        type: "array",
+        minItems: 1,
+        maxItems: 128,
+        items: {
+          type: "object",
+          properties: {
+            id: { type: "string" },
+            position_seconds: { type: "number" },
+            start_percent: { type: "number" },
+            end_percent: { type: "number" },
+          },
+          required: ["id", "position_seconds"],
+          additionalProperties: false,
+        },
+      },
       preserve_selection: { type: "boolean" },
     }, ["batch", "preserve_selection"]),
     outputSchema: objectSchema({

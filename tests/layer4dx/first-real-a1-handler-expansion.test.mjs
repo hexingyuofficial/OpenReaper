@@ -280,6 +280,7 @@ describe("First-Real-Fixture-A A1 live handler expansion", () => {
     const uniqueRunJobKeys = [...new Set(runJobKeys)];
     assert.deepEqual(uniqueRunJobKeys, [
       ...A1_OPERATIONS,
+      "analysis.analyze_items_batch",
       ...D27_ANALYSIS_AUDIO_OPERATIONS,
       "items.create_layer_report",
       ...D29_RENDER_JOB_OPERATIONS,
