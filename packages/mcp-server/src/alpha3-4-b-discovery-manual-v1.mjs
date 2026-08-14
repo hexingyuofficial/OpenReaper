@@ -288,6 +288,14 @@ export function createAlpha345RecipeProductizationManual({ requested_ids = [] } 
   return deepFreeze({
     contract: ALPHA3_45_RECIPE_MANUAL_CONTRACT,
     version: "1.0.0",
+    plain_language: "A Recipe is a saved declarative batch program. The Agent chooses and binds it before execution, OpenReaper runs the complete plan without Agent stage loops, and the Agent explains the aggregate readback afterward.",
+    choose_recipe_when: [
+      "the task has two or more ordered stages",
+      "one frozen plan must apply the same operation across many exact targets",
+      "the operation should be saved, rediscovered, or repeated after reconnect",
+    ],
+    choose_macro_when: "One existing Macro already covers the complete bounded operation.",
+    choose_skill_when: "The work primarily needs judgment, teaching, or an adaptive workflow rather than a fixed mutation plan.",
     discovery: {
       compact: { tool: "list_recipes", arguments: { limit: 25 } },
       search: { tool: "list_recipes", arguments: { query: "use the user's original words", limit: 25 } },
@@ -297,6 +305,14 @@ export function createAlpha345RecipeProductizationManual({ requested_ids = [] } 
     lifecycle: createAlpha345RecipeLifecycleManual(),
     temporary_one_off: ["validate", "save exact temporary immutable revision", "run once", "delete exact revision after terminal evidence is retained"],
     persistent_reuse: ["validate", "save immutable revision", "reconnect", "list_recipes or call_recipe list", "get exact identity", "run with one public call"],
+    temporary_recipe_example: {
+      user_intent: "Apply one fixed dialogue cleanup plan to 63 selected audio Items.",
+      authoring_source: "Copy lifecycle.minimal_draft_template, exact-expand every Macro dependency, and replace every COPY_ value; never invent dependency facts or output ports.",
+      execution: "validate -> save -> run once; the Agent does not execute stages or targets in a loop.",
+      keep_it: "Omit delete. Rediscover the saved exact revision with list/get after reconnect.",
+      discard_it: "After terminal evidence is retained, delete only the exact saved revision with confirm=true.",
+      target_limit: "1-64 exact targets are valid, including 63; 65 must fail before mutation when the selected Macro has the 64-target batch limit.",
+    },
     system_model: "Official Recipes pressure-test the same general Recipe system; they do not use a specialized execution surface.",
     shared_lifecycle: ["validate", "save", "list", "get", "run", "reconnect", "trust", "evidence", "whole-Recipe Undo"],
     official_recipe_ids: ALPHA3_45_OFFICIAL_RECIPE_IDS,

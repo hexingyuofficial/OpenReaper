@@ -164,6 +164,13 @@ test("canonical AGENT_START_HERE markers project under 16 KiB with exact 15 Macr
   assert.match(instructions, /call_recipe/u);
   assert.match(instructions, /validate -> save/u);
   assert.match(instructions, /temporary one-off/u);
+  assert.match(instructions, /Recipe is a saved declarative batch program/u);
+  assert.match(instructions, /product_surface\.recipe_productization\.lifecycle\.minimal_draft_template/u);
+  assert.match(instructions, /validate -> save -> run/u);
+  assert.match(instructions, /do not generate 63 calls/u);
+  assert.match(instructions, /65 must fail before mutation/u);
+  assert.match(instructions, /To keep the same\s+Recipe, omit `delete`/u);
+  assert.match(instructions, /Never execute an inline or unsaved draft/u);
   assert.match(instructions, /rediscovered after reconnect/u);
   assert.match(instructions, /one public `call_recipe` call/u);
   assert.match(instructions, /list_recipes/u);

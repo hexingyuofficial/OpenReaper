@@ -48,6 +48,28 @@ a reusable Recipe stays saved and is rediscovered after reconnect with
 Use the returned exact `next_call` for a safe resume;
 never replay Recipe stages or targets yourself.
 
+## Recipe quick use
+
+A Recipe is a saved declarative batch program, not an Agent conversation. Use
+one Macro when it already covers the whole bounded operation; use a Recipe for
+two or more ordered stages, one frozen plan over many exact targets, or work
+that should be saved and repeated. Use a Skill for judgment or adaptive
+guidance. The Agent only chooses dependencies and binds inputs before the run,
+then explains aggregate readback afterward; it never loops through stages or
+targets while the Recipe runs.
+
+For a temporary Recipe, read
+`product_surface.recipe_productization.lifecycle.minimal_draft_template`, exact-
+expand each dependency, copy its id/version/risk/descriptor hash/capabilities,
+replace every `COPY_` value, then call `validate -> save -> run`. Example:
+"apply one fixed dialogue cleanup plan to 63 selected audio Items." The Recipe
+holds the fixed plan and the batch Macro handles all 63 targets in one stage;
+do not generate 63 calls. Where that Macro has the 64-target limit, 1-64 is
+valid and 65 must fail before mutation. After terminal evidence is retained,
+call `delete` with the exact saved identity and `confirm=true`. To keep the same
+Recipe, omit `delete`; after reconnect rediscover it with `list/get` and run the
+exact revision again. Never execute an inline or unsaved draft.
+
 Search Recipes with the user's original words, then exact-expand the selected
 id using `list_recipes` fields `steps`, `assertions`, and `recovery`. The two
 official product Recipes are:

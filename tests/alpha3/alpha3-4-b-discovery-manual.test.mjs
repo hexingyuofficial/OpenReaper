@@ -186,8 +186,19 @@ test("Alpha3.45 Recipe manual covers seven operations, temporary/persistent reus
 
   const product = createAlpha345RecipeProductizationManual({ requested_ids: ALPHA3_45_OFFICIAL_RECIPE_IDS });
   assert.deepEqual(product.official_recipe_ids, ALPHA3_45_OFFICIAL_RECIPE_IDS);
+  assert.match(product.plain_language, /saved declarative batch program/u);
+  assert.match(product.plain_language, /without Agent stage loops/u);
+  assert.equal(product.choose_recipe_when.length, 3);
+  assert.match(product.choose_macro_when, /One existing Macro/u);
+  assert.match(product.choose_skill_when, /judgment/u);
   assert.deepEqual(product.temporary_one_off.map((step) => step.split(" ")[0]), ["validate", "save", "run", "delete"]);
   assert.match(product.persistent_reuse.join(" "), /reconnect/u);
+  assert.match(product.temporary_recipe_example.authoring_source, /minimal_draft_template/u);
+  assert.match(product.temporary_recipe_example.execution, /validate -> save -> run once/u);
+  assert.match(product.temporary_recipe_example.keep_it, /Omit delete/u);
+  assert.match(product.temporary_recipe_example.discard_it, /confirm=true/u);
+  assert.match(product.temporary_recipe_example.target_limit, /including 63/u);
+  assert.match(product.temporary_recipe_example.target_limit, /65 must fail before mutation/u);
   assert.match(product.system_model, /same general Recipe system/u);
   assert.deepEqual(product.shared_lifecycle, ["validate", "save", "list", "get", "run", "reconnect", "trust", "evidence", "whole-Recipe Undo"]);
   assert.match(lifecycle.official_and_user_rule, /share validate\/save\/list\/get\/run\/reconnect/u);

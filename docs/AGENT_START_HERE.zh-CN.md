@@ -34,6 +34,25 @@ raw executor。
 官方、用户和 fork Recipe 共用 generic runner、一次公开 `call_recipe`、完整
 plan、REAPER 侧批处理、一次聚合 readback/evidence 和一次 Whole-Recipe Undo。
 
+## Recipe 快速用法
+
+Recipe 是“保存下来的声明式批处理程序”，不是 Agent 对话。一个现有 Macro
+已经完整覆盖单次有界操作时用 Macro；需要两个或更多有序阶段、把同一固定
+计划应用到许多精确目标，或希望断线重连后继续复用时用 Recipe；需要判断、
+教学或动态工作流时用 Skill。Agent 只在执行前选择依赖并绑定输入，执行后解释
+聚合 readback；Recipe 执行期间 Agent 不逐阶段、逐目标循环。
+
+临时 Recipe 的机械写法：读取
+`product_surface.recipe_productization.lifecycle.minimal_draft_template`，精确展开
+每个依赖，复制 id/version/risk/descriptor hash/capabilities，替换所有 `COPY_`
+值，然后执行 `validate -> save -> run`。例子：“对 63 个精确选中的对白音频
+Item 套同一固定清理计划。”Recipe 保存固定计划，批处理 Macro 在一个阶段内
+处理全部 63 个目标，不能发 63 次调用。该 Macro 上限为 64 时，1-64（包括
+63）都合法，65 必须在 mutation 前失败。终态 evidence 保留后，如只用一次，
+用完整 saved identity 和 `confirm=true` 执行 `delete`；如需长期保存，省略
+`delete`，重连后用 `list/get` 找回同一精确 revision 再运行。inline 或未保存
+draft 永远不能执行。
+
 升级后，如果某个被保留的用户 Recipe revision 与当前 dependency catalog
 不再一致，`list_recipes` 会将它标记为 `REVISION_STALE`，同时保持官方 Recipe
 和其他有效 Recipe 可用。不要自动改写或执行 stale revision；提示用户需要
