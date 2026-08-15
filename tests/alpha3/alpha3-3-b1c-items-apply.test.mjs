@@ -740,6 +740,35 @@ describe("Alpha3.3-B1c executable macro.items.apply", () => {
     }
   });
 
+  it("rejects 65 exact audio targets as typed zero-write before dispatch", async () => {
+    const targetRefs = Array.from({ length: 65 }, (_, index) =>
+      `item:guid:{00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}}`);
+    for (const mode of ["remove_silence", "normalize_level"]) {
+      let dispatches = 0;
+      const result = await executeAlpha3_3B1cItemsApplyMacro({
+        request: request({
+          mode,
+          target: "exact",
+          target_refs: targetRefs,
+          ...(mode === "normalize_level" ? { normalization_metric: "peak", normalization_target: -6 } : {}),
+          dry_run: false,
+        }),
+        executeAtomic: async () => {
+          dispatches += 1;
+          throw new Error("65-target audio batch must not dispatch");
+        },
+        now: () => new Date(NOW),
+      });
+
+      assert.equal(result.ok, false, JSON.stringify(result));
+      assert.equal(result.error.code, "ITEM_APPLY_TARGET_LIMIT_EXCEEDED");
+      assert.equal(result.result.data.zero_write, true);
+      assert.equal(result.result.data.target_count, 65);
+      assert.equal(dispatches, 0);
+      assert.deepEqual(validateMacroExecutionEnvelope(result), { valid: true, errors: [] });
+    }
+  });
+
   it("projects a three-target high-fragment Silence success without post-write RESPONSE_TOO_LARGE", async () => {
     const items = Array.from({ length: 3 }, (_, index) => item(
       itemRef(`{HIGH-FRAGMENT-${index + 1}}`),

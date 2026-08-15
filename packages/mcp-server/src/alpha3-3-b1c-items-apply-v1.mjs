@@ -187,7 +187,7 @@ const REGISTRY_ENTRY = deepFreeze({
   contract: MACRO_PROGRAM_REGISTRY_CONTRACT,
   macro_id: ALPHA3_3_B1C_ITEMS_APPLY_MACRO_ID,
   program_id: "openreaper.macro.items.apply",
-  program_version: "1.7.0",
+  program_version: "1.7.1",
   implementation_status: "executable",
   risk: "destructive",
   input_schema: {
@@ -318,6 +318,18 @@ const REGISTRY_ENTRY = deepFreeze({
       transient_delta_linear: { type: "number", exclusiveMinimum: 0, maximum: 1024 },
       min_transient_gap_ms: { type: "number", minimum: 0, maximum: 60000 },
     },
+    allOf: [{
+      if: {
+        properties: { mode: { enum: ["remove_silence", "normalize_level"] } },
+        required: ["mode"],
+      },
+      then: {
+        properties: {
+          target_refs: { maxItems: AUDIO_BATCH_MAX_TARGETS },
+          limit: { maximum: AUDIO_BATCH_MAX_TARGETS },
+        },
+      },
+    }],
     required: ["mode"],
   },
   selector_policy: {
@@ -1765,6 +1777,8 @@ async function executeAudioBatchMacro({
   // input normalization: no selected-target resolution or REAPER dispatch may
   // begin for either remove_silence or normalize_level.
   if (input.target_refs.length > AUDIO_BATCH_MAX_TARGETS) {
+    state.totalTargetCount = input.target_refs.length;
+    state.returnedTargetCount = 0;
     state.timings.total_ms = monoElapsed(t0, monoNow);
     return failureEnvelope({
       entry, request, startedAt, now, stages, state, activeBudget,

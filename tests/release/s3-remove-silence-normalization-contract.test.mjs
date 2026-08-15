@@ -149,9 +149,14 @@ describe("S3 remove-silence and normalization static release contract", () => {
     assert.ok(macroEntry, "macro.items.apply must remain a registered Macro");
 
     const properties = macroEntry.input_schema.properties;
+    const audioBatchGuard = macroEntry.input_schema.allOf.find((branch) =>
+      branch.if?.properties?.mode?.enum?.includes("remove_silence")
+      && branch.if?.properties?.mode?.enum?.includes("normalize_level"));
     assert.deepEqual(properties.silence_scope.enum, SCOPES);
     assert.equal(properties.target.enum.includes("selected"), true);
-    assert.equal(properties.target_refs.maxItems, 64);
+    assert.equal(properties.target_refs.maxItems, 128, "non-audio Item modes retain their accepted 128-target bound");
+    assert.equal(audioBatchGuard?.then?.properties?.target_refs?.maxItems, 64);
+    assert.equal(audioBatchGuard?.then?.properties?.limit?.maximum, 64);
     assert.equal(properties.dry_run.type, "boolean");
     for (const [field, expected] of Object.entries(SILENCE_FIELDS)) {
       assert.ok(properties[field], `macro.items.apply schema is missing ${field}`);
@@ -270,7 +275,10 @@ describe("S3 remove-silence and normalization static release contract", () => {
     sourceHas(s3SourceEntries, /unsupported/i, "unreadable/unsupported targets must fail closed");
     sourceHas(s3SourceEntries, /zero_write/, "blocked target sets must report zero-write truth");
     assert.equal(nearby(macroSource, "65", "zero_write", 1200), true, "65-target silence rejection must be zero-write before analysis/mutation");
-    assert.equal(macroEntry.input_schema.properties.target_refs.maxItems, 64, "exact target_refs must be bounded at 64");
+    const audioBatchGuard = macroEntry.input_schema.allOf.find((branch) =>
+      branch.if?.properties?.mode?.enum?.includes("remove_silence")
+      && branch.if?.properties?.mode?.enum?.includes("normalize_level"));
+    assert.equal(audioBatchGuard?.then?.properties?.target_refs?.maxItems, 64, "exact audio target_refs must be bounded at 64");
     sourceHas(s3SourceEntries, /source_media_deleted/, "source media preservation must be explicit in the result truth");
   });
 

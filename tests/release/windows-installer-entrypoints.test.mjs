@@ -97,14 +97,16 @@ test("Windows start omits an empty Start-Process argument list", () => {
       < startPs1.indexOf("if (Test-HeartbeatReady) { break }"),
     "Windows start must inspect visible REAPER windows before accepting heartbeat readiness",
   );
-  assert.match(startPs1, /\$unexpected = @\(\$windows \| Where-Object \{ \$_\.class_name -ne "REAPERwnd" \}\)/u);
   assert.match(startPs1, /\$stockSplash = @\(\$windows \| Where-Object \{ \$_\.class_name -ceq "REAPERsplash" -and \$_\.title -ceq "REAPER" \}\)/u);
   assert.match(startPs1, /if \(\$windows\.Count -eq 1 -and \$stockSplash\.Count -eq 1\)/u);
   assert.match(startPs1, /state = "pending"; detail = "stock_reaper_splash"/u);
+  assert.match(startPs1, /\$unexpected = @\(\$windows \| Where-Object \{\s+\$_\.class_name -ne "REAPERwnd" -and\s+-not \(\$_\.class_name -ceq "REAPERsplash" -and \$_\.title -ceq "REAPER"\)\s+\}\)/u);
+  assert.match(startPs1, /\$mainWindows\.Count -ne 1 -or \$stockSplash\.Count -gt 1 -or \$unexpected\.Count -ne 0/u);
+  assert.match(startPs1, /reaper_main_window_with_stock_splash/u);
   assert.ok(
     startPs1.indexOf('detail = "stock_reaper_splash"')
       < startPs1.indexOf('$mainWindows = @($windows | Where-Object { $_.class_name -eq "REAPERwnd" })'),
-    "Windows start may wait through only the exact stock splash before enforcing the normal-main-window gate",
+    "Windows start must distinguish the splash-only wait from the normal main-window transition",
   );
   assert.match(startPs1, /preserve the dialog and ask the user to resolve it/u);
   assert.match(startPs1, /rerun openreaper-start\.ps1 -RecoverExisting/u);

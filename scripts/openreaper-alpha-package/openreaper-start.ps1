@@ -157,12 +157,16 @@ public static class OpenReaperNativeWindowProbe {
         return [pscustomobject]@{ state = "pending"; detail = "stock_reaper_splash" }
     }
     $mainWindows = @($windows | Where-Object { $_.class_name -eq "REAPERwnd" })
-    $unexpected = @($windows | Where-Object { $_.class_name -ne "REAPERwnd" })
-    if ($mainWindows.Count -ne 1 -or $unexpected.Count -ne 0) {
+    $unexpected = @($windows | Where-Object {
+        $_.class_name -ne "REAPERwnd" -and
+        -not ($_.class_name -ceq "REAPERsplash" -and $_.title -ceq "REAPER")
+    })
+    if ($mainWindows.Count -ne 1 -or $stockSplash.Count -gt 1 -or $unexpected.Count -ne 0) {
         $observed = ($windows | ForEach-Object { "class=$($_.class_name);title=$($_.title)" }) -join " | "
         return [pscustomobject]@{ state = "blocked"; detail = "dialog_or_unknown_window:$observed" }
     }
-    return [pscustomobject]@{ state = "safe"; detail = "reaper_main_window_only" }
+    $detail = if ($stockSplash.Count -eq 1) { "reaper_main_window_with_stock_splash" } else { "reaper_main_window_only" }
+    return [pscustomobject]@{ state = "safe"; detail = $detail }
 }
 
 Assert-AbsolutePath $InstallRoot "-InstallRoot"
