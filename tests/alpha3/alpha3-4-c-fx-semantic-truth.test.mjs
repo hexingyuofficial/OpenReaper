@@ -98,6 +98,44 @@ test("reaeq_bands dispatches one typed atomic batch and invalidates FX once", as
   assert.deepEqual(invalidations, [["fx"]]);
 });
 
+test("reaeq_bands preserves mutation-attempted failure truth and invalidates FX once", async () => {
+  const invalidations = [];
+  const response = await executeAlpha3_2_5CControlMacro({
+    request: {
+      id: "macro.set_stock_plugin_controls",
+      input: { mode: "reaeq_bands", dry_run: false, bands: [{ band: 1, type: "high_pass", frequency_hz: 85 }] },
+      refs: { fx_ref: "fx:track:guid:{TRACK}:0" },
+    },
+    executeAtomic: async ({ id }) => {
+      if (id === "template.tracks.resolve_track_ref") {
+        return atomic(id, { track_ref: "track:guid:{TRACK}" }, [{ kind: "track", ref: "track:guid:{TRACK}", identity: { scheme: "guid", value: "{TRACK}" } }]);
+      }
+      if (id === "template.fx.resolve_fx_ref") {
+        return atomic(id, { fx_ref: "fx:track:guid:{TRACK}:0" }, [{ kind: "fx", ref: "fx:track:guid:{TRACK}:0", identity: { scheme: "track_fx", value: "track:guid:{TRACK}:0" } }]);
+      }
+      if (id === "template.fx.set_reaeq_bands") {
+        return {
+          contract: "template.execution.v1",
+          ok: false,
+          error: {
+            code: "VERIFY_FAILED",
+            message: "ReaEQ write completed but aggregate readback failed.",
+            details: { mutation_attempted: true, zero_write: false },
+          },
+        };
+      }
+      throw new Error(`unexpected ${id}`);
+    },
+    projectIndexRuntime: exactIndexRuntime(invalidations),
+  });
+
+  assert.equal(response.ok, false, JSON.stringify(response));
+  assert.equal(response.execution.status, "partial_failure");
+  assert.equal(response.error.code, "VERIFY_FAILED");
+  assert.equal(response.result.data.outcome.mutation.status, "unknown");
+  assert.deepEqual(invalidations, [["fx"]]);
+});
+
 test("reaeq_bands live-resolves exact audio Take FX without the MIDI-only resolver", async () => {
   const takeRef = "take:guid:{TAKE}";
   const fxRef = `fx:${takeRef}:0`;

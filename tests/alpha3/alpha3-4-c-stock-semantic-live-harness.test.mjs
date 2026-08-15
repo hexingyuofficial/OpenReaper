@@ -155,7 +155,7 @@ function fakeReaCompClient({ probeOffset = 0 } = {}) {
   ];
   const client = {
     async listTools() {
-      return { tools: ["ping", "get_state", "list_templates", "list_recipes", "call_template"].map((name) => ({ name })) };
+      return { tools: ["ping", "get_state", "list_templates", "list_recipes", "call_template", "call_recipe"].map((name) => ({ name })) };
     },
     async callTool(request) {
       calls.push(structuredClone(request));

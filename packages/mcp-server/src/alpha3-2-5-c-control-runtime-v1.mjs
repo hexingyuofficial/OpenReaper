@@ -1076,6 +1076,25 @@ async function executeReaEqBands({
     if (mutationUnknown) {
       const invalidation = invalidateKnownScopes(projectIndexRuntime, ["fx"], now);
       state.indexUpdate = invalidation;
+      state.changes = normalized.bands.map((band) => ({
+        id: `band_${band.band}`,
+        status: "failed",
+        fx_ref: selected.fxRef,
+        band: band.band,
+        mutation: {
+          status: "unknown",
+          dispatch_status: "attempted",
+          error_code: error.code ?? "FX_REAEQ_BANDS_FAILED",
+        },
+        live_readback: { status: "not_run" },
+        index_maintenance: { status: "not_run", scopes: [] },
+      }));
+      applyIndexMaintenanceToChanges(
+        state.changes,
+        invalidation?.ok === false ? "failed" : (invalidation ? "completed" : "skipped"),
+        invalidation,
+      );
+      if (invalidation) state.sqlite = sqliteEvidence(projectIndexRuntime, { used: true, freshness: "stale" });
     }
     return failureEnvelope({
       entry, request, startedAt, now, stages, state,
@@ -2250,11 +2269,13 @@ async function runAtomic({ executeAtomic, request, state, child, idempotencyKey 
     observeProjectIndex: false,
   });
   if (execution?.ok !== true) {
-    throw coded(
+    const error = coded(
       execution?.error?.code ?? "MACRO_ATOMIC_STAGE_FAILED",
       execution?.error?.message ?? `${child.id} failed through the managed atomic route.`,
       execution?.error?.details?.blockers,
     );
+    if (object(execution?.error?.details)) error.details = clone(execution.error.details);
+    throw error;
   }
   return execution;
 }

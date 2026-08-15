@@ -94,7 +94,7 @@ export async function runStockSemanticTruthAudit({
       });
       const tools = typeof client.listTools === "function" ? await client.listTools() : null;
       report.tool_surface = tools?.tools?.map((entry) => entry.name) ?? null;
-      assertFiveToolSurface(report.tool_surface);
+      assertInstalledToolSurface(report.tool_surface);
       const context = createAuditContext({ client, journal, report });
       await context.callTool("ping", {}, { scenario: "stock_semantic_audit", stage: "ping" });
       for (const pluginId of pluginIds) {
@@ -624,10 +624,10 @@ function assertMacro(value, label) {
   }
 }
 
-function assertFiveToolSurface(tools) {
-  const expected = ["ping", "get_state", "list_templates", "list_recipes", "call_template"];
+function assertInstalledToolSurface(tools) {
+  const expected = ["ping", "get_state", "list_templates", "list_recipes", "call_template", "call_recipe"];
   if (!Array.isArray(tools) || expected.some((name) => !tools.includes(name)) || tools.length !== expected.length) {
-    throw coded("STOCK_AUDIT_TOOL_SURFACE_MISMATCH", "Installed wrapper did not expose exactly the five OpenReaper tools.");
+    throw coded("STOCK_AUDIT_TOOL_SURFACE_MISMATCH", "Installed wrapper did not expose exactly the six OpenReaper tools.");
   }
 }
 

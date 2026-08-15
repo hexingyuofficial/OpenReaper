@@ -229,8 +229,8 @@ describe("E2 FX native assignment batch", () => {
     assert.match(extracted, /FX_REAEQ_TOPOLOGY_WRITE_MISMATCH/);
     assert.match(extracted, /type_raw = type_raw or JSON_NULL/);
     assert.match(extracted, /enabled_raw = enabled_raw or JSON_NULL/);
-    assert.match(extracted, /e2_fx_set_param_normalized\(owner_kind, owner, slot_index, target\.param_index, target\.normalized_value\)/);
-    assert.doesNotMatch(extracted, /Main_OnCommand|e2_fx_set_param_value\(owner_kind|reaper\.ini|SWS|ReaPack/u);
+    assert.match(extracted, /e2_fx_set_param_value\(owner_kind, owner, slot_index, target\.param_index, target\.native_value\)/);
+    assert.doesNotMatch(extracted, /Main_OnCommand|e2_fx_set_param_normalized\(owner_kind, owner, slot_index, target\.param_index|reaper\.ini|SWS|ReaPack/u);
     assert.doesNotMatch(extracted, /request\.params\.(?:key|named_config|parmname)/u);
     assert.ok(extracted.indexOf("e2_fx_reaeq_validate_request(request") < extracted.indexOf("local mutation_started"));
     const mutation = extracted.slice(extracted.indexOf("local mutation_started"));
@@ -239,14 +239,14 @@ describe("E2 FX native assignment batch", () => {
     assert.ok(mutation.indexOf("post_topology_identity") < mutation.indexOf("e2_fx_reaeq_compile_rows(owner_kind, owner, slot_index, plan.prepared, post_topology_layout)"));
   });
 
-  it("compiles negative ReaEQ gain in the native normalized domain and routes both owners through official APIs", () => {
+  it("compiles ReaEQ gain to the formatter's native domain and routes both owners through official APIs", () => {
     const source = readFileSync(new URL("../../reaper/bridge/src/handlers/fx/e2_fx_l1_read_route.lua", import.meta.url), "utf8");
     const parseStart = source.indexOf("local function e2_fx_reaeq_parse_formatted");
     const compileEnd = source.indexOf("\nlocal function e2_fx_reaeq_compile_rows", parseStart);
     assert.ok(parseStart >= 0 && compileEnd > parseStart);
     const compileSource = source.slice(parseStart, compileEnd);
-    const helperStart = source.indexOf("local function e2_fx_set_param_normalized");
-    const helperEnd = source.indexOf("\nlocal function e2_fx_set_param_value", helperStart);
+    const helperStart = source.indexOf("local function e2_fx_set_param_value");
+    const helperEnd = source.indexOf("\nlocal function e2_fx_named_config_get", helperStart);
     assert.ok(helperStart >= 0 && helperEnd > helperStart);
     const helperSource = source.slice(helperStart, helperEnd);
     runLua(String.raw`
@@ -259,7 +259,7 @@ describe("E2 FX native assignment batch", () => {
       local calls = {}
       local function call_reaper(api, owner, slot, index, value)
         calls[#calls + 1] = { api = api, owner = owner, slot = slot, index = index, value = value }
-        return true
+        return true, true
       end
       local function e2_fx_format_param_normalized(owner_kind, owner, slot, index, value)
         if value == 0 then return formatted[0] end
@@ -273,11 +273,12 @@ describe("E2 FX native assignment batch", () => {
       assert(compiled ~= nil)
       assert(math.abs(compiled.native_formatted_numeric + 3) < 0.01)
       assert(compiled.normalized_value > 0.4 and compiled.normalized_value < 0.5)
-      assert(e2_fx_set_param_normalized("track", "TRACK", 2, 4, compiled.normalized_value))
-      assert(e2_fx_set_param_normalized("take", "TAKE", 3, 7, compiled.normalized_value))
-      assert(calls[1].api == "TrackFX_SetParamNormalized" and calls[1].owner == "TRACK")
-      assert(calls[2].api == "TakeFX_SetParamNormalized" and calls[2].owner == "TAKE")
-      assert(calls[1].value == compiled.normalized_value and calls[2].value == compiled.normalized_value)
+      assert(math.abs(compiled.native_value + 0.05) < 0.001)
+      assert(e2_fx_set_param_value("track", "TRACK", 2, 4, compiled.native_value))
+      assert(e2_fx_set_param_value("take", "TAKE", 3, 7, compiled.native_value))
+      assert(calls[1].api == "TrackFX_SetParam" and calls[1].owner == "TRACK")
+      assert(calls[2].api == "TakeFX_SetParam" and calls[2].owner == "TAKE")
+      assert(calls[1].value == compiled.native_value and calls[2].value == compiled.native_value)
     `);
   });
 

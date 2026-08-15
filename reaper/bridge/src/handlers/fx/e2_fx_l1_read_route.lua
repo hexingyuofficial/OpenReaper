@@ -1962,7 +1962,7 @@ local function e2_fx_set_reaeq_bands(request)
       local target = item.targets[target_index]
       mutation_attempted = true
       batch_timings.native_mutation_count = batch_timings.native_mutation_count + 1
-      if not e2_fx_set_param_normalized(owner_kind, owner, slot_index, target.param_index, target.normalized_value) then
+      if not e2_fx_set_param_value(owner_kind, owner, slot_index, target.param_index, target.native_value) then
         return e2_fx_reaeq_error("COMMAND_FAILED", "REAPER rejected an exact ReaEQ parameter setter.", { band = item.band, field = target.field, mutation_attempted = true, zero_write = false })
       end
     end
