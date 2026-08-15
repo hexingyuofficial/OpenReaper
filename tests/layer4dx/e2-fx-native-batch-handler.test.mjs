@@ -220,8 +220,8 @@ describe("E2 FX native assignment batch", () => {
     const end = source.indexOf("\nlocal function reorder_fx", start);
     assert.ok(start >= 0 && end > start);
     const extracted = source.slice(start, end);
-    assert.match(source, /TakeFX_SetParam/);
-    assert.match(source, /TrackFX_SetParam/);
+    assert.match(source, /TakeFX_SetParamNormalized/);
+    assert.match(source, /TrackFX_SetParamNormalized/);
     assert.match(source, /TakeFX_SetNamedConfigParm/);
     assert.match(source, /TrackFX_SetNamedConfigParm/);
     assert.match(extracted, /BANDTYPE/);
@@ -229,13 +229,56 @@ describe("E2 FX native assignment batch", () => {
     assert.match(extracted, /FX_REAEQ_TOPOLOGY_WRITE_MISMATCH/);
     assert.match(extracted, /type_raw = type_raw or JSON_NULL/);
     assert.match(extracted, /enabled_raw = enabled_raw or JSON_NULL/);
-    assert.doesNotMatch(extracted, /Main_OnCommand|SetParamNormalized|reaper\.ini|SWS|ReaPack/u);
+    assert.match(extracted, /e2_fx_set_param_normalized\(owner_kind, owner, slot_index, target\.param_index, target\.normalized_value\)/);
+    assert.doesNotMatch(extracted, /Main_OnCommand|e2_fx_set_param_value\(owner_kind|reaper\.ini|SWS|ReaPack/u);
     assert.doesNotMatch(extracted, /request\.params\.(?:key|named_config|parmname)/u);
     assert.ok(extracted.indexOf("e2_fx_reaeq_validate_request(request") < extracted.indexOf("local mutation_started"));
     const mutation = extracted.slice(extracted.indexOf("local mutation_started"));
     assert.ok(mutation.indexOf('e2_fx_reaeq_band_key("BANDTYPE"') < mutation.indexOf("e2_fx_reaeq_compile_rows(owner_kind, owner, slot_index, plan.prepared, post_topology_layout)"));
     assert.ok(mutation.indexOf("post_topology_layout") < mutation.indexOf('e2_fx_reaeq_band_key("BANDENABLED"'));
     assert.ok(mutation.indexOf("post_topology_identity") < mutation.indexOf("e2_fx_reaeq_compile_rows(owner_kind, owner, slot_index, plan.prepared, post_topology_layout)"));
+  });
+
+  it("compiles negative ReaEQ gain in the native normalized domain and routes both owners through official APIs", () => {
+    const source = readFileSync(new URL("../../reaper/bridge/src/handlers/fx/e2_fx_l1_read_route.lua", import.meta.url), "utf8");
+    const parseStart = source.indexOf("local function e2_fx_reaeq_parse_formatted");
+    const compileEnd = source.indexOf("\nlocal function e2_fx_reaeq_compile_rows", parseStart);
+    assert.ok(parseStart >= 0 && compileEnd > parseStart);
+    const compileSource = source.slice(parseStart, compileEnd);
+    const helperStart = source.indexOf("local function e2_fx_set_param_normalized");
+    const helperEnd = source.indexOf("\nlocal function e2_fx_set_param_value", helperStart);
+    assert.ok(helperStart >= 0 && helperEnd > helperStart);
+    const helperSource = source.slice(helperStart, helperEnd);
+    runLua(String.raw`
+      local JSON_NULL = {}
+      local formatted = {
+        [0] = "-60.0 dB",
+        [0.5] = "0.0 dB",
+        [1] = "60.0 dB",
+      }
+      local calls = {}
+      local function call_reaper(api, owner, slot, index, value)
+        calls[#calls + 1] = { api = api, owner = owner, slot = slot, index = index, value = value }
+        return true
+      end
+      local function e2_fx_format_param_normalized(owner_kind, owner, slot, index, value)
+        if value == 0 then return formatted[0] end
+        if value == 1 then return formatted[1] end
+        return string.format("%.6f dB", -60 + value * 120)
+      end
+      local function e2_fx_read_param_value() return { min_value = -1, max_value = 1 } end
+      ${helperSource}
+      ${compileSource}
+      local compiled = e2_fx_reaeq_compile_target("track", "TRACK", 2, 4, "gain_db", -3)
+      assert(compiled ~= nil)
+      assert(math.abs(compiled.native_formatted_numeric + 3) < 0.01)
+      assert(compiled.normalized_value > 0.4 and compiled.normalized_value < 0.5)
+      assert(e2_fx_set_param_normalized("track", "TRACK", 2, 4, compiled.normalized_value))
+      assert(e2_fx_set_param_normalized("take", "TAKE", 3, 7, compiled.normalized_value))
+      assert(calls[1].api == "TrackFX_SetParamNormalized" and calls[1].owner == "TRACK")
+      assert(calls[2].api == "TakeFX_SetParamNormalized" and calls[2].owner == "TAKE")
+      assert(calls[1].value == compiled.normalized_value and calls[2].value == compiled.normalized_value)
+    `);
   });
 
   it("maps only approved Cockos ReaEQ identities and the six public topologies", () => {
