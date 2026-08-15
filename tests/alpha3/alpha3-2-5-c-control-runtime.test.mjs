@@ -167,8 +167,8 @@ describe("Alpha3.2.5-C executable controls", () => {
       bpm: 123,
       time_signature_numerator: 7,
       time_signature_denominator: 8,
-      linear_tempo: true,
     });
+    assert.equal(response.result.data.readback.tempo_markers[0].linear_tempo, true);
     assert.deepEqual(response.result.data.readback_verification.map((row) => [row.field, row.observed]), [
       ["time_signature_numerator", 7],
       ["time_signature_denominator", 8],
@@ -694,7 +694,7 @@ function controlAtomic(calls, options = {}) {
       projectBpm = input.bpm;
       projectTimeSigNum = input.time_signature_numerator;
       projectTimeSigDenom = input.time_signature_denominator;
-      projectLinearTempo = input.linear_tempo === true;
+      if (typeof input.linear_tempo === "boolean") projectLinearTempo = input.linear_tempo;
       return execution(id, {
         project_ref: "project:current",
         position_seconds: input.position_seconds,

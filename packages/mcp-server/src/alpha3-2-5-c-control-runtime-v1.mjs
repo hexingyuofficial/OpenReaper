@@ -2206,7 +2206,6 @@ function materializeProjectTimeSignatureChild(child, projectTempo) {
     input: {
       ...child.input,
       bpm: projectTempo.bpm,
-      ...(typeof projectTempo.linear_tempo === "boolean" ? { linear_tempo: projectTempo.linear_tempo } : {}),
     },
   };
 }
