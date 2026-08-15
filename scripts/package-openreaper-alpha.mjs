@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync, spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { constants as fsConstants } from "node:fs";
 import { access, chmod, cp, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
@@ -67,6 +67,12 @@ const vitalAgentRoot = withVital
   : null;
 const OPENREAPER_PRODUCT_VERSION = JSON.parse(await readFile(path.join(repoRoot, "package.json"), "utf8")).version;
 const version = OPENREAPER_PRODUCT_VERSION;
+const OPENREAPER_RUNTIME_PACKAGE_LOCK_PATH = path.join(
+  repoRoot,
+  "scripts",
+  "openreaper-alpha-package",
+  "runtime-package-lock.json",
+);
 if (options.version !== undefined && safeToken(options.version, "") !== version) {
   throw new Error(`--version ${String(options.version)} disagrees with root package.json version ${version}.`);
 }
@@ -195,7 +201,8 @@ async function buildPackage() {
         "bin/openreaper-start-mcp-bridge.lua",
         packagePlatform === "windows" ? "bin/openreaper-doctor.ps1" : "bin/openreaper-doctor",
       ],
-      dependency_source: "package_root_npm_install",
+      dependency_source: "checked_in_runtime_lock_npm_ci",
+      dependency_lock_sha256: provenance.runtime_dependency_lock_sha256,
     },
     optional_companions: withVital
       ? { vital_agent_mcp: { included: true, mode: "optional_companion" } }
@@ -241,6 +248,7 @@ async function writePackageProvenanceManifest() {
     throw new Error("Package provenance could not read the bridge handler registry.");
   }
   const catalogFacts = createOpenReaperAlphaPackageCatalogFacts(handlerRegistry);
+  const runtimeDependencyLock = await readOpenReaperRuntimeDependencyLock();
   const manifest = {
     contract: PACKAGE_PROVENANCE_CONTRACT,
     product: "OpenReaper alpha",
@@ -251,6 +259,7 @@ async function writePackageProvenanceManifest() {
     build_time_utc: new Date().toISOString(),
     source_tree_clean: true,
     source_tree_ignored_dirty_paths: gitStatus.includes("AGENTS.md") ? ["AGENTS.md"] : [],
+    runtime_dependency_lock_sha256: runtimeDependencyLock.sha256,
     ...catalogFacts,
     ...(withVital ? {
       optional_companions: {
@@ -332,6 +341,7 @@ async function smokePackagedProvenanceManifest(expected) {
     bridge_handler_count: expected.bridge_handler_count,
     exact_tool_count: expected.exact_tool_count,
     executable_recipe_catalog_hash: expected.executable_recipe_catalog_hash,
+    runtime_dependency_lock_sha256: expected.runtime_dependency_lock_sha256,
     read_only: true,
   };
 }
@@ -476,19 +486,71 @@ async function copyVitalAgentCompanion() {
 }
 
 async function installPackageDependencies() {
-  await writeFile(path.join(packageRoot, "package.json"), `${JSON.stringify({
+  const packageMetadata = createOpenReaperRuntimePackageMetadata();
+  const runtimeDependencyLock = await readOpenReaperRuntimeDependencyLock(packageMetadata);
+  await writeFile(path.join(packageRoot, "package.json"), `${JSON.stringify(packageMetadata, null, 2)}\n`, "utf8");
+  await writeFile(path.join(packageRoot, "package-lock.json"), runtimeDependencyLock.bytes);
+  await run("npm", ["ci", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund"], {
+    cwd: packageRoot,
+  });
+  const installedLock = await readFile(path.join(packageRoot, "package-lock.json"));
+  if (Buffer.compare(runtimeDependencyLock.bytes, installedLock) !== 0) {
+    throw new Error("npm ci changed the checked-in OpenReaper runtime dependency lock.");
+  }
+}
+
+export function createOpenReaperRuntimePackageMetadata(productVersion = OPENREAPER_PRODUCT_VERSION) {
+  if (typeof productVersion !== "string" || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u.test(productVersion)) {
+    throw new Error("OpenReaper runtime package version must be SemVer.");
+  }
+  return {
     name: "openreaper-alpha-package",
-    version: OPENREAPER_PRODUCT_VERSION,
+    version: productVersion,
     private: true,
     type: "module",
     dependencies: {
       "@modelcontextprotocol/sdk": "^1.29.0",
       "zod": "^3.25.76",
     },
-  }, null, 2)}\n`, "utf8");
-  await run("npm", ["install", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund"], {
-    cwd: packageRoot,
-  });
+  };
+}
+
+export function validateOpenReaperRuntimeDependencyLock(lock, packageMetadata = createOpenReaperRuntimePackageMetadata()) {
+  const root = lock?.packages?.[""];
+  const dependencyEntries = Object.entries(lock?.packages ?? {})
+    .filter(([packagePath]) => packagePath.startsWith("node_modules/"));
+  if (
+    lock?.lockfileVersion !== 3
+    || lock?.requires !== true
+    || root?.name !== packageMetadata.name
+    || root?.version !== packageMetadata.version
+    || JSON.stringify(root?.dependencies) !== JSON.stringify(packageMetadata.dependencies)
+    || dependencyEntries.length === 0
+    || dependencyEntries.some(([, entry]) => (
+      typeof entry?.version !== "string"
+      || typeof entry?.resolved !== "string"
+      || typeof entry?.integrity !== "string"
+    ))
+  ) {
+    throw new Error("Checked-in OpenReaper runtime dependency lock does not match the generated runtime package.");
+  }
+  return lock;
+}
+
+async function readOpenReaperRuntimeDependencyLock(packageMetadata = createOpenReaperRuntimePackageMetadata()) {
+  const bytes = await readFile(OPENREAPER_RUNTIME_PACKAGE_LOCK_PATH);
+  let lock;
+  try {
+    lock = JSON.parse(bytes.toString("utf8"));
+  } catch {
+    throw new Error("Checked-in OpenReaper runtime dependency lock is invalid JSON.");
+  }
+  validateOpenReaperRuntimeDependencyLock(lock, packageMetadata);
+  return {
+    bytes,
+    lock,
+    sha256: createHash("sha256").update(bytes).digest("hex"),
+  };
 }
 
 async function installVitalAgentCompanion() {
