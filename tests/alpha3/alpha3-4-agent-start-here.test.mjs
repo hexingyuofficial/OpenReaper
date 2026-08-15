@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile, mkdtemp, writeFile, rm, mkdir } from "node:fs/promises";
+import { readFile, mkdtemp, writeFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -36,6 +36,10 @@ import {
   INSTALLED_CANARY_REQUIRED_MACROS,
   captureInstalledCanaryInstructions,
 } from "../../scripts/smoke-alpha3-4-harness-installed-canary.mjs";
+import {
+  copyOpenReaperPublicDocuments,
+  validatePackagedPublicDocuments,
+} from "../../scripts/package-openreaper-alpha.mjs";
 import {
   planAlpha3_2EProjectInspectMacro,
 } from "../../packages/mcp-server/src/alpha3-2e-small-macro-spine-v1.mjs";
@@ -336,28 +340,54 @@ test("stdio wires exactly six tools and SDK instructions from the unique documen
   await server.close();
 });
 
-test("package builder copies the unique Agent entry and the user guide", async () => {
+test("package builder copies byte-identical bilingual Agent and user guides", async () => {
   const builder = await readFile(PACKAGE_BUILDER, "utf8");
-  assert.match(builder, /copyAgentStartHereDocument/u);
+  assert.match(builder, /copyOpenReaperPublicDocuments/u);
   assert.match(builder, /vendor\/openreaper-kernel\/docs\/AGENT_START_HERE\.md/u);
   assert.match(builder, /docs\/AGENT_START_HERE\.md/u);
+  assert.match(builder, /docs\\\\AGENT_START_HERE\.zh-CN\.md/u);
   assert.match(builder, /Agent entry \(unique\):/u);
   assert.match(builder, /MCP initialization instructions are projected from that document/u);
   assert.match(builder, /docs\/USER_GUIDE\.md/u);
+  assert.match(builder, /docs\\\\USER_GUIDE\.zh-CN\.md/u);
   assert.match(builder, /User guide:/u);
 
   const root = await mkdtemp(path.join(os.tmpdir(), "openreaper-alpha34-start-here-pkg-"));
   try {
-    const source = await readFile(DOC_PATH);
-    const kernelDocs = path.join(root, "vendor", "openreaper-kernel", "docs");
-    const packageDocs = path.join(root, "docs");
-    await mkdir(kernelDocs, { recursive: true });
-    await mkdir(packageDocs, { recursive: true });
-    await writeFile(path.join(kernelDocs, "AGENT_START_HERE.md"), source);
-    await writeFile(path.join(packageDocs, "AGENT_START_HERE.md"), source);
-    const a = await readFile(path.join(kernelDocs, "AGENT_START_HERE.md"));
-    const b = await readFile(path.join(packageDocs, "AGENT_START_HERE.md"));
-    assert.equal(Buffer.compare(a, b), 0);
+    const packageRoot = path.join(root, "OpenReaper-alpha");
+    const kernelRoot = path.join(packageRoot, "vendor", "openreaper-kernel");
+    await copyOpenReaperPublicDocuments({
+      sourceRoot: REPO,
+      targetPackageRoot: packageRoot,
+      targetKernelRoot: kernelRoot,
+    });
+    await validatePackagedPublicDocuments({
+      sourceRoot: REPO,
+      targetPackageRoot: packageRoot,
+      targetKernelRoot: kernelRoot,
+    });
+    for (const filename of [
+      "AGENT_START_HERE.md",
+      "AGENT_START_HERE.zh-CN.md",
+      "USER_GUIDE.md",
+      "USER_GUIDE.zh-CN.md",
+    ]) {
+      const source = await readFile(path.join(REPO, "docs", filename));
+      const packaged = await readFile(path.join(packageRoot, "docs", filename));
+      assert.equal(Buffer.compare(source, packaged), 0, filename);
+    }
+    const canonicalAgentGuide = await readFile(DOC_PATH);
+    const kernelAgentGuide = await readFile(path.join(kernelRoot, "docs", "AGENT_START_HERE.md"));
+    assert.equal(Buffer.compare(canonicalAgentGuide, kernelAgentGuide), 0);
+    await writeFile(path.join(packageRoot, "docs", "USER_GUIDE.zh-CN.md"), "corrupt\n", "utf8");
+    await assert.rejects(
+      validatePackagedPublicDocuments({
+        sourceRoot: REPO,
+        targetPackageRoot: packageRoot,
+        targetKernelRoot: kernelRoot,
+      }),
+      /USER_GUIDE\.zh-CN\.md/u,
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }

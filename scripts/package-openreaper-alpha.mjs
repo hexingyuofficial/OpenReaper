@@ -397,15 +397,16 @@ async function copyOpenReaperKernel() {
     recursive: true,
     filter: packageFilter,
   });
-  await copyAgentStartHereDocument({
-    sourcePath: path.join(repoRoot, "docs", "AGENT_START_HERE.md"),
-    destinations: [
-      path.join(target, "docs", "AGENT_START_HERE.md"),
-      path.join(packageRoot, "docs", "AGENT_START_HERE.md"),
-    ],
+  await copyOpenReaperPublicDocuments({
+    sourceRoot: repoRoot,
+    targetPackageRoot: packageRoot,
+    targetKernelRoot: target,
   });
-  await mkdir(path.join(packageRoot, "docs"), { recursive: true });
-  await cp(path.join(repoRoot, "docs", "USER_GUIDE.md"), path.join(packageRoot, "docs", "USER_GUIDE.md"));
+  await validatePackagedPublicDocuments({
+    sourceRoot: repoRoot,
+    targetPackageRoot: packageRoot,
+    targetKernelRoot: target,
+  });
 }
 
 async function copyAgentStartHereDocument({ sourcePath, destinations }) {
@@ -413,6 +414,56 @@ async function copyAgentStartHereDocument({ sourcePath, destinations }) {
   for (const destination of destinations) {
     await mkdir(path.dirname(destination), { recursive: true });
     await writeFile(destination, source);
+  }
+}
+
+export async function copyOpenReaperPublicDocuments({
+  sourceRoot,
+  targetPackageRoot,
+  targetKernelRoot,
+}) {
+  const sourceDocs = path.join(sourceRoot, "docs");
+  const packageDocs = path.join(targetPackageRoot, "docs");
+  await copyAgentStartHereDocument({
+    sourcePath: path.join(sourceDocs, "AGENT_START_HERE.md"),
+    destinations: [
+      path.join(targetKernelRoot, "docs", "AGENT_START_HERE.md"),
+      path.join(packageDocs, "AGENT_START_HERE.md"),
+    ],
+  });
+  await mkdir(packageDocs, { recursive: true });
+  for (const filename of [
+    "AGENT_START_HERE.zh-CN.md",
+    "USER_GUIDE.md",
+    "USER_GUIDE.zh-CN.md",
+  ]) {
+    await cp(path.join(sourceDocs, filename), path.join(packageDocs, filename));
+  }
+}
+
+export async function validatePackagedPublicDocuments({
+  sourceRoot,
+  targetPackageRoot,
+  targetKernelRoot,
+}) {
+  const sourceDocs = path.join(sourceRoot, "docs");
+  const packageDocs = path.join(targetPackageRoot, "docs");
+  for (const filename of [
+    "AGENT_START_HERE.md",
+    "AGENT_START_HERE.zh-CN.md",
+    "USER_GUIDE.md",
+    "USER_GUIDE.zh-CN.md",
+  ]) {
+    const source = await readFile(path.join(sourceDocs, filename));
+    const packaged = await readFile(path.join(packageDocs, filename));
+    if (Buffer.compare(source, packaged) !== 0) {
+      throw new Error(`Packaged public document is not byte-identical to source: ${filename}`);
+    }
+  }
+  const canonicalAgentGuide = await readFile(path.join(sourceDocs, "AGENT_START_HERE.md"));
+  const kernelAgentGuide = await readFile(path.join(targetKernelRoot, "docs", "AGENT_START_HERE.md"));
+  if (Buffer.compare(canonicalAgentGuide, kernelAgentGuide) !== 0) {
+    throw new Error("Packaged kernel Agent guide is not byte-identical to source: AGENT_START_HERE.md");
   }
 }
 
@@ -498,6 +549,8 @@ Install or upgrade from native Windows PowerShell:
 
 Default install root: %LOCALAPPDATA%\\OpenReaper\\current
 Default REAPER resource root: %APPDATA%\\REAPER
+Agent guides: docs\\AGENT_START_HERE.md and docs\\AGENT_START_HERE.zh-CN.md
+User guides: docs\\USER_GUIDE.md and docs\\USER_GUIDE.zh-CN.md
 Doctor:
   powershell.exe -ExecutionPolicy Bypass -File %LOCALAPPDATA%\\OpenReaper\\current\\bin\\openreaper-doctor.ps1
 Start REAPER in the logged-in desktop session:
@@ -529,12 +582,16 @@ ${withVital
 
 Agent entry (unique):
   docs/AGENT_START_HERE.md
+Chinese agent guide:
+  docs/AGENT_START_HERE.zh-CN.md
 Also shipped byte-identical at:
   vendor/openreaper-kernel/docs/AGENT_START_HERE.md
 MCP initialization instructions are projected from that document's compact marked section. Read it first: ping -> list_templates with the user's original query -> exact-id expansion -> call_template -> live readback. Macro-first; no product bypass.
 
 User guide:
   docs/USER_GUIDE.md
+Chinese user guide:
+  docs/USER_GUIDE.zh-CN.md
 
 Important:
 REAPER must be started through OpenReaper for MCP to connect. Normal double-click REAPER launches are not OpenReaper MCP sessions.
