@@ -15444,7 +15444,40 @@ local function e2_fx_reaeq_target_tolerance(field, target)
   return 0.02
 end
 
+local function e2_fx_reaeq_calibrate_setter_domain(owner_kind, owner, slot_index, param_index, field)
+  local values = e2_fx_read_param_value(owner_kind, owner, slot_index, param_index)
+  local range = values.max_value - values.min_value
+  local current_normalized = e2_fx_read_param_normalized(owner_kind, owner, slot_index, param_index)
+  local current_formatted = e2_fx_read_param_formatted(owner_kind, owner, slot_index, param_index)
+  local current_value = e2_fx_reaeq_parse_formatted(field, current_formatted)
+  if range <= 0 or type(current_normalized) ~= "number" or not current_value then return nil end
+
+  local raw_coordinate = (values.value - values.min_value) / range
+  if raw_coordinate < 0 or raw_coordinate > 1 then return nil end
+  local normalized_probe = e2_fx_reaeq_parse_formatted(field, e2_fx_format_param_normalized(owner_kind, owner, slot_index, param_index, current_normalized))
+  local raw_probe = e2_fx_reaeq_parse_formatted(field, e2_fx_format_param_normalized(owner_kind, owner, slot_index, param_index, raw_coordinate))
+  local tolerance = e2_fx_reaeq_target_tolerance(field, current_value)
+  local normalized_matches = normalized_probe and math.abs(normalized_probe - current_value) <= tolerance
+  local raw_matches = raw_probe and math.abs(raw_probe - current_value) <= tolerance
+  if not normalized_matches and not raw_matches then return nil end
+
+  return {
+    setter_domain = normalized_matches and "normalized" or "native",
+    values = values,
+    current_formatted_value = current_formatted,
+    current_formatted_numeric = current_value,
+    current_normalized_value = current_normalized,
+    current_raw_coordinate = raw_coordinate,
+    normalized_probe_numeric = normalized_probe or JSON_NULL,
+    native_probe_numeric = raw_probe or JSON_NULL,
+    normalized_probe_matches = normalized_matches == true,
+    native_probe_matches = raw_matches == true,
+  }
+end
+
 local function e2_fx_reaeq_compile_target(owner_kind, owner, slot_index, param_index, field, target)
+  local calibration = e2_fx_reaeq_calibrate_setter_domain(owner_kind, owner, slot_index, param_index, field)
+  if not calibration then return nil end
   local low_formatted = e2_fx_format_param_normalized(owner_kind, owner, slot_index, param_index, 0)
   local high_formatted = e2_fx_format_param_normalized(owner_kind, owner, slot_index, param_index, 1)
   local low_value = e2_fx_reaeq_parse_formatted(field, low_formatted)
@@ -15477,15 +15510,17 @@ local function e2_fx_reaeq_compile_target(owner_kind, owner, slot_index, param_i
     end
   end
   if math.abs(best_value - target) > tolerance then return nil end
-  local values = e2_fx_read_param_value(owner_kind, owner, slot_index, param_index)
+  local values = calibration.values
   local native_value = values.min_value + best_normalized * (values.max_value - values.min_value)
   return {
+    setter_domain = calibration.setter_domain,
     normalized_value = best_normalized,
     native_value = native_value,
     requested_value = target,
     native_formatted_value = best_formatted,
     native_formatted_numeric = best_value,
     tolerance = tolerance,
+    calibration = calibration,
   }
 end
 
@@ -15650,7 +15685,11 @@ local function e2_fx_set_reaeq_bands(request)
       local target = item.targets[target_index]
       mutation_attempted = true
       batch_timings.native_mutation_count = batch_timings.native_mutation_count + 1
-      if not e2_fx_set_param_value(owner_kind, owner, slot_index, target.param_index, target.native_value) then
+      local accepted = target.setter_domain == "normalized"
+        and e2_fx_set_param_normalized(owner_kind, owner, slot_index, target.param_index, target.normalized_value)
+        or target.setter_domain == "native"
+          and e2_fx_set_param_value(owner_kind, owner, slot_index, target.param_index, target.native_value)
+      if not accepted then
         return e2_fx_reaeq_error("COMMAND_FAILED", "REAPER rejected an exact ReaEQ parameter setter.", { band = item.band, field = target.field, mutation_attempted = true, zero_write = false })
       end
     end
@@ -15681,7 +15720,7 @@ local function e2_fx_set_reaeq_bands(request)
       if not e2_fx_reaeq_ident_matches(target.param_index, live.param_ident, target.expected_param_ident, item.band) or not observed or math.abs(observed - target.requested_value) > target.tolerance then
         return e2_fx_reaeq_error("VERIFY_FAILED", "ReaEQ exact parameter identity or value readback does not match the requested band row.", { band = item.band, field = target.field, expected_param_ident = target.expected_param_ident, live_param_ident = live.param_ident, requested_value = target.requested_value, observed_value = observed or JSON_NULL, mutation_attempted = mutation_attempted, zero_write = false })
       end
-      values[target.field] = { requested_value = target.requested_value, observed_value = observed, formatted_value = live.formatted_value, normalized_value = live.normalized_value, param_index = target.param_index, param_ident = live.param_ident, tolerance = target.tolerance }
+      values[target.field] = { requested_value = target.requested_value, observed_value = observed, formatted_value = live.formatted_value, normalized_value = live.normalized_value, param_index = target.param_index, param_ident = live.param_ident, setter_domain = target.setter_domain, tolerance = target.tolerance }
       batch_timings.native_readback_count = batch_timings.native_readback_count + 1
     end
     rows[#rows + 1] = { band = item.band, type = topology[item.band].type, enabled = topology[item.band].enabled, values = values, readback_status = "aggregate_passed" }

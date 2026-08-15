@@ -229,8 +229,10 @@ describe("E2 FX native assignment batch", () => {
     assert.match(extracted, /FX_REAEQ_TOPOLOGY_WRITE_MISMATCH/);
     assert.match(extracted, /type_raw = type_raw or JSON_NULL/);
     assert.match(extracted, /enabled_raw = enabled_raw or JSON_NULL/);
+    assert.match(extracted, /target\.setter_domain == "normalized"/);
+    assert.match(extracted, /e2_fx_set_param_normalized\(owner_kind, owner, slot_index, target\.param_index, target\.normalized_value\)/);
     assert.match(extracted, /e2_fx_set_param_value\(owner_kind, owner, slot_index, target\.param_index, target\.native_value\)/);
-    assert.doesNotMatch(extracted, /Main_OnCommand|e2_fx_set_param_normalized\(owner_kind, owner, slot_index, target\.param_index|reaper\.ini|SWS|ReaPack/u);
+    assert.doesNotMatch(extracted, /Main_OnCommand|reaper\.ini|SWS|ReaPack/u);
     assert.doesNotMatch(extracted, /request\.params\.(?:key|named_config|parmname)/u);
     assert.ok(extracted.indexOf("e2_fx_reaeq_validate_request(request") < extracted.indexOf("local mutation_started"));
     const mutation = extracted.slice(extracted.indexOf("local mutation_started"));
@@ -239,46 +241,61 @@ describe("E2 FX native assignment batch", () => {
     assert.ok(mutation.indexOf("post_topology_identity") < mutation.indexOf("e2_fx_reaeq_compile_rows(owner_kind, owner, slot_index, plan.prepared, post_topology_layout)"));
   });
 
-  it("compiles ReaEQ gain to the formatter's native domain and routes both owners through official APIs", () => {
+  it("calibrates ReaEQ setter domains from current live truth and routes both owners through official APIs", () => {
     const source = readFileSync(new URL("../../reaper/bridge/src/handlers/fx/e2_fx_l1_read_route.lua", import.meta.url), "utf8");
     const parseStart = source.indexOf("local function e2_fx_reaeq_parse_formatted");
     const compileEnd = source.indexOf("\nlocal function e2_fx_reaeq_compile_rows", parseStart);
     assert.ok(parseStart >= 0 && compileEnd > parseStart);
     const compileSource = source.slice(parseStart, compileEnd);
-    const helperStart = source.indexOf("local function e2_fx_set_param_value");
+    const helperStart = source.indexOf("local function e2_fx_set_param_normalized");
     const helperEnd = source.indexOf("\nlocal function e2_fx_named_config_get", helperStart);
     assert.ok(helperStart >= 0 && helperEnd > helperStart);
     const helperSource = source.slice(helperStart, helperEnd);
     runLua(String.raw`
       local JSON_NULL = {}
-      local formatted = {
-        [0] = "-60.0 dB",
-        [0.5] = "0.0 dB",
-        [1] = "60.0 dB",
-      }
       local calls = {}
       local function call_reaper(api, owner, slot, index, value)
         calls[#calls + 1] = { api = api, owner = owner, slot = slot, index = index, value = value }
         return true, true
       end
       local function e2_fx_format_param_normalized(owner_kind, owner, slot, index, value)
-        if value == 0 then return formatted[0] end
-        if value == 1 then return formatted[1] end
-        return string.format("%.6f dB", -60 + value * 120)
+        return string.format("%.6f dB", -12 + value * 24)
       end
-      local function e2_fx_read_param_value() return { min_value = -1, max_value = 1 } end
+      local current = { raw = 0.25, normalized = 0.5, formatted = "0.0 dB" }
+      local function e2_fx_read_param_value()
+        return { value = current.raw, min_value = 0, max_value = 1 }
+      end
+      local function e2_fx_read_param_normalized() return current.normalized end
+      local function e2_fx_read_param_formatted() return current.formatted end
       ${helperSource}
       ${compileSource}
-      local compiled = e2_fx_reaeq_compile_target("track", "TRACK", 2, 4, "gain_db", -3)
-      assert(compiled ~= nil)
-      assert(math.abs(compiled.native_formatted_numeric + 3) < 0.01)
-      assert(compiled.normalized_value > 0.4 and compiled.normalized_value < 0.5)
-      assert(math.abs(compiled.native_value + 0.05) < 0.001)
-      assert(e2_fx_set_param_value("track", "TRACK", 2, 4, compiled.native_value))
-      assert(e2_fx_set_param_value("take", "TAKE", 3, 7, compiled.native_value))
-      assert(calls[1].api == "TrackFX_SetParam" and calls[1].owner == "TRACK")
+
+      local windows = e2_fx_reaeq_compile_target("track", "TRACK", 2, 4, "gain_db", -3)
+      assert(windows ~= nil and windows.setter_domain == "normalized")
+      assert(math.abs(windows.native_formatted_numeric + 3) < 0.01)
+      assert(math.abs(windows.normalized_value - 0.375) < 0.001)
+      assert(windows.calibration.normalized_probe_matches and not windows.calibration.native_probe_matches)
+      assert(e2_fx_set_param_normalized("track", "TRACK", 2, 4, windows.normalized_value))
+
+      current.formatted = "-6.0 dB"
+      local macos = e2_fx_reaeq_compile_target("take", "TAKE", 3, 7, "gain_db", -3)
+      assert(macos ~= nil and macos.setter_domain == "native")
+      assert(not macos.calibration.normalized_probe_matches and macos.calibration.native_probe_matches)
+      assert(e2_fx_set_param_value("take", "TAKE", 3, 7, macos.native_value))
+
+      current.raw = 0.5
+      current.formatted = "0.0 dB"
+      local ambiguous = e2_fx_reaeq_compile_target("track", "TRACK", 2, 4, "gain_db", -3)
+      assert(ambiguous ~= nil and ambiguous.setter_domain == "normalized")
+      assert(ambiguous.calibration.normalized_probe_matches and ambiguous.calibration.native_probe_matches)
+
+      current.raw = 0.25
+      current.formatted = "7.0 dB"
+      assert(e2_fx_reaeq_compile_target("track", "TRACK", 2, 4, "gain_db", -3) == nil)
+
+      assert(calls[1].api == "TrackFX_SetParamNormalized" and calls[1].owner == "TRACK")
       assert(calls[2].api == "TakeFX_SetParam" and calls[2].owner == "TAKE")
-      assert(calls[1].value == compiled.native_value and calls[2].value == compiled.native_value)
+      assert(calls[1].value == windows.normalized_value and calls[2].value == macos.native_value)
     `);
   });
 
