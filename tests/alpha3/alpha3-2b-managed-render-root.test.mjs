@@ -2312,9 +2312,10 @@ print -rn -- "exited" > "$exited_path"
       for (let index = 0; index < keys.length; index += 1) {
         await api.setState(keys[index], index % 3 !== 2, index % 3 === 1 ? "" : `previous ${index} with spaces`);
       }
-      await writeFile(path.join(controlRoot, "restore-values.json"), JSON.stringify(Object.fromEntries(
+      const expected = Object.fromEntries(
         await Promise.all(keys.map(async (key) => [key, await api.getState(key)])),
-      )), "utf8");
+      );
+      await writeFile(path.join(controlRoot, "restore-values.json"), JSON.stringify(expected), "utf8");
     },
     async assertSeededStatesRestored() {
       const expected = JSON.parse(await readFile(path.join(controlRoot, "restore-values.json"), "utf8"));
@@ -2421,6 +2422,7 @@ set -eu
 state=${shellQuote(stateRoot)}
 control=${shellQuote(controlRoot)}
 log=${shellQuote(logPath)}
+restore_values="$control/restore-values"
 cmd="$1"
 key="$2"
 case "$cmd" in
@@ -2436,9 +2438,15 @@ case "$cmd" in
 	    while true; do :; done
 	  fi
 	  if [[ -f "$state/$key.presence" && "$(cat "$state/$key.presence")" == "set" ]]; then
+      mkdir -p "$restore_values"
+      print -rn -- "set" > "$restore_values/$key.presence"
+      cat "$state/$key.value" > "$restore_values/$key.value"
       cat "$state/$key.value"
       exit 0
     fi
+    mkdir -p "$restore_values"
+    print -rn -- "unset" > "$restore_values/$key.presence"
+    : > "$restore_values/$key.value"
     exit 1
     ;;
   setenv)
@@ -2450,15 +2458,14 @@ case "$cmd" in
       print -r -- "set-fail:$key" >> "$log"
       exit 1
     fi
-    if [[ -f "$control/fail-restore-key" && "$key" == "$(cat "$control/fail-restore-key" | tr -d '\\n')" && -f "$control/restore-values.json" ]]; then
-      expected="$(node -e 'const fs=require("fs"); const j=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); const row=j[process.argv[2]]; if(row?.present) process.stdout.write(row.value)' "$control/restore-values.json" "$key")"
-      if [[ "$3" == "$expected" ]]; then
-        print -r -- "restore-fail:$key" >> "$log"
-        exit 1
-      fi
-    fi
     phase="set"
-    [[ -f "$control/restore-values.json" ]] && node -e 'const fs=require("fs");const j=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));const r=j[process.argv[2]];process.exit(r?.present&&r.value===process.argv[3]?0:1)' "$control/restore-values.json" "$key" "$3" && phase="restore"
+    if [[ -f "$restore_values/$key.presence" && "$(<"$restore_values/$key.presence")" == "set" && -f "$restore_values/$key.value" && "$3" == "$(<"$restore_values/$key.value")" ]]; then
+      phase="restore"
+    fi
+    if [[ "$phase" == "restore" && -f "$control/fail-restore-key" && "$key" == "$(<"$control/fail-restore-key")" ]]; then
+      print -r -- "restore-fail:$key" >> "$log"
+      exit 1
+    fi
     print -r -- "\${phase}:set:\${key}" >> "$log"
     print -rn -- "set" > "$state/$key.presence"
     print -rn -- "$3" > "$state/$key.value"
@@ -2470,14 +2477,14 @@ case "$cmd" in
     fi
     ;;
   unsetenv)
-    if [[ -f "$control/fail-restore-key" && "$key" == "$(cat "$control/fail-restore-key" | tr -d '\\n')" && -f "$control/restore-values.json" ]]; then
-      if node -e 'const fs=require("fs");const j=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));process.exit(j[process.argv[2]]?.present?1:0)' "$control/restore-values.json" "$key"; then
-        print -r -- "restore-fail:$key" >> "$log"
-        exit 1
-      fi
-    fi
     phase="set"
-    [[ -f "$control/restore-values.json" ]] && node -e 'const fs=require("fs");const j=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));process.exit(j[process.argv[2]]?.present?1:0)' "$control/restore-values.json" "$key" && phase="restore"
+    if [[ -f "$restore_values/$key.presence" && "$(<"$restore_values/$key.presence")" == "unset" ]]; then
+      phase="restore"
+    fi
+    if [[ "$phase" == "restore" && -f "$control/fail-restore-key" && "$key" == "$(<"$control/fail-restore-key")" ]]; then
+      print -r -- "restore-fail:$key" >> "$log"
+      exit 1
+    fi
     print -r -- "\${phase}:unset:\${key}" >> "$log"
     print -rn -- "unset" > "$state/$key.presence"
     : > "$state/$key.value"
