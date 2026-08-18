@@ -119,7 +119,7 @@ describe("Alpha3.4-D3 upper macro.project.file highway", () => {
     assert.equal(items.length, 1);
     assert.deepEqual(items[0].inputSchema.properties.operation.enum, SIX_OPS);
     assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 242);
-    assert.equal(ALPHA3_2C3D_PROJECT_FILE_MACRO_VERSION, "1.2.0");
+    assert.equal(ALPHA3_2C3D_PROJECT_FILE_MACRO_VERSION, "1.2.1");
     assert.equal(ALPHA3_2C3D_PROJECT_FILE_MACRO_ID, "macro.project.file");
   });
 

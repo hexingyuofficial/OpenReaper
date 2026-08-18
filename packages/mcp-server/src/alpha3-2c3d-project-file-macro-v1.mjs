@@ -1,6 +1,6 @@
 export const ALPHA3_2C3D_PROJECT_FILE_MACRO_CONTRACT = "alpha3.2c3d.project_file_macro.v1";
 export const ALPHA3_2C3D_PROJECT_FILE_MACRO_ID = "macro.project.file";
-export const ALPHA3_2C3D_PROJECT_FILE_MACRO_VERSION = "1.2.0";
+export const ALPHA3_2C3D_PROJECT_FILE_MACRO_VERSION = "1.2.1";
 
 import {
   MACRO_CONTRACT_CEILINGS,
@@ -10,6 +10,11 @@ import {
   validateMacroExecutionEnvelope,
   validateMacroProgramRequest,
 } from "./macro-runtime-contract-v1.mjs";
+import {
+  classifyNativePathTransport,
+  nativePathTransportMessage,
+  nativePathTransportRecovery,
+} from "./native-path-input-v1.mjs";
 
 const READ_PATH_ID = "template.project.read_current_project_path";
 const READ_DIRTY_ID = "template.project.read_dirty_state";
@@ -2489,7 +2494,7 @@ export function createAlpha3_2C3DProjectFileMacroDiscoveryItems(options = {}) {
             "activate_project_tab",
           ],
         },
-        target_path: { type: "string", description: "Required for save_as, create_project_tab, and open_project_in_tab." },
+        target_path: { type: "string", description: "Required for save_as, create_project_tab, and open_project_in_tab. Pass one native absolute .RPP path JSON string with Unicode and spaces literal; no shell quoting/escaping, file://, percent encoding, or ~." },
         overwrite: { const: true, description: "Required for save_as and create_project_tab." },
         cursor: { oneOf: [{ type: "integer", minimum: 0 }, { type: "string", pattern: "^[0-9]+$" }], description: "list_open_projects only." },
         limit: { type: "integer", minimum: 1, maximum: 100, description: "list_open_projects only; default 25." },
@@ -2519,7 +2524,7 @@ export function createAlpha3_2C3DProjectFileMacroDiscoveryItems(options = {}) {
     },
     examples: [
       { input: { operation: "save_current" } },
-      { input: { operation: "save_as", target_path: "/projects/demo/demo.RPP", overwrite: true } },
+      { input: { operation: "save_as", target_path: "/projects/对白 中文/demo project.RPP", overwrite: true } },
       { input: { operation: "list_open_projects", cursor: "0", limit: 25 } },
       { input: { operation: "create_project_tab", name: "sound design", target_path: "/projects/demo/new.RPP", overwrite: true, copy_active_project_settings: false } },
       { input: { operation: "open_project_in_tab", target_path: "/projects/demo/demo.RPP" } },
@@ -2673,6 +2678,15 @@ function validateAbsoluteRppPath(input, field, prefix, blockers) {
   const value = input[field];
   if (typeof value !== "string" || value.length === 0) {
     blockers.push(blocker(`${prefix}_TARGET_PATH_REQUIRED`, `${field} requires a non-empty absolute .RPP path.`));
+    return;
+  }
+  const pathTransport = classifyNativePathTransport(value);
+  if (pathTransport) {
+    blockers.push(blocker(
+      `${prefix}_TARGET_PATH_ENCODING_INVALID`,
+      nativePathTransportMessage(field, pathTransport),
+      nativePathTransportRecovery({ field, form: pathTransport }),
+    ));
     return;
   }
   if (Buffer.byteLength(value) > TARGET_PATH_MAX_BYTES) {

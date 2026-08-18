@@ -79,6 +79,47 @@ describe("Alpha3.2-C3D macro.project.file plan-only runtime", () => {
     assert.equal(plan.safety.wrapper_revalidates_or_weakens_atomic_filesystem_safety, false);
   });
 
+  it("preserves native Unicode/space paths and rejects shell or URI transport forms before planning writes", () => {
+    const nativePaths = [
+      "/projects/对白 中文/demo project.RPP",
+      "C:\\OpenReaperLab\\工程 中文\\demo project.RPP",
+      "\\\\server\\share\\工程 中文\\demo project.RPP",
+    ];
+    for (const targetPath of nativePaths) {
+      const plan = planAlpha3_2C3DProjectFileMacro({ operation: "save_as", target_path: targetPath, overwrite: true });
+      assert.equal(plan.ok, true, targetPath);
+      assert.equal(plan.mutation_requests[0].call_template.input.target_path, targetPath);
+    }
+
+    const encodedPaths = [
+      '"/projects/对白 中文/demo project.RPP"',
+      "/projects/对白\\ 中文/demo project.RPP",
+      "file:///projects/%E5%AF%B9%E7%99%BD%20%E4%B8%AD%E6%96%87/demo%20project.RPP",
+      "/projects/%E5%AF%B9%E7%99%BD%20%E4%B8%AD%E6%96%87/demo%20project.RPP",
+      "~/projects/对白 中文/demo project.RPP",
+    ];
+    for (const targetPath of encodedPaths) {
+      const plan = planAlpha3_2C3DProjectFileMacro({ operation: "save_as", target_path: targetPath, overwrite: true });
+      assert.equal(plan.ok, false, targetPath);
+      assert.equal(plan.blockers[0].code, "SAVE_AS_TARGET_PATH_ENCODING_INVALID", targetPath);
+      assert.equal(plan.blockers[0].details.zero_write, true, targetPath);
+      assert.match(plan.blockers[0].details.request_patch.input.note, /native absolute path value/u);
+      assert.equal(plan.mutation_requests.length, 0, targetPath);
+      assert.equal(plan.child_requests.length, 0, targetPath);
+    }
+
+    const create = planAlpha3_2C3DProjectFileMacro({
+      operation: "create_project_tab",
+      name: "encoded",
+      target_path: "file:///projects/demo.RPP",
+      overwrite: true,
+      copy_active_project_settings: false,
+    });
+    assert.equal(create.blockers[0].code, "CREATE_TARGET_PATH_ENCODING_INVALID");
+    const open = planAlpha3_2C3DProjectFileMacro({ operation: "open_project_in_tab", target_path: "~/demo.RPP" });
+    assert.equal(open.blockers[0].code, "OPEN_TARGET_PATH_ENCODING_INVALID");
+  });
+
   it("returns typed zero-mutation blockers for invalid operation-specific inputs", () => {
     const cases = [
       [{ operation: "save_as", overwrite: true }, "SAVE_AS_TARGET_PATH_REQUIRED"],

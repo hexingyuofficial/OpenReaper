@@ -321,7 +321,7 @@ export function createAlpha3_3B1ExactMacroExpansion(id) {
             name: "preview one explicit asset placement",
             input: {
               mode: "place_assets",
-              assets: [{ id: "impact", path: "/absolute/path/from-search.wav" }],
+              assets: [{ id: "impact", path: "/absolute/对白 中文/impact one.wav" }],
               placement: { mode: "sequence_on_one_track", start_seconds: 0, align_basis: "item_start" },
               track_policy: "one_shared_new_track",
               new_track: { name: "SFX" },

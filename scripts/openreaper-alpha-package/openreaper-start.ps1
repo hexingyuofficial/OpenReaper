@@ -51,7 +51,11 @@ function Require-UserAction([string] $Message) {
 
 function Quote-ProcessArgument([string] $Value) {
     if ($Value -notmatch '[\s"]') { return $Value }
-    return '"' + $Value.Replace('"', '\"') + '"'
+    # Start-Process flattens ArgumentList in Windows PowerShell 5.1. Follow the
+    # CommandLineToArgvW rules for quotes and for backslashes before a quote.
+    $escaped = [regex]::Replace($Value, '(\\*)"', '$1$1\"')
+    $escaped = [regex]::Replace($escaped, '(\\+)$', '$1$1')
+    return '"' + $escaped + '"'
 }
 
 function Assert-AbsolutePath([string] $Value, [string] $Label) {

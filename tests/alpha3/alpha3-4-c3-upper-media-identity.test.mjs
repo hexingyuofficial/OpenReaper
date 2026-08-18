@@ -101,6 +101,35 @@ describe("Alpha3.4-C3B upper media canonical identity and budget", () => {
     }
   });
 
+  it("rejects shell- and URI-encoded asset paths with typed zero-write recovery", async () => {
+    const encodedPaths = [
+      '"/Users/Shared/OpenReaper/对白 中文/clip one.wav"',
+      "/Users/Shared/OpenReaper/对白\\ 中文/clip.wav",
+      "file:///Users/Shared/OpenReaper/%E5%AF%B9%E7%99%BD%20%E4%B8%AD%E6%96%87/clip.wav",
+      "/Users/Shared/OpenReaper/%E5%AF%B9%E7%99%BD%20%E4%B8%AD%E6%96%87/clip.wav",
+      "~/OpenReaper/对白 中文/clip.wav",
+    ];
+    for (const pathValue of encodedPaths) {
+      let calls = 0;
+      const rejected = await executeAlpha3_3MediaPlaceAssetsMacro({
+        request: request({
+          assets: [{ id: "encoded", path: pathValue, track_ref: TRACK_A, position_seconds: 0 }],
+          placement: { mode: "explicit" },
+          track_policy: "explicit_per_asset",
+          dry_run: false,
+        }),
+        executeAtomic: async () => { calls += 1; },
+      });
+      assert.equal(rejected.ok, false, pathValue);
+      assert.equal(rejected.error.code, "MEDIA_SOURCE_PATH_ENCODING_INVALID", pathValue);
+      assert.equal(rejected.error.details.zero_write, true, pathValue);
+      assert.equal(rejected.result.data.path_recovery.zero_write, true, pathValue);
+      assert.equal(rejected.result.data.path_recovery.fields[0], "assets[0].path", pathValue);
+      assert.match(rejected.result.data.path_recovery.request_patch.input.note, /native absolute path value/u);
+      assert.equal(calls, 0, pathValue);
+    }
+  });
+
   it("preserves a >240-byte multi-segment UTF-8 absolute path through probe, mutation refs, native readback, and public result", async () => {
     const fixture = mediaFixture({ files: { [LONG_PATH]: 2 }, tracks: { [TRACK_A]: [] } });
     const response = await executeAlpha3_3MediaPlaceAssetsMacro({

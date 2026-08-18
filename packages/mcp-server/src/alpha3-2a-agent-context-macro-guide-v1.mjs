@@ -716,18 +716,18 @@ const PROJECT_FILE_DEFINITION = deepFreeze(primaryDefinition({
     required_readiness: ["All four exact project-file Template ids are accepted/live-smoked.", "The managed OpenReaper atomic route must be ready; the Macro executes its fixed serial program internally."],
     input_shape: {
       operation: "save_current | save_as only; new/create/open/unknown return typed blockers with zero mutation requests.",
-      target_path: "Required only for save_as and forwarded unchanged to template.project.save_project_as.",
+      target_path: "Required only for save_as. Pass one native absolute .RPP path directly as a JSON string with Unicode and spaces literal; do not add shell quotes/escaping, file://, percent encoding, or ~. The accepted value is forwarded unchanged.",
       overwrite: "Required literal true only for save_as; atomic overwrite=false remains held.",
     },
     preflight_steps: ["Read the exact current path posture, then the exact dirty state.", "save_current requires an already-named project; save_as may name an unsaved current project."],
     underlying_actions: ["template.project.read_current_project_path", "template.project.read_dirty_state", "template.project.save_current_project", "template.project.save_project_as"],
     readback_steps: ["After a successful mutation, call the exact path read and exact dirty-state read again in that order."],
     success_criteria: ["save_current requires the exact preflight path to remain unchanged and dirty state clean/raw 0; save_as requires the exact target_path and dirty state clean/raw 0."],
-    common_blockers: [blocker("PROJECT_FILE_OPERATION_HELD", "new/create/open remain held and produce no mutation requests."), blocker("SAVE_AS_TARGET_PATH_REQUIRED", "save_as requires target_path."), blocker("SAVE_AS_OVERWRITE_TRUE_REQUIRED", "save_as requires explicit overwrite=true."), blocker("SAVE_CURRENT_FIELDS_REJECTED", "save_current rejects target_path and overwrite fields."), blocker("DEPENDENCY_GATE_FAILED", "A failed preflight or unsaved-project read stops before mutation.")],
+    common_blockers: [blocker("PROJECT_FILE_OPERATION_HELD", "new/create/open remain held and produce no mutation requests."), blocker("SAVE_AS_TARGET_PATH_REQUIRED", "save_as requires target_path."), blocker("SAVE_AS_TARGET_PATH_ENCODING_INVALID", "target_path must be one native absolute JSON string, not shell/URI encoded text."), blocker("SAVE_AS_OVERWRITE_TRUE_REQUIRED", "save_as requires explicit overwrite=true."), blocker("SAVE_CURRENT_FIELDS_REJECTED", "save_current rejects target_path and overwrite fields."), blocker("DEPENDENCY_GATE_FAILED", "A failed preflight or unsaved-project read stops before mutation.")],
     recovery_steps: ["Repair the typed input or preflight blocker, then request a fresh plan.", "For save-as filesystem/path blockers, preserve and rely on the atomic save_project_as validation; the wrapper never substitutes weaker checks."],
     dry_run_shape: { supported: true, output: ["macro_execution", "path_before", "dirty_before", "mutation_skipped", "typed_blockers"] },
     resume_or_retry_policy: { resume_from: "the latest completed stage and exact path/dirty evidence", retry: "Retry only after the typed blocker is repaired; never skip or reuse stale preflight evidence.", hard_stop: "Stop on new/create/open, overwrite other than literal true, failed dependency, or exact postflight mismatch." },
-    examples: [example("save current", { operation: "save_current" }), example("save as", { operation: "save_as", target_path: "/projects/demo/demo.RPP", overwrite: true })],
+    examples: [example("save current", { operation: "save_current" }), example("save as", { operation: "save_as", target_path: "/projects/对白 中文/demo project.RPP", overwrite: true })],
   }),
 }));
 

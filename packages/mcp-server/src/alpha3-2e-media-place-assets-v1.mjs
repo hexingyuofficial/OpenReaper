@@ -11,12 +11,17 @@ import {
   projectMediaExplorerSearchPage,
   searchMediaExplorerDatabases,
 } from "./media-explorer-database-search-v1.mjs";
+import {
+  classifyNativePathTransport,
+  nativePathTransportMessage,
+  nativePathTransportRecovery,
+} from "./native-path-input-v1.mjs";
 
 export { MEDIA_EXPLORER_DATABASE_SEARCH_CAPABILITY };
 
 export const ALPHA3_2E_MEDIA_PLACE_ASSETS_MACRO_CONTRACT = "alpha3.3.media_place_assets_macro.v1";
 export const ALPHA3_2E_MEDIA_PLACE_ASSETS_MACRO_ID = "macro.media.place_assets";
-export const ALPHA3_2E_MEDIA_PLACE_ASSETS_MACRO_VERSION = "2.1.0";
+export const ALPHA3_2E_MEDIA_PLACE_ASSETS_MACRO_VERSION = "2.1.1";
 export const ALPHA3_3_MEDIA_PLACE_ASSETS_MODES = deepFreeze([
   "place_assets",
   "relink_sources",
@@ -195,7 +200,7 @@ export function createAlpha3_2EMediaPlaceAssetsMacroDiscoveryItems({ liveRunnabl
     limits: { assets: MAX_ASSETS, append_track_items: MAX_TRACK_ITEMS, library_page_size: 25 },
     examples: [
       { name: "search_media_explorer", input: { mode: "search_library", query: "short kick", page_size: 10 } },
-      { name: "sequence_on_one_track", input: { assets: [{ id: "kick", path: "/Users/Shared/OpenReaper/kick.wav" }, { id: "snare", path: "/Users/Shared/OpenReaper/snare.wav" }], placement: { mode: "sequence_on_one_track", start_seconds: 0, gap_seconds: 0.25 }, track_policy: "existing_track", track_ref: "track:guid:{DRUMS}", dry_run: true } },
+      { name: "sequence_on_one_track", input: { assets: [{ id: "kick", path: "/Users/Shared/OpenReaper/对白 中文/kick one.wav" }, { id: "snare", path: "/Users/Shared/OpenReaper/对白 中文/snare two.wav" }], placement: { mode: "sequence_on_one_track", start_seconds: 0, gap_seconds: 0.25 }, track_policy: "existing_track", track_ref: "track:guid:{DRUMS}", dry_run: true } },
       { name: "stack_new_tracks", input: { assets: [{ id: "a", path: "/Users/Shared/OpenReaper/a.wav" }, { id: "b", path: "/Users/Shared/OpenReaper/b.wav" }], placement: { mode: "stack_on_separate_tracks", start_seconds: 0 }, track_policy: "one_new_track_per_asset", new_track: { name_prefix: "Layer" }, dry_run: true } },
       { name: "relink_exact_take", input: { mode: "relink_sources", assets: [{ id: "replacement", path: "/Users/Shared/OpenReaper/replacement.wav", take_ref: "take:guid:{TAKE}" }], dry_run: true } },
     ],
@@ -227,7 +232,7 @@ export function createAlpha3_3MediaPlaceAssetsExactManual() {
       input_shape: {
         mode: "place_assets (default) | relink_sources | search_library",
         search_library: "{query, database_ids?, page_size?:1-25, cursor?}; returns compact candidates with path/file_ref, duration, format facts, availability, total, and next_cursor.",
-        assets: "1-128 unique rows. Placement rows require id/path and policy-specific track fields; relink rows require id/path/exact take_ref.",
+        assets: "1-128 unique rows. path is one native absolute OS path JSON string: preserve Unicode and spaces literally; do not add shell quotes, POSIX \\  escaping, file://, percent encoding, or ~. Placement rows require id/path and policy-specific track fields; relink rows require id/path/exact take_ref.",
         placement: "{mode: explicit | sequence_on_one_track | stack_on_separate_tracks | columns | append_after_existing, start_seconds?, gap_seconds?, column_gap_seconds?, columns?, align_basis:'item_start'}; top-level gap/columns aliases remain accepted; columns is 1-128.",
         track_policy: "existing_track | one_shared_new_track | one_new_track_per_asset | explicit_per_asset",
         new_track: "For new-track policies: bounded name (shared) or name_prefix plus optional starting_index.",
@@ -255,6 +260,7 @@ export function createAlpha3_3MediaPlaceAssetsExactManual() {
         blocker("MEDIA_RESPONSE_BUDGET_EXCEEDED", "The projected truthful result does not fit the caller's public response budget, so mutation does not start."),
         blocker("MEDIA_LIBRARY_CURSOR_STALE", "The Media Explorer database changed after a cursor was issued; restart at page one."),
         blocker("MEDIA_LIBRARY_SOURCE_UNAVAILABLE", "A selected search candidate is offline and must not be passed to placement until its source volume is available."),
+        blocker("MEDIA_SOURCE_PATH_ENCODING_INVALID", "An asset path used shell/URI transport encoding instead of one native absolute JSON string."),
         blocker("MEDIA_FOLDER_APPROVAL_UNPROVEN", "Current folder:path listing does not prove approved-folder identity, so folder_ref selection is held."),
         blocker("MEDIA_LIVE_READBACK_MISMATCH", "Independent Item/Take source readback does not match the planned asset."),
       ],
@@ -330,7 +336,7 @@ export async function executeAlpha3_3MediaPlaceAssetsMacro({ request = {}, execu
   const state = createState();
   const activeBudget = responseBudget(request);
   const normalized = normalizeInput(request.input, { idempotency_key_present: request.idempotency_key !== undefined });
-  if (!normalized.ok) return failureEnvelope({ entry, request, startedAt, now, stages, state, activeBudget, code: normalized.code, message: normalized.message, blockers: normalized.blockers });
+  if (!normalized.ok) return failureEnvelope({ entry, request, startedAt, now, stages, state, activeBudget, code: normalized.code, message: normalized.message, blockers: normalized.blockers, data: normalized.data });
   const input = normalized.input;
   if (request.id !== ALPHA3_2E_MEDIA_PLACE_ASSETS_MACRO_ID) return failureEnvelope({ entry, request, startedAt, now, stages, state, activeBudget, code: "MEDIA_MACRO_ID_UNSUPPORTED", message: `Unsupported media Macro id: ${String(request.id)}.` });
   const validation = validateMacroProgramRequest({ macro_id: request.id, input, refs: request.refs ?? {}, dry_run: input.dry_run }, { registry: ALPHA3_3_MEDIA_PLACE_ASSETS_REGISTRY });
@@ -1100,6 +1106,14 @@ function normalizeAsset(row, index, mode, placementMode, trackPolicy) {
   if (unknown.length) return failed("MEDIA_ASSET_UNKNOWN_FIELD", `assets[${index}] has unsupported field(s): ${unknown.join(", ")}.`);
   const id = row.id ?? `asset-${index + 1}`;
   if (typeof id !== "string" || !id.length || Buffer.byteLength(id) > MAX_ID_BYTES || hasControls(id)) return failed("MEDIA_ASSET_ID_INVALID", `assets[${index}].id must be a bounded non-control string.`);
+  const pathField = `assets[${index}].path`;
+  const pathTransport = classifyNativePathTransport(row.path);
+  if (pathTransport) {
+    const code = "MEDIA_SOURCE_PATH_ENCODING_INVALID";
+    const message = nativePathTransportMessage(pathField, pathTransport);
+    const recovery = nativePathTransportRecovery({ field: pathField, form: pathTransport });
+    return failed(code, message, [blocker(code, message, true, recovery)], { path_recovery: recovery });
+  }
   if (!isSafeAbsoluteFilePath(row.path)) return failed("MEDIA_SOURCE_PATH_UNSAFE", `assets[${index}].path must be a bounded absolute non-device local path.`);
   if (row.delete_source_media === true) return failed("MEDIA_SOURCE_DELETE_FORBIDDEN", "macro.media.place_assets never deletes source media files.");
   if (row.take_name !== undefined) return failed("MEDIA_TAKE_RENAME_NOT_BOUND", "Take renaming is not part of this media placement slice.");
@@ -1621,7 +1635,7 @@ function requestSummary(request) {
 }
 function responseBudget(request) { const requested = request?.budget?.max_response_bytes ?? request?.response_budget ?? MACRO_CONTRACT_CEILINGS.envelope_max_bytes; return Number.isInteger(requested) && requested >= MIN_RESPONSE_BUDGET && requested <= MACRO_CONTRACT_CEILINGS.envelope_max_bytes ? requested : MACRO_CONTRACT_CEILINGS.envelope_max_bytes; }
 function macroIdentity(entry) { return { id: entry.macro_id, program_id: entry.program_id, program_version: entry.program_version, risk: entry.risk }; }
-function blocker(code, message, recoverable = true) { return { code, message, recoverable }; }
+function blocker(code, message, recoverable = true, details = undefined) { return { code, message, recoverable, ...(details === undefined ? {} : { details }) }; }
 function boundedFailureCode(value, fallback) {
   if (typeof value !== "string" || value.length === 0 || Buffer.byteLength(value, "utf8") > MAX_FAILURE_CODE_BYTES) return fallback;
   return value;
@@ -1654,7 +1668,7 @@ function boundedUtf8(value, maxBytes) {
   }
   return `${output}${suffix}`;
 }
-function failed(code, message, blockers = [blocker(code, message)]) { return { ok: false, code, message, blockers }; }
+function failed(code, message, blockers = [blocker(code, message)], data = {}) { return { ok: false, code, message, blockers, data }; }
 function coded(code, message, blockers = [blocker(code, message)]) { const error = new Error(message); error.code = code; error.blockers = blockers; return error; }
 function exactGuidObjectRef(kind, ref) { if (typeof ref !== "string" || !ref.startsWith(`${kind}:guid:`)) return null; return { kind, ref, identity: { scheme: "guid", value: ref.slice(`${kind}:guid:`.length) } }; }
 function fileRefForPath(pathValue) { return `${MEDIA_FILE_REF_PREFIX}${pathValue}`; }

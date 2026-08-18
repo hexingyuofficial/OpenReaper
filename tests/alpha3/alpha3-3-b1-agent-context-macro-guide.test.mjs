@@ -136,7 +136,18 @@ describe("Alpha3.3-B1 agent context Macro guide", () => {
     assert.match(media.action_manual.input_shape.placement, /append_after_existing/u);
     assert.match(media.action_manual.input_shape.track_policy, /one_new_track_per_asset/u);
     assert.match(media.action_manual.input_shape.mode, /relink_sources/u);
+    assert.match(media.action_manual.input_shape.assets, /native absolute OS path JSON string/u);
+    assert.match(media.action_manual.input_shape.assets, /preserve Unicode and spaces literally/u);
+    assert.match(media.action_manual.common_blockers.map((entry) => entry.code).join(" "), /MEDIA_SOURCE_PATH_ENCODING_INVALID/u);
     assert.match(media.action_manual.readback_steps.join(" "), /dispatch success alone never marks applied/iu);
+  });
+
+  it("teaches project-file Agents to pass native Unicode paths without shell encoding", () => {
+    const guide = createAlpha3_3B1AgentContextMacroGuide({ requested_ids: ["macro.project.file"] });
+    const [projectFile] = guide.requested_expansions.items;
+    assert.match(projectFile.action_manual.input_shape.target_path, /native absolute \.RPP path/u);
+    assert.match(projectFile.action_manual.input_shape.target_path, /Unicode and spaces literal/u);
+    assert.match(projectFile.action_manual.common_blockers.map((entry) => entry.code).join(" "), /SAVE_AS_TARGET_PATH_ENCODING_INVALID/u);
   });
 
   it("publishes the exact executable Routing ABI and a planner-valid preview-to-execute handoff", () => {

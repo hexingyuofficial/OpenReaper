@@ -51,7 +51,7 @@ const MACRO_TARGET_FACTS = deepFreeze({
     required_targets: ["operation"],
     preview_or_dry_run_mandatory: false,
     identity_required: false,
-    notes: "Six operations: save_current, save_as, list_open_projects, create_project_tab, open_project_in_tab, activate_project_tab. save_as/create need absolute .RPP + overwrite:true. activate requires exact saved project:path ref. dry_run only for saves. list pages with string cursor; switches rebind Project Index from live inventory.",
+    notes: "Six operations: save_current, save_as, list_open_projects, create_project_tab, open_project_in_tab, activate_project_tab. target_path is one native absolute .RPP JSON string with Unicode/spaces literal, never shell/URI encoded; save_as/create also need overwrite:true. activate requires exact saved project:path ref. dry_run only for saves. list pages with string cursor; switches rebind Project Index from live inventory.",
   },
   "macro.routing.apply": {
     required_targets: ["exact track/send refs"],
@@ -63,7 +63,7 @@ const MACRO_TARGET_FACTS = deepFreeze({
     required_targets: ["search query or asset paths"],
     preview_or_dry_run_mandatory: true,
     identity_required: false,
-    notes: "Media library search/placement; dry_run for placement preview when mutating.",
+    notes: "Media library search/placement; each explicit path is one native absolute JSON string with Unicode/spaces literal, never shell/URI encoded; dry_run for placement preview when mutating.",
   },
   "macro.items.analyze": {
     required_targets: ["selected or exact item refs"],

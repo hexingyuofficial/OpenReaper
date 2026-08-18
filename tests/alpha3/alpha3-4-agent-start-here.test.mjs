@@ -195,6 +195,9 @@ test("canonical AGENT_START_HERE markers project under 16 KiB with exact 15 Macr
   assert.match(instructions, /expectedDelta/u);
   assert.match(instructions, /Exactly six tools/u);
   assert.match(instructions, /Raw Lua/u);
+  assert.match(instructions, /Native paths are JSON values, not shell arguments/u);
+  assert.match(instructions, /keep Unicode and spaces literal/u);
+  assert.match(instructions, /file:\/\/.*percent encoding.*`~`/u);
 });
 
 test("marker parser fails closed on missing, duplicate, order, and budget errors", () => {

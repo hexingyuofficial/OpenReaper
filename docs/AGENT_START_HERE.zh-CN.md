@@ -73,6 +73,11 @@ revalidate/rebase，并在合适时继续使用不受影响的 Recipe。
 安全解析、领域尚未接受，或预算更适合原子调用时，才使用 direct Template，并
 记录 typed fallback reason。不要用多个 Template 调用拼出隐藏 workflow。
 
+原生路径是 JSON 值，不是 shell 参数。把一个绝对 OS 路径直接放进字段，中文和
+空格保持原样；不要再包一层 shell 引号、写 POSIX `\ ` 转义、使用 `file://`、
+百分号编码或 `~`，也不得按空格拆分。收到 typed 路径编码 blocker 后，取得原生
+绝对路径并最多重试一次；不得猜测或静默改写。
+
 对于同时放置的音频层，每个 source 使用独立 Track，避免意外的同 Track 重叠。
 Remove Silence 使用 `macro.items.apply` 的 `mode=remove_silence`，或软件包内的
 `Remove Silence...` / `Repeat Remove Silence with Last Settings` Action。支持

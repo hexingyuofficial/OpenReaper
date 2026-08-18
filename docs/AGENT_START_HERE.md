@@ -148,6 +148,12 @@ For ordinary Audio Take FX, publicly query one exact `take_ref`, call
 `macro.fx.apply_chain` with that ref, copy the exact returned `fx_ref`, then call
 `macro.fx.set_controls`; never construct the FX ref or invoke an internal resolver.
 
+Native paths are JSON values, not shell arguments. Pass one absolute OS path
+directly; keep Unicode and spaces literal. Never add outer shell quotes, write
+POSIX `\ ` escapes, use `file://` / percent encoding / `~`, or split on spaces.
+On a typed path-encoding blocker, obtain the native absolute path and retry once;
+do not guess or silently rewrite it.
+
 Audio Items: preserve source files, Track identity, and timeline position unless
 the exact requested Macro says otherwise. For simultaneous layers, place each
 source on a separate Track; do not create accidental same-Track overlap. Use
@@ -256,7 +262,7 @@ call_template {"id":"macro.items.apply","input":{"mode":"set_properties","target
 call_template {"id":"macro.fx.apply_chain","input":{"plugin":"reacomp","controls":{"threshold_db":-18,"ratio":3},"selector":{"name":"Lead Vocal"},"dry_run":false}}
 call_template {"id":"macro.project.file","input":{"operation":"save_current"}}
 call_template {"id":"macro.project.file","input":{"operation":"list_open_projects","cursor":"0","limit":25}}
-call_template {"id":"macro.project.file","input":{"operation":"open_project_in_tab","target_path":"/projects/demo/demo.RPP"}}
+call_template {"id":"macro.project.file","input":{"operation":"open_project_in_tab","target_path":"/projects/对白 中文/demo project.RPP"}}
 ```
 
 Full Macro manuals stay behind exact-id `list_templates` expansion. Do not
