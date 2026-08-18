@@ -2,6 +2,8 @@ export const ALPHA3_2E_RENDER_TARGETS_MACRO_CONTRACT = "alpha3.2e.render_targets
 export const ALPHA3_2E_RENDER_TARGETS_MACRO_ID = "macro.render.targets";
 export const ALPHA3_2E_RENDER_TARGETS_MACRO_VERSION = "1.0.0";
 
+import { stat } from "node:fs/promises";
+import path from "node:path";
 import {
   MACRO_CONTRACT_CEILINGS,
   MACRO_EXECUTION_CONTRACT,
@@ -26,6 +28,7 @@ export const ALPHA3_2E_RENDER_CHANNEL_COUNTS = Object.freeze([1, 2]);
 export const ALPHA3_2E_RENDER_WAV_BIT_DEPTHS = Object.freeze([16, 24]);
 export const ALPHA3_2E_RENDER_OGG_QUALITIES = Object.freeze([0.3, 0.5, 0.6, 0.8, 1.0]);
 export const ALPHA3_2E_RENDER_MP3_BITRATES = Object.freeze([128, 192, 256, 320]);
+export const ALPHA3_2E_RENDER_COLLISION_POLICIES = Object.freeze(["fail_if_exists", "overwrite", "suffix"]);
 export const ALPHA3_2E_RENDER_MAX_TARGETS = 16;
 
 const ALLOWED_INPUT_FIELDS = new Set([
@@ -93,7 +96,7 @@ export const ALPHA3_2_5_C_RENDER_TARGETS_REGISTRY = createMacroProgramRegistry([
   program_id: "openreaper.macro.render.targets",
   program_version: ALPHA3_2E_RENDER_TARGETS_MACRO_VERSION,
   implementation_status: "executable",
-  risk: "write",
+  risk: "destructive",
   input_schema: { type: "object", additionalProperties: false },
   selector_policy: { task_shaped: true, canonical_refs_optional_at_public_boundary: true, live_reresolve_before_write: true },
   sqlite_policy: { mode: "not_used", write_authority: false, identity_fields: [] },
@@ -102,7 +105,7 @@ export const ALPHA3_2_5_C_RENDER_TARGETS_REGISTRY = createMacroProgramRegistry([
     { id: "render-selector-resolve", kind: "selector_resolve", risk: "read", stop_on_error: true },
     { id: "render-live-ref-resolve", kind: "live_ref_resolve", risk: "read", stop_on_error: true },
     { id: "render-dirty-before", kind: "template_execute", dependency_ref: DIRTY_STATE_TEMPLATE_ID, risk: "read", stop_on_error: true },
-    { id: "render-template-execute", kind: "template_execute", dependency_ref: RENDER_TEMPLATE_ID, risk: "write", stop_on_error: true },
+    { id: "render-template-execute", kind: "template_execute", dependency_ref: RENDER_TEMPLATE_ID, risk: "destructive", stop_on_error: true },
     { id: "render-dirty-after", kind: "template_execute", dependency_ref: DIRTY_STATE_TEMPLATE_ID, risk: "read", stop_on_error: true },
     { id: "render-result-project", kind: "result_project", risk: "read", stop_on_error: true },
   ],
@@ -180,7 +183,7 @@ export function createAlpha3_2ERenderTargetsMacroRuntimeEnvelope({ request = {},
   const envelope = {
     contract: "call_template.runtime.v1",
     ok: normalizedPlan.ok,
-    template: { id: ALPHA3_2E_RENDER_TARGETS_MACRO_ID, pack: "render", risk: "write" },
+    template: { id: ALPHA3_2E_RENDER_TARGETS_MACRO_ID, pack: "render", risk: "destructive" },
     request: summarizeRuntimeRequest(request),
     completed_at: safeNowIso(now),
     error: normalizedPlan.ok ? null : macroRuntimeError(normalizedPlan),
@@ -302,9 +305,13 @@ export async function executeAlpha3_2_5CRenderTargetsMacro({ request = {}, execu
     renderStage.summary = typeof execution?.result?.summary === "string" ? execution.result.summary : "Audited render route completed.";
     renderStage.evidence_refs = evidenceRefs(execution);
     if (execution?.ok !== true) {
+      const details = await enrichRenderFailureDetails({
+        value: execution?.error?.details,
+        managedRoot,
+      });
       throw Object.assign(new Error(execution?.error?.message ?? "Audited render route failed."), {
         code: execution?.error?.code ?? "RENDER_TEMPLATE_FAILED",
-        details: renderFailureDetails(execution?.error?.details),
+        details,
       });
     }
     const result = execution.result ?? {};
@@ -327,6 +334,7 @@ export async function executeAlpha3_2_5CRenderTargetsMacro({ request = {}, execu
       readback,
       artifactRefs,
       requestedOutputBasename: plan.preview.render_settings.output_basename ?? null,
+      requestedCollisionPolicy: plan.preview.render_settings.collision_policy,
       requestedFormat: plan.preview.format,
       requestedMp3Bitrate: plan.preview.render_settings.mp3_bitrate_kbps ?? null,
     });
@@ -605,7 +613,7 @@ function renderArtifactRefs(result, payload) {
   ]);
 }
 
-function requireRenderCompletion({ result, payload, readback, artifactRefs, requestedOutputBasename = null, requestedFormat, requestedMp3Bitrate = null }) {
+function requireRenderCompletion({ result, payload, readback, artifactRefs, requestedOutputBasename = null, requestedCollisionPolicy, requestedFormat, requestedMp3Bitrate = null }) {
   const manifestRef = payload.output_artifact_ref;
   const evidenceRef = payload.evidence_artifact_ref;
   if (typeof manifestRef !== "string" || !manifestRef.startsWith("artifact:") || !artifactRefs.includes(manifestRef)) {
@@ -648,9 +656,18 @@ function requireRenderCompletion({ result, payload, readback, artifactRefs, requ
     throw coded("RENDER_OUTPUT_ROW_INVALID", "The audited render route returned an invalid output row.");
   }
   if (requestedOutputBasename !== null) {
-    const expected = outputs.map((_, index) => fileCount === 1
+    const collisionSuffixIndex = requestedCollisionPolicy === "suffix"
+      ? outputs[0]?.collision_suffix_index
+      : 0;
+    if (!Number.isInteger(collisionSuffixIndex) || collisionSuffixIndex < 0 || outputs.some((output) => (output.collision_suffix_index ?? 0) !== collisionSuffixIndex)) {
+      throw coded("RENDER_COLLISION_SUFFIX_INVALID", "The audited render route returned inconsistent collision suffix evidence.");
+    }
+    const effectiveBase = collisionSuffixIndex === 0
       ? requestedOutputBasename
-      : `${requestedOutputBasename}_${String(index + 1).padStart(2, "0")}`);
+      : `${requestedOutputBasename}_${collisionSuffixIndex}`;
+    const expected = outputs.map((_, index) => fileCount === 1
+      ? effectiveBase
+      : `${effectiveBase}_${String(index + 1).padStart(2, "0")}`);
     const mismatch = outputs.findIndex((output, index) => output.output_basename !== expected[index]);
     if (mismatch >= 0) {
       throw coded("RENDER_OUTPUT_BASENAME_MISMATCH", `The audited render route did not preserve the requested managed basename for output ${mismatch + 1}.`);
@@ -758,6 +775,12 @@ function renderFailureDetails(value) {
     "render_action_id",
     "retry_requires_source_reconnect",
     "output_basename",
+    "absolute_path",
+    "existing_kind",
+    "existing_size_bytes",
+    "existing_modified_at",
+    "collision_policy",
+    "collision_suffix_index",
     "requested_format",
     "actual_format",
     "measurement_status",
@@ -781,6 +804,29 @@ function renderFailureDetails(value) {
       .slice(0, 8);
   }
   return Object.keys(details).length > 0 ? details : undefined;
+}
+
+async function enrichRenderFailureDetails({ value, managedRoot }) {
+  const details = renderFailureDetails(value);
+  if (!isPlainObject(details) || typeof details.absolute_path !== "string") return details;
+  if (!isManagedRenderPath(managedRoot, details.absolute_path)) return details;
+  try {
+    const facts = await stat(details.absolute_path);
+    if (!facts.isFile()) return details;
+    return {
+      ...details,
+      existing_size_bytes: facts.size,
+      existing_modified_at: facts.mtime.toISOString(),
+    };
+  } catch {
+    return details;
+  }
+}
+
+function isManagedRenderPath(managedRoot, candidate) {
+  if (typeof managedRoot !== "string" || typeof candidate !== "string" || !path.isAbsolute(candidate)) return false;
+  const relative = path.relative(path.resolve(managedRoot), path.resolve(candidate));
+  return relative !== "" && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
 }
 
 function renderFailureRecovery({ request, status, blocker, data }) {
@@ -862,7 +908,7 @@ export function createAlpha3_2ERenderTargetsMacroDiscoveryItems(options = {}) {
     summary: "Execute bounded managed-root WAV/OGG/native-MP3 exports with an optional user-owned output basename through the audited render route.",
     pack: "render",
     lifecycle: "experimental",
-    risk: "write",
+    risk: "destructive",
     entity_kind: "macro.render.targets",
     tags: ["alpha3.2", "alpha3.2e", "macro", "render", "executable", "runtime_bound"],
     kind: "official_macro",
@@ -894,7 +940,7 @@ export function createAlpha3_2ERenderTargetsMacroDiscoveryItems(options = {}) {
         mp3_bitrate_kbps: { enum: [...ALPHA3_2E_RENDER_MP3_BITRATES] },
         output_basename: { type: "string", description: "Optional safe filename stem without an extension. Multi-target renders append _01, _02, and so on." },
         output_policy: { const: "openreaper_managed_render_root" },
-        collision_policy: { const: "fail_if_exists" },
+        collision_policy: { enum: [...ALPHA3_2E_RENDER_COLLISION_POLICIES], default: "fail_if_exists" },
         max_targets: { type: "integer", minimum: 1, maximum: ALPHA3_2E_RENDER_MAX_TARGETS },
         dry_run: { type: "boolean" },
       },
@@ -1026,7 +1072,7 @@ function normalizeSettings(input) {
   if (!ALPHA3_2E_RENDER_CHANNEL_COUNTS.includes(channels)) blockers.push(blocker("RENDER_CHANNELS_UNSUPPORTED", "channel_count must be 1 or 2."));
   if (!Number.isInteger(maxTargets) || maxTargets < 1 || maxTargets > ALPHA3_2E_RENDER_MAX_TARGETS) blockers.push(blocker("RENDER_MAX_TARGETS_INVALID", `max_targets must be an integer from 1 to ${ALPHA3_2E_RENDER_MAX_TARGETS}.`));
   if (outputPolicy !== "openreaper_managed_render_root") blockers.push(blocker("RENDER_OUTPUT_POLICY_REQUIRED", "output_policy must be openreaper_managed_render_root."));
-  if (collisionPolicy !== "fail_if_exists") blockers.push(blocker("RENDER_COLLISION_POLICY_REQUIRED", "collision_policy must be fail_if_exists; overwrite and suffix fallback are not supported."));
+  if (!ALPHA3_2E_RENDER_COLLISION_POLICIES.includes(collisionPolicy)) blockers.push(blocker("RENDER_COLLISION_POLICY_REQUIRED", "collision_policy must be fail_if_exists, overwrite, or suffix."));
   if (input.output_basename !== undefined && outputBasename === null) blockers.push(blocker("RENDER_OUTPUT_BASENAME_INVALID", "output_basename must be a safe 1-96 byte filename stem without an extension, path separator, control character, surrounding whitespace, or reserved dot name."));
 
   const settings = {
@@ -1035,7 +1081,7 @@ function normalizeSettings(input) {
     channel_count: channels,
     max_targets: maxTargets,
     output_policy: "openreaper_managed_render_root",
-    collision_policy: "fail_if_exists",
+    collision_policy: collisionPolicy,
     ...(outputBasename === null ? {} : { output_basename: outputBasename }),
   };
   if (input.format === "wav") {
@@ -1076,9 +1122,10 @@ function buildPreview({ targetKind, targetRefs, refs, settings }) {
     render_settings: { ...settings },
     output_policy: {
       root: "openreaper_managed_render_root",
-      collision_policy: "fail_if_exists",
+      collision_policy: settings.collision_policy,
       arbitrary_path_allowed: false,
-      overwrite_allowed: false,
+      overwrite_allowed: settings.collision_policy === "overwrite",
+      suffix_fallback: settings.collision_policy === "suffix",
       external_encoder_allowed: false,
       basename_owner: settings.output_basename === undefined ? "deterministic_compatibility_default" : "user_request",
       deterministic_handler_naming: settings.output_basename === undefined,
@@ -1096,7 +1143,7 @@ function buildMutationRequest(preview) {
     target_kind: preview.target_kind,
     format: preview.format,
     output_policy: "openreaper_managed_render_root",
-    collision_policy: "fail_if_exists",
+    collision_policy: preview.render_settings.collision_policy,
     sample_rate_hz: preview.render_settings.sample_rate_hz,
     channel_count: preview.render_settings.channel_count,
     max_targets: preview.max_targets,
@@ -1175,7 +1222,7 @@ function blockedPlan(blockers, preview, dryRun) {
 
 function successCriteriaFor(preview) {
   return deepFreeze([
-    "The single template.render.render_targets child resolves the exact target set and rejects all collisions before the first render action.",
+    "The single template.render.render_targets child resolves the exact target set and applies the requested managed-root collision policy before the first render action.",
     `Every ${preview.format.toUpperCase()} output is non-empty, has the expected container header${preview.format === "mp3" ? " and exact MPEG Layer III bitrate" : ""}, and remains under the managed render root.`,
     "The D31 result returns requested/actual format facts, compact output rows, manifest/evidence artifact refs, and confirms render-setting and selection restoration.",
   ]);

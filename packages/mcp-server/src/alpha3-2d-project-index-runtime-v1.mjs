@@ -2016,7 +2016,7 @@ function mapTakesFromItems(rows) {
       const ref = canonicalRefFrom(take, ["ref", "take_ref"], "take");
       if (!ref || !itemRef) continue;
       const takeFxCount = integerOrNull(take.take_fx_count ?? take.fx_count);
-      takes.push({ ref, owner_ref: itemRef, item_ref: itemRef, track_ref: canonicalRefFrom(take, ["track_ref"], "track") ?? trackRef, active: take.active === true || take.is_active === true, selected: take.selected === true, source_kind: stringOrNull(take.source_kind), source_ref: canonicalRefFrom(take, ["source_ref", "file_ref"]), pitch_semitones: finiteOrNull(take.pitch_semitones ?? take.pitch), playrate: finiteOrNull(take.playrate ?? take.play_rate), preserve_pitch: booleanOrNull(take.preserve_pitch), reverse: booleanOrNull(take.reverse ?? take.reversed), has_take_fx: booleanOrNull(take.has_take_fx) ?? (takeFxCount === null ? null : takeFxCount > 0), summary: compactObject(take) });
+      takes.push({ ref, owner_ref: itemRef, item_ref: itemRef, track_ref: canonicalRefFrom(take, ["track_ref"], "track") ?? trackRef, name: stringOr(take.name ?? take.take_name, ""), active: take.active === true || take.is_active === true, selected: take.selected === true, source_kind: stringOrNull(take.source_kind), source_ref: canonicalRefFrom(take, ["source_ref", "file_ref"]), pitch_semitones: finiteOrNull(take.pitch_semitones ?? take.pitch), playrate: finiteOrNull(take.playrate ?? take.play_rate), preserve_pitch: booleanOrNull(take.preserve_pitch), reverse: booleanOrNull(take.reverse ?? take.reversed), has_take_fx: booleanOrNull(take.has_take_fx) ?? (takeFxCount === null ? null : takeFxCount > 0), summary: compactObject(take) });
     }
   }
   return dedupeRows(takes);
@@ -2033,6 +2033,7 @@ function mapTakes(rows) {
       owner_ref: itemRef,
       item_ref: itemRef,
       track_ref: canonicalRefFrom(take, ["track_ref"], "track"),
+      name: stringOr(take.name ?? take.take_name, ""),
       active: take.active === true || take.is_active === true,
       selected: take.selected === true,
       source_kind: stringOrNull(take.source_kind),
@@ -2056,6 +2057,7 @@ function mapTakeSources(readback) {
     owner_ref: stringOrNull(readback.item_ref),
     item_ref: stringOrNull(readback.item_ref),
     track_ref: stringOrNull(readback.track_ref),
+    name: stringOr(readback.name ?? readback.take_name, ""),
     source_ref: fileRef,
     source_kind: stringOrNull(readback.source_kind ?? readback.source_type),
     length_seconds: finiteOrNull(readback.length_seconds),

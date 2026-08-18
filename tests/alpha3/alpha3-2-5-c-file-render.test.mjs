@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, it } from "node:test";
 
 import { FakeFoundationBridge } from "../../packages/core/src/foundation-bridge-v1.mjs";
@@ -439,6 +442,123 @@ describe("Alpha3.2.5-C executable file/render Macros", () => {
     const failed = await run("internal_request_name");
     assert.equal(failed.ok, false);
     assert.equal(failed.error.code, "RENDER_OUTPUT_BASENAME_MISMATCH");
+  });
+
+  it("returns exact Chinese-path file facts for the default fail_if_exists collision", async () => {
+    const renderRoot = await mkdtemp(path.join(tmpdir(), "openreaper-render-中文 空格-"));
+    try {
+      const existingPath = path.join(renderRoot, "中文 废品.wav");
+      await writeFile(existingPath, Buffer.from("old-render"));
+      const fixedMtime = new Date("2026-08-18T04:05:06.000Z");
+      await utimes(existingPath, fixedMtime, fixedMtime);
+      const existingFacts = await stat(existingPath);
+      const calls = [];
+      const response = await executeAlpha3_2_5CRenderTargetsMacro({
+        request: {
+          request_id: "render-chinese-collision",
+          input: { target_kind: "whole_project", format: "wav", output_basename: "中文 废品", dry_run: false },
+        },
+        now,
+        managedRenderRoot: renderRoot,
+        executeAtomic: async ({ id, input }) => {
+          calls.push({ id, input });
+          if (id === "template.project.read_dirty_state") return atomicExecution({ readback: { dirty: false } });
+          return {
+            contract: "template.execution.v1",
+            ok: false,
+            result: null,
+            error: {
+              code: "IDEMPOTENCY_CONFLICT",
+              message: "fail_if_exists rejected a managed output collision.",
+              recoverable: false,
+              details: {
+                local_code: "RENDER_OUTPUT_EXISTS",
+                absolute_path: existingPath,
+                output_basename: "中文 废品",
+                existing_kind: "audio_output",
+                existing_size_bytes: 1,
+                collision_policy: "fail_if_exists",
+                zero_write: true,
+              },
+            },
+          };
+        },
+      });
+
+      assert.equal(response.ok, false);
+      assert.equal(response.error.code, "IDEMPOTENCY_CONFLICT");
+      assert.equal(response.error.details.absolute_path, existingPath);
+      assert.equal(response.error.details.existing_size_bytes, existingFacts.size);
+      assert.equal(response.error.details.existing_modified_at, existingFacts.mtime.toISOString());
+      assert.equal(response.error.details.collision_policy, "fail_if_exists");
+      assert.equal(response.error.details.zero_write, true);
+      assert.equal(calls.find(({ id }) => id === "template.render.render_targets").input.collision_policy, "fail_if_exists");
+      assert.deepEqual(validateMacroExecutionEnvelope(response), { valid: true, errors: [] });
+    } finally {
+      await rm(renderRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts one deterministic Chinese suffix batch and forwards explicit overwrite", async () => {
+    const policies = ["suffix", "overwrite"];
+    for (const collisionPolicy of policies) {
+      const calls = [];
+      const outputs = collisionPolicy === "suffix"
+        ? [1, 2].map((index) => ({
+          absolute_path: `/managed/renders/中文 混音_2_${String(index).padStart(2, "0")}.wav`,
+          output_basename: `中文 混音_2_${String(index).padStart(2, "0")}`,
+          size: 4096,
+          extension: "wav",
+          requested_format: "wav",
+          actual_format: "wav",
+          target_identity: `track:guid:{TRACK-${index}}`,
+          collision_policy: "suffix",
+          collision_suffix_index: 2,
+        }))
+        : [{
+          absolute_path: "/managed/renders/中文 混音.wav",
+          output_basename: "中文 混音",
+          size: 4096,
+          extension: "wav",
+          requested_format: "wav",
+          actual_format: "wav",
+          target_identity: "whole_project",
+          collision_policy: "overwrite",
+          collision_suffix_index: 0,
+          overwritten_audio: true,
+        }];
+      const response = await executeAlpha3_2_5CRenderTargetsMacro({
+        request: {
+          request_id: `render-${collisionPolicy}`,
+          input: {
+            target_kind: collisionPolicy === "suffix" ? "selected_tracks" : "whole_project",
+            format: "wav",
+            output_basename: "中文 混音",
+            collision_policy: collisionPolicy,
+            dry_run: false,
+          },
+        },
+        now,
+        managedRenderRoot,
+        executeAtomic: async ({ id, input }) => {
+          calls.push({ id, input });
+          if (id === "template.project.read_dirty_state") return atomicExecution({ readback: { dirty: false } });
+          return atomicExecution(verifiedRenderResult({
+            data: {
+              file_count: outputs.length,
+              collision_policy: collisionPolicy,
+              collision_suffix_index: collisionPolicy === "suffix" ? 2 : 0,
+              outputs,
+            },
+          }));
+        },
+      });
+
+      assert.equal(response.ok, true, JSON.stringify(response));
+      assert.equal(calls.find(({ id }) => id === "template.render.render_targets").input.collision_policy, collisionPolicy);
+      assert.deepEqual(response.result.data.outputs.map((output) => output.output_basename), outputs.map((output) => output.output_basename));
+      assert.deepEqual(validateMacroExecutionEnvelope(response), { valid: true, errors: [] });
+    }
   });
 
   it("requires exact requested and actual native MP3 facts from D31", async () => {

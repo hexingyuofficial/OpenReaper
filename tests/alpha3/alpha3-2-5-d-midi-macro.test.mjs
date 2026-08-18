@@ -323,6 +323,41 @@ describe("Alpha3.2.5-D MIDI create clip Macro", () => {
     assert.equal(calls.findIndex((call) => call.id === "template.tracks.resolve_track_ref") < calls.findIndex((call) => call.id === "template.midi.create_midi_item"), true);
   });
 
+  it("returns three canonical patches for ambiguous Chinese Track names before mutation", async () => {
+    const calls = [];
+    const trackRows = ["A", "B", "C", "D"].map((suffix, index) => ({
+      ref: `track:guid:{TRACK-${suffix}}`,
+      name: "对白 主轨",
+      index,
+    }));
+    const response = await executeAlpha3_2_5DMidiMacro({
+      request: request({ input: { selector: { name: "对白 主轨" } } }),
+      projectIndexRuntime: fakeIndex({ trackRows }),
+      executeAtomic: async (child) => {
+        calls.push(child);
+        if (child.id === "template.project.read_summary") return executionFor(child.id, { change_count: 1 });
+        throw new Error(`Unexpected Template after ambiguous selector: ${child.id}`);
+      },
+    });
+
+    assert.equal(response.ok, false, JSON.stringify(response));
+    assert.equal(response.execution.status, "failed");
+    assert.equal(response.error.code, "MIDI_TRACK_SELECTOR_AMBIGUOUS");
+    assert.deepEqual(response.blockers[0].details, {
+      entity: "tracks",
+      candidate_count: 3,
+      candidates_truncated: true,
+      candidates: trackRows.slice(0, 3).map((row) => ({
+        kind: "track",
+        ref: row.ref,
+        name: row.name,
+        index: row.index,
+        request_patch: { refs: { track_ref: row.ref } },
+      })),
+    });
+    assert.deepEqual(calls.map((call) => call.id), ["template.project.read_summary"]);
+  });
+
   it("keeps verified MIDI changes applied when only index maintenance fails", async () => {
     const response = await executeAlpha3_2_5DMidiMacro({
       request: request({ refs: { track_ref: TRACK }, budget: { max_response_bytes: 2_048 } }),

@@ -278,13 +278,34 @@ async function executeControlsSet({
 
   try {
     for (const [index, child] of plan.requests.entries()) {
-      const execution = await runAtomic({
-        executeAtomic,
-        request,
-        state,
-        child: materializeProjectTimeSignatureChild(child, target.projectTempo),
-        idempotencyKey: childIdempotencyKey(request.idempotency_key, index),
-      });
+      const change = {
+        template_id: child.id,
+        fields: clone(child.fields ?? []),
+        status: "mutation_pending",
+        mutation: { status: "pending", dispatch_status: "pending" },
+        live_readback: { status: "not_run" },
+        index_maintenance: { status: "not_run" },
+      };
+      state.changes.push(change);
+      let execution;
+      try {
+        execution = await runAtomic({
+          executeAtomic,
+          request,
+          state,
+          child: materializeProjectTimeSignatureChild(child, target.projectTempo),
+          idempotencyKey: childIdempotencyKey(request.idempotency_key, index),
+        });
+      } catch (error) {
+        const unknownOutcome = error?.details?.outcome === "unknown";
+        change.status = unknownOutcome ? "mutation_unknown" : "mutation_failed";
+        change.mutation = {
+          status: unknownOutcome ? "unknown" : "failed",
+          dispatch_status: "failed",
+          blocker_code: error?.code ?? "CONTROL_EXECUTION_FAILED",
+        };
+        throw error;
+      }
       collectExecution(state, execution);
       const atomicReadback = captureRequiredAtomicControlReadback({
         targetKind: input.target_kind,
@@ -292,15 +313,11 @@ async function executeControlsSet({
         requestedFields,
         readback: executionReadback(execution),
       });
-      state.changes.push({
-        template_id: child.id,
-        fields: clone(child.fields ?? []),
-        status: "mutation_completed",
-        mutation: { status: "completed", dispatch_status: "completed" },
-        live_readback: { status: "pending" },
-        index_maintenance: { status: "pending" },
-        atomic_readback: atomicReadback,
-      });
+      change.status = "mutation_completed";
+      change.mutation = { status: "completed", dispatch_status: "completed" };
+      change.live_readback = { status: "pending" };
+      change.index_maintenance = { status: "pending" };
+      change.atomic_readback = atomicReadback;
     }
     pushStage(
       stages,
@@ -406,9 +423,10 @@ async function executeControlsSet({
       },
     });
   } catch (error) {
+    const mutationCompleted = state.changes.some((change) => change.mutation?.status === "completed");
     return failureEnvelope({
       entry, request, startedAt, now, stages, state,
-      status: state.changes.length > 0 ? "partial_failure" : "failed",
+      status: mutationCompleted ? "partial_failure" : "failed",
       code: error.code ?? "CONTROL_EXECUTION_FAILED",
       message: error.message ?? "The registered control program failed.",
       blockers: error.blockers,
@@ -1785,13 +1803,74 @@ async function querySelector({
   }
   const rows = response.result?.data?.rows ?? [];
   if (rows.length === 0) return blocked("SELECTOR_TARGET_NOT_FOUND", `No ${entity} candidate matched the bounded selector.`);
-  if (rows.length > 1) return blocked("SELECTOR_TARGET_AMBIGUOUS", `The bounded selector matched ${rows.length} ${entity} candidates; refine it or pass an exact ref.`);
+  if (rows.length > 1) {
+    const candidates = boundedSelectorCandidates(entity, rows);
+    const truncated = response.result?.data?.page?.has_more === true;
+    return blocked(
+      "SELECTOR_TARGET_AMBIGUOUS",
+      `The bounded selector matched ${truncated ? "at least " : ""}${rows.length} ${entity} candidates; choose one canonical candidate patch.`,
+      [{
+        code: "SELECTOR_TARGET_AMBIGUOUS",
+        message: `The bounded selector matched ${truncated ? "at least " : ""}${rows.length} ${entity} candidates; choose one canonical candidate patch.`,
+        recoverable: true,
+        details: {
+          entity,
+          candidate_count: candidates.length,
+          candidates_truncated: truncated,
+          candidates,
+        },
+      }],
+    );
+  }
   return {
     ok: true,
     row: rows[0],
     sqlite: response.sqlite,
     evidenceRefs: response.result?.verification?.evidence_refs ?? [],
   };
+}
+
+function boundedSelectorCandidates(entity, rows) {
+  return rows.slice(0, 3).flatMap((row) => {
+    const ref = selectorCandidateRef(entity, row);
+    const refName = selectorRefName(entity);
+    if (!ref || !refName) return [];
+    return [compactObject({
+      kind: entity === "tracks" ? "track" : entity === "fx" ? "fx" : entity.replace(/s$/u, ""),
+      ref,
+      owner_ref: typeof row.owner_ref === "string" ? row.owner_ref : undefined,
+      name: typeof row.name === "string" ? row.name : undefined,
+      plugin_name: typeof row.plugin_name === "string" ? row.plugin_name : undefined,
+      index: Number.isInteger(row.index) ? row.index : undefined,
+      slot_index: Number.isInteger(row.slot_index) ? row.slot_index : undefined,
+      request_patch: { refs: { [refName]: ref } },
+    })];
+  });
+}
+
+function selectorCandidateRef(entity, row) {
+  const value = entity === "tracks"
+    ? row.ref ?? row.track_ref
+    : entity === "fx"
+      ? row.ref ?? row.fx_ref
+      : entity === "items"
+        ? row.ref ?? row.item_ref
+        : entity === "takes"
+          ? row.ref ?? row.take_ref
+          : entity === "routing"
+            ? row.ref ?? row.send_ref
+            : row.ref;
+  return typeof value === "string" && value.length <= 240 ? value : null;
+}
+
+function selectorRefName(entity) {
+  return {
+    tracks: "track_ref",
+    fx: "fx_ref",
+    items: "item_ref",
+    takes: "take_ref",
+    routing: "send_ref",
+  }[entity] ?? null;
 }
 
 function queryParts(selector) {
@@ -2027,31 +2106,66 @@ const CONTROL_REQUIRED_ATOMIC_READBACK_PATHS = Object.freeze({
   }),
 });
 
+const CONTROL_NUMERIC_READBACK_EPSILONS = Object.freeze({
+  project: Object.freeze({ bpm: 0.0001, grid_swing: 0.0001 }),
+  track: Object.freeze({ volume: 0.0001, pan: 0.0001, width: 0.0001 }),
+  item: Object.freeze({
+    position_seconds: 0.0001,
+    length_seconds: 0.0001,
+    fade_in_seconds: 0.0001,
+    fade_out_seconds: 0.0001,
+    snap_offset_seconds: 0.0001,
+  }),
+  take: Object.freeze({ pan: 0.0001 }),
+  transport: Object.freeze({
+    edit_cursor_seconds: 0.0001,
+    loop_start_seconds: 0.0001,
+    loop_end_seconds: 0.0001,
+    time_selection_start_seconds: 0.0001,
+    time_selection_end_seconds: 0.0001,
+  }),
+  send: Object.freeze({ volume: 0.0001, pan: 0.0001 }),
+});
+
 function applyControlReadbackToChanges(changes, rows) {
   const byField = new Map((rows ?? []).map((row) => [row.field, row]));
   for (const change of changes) {
     const fields = Array.isArray(change.fields) ? change.fields : [];
     const evidence = fields.map((field) => byField.get(field)).filter(Boolean);
+    const readbackFields = evidence.map((row) => compactObject({
+      field: row.field,
+      status: row.status,
+      classification: row.classification,
+      source: row.source,
+      requested_value: row.requested,
+      observed_value: row.observed,
+      delta: row.delta,
+      tolerance: row.tolerance,
+      tolerance_source: row.tolerance_source,
+    }));
     if (evidence.length !== fields.length || evidence.some((row) => !["passed", "verified_by_atomic_template"].includes(row.status))) {
       change.status = "readback_failed";
-      change.live_readback = { status: "failed", source: "live_control_readback" };
+      change.live_readback = {
+        status: "failed",
+        classification: "live_mismatch",
+        source: "live_control_readback",
+        fields: readbackFields,
+      };
       continue;
     }
+    const classification = evidence.some((row) => row.classification === "precision_equivalent")
+      ? "precision_equivalent"
+      : "passed_exact";
     change.status = "applied";
     change.live_readback = {
       status: "passed",
+      classification,
       source: evidence.every((row) => row.source === "accepted_template_live_readback")
         ? "accepted_template_live_readback"
         : evidence.some((row) => row.status === "passed")
           ? "live_control_readback"
           : "accepted_template_readback",
-      fields: evidence.map((row) => compactObject({
-        field: row.field,
-        status: row.status,
-        source: row.source,
-        requested_value: row.requested,
-        observed_value: row.observed,
-      })),
+      fields: readbackFields,
     };
     delete change.atomic_readback;
   }
@@ -2071,18 +2185,30 @@ function outcomeEvidence(state) {
   const changes = Array.isArray(state.changes) ? state.changes : [];
   const readbackPassed = changes.filter((change) => change.live_readback?.status === "passed").length;
   const mutationCompleted = changes.filter((change) => change.mutation?.status === "completed").length;
+  const mutationFailed = changes.filter((change) => change.mutation?.status === "failed").length;
   const mutationUnknown = changes.filter((change) => change.mutation?.status === "unknown").length;
   const indexStatuses = unique(changes.map((change) => change.index_maintenance?.status).filter(Boolean), 8);
   return {
     mutation: {
-      status: mutationUnknown > 0 ? (mutationCompleted > 0 ? "partial_unknown" : "unknown") : changes.length > 0 ? "completed" : "not_run",
+      status: mutationUnknown > 0
+        ? (mutationCompleted > 0 ? "partial_unknown" : "unknown")
+        : mutationFailed > 0
+          ? (mutationCompleted > 0 ? "partial_failed" : "failed")
+          : mutationCompleted > 0
+            ? "completed"
+            : "not_run",
       completed_count: mutationCompleted,
+      failed_count: mutationFailed,
       unknown_count: mutationUnknown,
     },
     live_readback: {
       status: changes.length > 0 && readbackPassed === changes.length ? "passed" : readbackPassed > 0 ? "partial" : "not_passed",
       passed_count: readbackPassed,
       total_count: changes.length,
+      classifications: unique(changes.flatMap((change) => [
+        change.live_readback?.classification,
+        ...(change.live_readback?.fields ?? []).map((field) => field.classification),
+      ]).filter(Boolean), 8),
     },
     index_maintenance: {
       status: indexStatuses.length === 1 ? indexStatuses[0] : indexStatuses.length > 1 ? "mixed" : "not_run",
@@ -2130,13 +2256,22 @@ function verifyControlReadback({ targetKind, requestedFields, targetRefs, readba
       continue;
     }
     comparedCount += 1;
-    const matched = controlValuesMatch(requested, observed);
-    rows.push({ field, status: matched ? "passed" : "mismatch", requested, observed });
-    if (!matched) {
+    const comparison = classifyControlReadbackValue(targetKind, field, requested, observed);
+    rows.push({ field, ...comparison, requested, observed });
+    if (comparison.status !== "passed") {
       blockers.push({
         code: "CONTROL_READBACK_MISMATCH",
         message: `Readback for ${targetKind}.${field} did not match the requested value.`,
         recoverable: true,
+        details: {
+          field,
+          classification: comparison.classification,
+          requested,
+          observed,
+          delta: comparison.delta,
+          tolerance: comparison.tolerance,
+          tolerance_source: comparison.tolerance_source,
+        },
       });
     }
   }
@@ -2156,9 +2291,15 @@ function captureRequiredAtomicControlReadback({ targetKind, fields = [], request
     if (!path) return [];
     const requested = requestedFields[field];
     const observed = valueAtPath(readback, path);
+    const comparison = classifyControlReadbackValue(targetKind, field, requested, observed);
+    const readbackPassed = readback?.readback_status === "passed";
     return [{
       field,
-      status: readback?.readback_status === "passed" && observed !== undefined && controlValuesMatch(requested, observed) ? "passed" : "mismatch",
+      ...comparison,
+      status: readbackPassed && observed !== undefined && comparison.status === "passed" ? "passed" : "mismatch",
+      classification: readbackPassed && observed !== undefined
+        ? comparison.classification
+        : "live_mismatch",
       source: "accepted_template_live_readback",
       requested,
       observed,
@@ -2238,12 +2379,34 @@ function valueAtPath(value, path) {
   return current;
 }
 
-function controlValuesMatch(requested, observed) {
-  if (typeof requested === "number" && typeof observed === "number") {
-    return Number.isFinite(requested) && Number.isFinite(observed)
-      && Math.abs(requested - observed) <= 0.0001;
+function classifyControlReadbackValue(targetKind, field, requested, observed) {
+  if (typeof requested !== "number" || typeof observed !== "number") {
+    const exact = Object.is(requested, observed);
+    return { status: exact ? "passed" : "mismatch", classification: exact ? "passed_exact" : "live_mismatch" };
   }
-  return Object.is(requested, observed);
+  if (!Number.isFinite(requested) || !Number.isFinite(observed)) {
+    return { status: "mismatch", classification: "live_mismatch" };
+  }
+  const delta = Math.abs(requested - observed);
+  if (delta === 0) {
+    return { status: "passed", classification: "passed_exact", delta: 0 };
+  }
+  const tolerance = CONTROL_NUMERIC_READBACK_EPSILONS[targetKind]?.[field];
+  if (!Number.isFinite(tolerance) || tolerance < 0) {
+    return {
+      status: "mismatch",
+      classification: "live_mismatch",
+      delta,
+      tolerance_source: "unregistered",
+    };
+  }
+  return {
+    status: delta <= tolerance ? "passed" : "mismatch",
+    classification: delta <= tolerance ? "precision_equivalent" : "live_mismatch",
+    delta,
+    tolerance,
+    tolerance_source: "registered_control_field",
+  };
 }
 
 function requireStableRefMatch(requested, observed, code, { alwaysExact = false } = {}) {
@@ -2801,7 +2964,45 @@ function boundedBlockers(entries) {
     code: typeof item?.code === "string" ? item.code : "MACRO_BLOCKED",
     message: typeof item?.message === "string" ? item.message : String(item),
     recoverable: item?.recoverable !== false,
+    ...(boundedBlockerDetails(item?.details) ? { details: boundedBlockerDetails(item.details) } : {}),
   }));
+}
+
+function boundedBlockerDetails(value) {
+  if (!object(value)) return null;
+  const scalarKeys = [
+    "entity", "field", "classification", "candidate_count", "candidates_truncated",
+    "requested", "observed", "delta", "tolerance", "tolerance_source",
+  ];
+  const details = {};
+  for (const key of scalarKeys) {
+    const entry = value[key];
+    if (typeof entry === "string") details[key] = entry.slice(0, 240);
+    else if (typeof entry === "number" && Number.isFinite(entry)) details[key] = entry;
+    else if (typeof entry === "boolean") details[key] = entry;
+  }
+  if (Array.isArray(value.candidates)) {
+    details.candidates = value.candidates.slice(0, 3).flatMap((candidate) => {
+      if (!object(candidate) || typeof candidate.ref !== "string" || candidate.ref.length > 240) return [];
+      const row = {};
+      for (const key of ["kind", "ref", "owner_ref", "name", "plugin_name"]) {
+        if (typeof candidate[key] === "string") row[key] = candidate[key].slice(0, 240);
+      }
+      for (const key of ["index", "slot_index"]) {
+        if (Number.isInteger(candidate[key])) row[key] = candidate[key];
+      }
+      const refs = candidate.request_patch?.refs;
+      if (object(refs)) {
+        const patchRefs = {};
+        for (const key of ["track_ref", "item_ref", "take_ref", "fx_ref", "send_ref"]) {
+          if (typeof refs[key] === "string" && refs[key].length <= 240) patchRefs[key] = refs[key];
+        }
+        if (Object.keys(patchRefs).length > 0) row.request_patch = { refs: patchRefs };
+      }
+      return [row];
+    });
+  }
+  return Object.keys(details).length > 0 ? details : null;
 }
 
 function validationBlockers(errors = []) {

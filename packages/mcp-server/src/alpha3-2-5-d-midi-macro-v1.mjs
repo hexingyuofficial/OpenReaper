@@ -624,7 +624,20 @@ async function selectTrack({ request, input, projectIndexRuntime, catalog, execu
   if (response.ok !== true) return { ok: false, blockers: response.blockers ?? [blocker(response.error?.code ?? "PROJECT_INDEX_SELECTOR_FAILED", response.error?.message ?? "Project Index track selection failed.")] };
   const rows = response.result?.data?.rows ?? [];
   if (rows.length === 0) return { ok: false, blockers: [blocker("MIDI_TRACK_SELECTOR_NOT_FOUND", "The bounded track selector matched no candidates.")] };
-  if (rows.length > 1) return { ok: false, blockers: [blocker("MIDI_TRACK_SELECTOR_AMBIGUOUS", `The bounded track selector matched ${rows.length} candidates.`)] };
+  if (rows.length > 1) {
+    const candidates = boundedTrackCandidates(rows);
+    const truncated = response.result?.data?.page?.has_more === true;
+    const message = `The bounded track selector matched ${truncated ? "at least " : ""}${rows.length} candidates; choose one canonical track_ref patch.`;
+    return {
+      ok: false,
+      blockers: [blocker("MIDI_TRACK_SELECTOR_AMBIGUOUS", message, true, {
+        entity: "tracks",
+        candidate_count: candidates.length,
+        candidates_truncated: truncated,
+        candidates,
+      })],
+    };
+  }
   const trackRef = rows[0]?.ref ?? rows[0]?.track_ref;
   if (typeof trackRef !== "string" || !trackRef.startsWith("track:")) return { ok: false, blockers: [blocker("MIDI_TRACK_CANDIDATE_INVALID", "The Project Index returned no canonical track candidate.")] };
   state.trackRef = trackRef;
@@ -1255,7 +1268,23 @@ function requiresExactIdentity(ref) {
   return typeof ref === "string" && ref.includes(":guid:");
 }
 
-function blocker(code, message, recoverable = true) { return { code, message, recoverable }; }
+function boundedTrackCandidates(rows) {
+  return rows.slice(0, 3).flatMap((row) => {
+    const ref = row?.ref ?? row?.track_ref;
+    if (typeof ref !== "string" || !ref.startsWith("track:")) return [];
+    return [{
+      kind: "track",
+      ref,
+      ...(typeof row.name === "string" ? { name: row.name } : {}),
+      ...(Number.isInteger(row.index) ? { index: row.index } : {}),
+      request_patch: { refs: { track_ref: ref } },
+    }];
+  });
+}
+
+function blocker(code, message, recoverable = true, details) {
+  return { code, message, recoverable, ...(isObject(details) ? { details } : {}) };
+}
 function coded(code, message, blockers) { const error = new Error(message); error.code = code; error.blockers = blockers; return error; }
 function unique(values, limit = Number.POSITIVE_INFINITY) { return [...new Set((values ?? []).filter((value) => typeof value === "string" && value.length > 0))].slice(0, limit); }
 function macroIdentity(entry) { return { id: entry.macro_id, program_id: entry.program_id, program_version: entry.program_version, risk: entry.risk }; }

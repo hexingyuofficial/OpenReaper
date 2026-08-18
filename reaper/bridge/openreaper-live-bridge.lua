@@ -511,6 +511,42 @@ local function first_number(...)
   return nil
 end
 
+local function utf8_prefix_by_bytes(text, max_bytes)
+  if max_bytes <= 0 then
+    return ""
+  end
+  if #text <= max_bytes then
+    return text
+  end
+
+  local start = max_bytes
+  while start > 0 do
+    local byte = string.byte(text, start)
+    if byte == nil or byte < 0x80 or byte >= 0xC0 then
+      break
+    end
+    start = start - 1
+  end
+  if start == 0 then
+    return ""
+  end
+
+  local lead = string.byte(text, start)
+  local width = 1
+  if lead >= 0xF0 and lead < 0xF8 then
+    width = 4
+  elseif lead >= 0xE0 and lead < 0xF0 then
+    width = 3
+  elseif lead >= 0xC0 and lead < 0xE0 then
+    width = 2
+  end
+  local complete_end = start + width - 1
+  if complete_end <= max_bytes then
+    return text:sub(1, complete_end)
+  end
+  return text:sub(1, start - 1)
+end
+
 local function bounded_string(value, max_length)
   if value == nil or value == JSON_NULL then
     return nil
@@ -520,7 +556,10 @@ local function bounded_string(value, max_length)
   if #text <= limit then
     return text
   end
-  return text:sub(1, limit - 3) .. "..."
+  if limit <= 3 then
+    return string.rep(".", math.max(limit, 0))
+  end
+  return utf8_prefix_by_bytes(text, limit - 3) .. "..."
 end
 
 local function is_object(value)
@@ -1698,7 +1737,7 @@ local D29_RENDER_JOB_OPERATIONS = {
   ["run_job:render.m4a"] = { pack = "render", risk = "write" },
   ["run_job:render.opus"] = { pack = "render", risk = "write" },
   ["run_job:render.region_track_filter"] = { pack = "render", risk = "write" },
-  ["run_job:render.targets"] = { pack = "render", risk = "write" },
+  ["run_job:render.targets"] = { pack = "render", risk = "destructive" },
 }
 
 local D30_PROJECT_CONTAINER_CAPABILITIES = {
@@ -2929,10 +2968,10 @@ local READ_TEMPLATE_CATALOG_SUMMARY_COUNTS = {
     transport = 16,
   },
   by_risk = {
-    destructive = 15,
+    destructive = 16,
     read = 83,
     safe = 13,
-    write = 131,
+    write = 130,
   },
   by_lifecycle = {
     experimental = 242,
@@ -21103,6 +21142,7 @@ local D31_ERROR_CODE_MAP = {
   RENDER_SOURCE_READBACK_UNAVAILABLE = "VERIFY_FAILED",
   RENDER_SOURCE_OFFLINE = "FILE_NOT_FOUND",
   RENDER_OUTPUT_ALL_ZERO = "VERIFY_FAILED",
+  RENDER_OVERWRITE_REMOVE_FAILED = "INTERNAL_ERROR",
   RESTORE_FAILED = "VERIFY_FAILED",
 }
 
@@ -21812,18 +21852,45 @@ local function d31_resolve_targets(project, request, groups)
   return targets
 end
 
-local function d31_plan_outputs(request, targets, extension, requested_basename)
+local function d31_plan_outputs(request, targets, extension, requested_basename, collision_suffix_index)
   local suffix = d31_safe_name(request.idempotency_key or request.id or "request", "request"):sub(1, 48)
   local project_name = d31_safe_name(d31_project_name(), "current_project")
+  local collision_suffix = collision_suffix_index and collision_suffix_index > 0 and ("_" .. tostring(collision_suffix_index)) or ""
   local outputs = json_array({})
   for index = 1, #targets do
     local target = targets[index]
-    local basename = requested_basename or (project_name .. "_" .. d31_safe_name(target.source_name, "target") .. "_" .. d31_safe_name(target.label, "target") .. "_" .. suffix)
-    if #targets > 1 then basename = basename .. "_" .. string.format("%02d", index) end
-    basename = basename:sub(1, 180)
-    outputs[#outputs + 1] = { source_name = bounded_string(target.source_name, 160), output_basename = basename, absolute_path = path_join(RENDER_ROOT, basename .. "." .. extension), extension = extension, target = target }
+    local base = requested_basename or (project_name .. "_" .. d31_safe_name(target.source_name, "target") .. "_" .. d31_safe_name(target.label, "target") .. "_" .. suffix)
+    local target_suffix = #targets > 1 and ("_" .. string.format("%02d", index)) or ""
+    local appended = collision_suffix .. target_suffix
+    local basename = base:sub(1, 180 - #appended) .. appended
+    outputs[#outputs + 1] = { source_name = bounded_string(target.source_name, 160), output_basename = basename, absolute_path = path_join(RENDER_ROOT, basename .. "." .. extension), extension = extension, target = target, collision_suffix_index = collision_suffix_index or 0 }
   end
   return outputs
+end
+
+local function d31_first_output_collision(outputs)
+  for index = 1, #outputs do
+    local output = outputs[index]
+    if file_exists(output.absolute_path) then
+      return { blocker = "render_output_exists", existing_kind = "audio_output", output_basename = output.output_basename, absolute_path = output.absolute_path, existing_size_bytes = d31_size(output.absolute_path), target_index = index - 1, collision_suffix_index = output.collision_suffix_index }
+    end
+    local project_copy_path = output.absolute_path .. ".RPP"
+    if file_exists(project_copy_path) then
+      return { blocker = "render_project_copy_exists", existing_kind = "project_copy", output_basename = output.output_basename, absolute_path = project_copy_path, existing_size_bytes = d31_size(project_copy_path), target_index = index - 1, collision_suffix_index = output.collision_suffix_index }
+    end
+  end
+  return nil
+end
+
+local function d31_resolve_outputs(request, targets, extension, requested_basename)
+  if request.params.collision_policy ~= "suffix" then
+    return d31_plan_outputs(request, targets, extension, requested_basename, 0), 0
+  end
+  for suffix_index = 0, 9999 do
+    local outputs = d31_plan_outputs(request, targets, extension, requested_basename, suffix_index)
+    if not d31_first_output_collision(outputs) then return outputs, suffix_index end
+  end
+  return d31_error("IDEMPOTENCY_CONFLICT", "suffix could not find a free managed output name through _9999.", { blocker = "render_suffix_space_exhausted", collision_policy = "suffix", zero_write = true }, false)
 end
 
 local function d31_preflight(request, outputs)
@@ -21833,9 +21900,13 @@ local function d31_preflight(request, outputs)
   if not artifact_ready then return d31_error("ARTIFACT_INVALID", artifact_message, { blocker = artifact_blocker, artifact_root_env = ARTIFACT_ROOT_ENV }, false) end
   local dir_ok, dir_error = ensure_directory(RENDER_ROOT)
   if not dir_ok then return d31_error("FILE_NOT_FOUND", "D31 managed render root could not be prepared.", { blocker = "render_root_unavailable", message = bounded_string(dir_error, 160) }, false) end
-  for index = 1, #outputs do
-    if file_exists(outputs[index].absolute_path) then return d31_error("IDEMPOTENCY_CONFLICT", "fail_if_exists rejected an existing managed output before rendering began.", { blocker = "render_output_exists", output_basename = outputs[index].output_basename }, false) end
-    if file_exists(outputs[index].absolute_path .. ".RPP") then return d31_error("IDEMPOTENCY_CONFLICT", "fail_if_exists rejected an existing generated project-copy path before rendering began.", { blocker = "render_project_copy_exists", output_basename = outputs[index].output_basename }, false) end
+  if request.params.collision_policy ~= "overwrite" then
+    local collision = d31_first_output_collision(outputs)
+    if collision then
+      collision.collision_policy = request.params.collision_policy
+      collision.zero_write = true
+      return d31_error("IDEMPOTENCY_CONFLICT", request.params.collision_policy .. " rejected an existing managed output before rendering began.", collision, false)
+    end
   end
   for _, spec in ipairs({ D31_MANIFEST_SPEC, D31_EVIDENCE_SPEC }) do
     local ref, ref_error = artifact_ref_for_request(request, spec)
@@ -21905,9 +21976,28 @@ local function d31_finish_render_attempt(project, settings, prior_tracks, prior_
   return outcome
 end
 
+local function d31_remove_overwrite_target(output)
+  local removed_audio = false
+  local removed_audio_size = 0
+  local removed_project_copy = false
+  local project_copy_path = output.absolute_path .. ".RPP"
+  if file_exists(project_copy_path) then
+    local ok, message = os.remove(project_copy_path)
+    if not ok then return nil, { existing_kind = "project_copy", absolute_path = project_copy_path, message = bounded_string(message, 160) } end
+    removed_project_copy = true
+  end
+  if file_exists(output.absolute_path) then
+    removed_audio_size = d31_size(output.absolute_path)
+    local ok, message = os.remove(output.absolute_path)
+    if not ok then return nil, { existing_kind = "audio_output", absolute_path = output.absolute_path, existing_size_bytes = removed_audio_size, message = bounded_string(message, 160) } end
+    removed_audio = true
+  end
+  return { removed_audio = removed_audio, removed_audio_size = removed_audio_size, removed_project_copy = removed_project_copy }
+end
+
 local function d31_render_targets(request)
   if request.params.output_policy ~= "openreaper_managed_render_root" then return d31_error("PARAMS_INVALID", "D31 requires openreaper_managed_render_root output_policy.", { field = "output_policy" }, false) end
-  if request.params.collision_policy ~= "fail_if_exists" then return d31_error("IDEMPOTENCY_CONFLICT", "D31 currently supports only collision_policy fail_if_exists.", { collision_policy = request.params.collision_policy }, false) end
+  if request.params.collision_policy ~= "fail_if_exists" and request.params.collision_policy ~= "overwrite" and request.params.collision_policy ~= "suffix" then return d31_error("PARAMS_INVALID", "D31 collision_policy must be fail_if_exists, overwrite, or suffix.", { collision_policy = request.params.collision_policy }, false) end
   local max_targets = tonumber(request.params.max_targets)
   if not max_targets or max_targets ~= math.floor(max_targets) or max_targets < 1 or max_targets > D31_MAX_TARGETS then return d31_error("MAX_TARGETS_INVALID", "max_targets must be an integer from 1 through 16.", { max_targets = request.params.max_targets }, false) end
   local format, format_error = d31_format(request.params)
@@ -21924,7 +22014,9 @@ local function d31_render_targets(request)
   local targets, targets_error = d31_resolve_targets(project, request, groups)
   if not targets then return nil, targets_error end
   if #targets < 1 or #targets > max_targets or #targets > D31_MAX_TARGETS then return d31_error("TARGET_COUNT_EXCEEDED", "Resolved targets exceed max_targets.", { resolved_target_count = #targets, max_targets = max_targets, hard_max_targets = D31_MAX_TARGETS }, false) end
-  local outputs = d31_plan_outputs(request, targets, format.extension, requested_basename)
+  local outputs, collision_suffix_index_or_error = d31_resolve_outputs(request, targets, format.extension, requested_basename)
+  if not outputs then return nil, collision_suffix_index_or_error end
+  local collision_suffix_index = collision_suffix_index_or_error
   local preflight_ok, preflight_error = d31_preflight(request, outputs)
   if not preflight_ok then return nil, preflight_error end
 
@@ -21942,9 +22034,6 @@ local function d31_render_targets(request)
       local target = output.target
       if target.item and not d31_apply_item_selection(project, json_array({ target.item })) then return { failure = { code = "SELECTION_SET_FAILED", message = "Could not select D31 item target.", details = { target_index = index - 1 }, recoverable = false } } end
       if target.track and not d31_apply_track_selection(project, json_array({ target.track })) then return { failure = { code = "SELECTION_SET_FAILED", message = "Could not select D31 track target.", details = { target_index = index - 1 }, recoverable = false } } end
-      if file_exists(output.absolute_path) or file_exists(output.absolute_path .. ".RPP") then
-        return { failure = { code = "IDEMPOTENCY_CONFLICT", message = "fail_if_exists rejected a managed output collision immediately before rendering the target.", details = { blocker = "render_target_collision", output_basename = output.output_basename, target_index = index - 1 }, recoverable = false } }
-      end
       local settings_ok, setting_key = d31_apply_settings(project, target, output, request.params, format)
       if not settings_ok then return { failure = { code = "RENDER_SETTINGS_WRITE_FAILED", message = "Could not configure REAPER project render settings.", details = { key = setting_key, target_index = index - 1 }, recoverable = false } } end
       local online_ok = call_reaper("Main_OnCommandEx", D31_MEDIA_ONLINE_ACTION_ID, 0, project)
@@ -21956,6 +22045,27 @@ local function d31_render_targets(request)
         details.media_online_action_id = D31_MEDIA_ONLINE_ACTION_ID
         details.render_action_id = D31_ACTION_ID
         return { failure = { code = source_error.code, message = source_error.message, details = details, recoverable = source_error.recoverable ~= false } }
+      end
+      local overwrite = { removed_audio = false, removed_audio_size = 0, removed_project_copy = false }
+      if request.params.collision_policy == "overwrite" then
+        local overwrite_error
+        overwrite, overwrite_error = d31_remove_overwrite_target(output)
+        if not overwrite then
+          overwrite_error.blocker = "render_overwrite_remove_failed"
+          overwrite_error.output_basename = output.output_basename
+          overwrite_error.collision_policy = request.params.collision_policy
+          overwrite_error.target_index = index - 1
+          return { failure = { code = "RENDER_OVERWRITE_REMOVE_FAILED", message = "overwrite could not remove the exact existing managed output before rendering.", details = overwrite_error, recoverable = false } }
+        end
+      else
+        local collision = d31_first_output_collision(json_array({ output }))
+        if collision then
+          collision.blocker = "render_target_collision"
+          collision.collision_policy = request.params.collision_policy
+          collision.zero_write = index == 1
+          collision.target_index = index - 1
+          return { failure = { code = "IDEMPOTENCY_CONFLICT", message = request.params.collision_policy .. " rejected a managed output collision immediately before rendering the target.", details = collision, recoverable = false } }
+        end
       end
       local action_ok = call_reaper("Main_OnCommandEx", D31_ACTION_ID, 0, project)
       if not action_ok then return { failure = { code = "COMMAND_FAILED", message = "The audited REAPER project-render action 41824 failed.", details = { action_id = D31_ACTION_ID, target_index = index - 1 }, recoverable = false } } end
@@ -21991,6 +22101,10 @@ local function d31_render_targets(request)
         silence_classification = measurement.silence_classification,
         is_silent = measurement.is_silent,
         target_identity = target.ref or target.label,
+        collision_policy = request.params.collision_policy,
+        collision_suffix_index = output.collision_suffix_index,
+        overwrote_existing = overwrite.removed_audio or overwrite.removed_project_copy,
+        overwritten_size_bytes = overwrite.removed_audio_size,
         generated_project_copy_retained = project_copy_retained,
         generated_project_copy_path = project_copy_retained and project_copy_path or nil,
       }
@@ -22004,13 +22118,13 @@ local function d31_render_targets(request)
   outcome = finished_outcome
 
   local job_ref = d31_job_ref(request)
-  local manifest_summary = { job_ref = job_ref.ref, format = request.params.format, mp3_bitrate_kbps = format.mp3_bitrate_kbps, requested_output_basename = requested_basename, file_count = #outcome.outputs, max_targets = max_targets, output_policy = request.params.output_policy, collision_policy = request.params.collision_policy, truncated = false }
+  local manifest_summary = { job_ref = job_ref.ref, format = request.params.format, mp3_bitrate_kbps = format.mp3_bitrate_kbps, requested_output_basename = requested_basename, collision_suffix_index = collision_suffix_index, file_count = #outcome.outputs, max_targets = max_targets, output_policy = request.params.output_policy, collision_policy = request.params.collision_policy, truncated = false }
   local manifest, manifest_error = write_a2_artifact(request, D31_MANIFEST_SPEC, manifest_summary, { target_kind = request.params.target_kind, outputs = outcome.outputs })
   if not manifest then return d31_error(manifest_error.code, manifest_error.message, manifest_error.details, manifest_error.recoverable) end
   local evidence_summary = { job_ref = job_ref.ref, output_artifact_ref = manifest.ref, verification_status = "passed", media_online_verified = true, render_settings_restored = true, selections_restored = true, truncated = false }
   local evidence, evidence_error = write_a2_artifact(request, D31_EVIDENCE_SPEC, evidence_summary, { action_id = D31_ACTION_ID, media_online_action_id = D31_MEDIA_ONLINE_ACTION_ID, source_online_preflight = true, render_action_id = D31_ACTION_ID, target_kind = request.params.target_kind, render_request = { format = request.params.format, output_basename = requested_basename, sample_rate_hz = request.params.sample_rate_hz, channel_count = request.params.channel_count, wav_bit_depth = format.wav_bit_depth, ogg_quality = format.ogg_quality, mp3_bitrate_kbps = format.mp3_bitrate_kbps, max_targets = max_targets }, restoration = { render_settings = true, track_selection = true, item_selection = true }, outputs = outcome.outputs })
   if not evidence then return d31_error(evidence_error.code, evidence_error.message, evidence_error.details, evidence_error.recoverable) end
-  return { job_ref = job_ref.ref, output_artifact_ref = manifest.ref, evidence_artifact_ref = evidence.ref, format = request.params.format, output_policy = request.params.output_policy, collision_policy = request.params.collision_policy, file_count = #outcome.outputs, outputs = outcome.outputs, restoration = { render_settings = true, track_selection = true, item_selection = true }, truncated = false }, nil, json_array({ manifest.object_ref, evidence.object_ref }), json_array({ job_ref })
+  return { job_ref = job_ref.ref, output_artifact_ref = manifest.ref, evidence_artifact_ref = evidence.ref, format = request.params.format, output_policy = request.params.output_policy, collision_policy = request.params.collision_policy, collision_suffix_index = collision_suffix_index, file_count = #outcome.outputs, outputs = outcome.outputs, restoration = { render_settings = true, track_selection = true, item_selection = true }, truncated = false }, nil, json_array({ manifest.object_ref, evidence.object_ref }), json_array({ job_ref })
 end
 return {
   exports = { d31_render_targets = d31_render_targets },

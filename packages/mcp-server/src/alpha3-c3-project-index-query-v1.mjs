@@ -217,6 +217,7 @@ const TAKE_ROW_FIELDS = deepFreeze([
   "owner_ref",
   "item_ref",
   "track_ref",
+  "name",
   "active",
   "selected",
   "source_kind",
@@ -1775,6 +1776,15 @@ function normalizeTakeRow(row) {
       : typeof summary.track_ref === "string"
         ? summary.track_ref
         : null,
+    name: typeof source.name === "string"
+      ? source.name
+      : typeof source.take_name === "string"
+        ? source.take_name
+        : typeof summary.name === "string"
+          ? summary.name
+          : typeof summary.take_name === "string"
+            ? summary.take_name
+            : "",
     active: Boolean(source.active ?? source.is_active ?? summary.active ?? summary.is_active),
     selected: Boolean(source.selected ?? summary.selected),
     source_kind: typeof source.source_kind === "string"
@@ -2752,6 +2762,7 @@ function projectTakeRow(row, fields) {
     "owner_ref",
     "item_ref",
     "track_ref",
+    "name",
     "active",
     "source_kind",
     "playrate",

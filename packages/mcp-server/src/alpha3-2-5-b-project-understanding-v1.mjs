@@ -428,6 +428,7 @@ async function executeProjectQuery({
       },
       blockers: [indexLiveContradictionBlocker(request, persistentLiveContradiction)],
       data: {
+        truth_classification: "stale_index_contradiction",
         index_live_contradiction: persistentLiveContradiction,
         refresh: hydrationEvidence(hydration),
       },
@@ -2177,10 +2178,14 @@ function refreshScopeForEntity(entity) {
 
 function projectIndexLiveCountContradiction({ request, plan, revision, projectIndexRuntime }) {
   const entity = request.input?.entity;
-  if (entity !== "items" && entity !== "takes") return null;
+  if (entity !== "tracks" && entity !== "items" && entity !== "takes") return null;
   if (!isProjectScopeCountComparableQuery(request.input)) return null;
   if (plan?.ok !== true || plan?.coverage?.complete !== true) return null;
-  const liveCountField = entity === "items" ? "item_count" : "take_count";
+  const liveCountField = entity === "tracks"
+    ? "track_count"
+    : entity === "items"
+      ? "item_count"
+      : "take_count";
   const liveCount = revision?.readback?.[liveCountField];
   if (!Number.isInteger(liveCount) || liveCount < 0) return null;
   const snapshot = projectIndexRuntime?.adapter?.snapshot?.();
@@ -2194,6 +2199,7 @@ function projectIndexLiveCountContradiction({ request, plan, revision, projectIn
     return null;
   }
   return {
+    truth_classification: "stale_index_contradiction",
     entity,
     live_count_field: liveCountField,
     live_count: liveCount,

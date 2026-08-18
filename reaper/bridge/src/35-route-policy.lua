@@ -184,7 +184,7 @@ local D29_RENDER_JOB_OPERATIONS = {
   ["run_job:render.m4a"] = { pack = "render", risk = "write" },
   ["run_job:render.opus"] = { pack = "render", risk = "write" },
   ["run_job:render.region_track_filter"] = { pack = "render", risk = "write" },
-  ["run_job:render.targets"] = { pack = "render", risk = "write" },
+  ["run_job:render.targets"] = { pack = "render", risk = "destructive" },
 }
 
 local D30_PROJECT_CONTAINER_CAPABILITIES = {

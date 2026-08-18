@@ -19,10 +19,10 @@ local READ_TEMPLATE_CATALOG_SUMMARY_COUNTS = {
     transport = 16,
   },
   by_risk = {
-    destructive = 15,
+    destructive = 16,
     read = 83,
     safe = 13,
-    write = 131,
+    write = 130,
   },
   by_lifecycle = {
     experimental = 242,

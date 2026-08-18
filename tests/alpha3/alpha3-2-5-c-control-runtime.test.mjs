@@ -452,6 +452,99 @@ describe("Alpha3.2.5-C executable controls", () => {
     assert.equal(calls.some((call) => call.id === "template.tracks.set_mute"), false);
   });
 
+  it("returns canonical patches for duplicate Chinese Track names without choosing one", async () => {
+    const calls = [];
+    const response = await executeAlpha3_2_5CControlMacro({
+      request: {
+        id: "macro.controls.set",
+        input: {
+          target_kind: "track",
+          fields: { mute: true },
+          selector: { name: "对白 主轨" },
+          dry_run: true,
+        },
+        refs: [],
+        context: { session_id: "duplicate-chinese-track", request_sequence: 1 },
+      },
+      executeAtomic: controlAtomic(calls),
+      projectIndexRuntime: readyTrackIndexRuntime([
+        trackIndexRow({ ref: "track:guid:{TRACK-A}", name: "对白 主轨", index: 0 }),
+        trackIndexRow({ ref: "track:guid:{TRACK-B}", name: "对白 主轨", index: 1 }),
+      ]),
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(response.ok, false);
+    assert.equal(response.execution.status, "blocked");
+    assert.equal(response.error.code, "SELECTOR_TARGET_AMBIGUOUS", JSON.stringify(response));
+    assert.deepEqual(response.blockers[0].details, {
+      entity: "tracks",
+      candidate_count: 2,
+      candidates_truncated: false,
+      candidates: [
+        {
+          kind: "track",
+          ref: "track:guid:{TRACK-A}",
+          name: "对白 主轨",
+          index: 0,
+          request_patch: { refs: { track_ref: "track:guid:{TRACK-A}" } },
+        },
+        {
+          kind: "track",
+          ref: "track:guid:{TRACK-B}",
+          name: "对白 主轨",
+          index: 1,
+          request_patch: { refs: { track_ref: "track:guid:{TRACK-B}" } },
+        },
+      ],
+    });
+    assert.equal(calls.some((call) => call.id === "template.tracks.resolve_track_ref"), false);
+  });
+
+  it("bounds duplicate FX candidates and returns owner, slot, and exact fx_ref patches", async () => {
+    const calls = [];
+    const rows = [0, 1, 2, 3].map((slotIndex) => ({
+      ref: `fx:track:guid:{TRACK-A}:${slotIndex}`,
+      owner_ref: "track:guid:{TRACK-A}",
+      plugin_name: "VST3: 对白工具",
+      plugin_id: "dialogue-tool",
+      slot_index: slotIndex,
+      bypassed: false,
+      summary: { parameter_count: 16 },
+    }));
+    const response = await executeAlpha3_2_5CControlMacro({
+      request: {
+        id: "macro.set_stock_plugin_controls",
+        input: {
+          mode: "exact_parameters",
+          selector: { owner_ref: "track:guid:{TRACK-A}", plugin_id: "dialogue-tool" },
+          dry_run: true,
+          changes: [{ id: "band-1-frequency", param_index: 0, normalized_value: 0.5 }],
+        },
+        refs: [],
+        context: { session_id: "duplicate-fx", request_sequence: 1 },
+      },
+      executeAtomic: stockAtomic(calls, new Map()),
+      projectIndexRuntime: readyThirdPartyFxIndexRuntime(rows),
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(response.ok, false);
+    assert.equal(response.execution.status, "blocked");
+    assert.equal(response.error.code, "SELECTOR_TARGET_AMBIGUOUS", JSON.stringify(response));
+    assert.equal(response.blockers[0].details.candidate_count, 3);
+    assert.equal(response.blockers[0].details.candidates_truncated, true);
+    assert.deepEqual(response.blockers[0].details.candidates, rows.slice(0, 3).map((row) => ({
+      kind: "fx",
+      ref: row.ref,
+      owner_ref: row.owner_ref,
+      plugin_name: row.plugin_name,
+      slot_index: row.slot_index,
+      request_patch: { refs: { fx_ref: row.ref } },
+    })));
+    assert.equal(calls.some((call) => call.id === "template.fx.resolve_fx_ref"), false);
+  });
+
   it("blocks false Item-level pan before live resolution and points to explicit Active Take pan", async () => {
     const calls = [];
     const response = await executeAlpha3_2_5CControlMacro({
@@ -493,15 +586,62 @@ describe("Alpha3.2.5-C executable controls", () => {
     ]);
     assert.deepEqual(response.result.changes[0].live_readback, {
       status: "passed",
+      classification: "passed_exact",
       source: "accepted_template_live_readback",
       fields: [{
         field: "pan",
         status: "passed",
+        classification: "passed_exact",
         source: "accepted_template_live_readback",
         requested_value: 0.25,
         observed_value: 0.25,
+        delta: 0,
       }],
     });
+  });
+
+  it("classifies a registered numeric epsilon difference as precision-equivalent live truth", async () => {
+    const response = await executeAlpha3_2_5CControlMacro({
+      request: {
+        id: "macro.controls.set",
+        input: { target_kind: "track", fields: { volume: 0.75 }, dry_run: false },
+        refs: { track_ref: "track:guid:{TRACK-A}" },
+      },
+      executeAtomic: controlAtomic([], { readbackVolume: 0.75005 }),
+      projectIndexRuntime: projectIndexInvalidator([]),
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(response.ok, true, JSON.stringify(response));
+    const field = response.result.changes[0].live_readback.fields[0];
+    assert.equal(response.result.changes[0].live_readback.classification, "precision_equivalent");
+    assert.equal(field.classification, "precision_equivalent");
+    assert.equal(field.tolerance, 0.0001);
+    assert.equal(field.tolerance_source, "registered_control_field");
+    assert.equal(Math.abs(field.delta - 0.00005) < 1e-12, true);
+    assert.deepEqual(response.result.data.outcome.live_readback.classifications, ["precision_equivalent"]);
+  });
+
+  it("classifies an atomic write rejection as mutation failure before readback", async () => {
+    const response = await executeAlpha3_2_5CControlMacro({
+      request: {
+        id: "macro.controls.set",
+        input: { target_kind: "track", fields: { volume: 0.75 }, dry_run: false },
+        refs: { track_ref: "track:guid:{TRACK-A}" },
+      },
+      executeAtomic: controlAtomic([], { failVolumeWrite: true }),
+      projectIndexRuntime: projectIndexInvalidator([]),
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(response.ok, false);
+    assert.equal(response.execution.status, "failed");
+    assert.equal(response.error.code, "TRACK_VOLUME_WRITE_FAILED");
+    assert.equal(response.result.changes[0].status, "mutation_failed");
+    assert.equal(response.result.changes[0].mutation.status, "failed");
+    assert.equal(response.result.changes[0].live_readback.status, "not_run");
+    assert.equal(response.result.data.outcome.mutation.status, "failed");
+    assert.equal(response.result.data.outcome.live_readback.status, "not_passed");
   });
 
   it("fails closed when a batch-readable control value does not match", async () => {
@@ -527,6 +667,9 @@ describe("Alpha3.2.5-C executable controls", () => {
     assert.equal(response.result.verification.status, "failed");
     assert.equal(response.blockers[0].code, "CONTROL_READBACK_MISMATCH");
     assert.equal(response.result.changes.every((change) => change.status !== "applied"), true);
+    assert.equal(response.result.changes[0].mutation.status, "completed");
+    assert.equal(response.result.changes[0].live_readback.classification, "live_mismatch");
+    assert.equal(response.result.changes[0].live_readback.fields[0].classification, "live_mismatch");
   });
 
   it("keeps verified control rows applied when only index maintenance fails", async () => {
@@ -761,6 +904,15 @@ function controlAtomic(calls, options = {}) {
         }],
       });
     }
+    if (id === "template.tracks.set_volume" && options.failVolumeWrite) {
+      return {
+        contract: "template.execution.v1",
+        ok: false,
+        request: { id: `evidence:${id}` },
+        result: null,
+        error: { code: "TRACK_VOLUME_WRITE_FAILED", message: "Fixture rejected the Track volume write." },
+      };
+    }
     return execution(id, { ...input, track_ref: refs.track_ref });
   };
 }
@@ -879,7 +1031,7 @@ function projectIndexInvalidator(invalidations) {
   };
 }
 
-function readyTrackIndexRuntime() {
+function readyTrackIndexRuntime(rows = [trackIndexRow()]) {
   const adapter = createAlpha3C3ProjectIndex({
     now: () => new Date(NOW),
     projectRef: "project:active",
@@ -890,18 +1042,7 @@ function readyTrackIndexRuntime() {
   adapter.replaceTracks({
     snapshot_id: "snapshot:controls",
     observed_at: NOW,
-    rows: [{
-      ref: "track:guid:{TRACK-A}",
-      name: "Lead Vocal",
-      index: 0,
-      selected: true,
-      muted: false,
-      record_arm: false,
-      folder_depth: 0,
-      item_count: 1,
-      fx_count: 1,
-      send_count: 0,
-    }],
+    rows,
     coverage_status: "complete",
     freshness_status: "fresh",
   });
@@ -910,14 +1051,38 @@ function readyTrackIndexRuntime() {
     status: () => ({
       ...adapter.snapshot(),
       rows_available: true,
-      row_counts: { tracks: 1 },
+      row_counts: { tracks: rows.length },
     }),
     reconcileProjectRevision: () => ({ ok: true, changed: false }),
     invalidateScopes: ({ scopes }) => ({ ok: true, scopes }),
   };
 }
 
-function readyThirdPartyFxIndexRuntime() {
+function trackIndexRow(overrides = {}) {
+  return {
+    ref: "track:guid:{TRACK-A}",
+    name: "Lead Vocal",
+    index: 0,
+    selected: true,
+    muted: false,
+    record_arm: false,
+    folder_depth: 0,
+    item_count: 1,
+    fx_count: 1,
+    send_count: 0,
+    ...overrides,
+  };
+}
+
+function readyThirdPartyFxIndexRuntime(rows = [{
+  ref: "fx:track:guid:{TRACK-A}:0",
+  owner_ref: "track:guid:{TRACK-A}",
+  plugin_name: "VST3: Snap Heap (Kilohearts)",
+  plugin_id: "snapheap",
+  slot_index: 0,
+  bypassed: false,
+  summary: { parameter_count: 2 },
+}]) {
   const adapter = createAlpha3C3ProjectIndex({
     now: () => new Date(NOW),
     projectRef: "project:active",
@@ -925,25 +1090,27 @@ function readyThirdPartyFxIndexRuntime() {
     bridgeGeneration: 1,
     sessionId: "session:controls",
   });
+  const ownerRefs = [...new Set(rows.map((row) => row.owner_ref).filter((ref) => typeof ref === "string"))];
+  adapter.replaceTracks({
+    snapshot_id: "snapshot:controls:fx-owners",
+    observed_at: NOW,
+    rows: ownerRefs.map((ref, index) => trackIndexRow({ ref, name: `FX Owner ${index + 1}`, index })),
+    coverage_status: "complete",
+    freshness_status: "fresh",
+  });
   adapter.replaceFx({
     snapshot_id: "snapshot:controls:fx",
     observed_at: NOW,
-    rows: [{
-      ref: "fx:track:guid:{TRACK-A}:0",
-      owner_ref: "track:guid:{TRACK-A}",
-      plugin_name: "VST3: Snap Heap (Kilohearts)",
-      plugin_id: "snapheap",
-      slot_index: 0,
-      bypassed: false,
-      summary: { parameter_count: 2 },
-    }],
+    rows,
+    coverage_status: "complete",
+    freshness_status: "fresh",
   });
   return {
     adapter,
     status: () => ({
       ...adapter.snapshot(),
       rows_available: true,
-      row_counts: { fx: 1 },
+      row_counts: { tracks: ownerRefs.length, fx: rows.length },
     }),
     reconcileProjectRevision: () => ({ ok: true, changed: false }),
     invalidateScopes: ({ scopes }) => ({ ok: true, scopes }),

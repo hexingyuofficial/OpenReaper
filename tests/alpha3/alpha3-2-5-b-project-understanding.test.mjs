@@ -184,6 +184,7 @@ describe("Alpha3.2.5-B executable project understanding", () => {
   it("keeps a fourteen-track Project Index complete behind the default 2 KiB public budget and public pagination", async () => {
     const fixture = await makeFixture();
     const trackNames = Array.from({ length: 14 }, (_, index) => `Highway ${String(index + 1).padStart(2, "0")}`);
+    trackNames[13] = "对白 主轨 中文";
     const state = { revision: 14, trackName: trackNames[0], trackNames, calls: [], atomicRequests: [] };
     let indexRuntime;
     try {
@@ -510,6 +511,9 @@ describe("Alpha3.2.5-B executable project understanding", () => {
           assert.equal(state.atomicRequests.filter((entry) => entry.operation.name === "project.read_track_item_overview" && entry.params.include_takes === true).length, 0);
         } else {
           assert.equal(result.error.code, "INDEX_LIVE_CONTRADICTION");
+          assert.equal(result.result.data.truth_classification, "stale_index_contradiction");
+          assert.equal(result.result.data.index_live_contradiction.truth_classification, "stale_index_contradiction");
+          assert.equal(result.blockers[0].details.truth_classification, "stale_index_contradiction");
           assert.equal(result.result.data.index_live_contradiction.live_count, 8);
           assert.equal(result.result.data.index_live_contradiction.indexed_count, 0);
           assert.equal(result.blockers[0].details.request_patch.input.refresh_policy, "force_read_only_refresh");
@@ -520,6 +524,71 @@ describe("Alpha3.2.5-B executable project understanding", () => {
         indexRuntime?.close();
         await fixture.cleanup();
       }
+    }
+  });
+
+  it("refreshes a contradictory Track count once, then escalates a persistent forced retry to reconnect", async () => {
+    const fixture = await makeFixture();
+    const state = {
+      revision: 83,
+      trackName: "对白 主轨",
+      trackNames: ["对白 主轨"],
+      calls: [],
+      atomicRequests: [],
+    };
+    let indexRuntime;
+    try {
+      indexRuntime = await openIndex(fixture);
+      const runtime = createRuntime({ fixture, indexRuntime, state });
+      const warm = await runtime.call_template({
+        id: "macro.project.query",
+        input: { entity: "tracks", refresh_policy: "if_stale", limit: 25 },
+        context: callContext(1, "track-contradiction-warm"),
+      });
+      assert.equal(warm.ok, true, JSON.stringify(warm));
+
+      state.liveTrackCount = 4;
+      const bundleCountBefore = state.atomicRequests.filter((entry) => entry.operation.name === "project.create_observation_bundle").length;
+      const first = await runtime.call_template({
+        id: "macro.project.query",
+        input: { entity: "tracks", refresh_policy: "if_stale", limit: 25 },
+        context: callContext(2, "track-contradiction-first"),
+      });
+
+      assert.equal(first.ok, false, JSON.stringify(first));
+      assert.equal(first.error.code, "INDEX_LIVE_CONTRADICTION");
+      assert.equal(first.result.data.truth_classification, "stale_index_contradiction");
+      assert.equal(first.result.data.index_live_contradiction.live_count_field, "track_count");
+      assert.equal(first.result.data.index_live_contradiction.live_count, 4);
+      assert.equal(first.result.data.index_live_contradiction.indexed_count, 1);
+      assert.equal(first.recovery.retry_limit, 1);
+      assert.equal(first.recovery.reconnect_required, false);
+      assert.equal(first.recovery.request_patch.input.refresh_policy, "force_read_only_refresh");
+      assert.equal(
+        state.atomicRequests.filter((entry) => entry.operation.name === "project.create_observation_bundle").length - bundleCountBefore,
+        1,
+      );
+
+      const forcedBundleCountBefore = state.atomicRequests.filter((entry) => entry.operation.name === "project.create_observation_bundle").length;
+      const forced = await runtime.call_template({
+        id: "macro.project.query",
+        input: { entity: "tracks", refresh_policy: "force_read_only_refresh", limit: 25 },
+        context: callContext(3, "track-contradiction-forced"),
+      });
+
+      assert.equal(forced.ok, false, JSON.stringify(forced));
+      assert.equal(forced.error.code, "INDEX_LIVE_CONTRADICTION");
+      assert.equal(forced.recovery.retry_limit, 0);
+      assert.equal(forced.recovery.reconnect_required, true);
+      assert.equal(forced.recovery.request_patch, null);
+      assert.equal(forced.recovery.restart_reaper_only_after_reconnect_failure, true);
+      assert.equal(
+        state.atomicRequests.filter((entry) => entry.operation.name === "project.create_observation_bundle").length - forcedBundleCountBefore,
+        1,
+      );
+    } finally {
+      indexRuntime?.close();
+      await fixture.cleanup();
     }
   });
 
@@ -1183,6 +1252,7 @@ describe("Alpha3.2.5-B executable project understanding", () => {
     const takeRefs = ["take:guid:{STALE-TAKE-1}", "take:guid:{STALE-TAKE-2}"];
     const liveTakes = new Map(takeRefs.map((takeRef, index) => [takeRef, {
       take_ref: takeRef,
+      take_name: `对白 Take 你好 ${index + 1}`,
       item_ref: `item:guid:{TAKE-OWNER-${index + 1}}`,
       track_ref: "track:guid:{OLD-TRACK}",
       source_kind: "audio",
@@ -1202,7 +1272,7 @@ describe("Alpha3.2.5-B executable project understanding", () => {
       const runtime = createRuntime({ fixture, indexRuntime, state });
       const input = {
         entity: "takes",
-        fields: ["ref", "item_ref", "track_ref", "source_kind"],
+        fields: ["ref", "name", "item_ref", "track_ref", "source_kind"],
         selectors: { refs: takeRefs },
         refresh_policy: "if_stale",
         limit: 2,
@@ -1218,6 +1288,7 @@ describe("Alpha3.2.5-B executable project understanding", () => {
       for (const [index, takeRef] of takeRefs.entries()) {
         state.liveTakes.set(takeRef, {
           take_ref: takeRef,
+          take_name: `对白 Take 刷新 ${index + 1}`,
           item_ref: `item:guid:{TAKE-OWNER-${index + 1}}`,
           track_ref: "track:guid:{NEW-TRACK}",
           source_kind: "audio",
@@ -1235,6 +1306,7 @@ describe("Alpha3.2.5-B executable project understanding", () => {
       assert.equal(state.takeReadRefs.length, 4);
       assert.deepEqual(new Set(state.takeReadRefs.slice(2).map((ref) => ref.ref)), new Set(takeRefs));
       assert.equal(refreshed.result.data.rows.every((row) => row.track_ref === "track:guid:{NEW-TRACK}"), true, JSON.stringify(refreshed.result.data.rows));
+      assert.deepEqual(refreshed.result.data.rows.map((row) => row.name), ["对白 Take 刷新 1", "对白 Take 刷新 2"]);
     } finally {
       indexRuntime?.close();
       await fixture.cleanup();
@@ -1627,7 +1699,7 @@ function createRuntime({ fixture, indexRuntime, state }) {
           name: "Trial",
           path: fixture.projectPath,
           change_count: state.revision,
-          track_count: state.trackNames?.length ?? 1,
+          track_count: state.liveTrackCount ?? state.trackNames?.length ?? 1,
           item_count: state.projectItems?.length ?? 1,
           ...(request.params.include_media_counts === true ? { take_count: state.liveTakeCount ?? state.projectTakes?.length ?? 1, midi_take_count: state.projectTakes?.filter((take) => take.source_kind === "midi").length ?? 1 } : {}),
           marker_count: 0,

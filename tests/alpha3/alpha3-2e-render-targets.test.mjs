@@ -118,6 +118,25 @@ describe("Alpha3.2-E render target planner", () => {
     }
   });
 
+  it("keeps fail_if_exists as default and forwards explicit overwrite or suffix policies", () => {
+    for (const policy of ["fail_if_exists", "overwrite", "suffix"]) {
+      const plan = planAlpha3_2ERenderTargetsMacro({
+        target_kind: "whole_project",
+        format: "wav",
+        output_basename: "中文 混音",
+        ...(policy === "fail_if_exists" ? {} : { collision_policy: policy }),
+        dry_run: false,
+      });
+      assert.equal(plan.ok, true, `${policy}: ${JSON.stringify(plan.blockers)}`);
+      assert.equal(plan.preview.render_settings.collision_policy, policy);
+      assert.equal(plan.preview.output_policy.collision_policy, policy);
+      assert.equal(plan.preview.output_policy.overwrite_allowed, policy === "overwrite");
+      assert.equal(plan.preview.output_policy.suffix_fallback, policy === "suffix");
+      assert.equal(plan.mutation_requests[0].input.collision_policy, policy);
+      assert.equal(plan.mutation_requests[0].input.output_basename, "中文 混音");
+    }
+  });
+
   it("fails closed for target/ref mismatches, unsafe output policy, and unsupported settings", () => {
     const cases = [
       [{ target_kind: "selected_items", refs: ["item:guid:{A}"], format: "wav" }, "RENDER_SELECTED_REFS_FORBIDDEN"],
@@ -127,7 +146,7 @@ describe("Alpha3.2-E render target planner", () => {
       [{ target_kind: "explicit_tracks", refs: ["track:guid:{A}", "track:guid:{B}"], format: "wav", max_targets: 1 }, "RENDER_MAX_TARGETS_EXCEEDED"],
       [{ target_kind: "whole_project", format: "wav", output_directory: "/tmp/renders" }, "RENDER_INPUT_UNKNOWN_FIELD"],
       [{ target_kind: "whole_project", format: "wav", output_path: "/tmp/renders/out.wav" }, "RENDER_UNSAFE_INPUT_FIELD"],
-      [{ target_kind: "whole_project", format: "wav", collision_policy: "overwrite" }, "RENDER_COLLISION_POLICY_REQUIRED"],
+      [{ target_kind: "whole_project", format: "wav", collision_policy: "replace_everything" }, "RENDER_COLLISION_POLICY_REQUIRED"],
       [{ target_kind: "whole_project", format: "wav", output_policy: "arbitrary" }, "RENDER_OUTPUT_POLICY_REQUIRED"],
       [{ target_kind: "whole_project", format: "wav", sample_rate_hz: 96_000 }, "RENDER_SAMPLE_RATE_UNSUPPORTED"],
       [{ target_kind: "whole_project", format: "wav", channel_count: 6 }, "RENDER_CHANNELS_UNSUPPORTED"],
@@ -189,8 +208,9 @@ describe("Alpha3.2-E render target planner", () => {
     assert.equal(item.live_runnable_now, false);
     assert.equal(item.exists_in_catalog, true);
     assert.equal(item.known_blocker, null);
+    assert.equal(item.risk, "destructive");
     assert.equal(item.input_schema.properties.output_policy.const, "openreaper_managed_render_root");
-    assert.equal(item.input_schema.properties.collision_policy.const, "fail_if_exists");
+    assert.deepEqual(item.input_schema.properties.collision_policy, { enum: ["fail_if_exists", "overwrite", "suffix"], default: "fail_if_exists" });
     assert.deepEqual(item.input_schema.properties.max_targets, { type: "integer", minimum: 1, maximum: 16 });
   });
 });

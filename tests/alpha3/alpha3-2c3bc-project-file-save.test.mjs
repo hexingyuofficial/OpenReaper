@@ -313,8 +313,8 @@ describe("Alpha3.2-C3B+C3C project-file save implementation", () => {
     assert.match(CATALOG_SUMMARY_SOURCE, /template_count = 242/);
     assert.match(CATALOG_SUMMARY_SOURCE, /project = 33/);
     assert.match(CATALOG_SUMMARY_SOURCE, /items = 37/);
-    assert.match(CATALOG_SUMMARY_SOURCE, /destructive = 15/);
-    assert.match(CATALOG_SUMMARY_SOURCE, /write = 131/);
+    assert.match(CATALOG_SUMMARY_SOURCE, /destructive = 16/);
+    assert.match(CATALOG_SUMMARY_SOURCE, /write = 130/);
     assert.match(CATALOG_SUMMARY_SOURCE, /experimental = 242/);
     assert.match(CATALOG_SUMMARY_SOURCE, /^    item = 23,$/m);
   });

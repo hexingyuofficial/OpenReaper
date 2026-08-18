@@ -169,7 +169,7 @@ describe("Alpha3 C3 Project SQLite Index store helpers", () => {
           {
             ref: "track:guid:{SQLITE-A}",
             owner_ref: "project:active",
-            name: "SQLite Kick",
+            name: "对白 主轨 中文",
             index: 0,
             selected: true,
             item_count: 8,
@@ -188,6 +188,22 @@ describe("Alpha3 C3 Project SQLite Index store helpers", () => {
             track_ref: "track:guid:{SQLITE-A}",
             start_seconds: 1,
             end_seconds: 2.5,
+          },
+        ],
+      });
+      first.adapter.replaceTakes({
+        snapshot_id: "snapshot:c3-sqlite:takes",
+        observed_at: "2026-07-08T00:06:35.000Z",
+        payload_ref: "artifact:sqlite:takes",
+        rows: [
+          {
+            ref: "take:guid:{SQLITE-TAKE}",
+            owner_ref: "item:guid:{SQLITE-ITEM}",
+            item_ref: "item:guid:{SQLITE-ITEM}",
+            track_ref: "track:guid:{SQLITE-A}",
+            name: "对白 Take 你好",
+            active: true,
+            source_kind: "audio",
           },
         ],
       });
@@ -236,7 +252,7 @@ describe("Alpha3 C3 Project SQLite Index store helpers", () => {
       });
       assert.equal(postCloseWrite.ok, false);
       assert.equal(postCloseWrite.blockers[0].code, "SQLITE_ADAPTER_CLOSED");
-      assert.equal(first.adapter.snapshot().rows.tracks[0].name, "SQLite Kick");
+      assert.equal(first.adapter.snapshot().rows.tracks[0].name, "对白 主轨 中文");
 
       const missingIdentity = await openAlpha3C3ProjectIndexSqliteAdapter({
         dbPath,
@@ -290,8 +306,10 @@ describe("Alpha3 C3 Project SQLite Index store helpers", () => {
       assert.equal(snapshot.bridge_generation, 4);
       assert.equal(snapshot.rows.tracks.length, 1);
       assert.equal(snapshot.rows.items.length, 1);
+      assert.equal(snapshot.rows.takes.length, 1);
       assert.equal(snapshot.rows.envelopes.length, 1);
-      assert.equal(snapshot.rows.tracks[0].name, "SQLite Kick");
+      assert.equal(snapshot.rows.tracks[0].name, "对白 主轨 中文");
+      assert.equal(snapshot.rows.takes[0].name, "对白 Take 你好");
       assert.equal(snapshot.rows.envelopes[0].payload_ref, "artifact:sqlite:automation");
       assert.equal(snapshot.rows.tracks[0].payload_ref, "artifact:sqlite:tracks");
       assert.deepEqual(snapshot.rows.tracks[0].summary, { role: "drums" });
@@ -313,6 +331,11 @@ describe("Alpha3 C3 Project SQLite Index store helpers", () => {
         fields: ["track_ref", "start_seconds", "length_seconds", "payload_ref"],
         limit: 10,
       }, { projectIndex: second.adapter });
+      const reopenedTakesPlan = planAlpha3C3ProjectIndexQueryMacro("macro.query_takes", {
+        filters: { track_ref: "track:guid:{SQLITE-A}" },
+        fields: ["name", "item_ref", "track_ref", "source_kind", "payload_ref"],
+        limit: 10,
+      }, { projectIndex: second.adapter });
       const reopenedAutomationPlan = planAlpha3C3ProjectIndexQueryMacro("macro.query_automation", {
         filters: { owner_ref: "track:guid:{SQLITE-A}", has_points: true },
         fields: ["owner_ref", "name", "point_count", "payload_ref"],
@@ -322,7 +345,7 @@ describe("Alpha3 C3 Project SQLite Index store helpers", () => {
       assert.deepEqual(reopenedPlan.refs, ["track:guid:{SQLITE-A}"]);
       assert.deepEqual(reopenedPlan.rows[0], {
         ref: "track:guid:{SQLITE-A}",
-        name: "SQLite Kick",
+        name: "对白 主轨 中文",
         item_count: 8,
         fx_count: 2,
         payload_ref: "artifact:sqlite:tracks",
@@ -335,6 +358,16 @@ describe("Alpha3 C3 Project SQLite Index store helpers", () => {
         start_seconds: 1,
         length_seconds: 1.5,
         payload_ref: "artifact:sqlite:items",
+      });
+      assert.equal(reopenedTakesPlan.ok, true);
+      assert.deepEqual(reopenedTakesPlan.refs, ["take:guid:{SQLITE-TAKE}"]);
+      assert.deepEqual(reopenedTakesPlan.rows[0], {
+        ref: "take:guid:{SQLITE-TAKE}",
+        name: "对白 Take 你好",
+        item_ref: "item:guid:{SQLITE-ITEM}",
+        track_ref: "track:guid:{SQLITE-A}",
+        source_kind: "audio",
+        payload_ref: "artifact:sqlite:takes",
       });
       assert.equal(reopenedAutomationPlan.ok, true);
       assert.deepEqual(reopenedAutomationPlan.refs, ["envelope:track:guid:{SQLITE-A}:volume"]);

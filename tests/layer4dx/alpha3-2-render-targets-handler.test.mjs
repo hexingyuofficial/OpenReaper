@@ -121,7 +121,7 @@ describe("Alpha3.2 D31 render-targets bridge route", () => {
     const bridgeRequest = bridge.seen[0];
     assert.equal(bridgeRequest.operation.family, "run_job");
     assert.equal(bridgeRequest.operation.name, "render.targets");
-    assert.equal(bridgeRequest.pack.risk, "write");
+    assert.equal(bridgeRequest.pack.risk, "destructive");
     assert.equal(bridgeRequest.undo.mode, "required");
     assert.equal(Object.hasOwn(bridgeRequest, "idempotency_key"), false);
     assert.equal(Object.hasOwn(bridgeRequest.params, "output_path"), false);
@@ -219,6 +219,29 @@ return true
     if (callStatus !== lua.LUA_OK) throw new Error(`Lua execution failed: ${to_jsstring(lua.lua_tostring(state, -1))}`);
     assert.equal(lua.lua_toboolean(state, -1), true);
     lua.lua_close(state);
+  });
+
+  it("chooses one deterministic suffix for a Chinese multi-target batch", () => {
+    runHandlerLua(String.raw`
+RENDER_ROOT = "/tmp/渲染 输出"
+path_join = function(root, name) return root .. "/" .. name end
+file_exists = function(path)
+  return path:find("中文 混音_01.wav", 1, true) ~= nil
+    or path:find("中文 混音_02.wav", 1, true) ~= nil
+    or path:find("中文 混音_1_", 1, true) ~= nil
+end
+d31_size = function() return 4096 end
+local request = { id = "suffix-test", params = { collision_policy = "suffix" } }
+local targets = {
+  { source_name = "A", label = "A" },
+  { source_name = "B", label = "B" },
+}
+local outputs, suffix_index = d31_resolve_outputs(request, targets, "wav", "中文 混音")
+assert(outputs ~= nil and suffix_index == 2)
+assert(outputs[1].output_basename == "中文 混音_2_01")
+assert(outputs[2].output_basename == "中文 混音_2_02")
+assert(outputs[1].absolute_path == "/tmp/渲染 输出/中文 混音_2_01.wav")
+`, ["d31_resolve_outputs", "file_exists", "d31_size"]);
   });
 
   it("uses audited codec blobs with the expected raw WAV, OGG, and native MP3 layouts", () => {
@@ -323,8 +346,12 @@ return true
     assert.match(HANDLER, /target_identity = target\.ref or target\.label/);
     assert.match(HANDLER, /generated_project_copy_retained/);
     assert.match(HANDLER, /output\.absolute_path \.\. "\.RPP"/);
-    assert.doesNotMatch(HANDLER, /os\.remove\(project_copy_path\)/);
-    assert.doesNotMatch(HANDLER, /os\.remove\(output\.absolute_path\)/);
+    assert.match(HANDLER, /os\.remove\(project_copy_path\)/);
+    assert.match(HANDLER, /os\.remove\(output\.absolute_path\)/);
+    assert.match(HANDLER, /collision_policy == "overwrite"/);
+    assert.match(HANDLER, /for suffix_index = 0, 9999 do/);
+    assert.match(HANDLER, /existing_size_bytes = d31_size/);
+    assert.match(HANDLER, /zero_write = true/);
     assert.match(HANDLER, /render_target_collision/);
     assert.match(HANDLER, /requested_basename or/);
     assert.match(HANDLER, /request\.params\.output_basename/);
@@ -332,7 +359,7 @@ return true
     assert.match(HANDLER, /root_ready, root_blocker, root_message = d31_root_ready\(\)/);
     assert.match(HANDLER, /restoration = \{ render_settings = true, track_selection = true, item_selection = true \}/);
     assert.match(ARTIFACT_HELPER, /\["run_job:render\.targets"\] = true/);
-    assert.match(ROUTE_POLICY, /\["run_job:render\.targets"\] = \{ pack = "render", risk = "write" \}/);
+    assert.match(ROUTE_POLICY, /\["run_job:render\.targets"\] = \{ pack = "render", risk = "destructive" \}/);
     assert.match(ROUTE_POLICY, /operation_key == "run_job:render\.targets" or template_execute_write_capability/);
     assert.match(ROUTE_POLICY, /D31 render targets does not accept an idempotency_key/);
     assert.match(DISPATCH, /\["run_job:render\.targets"\]\s*=\s*\{\s*pack = "render",\s*handler = d31_render_targets,/s);
@@ -341,12 +368,14 @@ return true
     const preflight = HANDLER.indexOf("local preflight_ok, preflight_error = d31_preflight(request, outputs)");
     const mediaOnlineAction = HANDLER.indexOf("local online_ok = call_reaper(\"Main_OnCommandEx\", D31_MEDIA_ONLINE_ACTION_ID, 0, project)");
     const sourcePreflight = HANDLER.indexOf("local source_ready, source_error = d31_target_source_preflight(project, target)");
+    const overwriteRemoval = HANDLER.indexOf("overwrite, overwrite_error = d31_remove_overwrite_target(output)");
     const firstAction = HANDLER.indexOf("local action_ok = call_reaper(\"Main_OnCommandEx\", D31_ACTION_ID, 0, project)");
     const rejectAllZero = HANDLER.indexOf("if measurement.is_silent == true then return { failure = { code = \"RENDER_OUTPUT_ALL_ZERO\"");
     const finish = HANDLER.indexOf("local finished_outcome, finish_error = d31_finish_render_attempt");
     assert.ok(preflight >= 0 && preflight < firstAction, "collision preflight occurs before the first audited action");
     assert.ok(mediaOnlineAction >= 0 && mediaOnlineAction < sourcePreflight, "media is brought online before source verification");
     assert.ok(sourcePreflight >= 0 && sourcePreflight < firstAction, "source verification gates the first render action");
+    assert.ok(sourcePreflight < overwriteRemoval && overwriteRemoval < firstAction, "overwrite removes only the exact old output after source preflight and before the render action");
     assert.ok(firstAction >= 0 && firstAction < finish, "restoration closure runs after any action attempt");
     assert.ok(firstAction < rejectAllZero && rejectAllZero < finish, "all-zero output enters the protected failure path before restoration");
   });

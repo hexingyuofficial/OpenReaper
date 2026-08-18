@@ -1277,7 +1277,17 @@ async function selectTrack({ request, input, executeAtomic, projectIndexRuntime,
     if (response?.ok !== true) return blockedFromEnvelope(response, "NATIVE_FX_TRACK_SELECTOR_FAILED");
     const rows = response.result?.data?.rows ?? [];
     if (rows.length === 0) return blocked("NATIVE_FX_TRACK_NOT_FOUND", "No track matched the bounded Project Index selector.");
-    if (rows.length > 1) return blocked("NATIVE_FX_TRACK_AMBIGUOUS", `The bounded selector matched ${rows.length} tracks; refine it or pass an exact track_ref.`);
+    if (rows.length > 1) {
+      const candidates = boundedTrackCandidates(rows);
+      const truncated = response.result?.data?.page?.has_more === true;
+      const message = `The bounded selector matched ${truncated ? "at least " : ""}${rows.length} tracks; choose one canonical track_ref patch.`;
+      return blocked("NATIVE_FX_TRACK_AMBIGUOUS", message, [codedBlocker("NATIVE_FX_TRACK_AMBIGUOUS", message, true, {
+        entity: "tracks",
+        candidate_count: candidates.length,
+        candidates_truncated: truncated,
+        candidates,
+      })]);
+    }
     candidate = rows[0].ref ?? rows[0].track_ref;
     sqliteUsed = true;
     state.sqlite = response.sqlite;
@@ -1716,13 +1726,48 @@ function coded(code, message, blockers) {
   return error;
 }
 
-function codedBlocker(code, message, recoverable = true) {
-  return { code, message, recoverable };
+function codedBlocker(code, message, recoverable = true, details) {
+  return { code, message, recoverable, ...(boundedTrackCandidateDetails(details) ? { details: boundedTrackCandidateDetails(details) } : {}) };
 }
 
 function normalizeBlocker(value) {
   if (!object(value)) return codedBlocker("NATIVE_FX_BLOCKED", String(value));
-  return codedBlocker(value.code ?? "NATIVE_FX_BLOCKED", value.message ?? "The native FX task is blocked.", value.recoverable !== false);
+  return codedBlocker(value.code ?? "NATIVE_FX_BLOCKED", value.message ?? "The native FX task is blocked.", value.recoverable !== false, value.details);
+}
+
+function boundedTrackCandidates(rows) {
+  return rows.slice(0, 3).flatMap((row) => {
+    const ref = row?.ref ?? row?.track_ref;
+    if (typeof ref !== "string" || !ref.startsWith("track:")) return [];
+    return [{
+      kind: "track",
+      ref,
+      ...(typeof row.name === "string" ? { name: row.name } : {}),
+      ...(Number.isInteger(row.index) ? { index: row.index } : {}),
+      request_patch: { refs: { track_ref: ref } },
+    }];
+  });
+}
+
+function boundedTrackCandidateDetails(value) {
+  if (!object(value) || !Array.isArray(value.candidates)) return null;
+  const candidates = value.candidates.slice(0, 3).flatMap((candidate) => {
+    const ref = candidate?.ref;
+    if (typeof ref !== "string" || !ref.startsWith("track:") || ref.length > 240) return [];
+    return [{
+      kind: "track",
+      ref,
+      ...(typeof candidate.name === "string" ? { name: candidate.name.slice(0, 240) } : {}),
+      ...(Number.isInteger(candidate.index) ? { index: candidate.index } : {}),
+      request_patch: { refs: { track_ref: ref } },
+    }];
+  });
+  return {
+    entity: "tracks",
+    candidate_count: candidates.length,
+    candidates_truncated: value.candidates_truncated === true,
+    candidates,
+  };
 }
 
 function validationBlocker(message) {

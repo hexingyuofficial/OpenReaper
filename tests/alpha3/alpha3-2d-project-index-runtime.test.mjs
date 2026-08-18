@@ -121,14 +121,14 @@ describe("Alpha3.2-D Product Project Index runtime", () => {
       const runtime = await openRuntime(fixture);
       const identity = runtimeIdentity(runtime);
       assertObserved(runtime, execution("template.tracks.list_tracks", identity, {
-        tracks: [{ track_ref: "track:guid:{T1}", index: 0, name: "Kick", selected: true, muted: false, record_armed: true }],
+        tracks: [{ track_ref: "track:guid:{T1}", index: 0, name: "对白 主轨 中文", selected: true, muted: false, record_armed: true }],
         track_count: 1,
       }));
       assertObserved(runtime, execution("template.items.list_items_on_track", identity, {
         track_ref: "track:guid:{T1}",
         items: [{
           item_ref: "item:guid:{I1}", track_ref: "track:guid:{T1}", position_seconds: 1, length_seconds: 2,
-          takes: [{ take_ref: "take:guid:{K1}", active: true, source_ref: "file:path:/audio/kick.wav" }],
+          takes: [{ take_ref: "take:guid:{K1}", name: "对白 Take 你好", active: true, source_ref: "file:path:/audio/kick.wav" }],
         }],
       }));
       assertObserved(runtime, execution("template.fx.list_track_fx_chain", identity, {
@@ -178,7 +178,7 @@ describe("Alpha3.2-D Product Project Index runtime", () => {
           markers_regions: { items: [{ marker_ref: "marker:index:1", kind: "marker", name: "Verse", position_seconds: 4 }] },
           project_map: {
             project_ref: identity.project_ref,
-            tracks: [{ track_ref: "track:guid:{T1}", index: 0, name: "Kick", items: [{ item_ref: "item:guid:{I1}", track_ref: "track:guid:{T1}", position_seconds: 1, length_seconds: 2 }] }],
+            tracks: [{ track_ref: "track:guid:{T1}", index: 0, name: "对白 主轨 中文", items: [{ item_ref: "item:guid:{I1}", track_ref: "track:guid:{T1}", position_seconds: 1, length_seconds: 2 }] }],
             selected_items: [{ item_ref: "item:guid:{I1}", track_ref: "track:guid:{T1}", position_seconds: 1, length_seconds: 2, selected: true }],
           },
           coverage: { project_map: "complete_page", selected_items: "bounded" },
@@ -189,9 +189,11 @@ describe("Alpha3.2-D Product Project Index runtime", () => {
 
       const snapshot = runtime.adapter.snapshot();
       assert.deepEqual(snapshot.rows.tracks.map((row) => row.ref), ["track:guid:{T1}"]);
+      assert.equal(snapshot.rows.tracks[0].name, "对白 主轨 中文");
       assert.deepEqual(snapshot.rows.items.map((row) => row.ref), ["item:guid:{I1}"]);
       // Artifact project maps do not currently carry take refs, so the prior canonical take page is retained rather than fabricated or erased.
       assert.deepEqual(snapshot.rows.takes.map((row) => row.ref), ["take:guid:{K1}"]);
+      assert.equal(snapshot.rows.takes[0].name, "对白 Take 你好");
       assert.deepEqual(snapshot.rows.fx.map((row) => row.ref), ["fx:track:guid:{T1}:slot:0"]);
       assert.deepEqual(snapshot.rows.sends.map((row) => row.ref), ["send:track:guid:{T1}:0"]);
       assert.deepEqual(snapshot.rows.envelopes.map((row) => row.ref), ["envelope:track:guid:{T1}:volume"]);

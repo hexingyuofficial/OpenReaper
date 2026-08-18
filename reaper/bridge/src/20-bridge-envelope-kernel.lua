@@ -18,6 +18,42 @@ local function first_number(...)
   return nil
 end
 
+local function utf8_prefix_by_bytes(text, max_bytes)
+  if max_bytes <= 0 then
+    return ""
+  end
+  if #text <= max_bytes then
+    return text
+  end
+
+  local start = max_bytes
+  while start > 0 do
+    local byte = string.byte(text, start)
+    if byte == nil or byte < 0x80 or byte >= 0xC0 then
+      break
+    end
+    start = start - 1
+  end
+  if start == 0 then
+    return ""
+  end
+
+  local lead = string.byte(text, start)
+  local width = 1
+  if lead >= 0xF0 and lead < 0xF8 then
+    width = 4
+  elseif lead >= 0xE0 and lead < 0xF0 then
+    width = 3
+  elseif lead >= 0xC0 and lead < 0xE0 then
+    width = 2
+  end
+  local complete_end = start + width - 1
+  if complete_end <= max_bytes then
+    return text:sub(1, complete_end)
+  end
+  return text:sub(1, start - 1)
+end
+
 local function bounded_string(value, max_length)
   if value == nil or value == JSON_NULL then
     return nil
@@ -27,7 +63,10 @@ local function bounded_string(value, max_length)
   if #text <= limit then
     return text
   end
-  return text:sub(1, limit - 3) .. "..."
+  if limit <= 3 then
+    return string.rep(".", math.max(limit, 0))
+  end
+  return utf8_prefix_by_bytes(text, limit - 3) .. "..."
 end
 
 local function is_object(value)

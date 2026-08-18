@@ -1867,7 +1867,7 @@
         "name": "render.targets"
       },
       "pack": "render",
-      "risk": "write",
+      "risk": "destructive",
       "route": "d29-render-output-policy-handlers",
       "handler_file": "render/d31_render_targets_route.lua",
       "handler_export": "d31_render_targets",

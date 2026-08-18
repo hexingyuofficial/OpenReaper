@@ -24,6 +24,10 @@ const ACTION_HANDLER_SOURCE = readFileSync(
   new URL("../../reaper/bridge/src/handlers/actions/read_action_metadata.lua", import.meta.url),
   "utf8",
 );
+const ENVELOPE_KERNEL_SOURCE = readFileSync(
+  new URL("../../reaper/bridge/src/20-bridge-envelope-kernel.lua", import.meta.url),
+  "utf8",
+);
 const OPERATION_KEYS = Object.freeze([
   "query_state:project.read_track_item_overview",
   "query_state:actions.read_custom_action_metadata",
@@ -97,6 +101,31 @@ reaper.CountSelectedMediaItems = function(project) assert(project == 0); return 
 `;
 
 describe("D10 read overview/actions live handler expansion", () => {
+  it("truncates bounded Bridge strings only on complete UTF-8 codepoint boundaries", () => {
+    const assertions = String.raw`
+local exact = "对白 主轨 中文"
+assert(bounded_string(exact, #exact) == exact)
+local long = string.rep("中", 30)
+local truncated = bounded_string(long, 80)
+assert(#truncated <= 80)
+assert(truncated:sub(-3) == "...")
+assert(utf8.len(truncated:sub(1, -4)) ~= nil)
+assert(truncated == string.rep("中", 25) .. "...")
+assert(bounded_string("abcdef", 3) == "...")
+`;
+    const state = lauxlib.luaL_newstate();
+    lualib.luaL_openlibs(state);
+    const status = lauxlib.luaL_loadstring(
+      state,
+      to_luastring(`JSON_NULL = {}\n${ENVELOPE_KERNEL_SOURCE}\n${assertions}`),
+    );
+    const loadMessage = status === lua.LUA_OK ? "UTF-8 helper Lua loaded" : to_jsstring(lua.lua_tostring(state, -1));
+    assert.equal(status, lua.LUA_OK, loadMessage);
+    const callStatus = lua.lua_pcall(state, 0, 0, 0);
+    const callMessage = callStatus === lua.LUA_OK ? "UTF-8 helper Lua executed" : to_jsstring(lua.lua_tostring(state, -1));
+    assert.equal(callStatus, lua.LUA_OK, callMessage);
+  });
+
   it("registers exactly the bounded read overview/actions batch", () => {
     const registry = loadBridgeHandlerRegistry({ cwd: ROOT.pathname });
     validateBridgeHandlerRegistry({ cwd: ROOT.pathname, registry });

@@ -69,6 +69,45 @@ describe("Alpha3.2.5-D native FX Macro", () => {
     assert.deepEqual(validateMacroExecutionEnvelope(result), { valid: true, errors: [] });
   });
 
+  it("returns bounded canonical patches for ambiguous Chinese Track names before FX work", async () => {
+    const bridge = chainAtomic();
+    const trackRows = ["A", "B", "C", "D"].map((suffix, index) => ({
+      ref: `track:guid:{TRACK-${suffix}}`,
+      name: "对白 主轨",
+      index,
+    }));
+    const result = await executeAlpha3_2_5DNativeFxMacro({
+      request: {
+        id: ALPHA3_2_5_D_NATIVE_FX_MACRO_ID,
+        input: {
+          selector: { name: "对白 主轨" },
+          chain: [{ plugin_query: "ReaEQ" }],
+          dry_run: true,
+        },
+      },
+      executeAtomic: bridge.executeAtomic,
+      projectIndexRuntime: selectorIndexRuntime(trackRows),
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, false, JSON.stringify(result));
+    assert.equal(result.execution.status, "blocked");
+    assert.equal(result.error.code, "NATIVE_FX_TRACK_AMBIGUOUS", JSON.stringify(result));
+    assert.deepEqual(result.blockers[0].details, {
+      entity: "tracks",
+      candidate_count: 3,
+      candidates_truncated: true,
+      candidates: trackRows.slice(0, 3).map((row) => ({
+        kind: "track",
+        ref: row.ref,
+        name: row.name,
+        index: row.index,
+        request_patch: { refs: { track_ref: row.ref } },
+      })),
+    });
+    assert.deepEqual(bridge.calls.map((call) => call.id), ["template.project.read_summary"]);
+  });
+
   it("applies a bounded ordered Track chain with duplicate, preset, bypass, reorder, and final complete readback", async () => {
     const bridge = chainAtomic({
       initial: [{ name: "VST: ReaEQ (Cockos)", enabled: true }],
@@ -948,6 +987,9 @@ function chainAtomic(options = {}) {
   const executeAtomic = async ({ id, input = {}, refs = {} }) => {
     const call = { id, input: structuredClone(input), refs: structuredClone(refs) };
     calls.push(call);
+    if (id === "template.project.read_summary") {
+      return execution(id, { change_count: 1 });
+    }
     if (id === "template.tracks.resolve_track_ref") {
       return execution(id, { track_ref: TRACK_REF }, [objectRef("track", TRACK_REF)]);
     }
@@ -1154,6 +1196,26 @@ function indexRuntime(invalidations, { fail = false } = {}) {
         return { ok: false, scopes, blockers: [{ code: "INDEX_WRITE_FAILED", message: "Index maintenance failed.", recoverable: true }] };
       }
       return { ok: true, scopes, snapshot_id: "snapshot:fx-d", revision: 4 };
+    },
+  };
+}
+
+function selectorIndexRuntime(trackRows) {
+  return {
+    status: () => ({
+      snapshot_id: "snapshot:fx-selector",
+      revision: "4",
+      rows_available: true,
+      row_counts: { tracks: trackRows.length },
+    }),
+    invalidateScopes: ({ scopes }) => ({ ok: true, scopes }),
+    adapter: {
+      snapshot: () => ({
+        lifecycle: "ready",
+        snapshot_id: "snapshot:fx-selector",
+        freshness_scopes: { tracks: { status: "fresh", coverage_status: "complete" } },
+        rows: { tracks: trackRows },
+      }),
     },
   };
 }

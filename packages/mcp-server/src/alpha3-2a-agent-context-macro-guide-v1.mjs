@@ -610,7 +610,7 @@ const PRIMARY_DEFINITIONS = deepFreeze([
     title: "Render declared targets",
     summary: "Preview or execute bounded managed-root WAV/OGG/MP3 exports with an optional user-owned basename through one audited D31 route.",
     pack: "render",
-    risk: "write",
+    risk: "destructive",
     entity_kind: "macro.render.targets",
     task_intents: ["render wav", "render region ogg", "export mp3", "render selected items", "export project"],
     rollout_slice: "3.2-E",
@@ -620,10 +620,10 @@ const PRIMARY_DEFINITIONS = deepFreeze([
     manual: actionManual({
       when_to_use: [
         "Render a bounded whole project, time selection, explicit regions, selected/explicit items, or selected/explicit tracks to WAV, OGG, or native MP3.",
-        "Require managed-root output, an optional safe visible basename, fail-if-exists collision policy, settings restoration, and verified output artifacts.",
+        "Require managed-root output, an optional safe visible basename, an explicit collision policy, settings restoration, and verified output artifacts.",
       ],
       when_not_to_use: [
-        "Do not provide an arbitrary output path, overwrite route, external encoder, shell/process, raw action/Lua, or hidden executor fallback.",
+        "Do not provide an arbitrary output path, external encoder, shell/process, raw action/Lua, or hidden executor fallback; overwrite is limited to the exact compiled managed output.",
         "Do not claim broader format/platform support than the accepted D31 WAV/OGG/native-MP3 evidence.",
       ],
       required_readiness: [
@@ -642,14 +642,14 @@ const PRIMARY_DEFINITIONS = deepFreeze([
         mp3_bitrate_kbps: "128 | 192 | 256 | 320 for native MP3 only; defaults to 320.",
         output_basename: "Optional safe 1-96 byte filename stem without an extension; multiple targets become stem_01, stem_02, and so on.",
         output_policy: "openreaper_managed_render_root only.",
-        collision_policy: "fail_if_exists only; overwrite and suffix fallback are forbidden.",
+        collision_policy: "fail_if_exists (default) | overwrite | suffix. suffix chooses the first free batch basename (_1, _2, ...); overwrite replaces only the exact managed output.",
         max_targets: "Integer from 1 through 16.",
         dry_run: "Boolean; true returns preview only, false executes the audited render program.",
       },
       preflight_steps: [
         "Normalize canonical refs and enforce exact target-kind/ref matching.",
-        "Validate managed-root-only output, fail_if_exists, max_targets, sample rate, channels, and format-specific WAV/OGG/MP3 settings.",
-        "D31 resolves live targets, validates the requested filename stem, and checks every expected output/artifact collision before its first render action.",
+        "Validate managed-root-only output, collision policy, max_targets, sample rate, channels, and format-specific WAV/OGG/MP3 settings.",
+        "D31 resolves live targets, validates the requested filename stem, and compiles the exact batch output names before its first render action.",
       ],
       underlying_actions: [
         "template.project.read_dirty_state before and after the render mutation",
@@ -664,20 +664,20 @@ const PRIMARY_DEFINITIONS = deepFreeze([
       ],
       success_criteria: [
         "Dry-run returns the effective managed-root preview; non-dry-run executes one D31 mutation bracketed by exact dirty-state reads.",
-        "The registered render dependency verifies every non-empty managed WAV/OGG/MP3 output and returns requested/actual format, bitrate, extension, absolute path, size, target identity, and compact manifest/evidence refs.",
-        "No arbitrary path, overwrite, external encoder, hidden Recipe executor, raw action/Lua, shell, or UI bypass is exposed; public call_recipe remains a separate saved-revision workflow.",
+        "The registered render dependency verifies every newly produced non-empty managed WAV/OGG/MP3 output and returns requested/actual format, bitrate, extension, absolute path, size, target identity, collision result, and compact manifest/evidence refs.",
+        "No arbitrary path, external encoder, hidden Recipe executor, raw action/Lua, shell, or UI bypass is exposed; overwrite can remove only the exact D31-compiled managed output and public call_recipe remains separate.",
       ],
       common_blockers: [
         blocker("RENDER_ROOT_NOT_READY", "The managed render root is absent, unwritable, or outside policy."),
         blocker("RENDER_TARGET_KIND_OR_REFS_INVALID", "Target kind and canonical refs do not match the strict target contract."),
         blocker("RENDER_FORMAT_SETTINGS_UNSUPPORTED", "Sample rate, channels, WAV bit depth, OGG quality, or MP3 bitrate is outside the bounded enum."),
         blocker("RENDER_OUTPUT_BASENAME_INVALID", "The requested filename stem is unsafe, includes an extension/path token, or exceeds the bounded length."),
-        blocker("RENDER_OUTPUT_COLLISION", "A managed output or evidence artifact already exists and fail_if_exists rejected the whole batch before rendering."),
+        blocker("RENDER_OUTPUT_COLLISION", "A managed output or evidence artifact already exists; fail_if_exists reports path/size/mtime, while suffix or explicit overwrite can be selected."),
       ],
       recovery_steps: [
         "Repair bridge/render-root readiness through supported startup/doctor guidance, then retry the same registered Macro.",
         "Repair target_kind and refs; selected modes take no explicit refs and whole/time take no object refs.",
-        "Use only the bounded WAV/OGG/MP3 settings and a fresh request identity; never bypass fail_if_exists.",
+        "Use fail_if_exists by default; after inspecting returned path/size/mtime, explicitly choose overwrite or suffix when that matches user intent.",
         "After a failure, inspect the D31 restoration/error evidence before retrying.",
       ],
       dry_run_shape: {
@@ -688,7 +688,7 @@ const PRIMARY_DEFINITIONS = deepFreeze([
       resume_or_retry_policy: {
         resume_from: "fresh preview plus retained failed-child evidence",
         retry: "Retry the registered Macro only after readiness, ref, or collision repair.",
-        hard_stop: "Stop on unmanaged path, overwrite request, explicit-ref mismatch, unsupported setting, or restoration failure.",
+        hard_stop: "Stop on unmanaged path, explicit-ref mismatch, unsupported setting, unknown collision policy, or restoration failure.",
       },
       examples: [
         example("whole project WAV preview", { target_kind: "whole_project", format: "wav", output_basename: "Client Mix", sample_rate_hz: 48000, channel_count: 2, wav_bit_depth: 24, dry_run: true }),

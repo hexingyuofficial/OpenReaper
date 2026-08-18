@@ -1503,6 +1503,15 @@ function normalizeTakeRow(row, defaults) {
       : typeof summary.track_ref === "string"
         ? summary.track_ref
         : null,
+    name: typeof source.name === "string"
+      ? source.name
+      : typeof source.take_name === "string"
+        ? source.take_name
+        : typeof summary.name === "string"
+          ? summary.name
+          : typeof summary.take_name === "string"
+            ? summary.take_name
+            : "",
     active: Boolean(source.active ?? source.is_active ?? summary.active ?? summary.is_active),
     selected: Boolean(source.selected ?? summary.selected),
     source_kind: typeof source.source_kind === "string"
