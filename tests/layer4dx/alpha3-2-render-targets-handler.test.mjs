@@ -203,12 +203,13 @@ local result, failure = d31_finish_render_attempt({}, {}, {}, {}, true, {
     code = "RENDER_OUTPUT_ALL_ZERO",
     message = "all zero",
     details = { silence_classification = "all_zero" },
-    recoverable = false,
+    recoverable = true,
   },
 })
 assert(result == nil)
 assert(failure.code == "VERIFY_FAILED")
 assert(failure.details.local_code == "RENDER_OUTPUT_ALL_ZERO")
+assert(failure.recoverable == true)
 assert(order[1] == "settings" and order[2] == "tracks" and order[3] == "items")
 return true
 `;
@@ -278,6 +279,18 @@ return true
     assert.match(HANDLER, /local ok_count, _, marker_count, region_count = call_reaper\("CountProjectMarkers", project\)/);
     assert.match(HANDLER, /Main_OnCommandEx", D31_ACTION_ID, 0, project/);
     assert.match(HANDLER, /D31_ACTION_ID = 41824/);
+    assert.match(HANDLER, /D31_MEDIA_ONLINE_ACTION_ID = 40101/);
+    assert.match(HANDLER, /d31_target_source_preflight/);
+    assert.match(HANDLER, /RENDER_SOURCE_OFFLINE/);
+    assert.match(HANDLER, /RENDER_SOURCE_READBACK_UNAVAILABLE = "VERIFY_FAILED"/);
+    assert.match(HANDLER, /RENDER_SOURCE_OFFLINE = "FILE_NOT_FOUND"/);
+    assert.match(HANDLER, /target\.ref:match\("\^item:guid:/);
+    assert.match(HANDLER, /GetSetMediaItemInfo_String", item, "GUID"/);
+    assert.match(HANDLER, /target\.ref:match\("\^track:guid:/);
+    assert.match(HANDLER, /GetTrackGUID", item_track/);
+    assert.match(HANDLER, /GetMediaItem_Track/);
+    assert.match(HANDLER, /GetMediaSourceFileName/);
+    assert.match(HANDLER, /Set all media online/);
     assert.match(HANDLER, /TARGET_REFS_REQUIRED/);
     assert.match(HANDLER, /TARGET_REFS_FORBIDDEN/);
     assert.match(HANDLER, /TARGET_COUNT_EXCEEDED/);
@@ -326,10 +339,14 @@ return true
     assert.match(BRIDGE, /\["run_job:render\.targets"\]\s*=/);
 
     const preflight = HANDLER.indexOf("local preflight_ok, preflight_error = d31_preflight(request, outputs)");
+    const mediaOnlineAction = HANDLER.indexOf("local online_ok = call_reaper(\"Main_OnCommandEx\", D31_MEDIA_ONLINE_ACTION_ID, 0, project)");
+    const sourcePreflight = HANDLER.indexOf("local source_ready, source_error = d31_target_source_preflight(project, target)");
     const firstAction = HANDLER.indexOf("local action_ok = call_reaper(\"Main_OnCommandEx\", D31_ACTION_ID, 0, project)");
     const rejectAllZero = HANDLER.indexOf("if measurement.is_silent == true then return { failure = { code = \"RENDER_OUTPUT_ALL_ZERO\"");
     const finish = HANDLER.indexOf("local finished_outcome, finish_error = d31_finish_render_attempt");
     assert.ok(preflight >= 0 && preflight < firstAction, "collision preflight occurs before the first audited action");
+    assert.ok(mediaOnlineAction >= 0 && mediaOnlineAction < sourcePreflight, "media is brought online before source verification");
+    assert.ok(sourcePreflight >= 0 && sourcePreflight < firstAction, "source verification gates the first render action");
     assert.ok(firstAction >= 0 && firstAction < finish, "restoration closure runs after any action attempt");
     assert.ok(firstAction < rejectAllZero && rejectAllZero < finish, "all-zero output enters the protected failure path before restoration");
   });

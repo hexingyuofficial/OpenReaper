@@ -1143,6 +1143,83 @@ describe("Alpha3.2-D Product Project Index runtime", () => {
     }
   });
 
+  it("atomically commits complete Take knowledge across hidden pages without exposing a partial index", async () => {
+    const fixture = await makeFixture();
+    let runtime;
+    try {
+      runtime = await openRuntime(fixture);
+      const identity = runtimeIdentity(runtime);
+      assertObserved(runtime, execution("template.items.list_items_on_track", identity, {
+        track_ref: "track:guid:{KEEP}",
+        items: [{
+          item_ref: "item:guid:{KEEP-ITEM}",
+          track_ref: "track:guid:{KEEP}",
+          takes: [{ take_ref: "take:guid:{KEEP-TAKE}", active: true, source_kind: "midi" }],
+        }],
+      }));
+      assertObserved(runtime, execution("template.project.read_summary", identity, {
+        project_ref: identity.project_ref,
+        change_count: 72,
+      }));
+
+      const refresh = runtime.beginLogicalRefresh({
+        scope: "takes",
+        expected_revision: "reaper-change-count:72",
+        declared_take_count: 65,
+      });
+      assert.equal(refresh.ok, true, JSON.stringify(refresh));
+
+      for (const [cursor, count] of [[0, 64], [64, 1]]) {
+        const nextCursor = cursor + count < 65 ? cursor + count : null;
+        const takes = Array.from({ length: count }, (_, offset) => ({
+          take_ref: `take:guid:{TAKE-${cursor + offset + 1}}`,
+          item_ref: `item:guid:{ITEM-${cursor + offset + 1}}`,
+          track_ref: "track:guid:{TRACK-1}",
+          active: true,
+          source_kind: "midi",
+        }));
+        const staged = runtime.observeSuccessfulTemplateExecution(execution(
+          "template.project.read_track_item_overview",
+          identity,
+          {
+            project_ref: identity.project_ref,
+            track_count: 1,
+            item_count: 65,
+            tracks: [],
+            items: [],
+            selected_items: [],
+            takes,
+            take_count: 65,
+            take_cursor: cursor,
+            returned_take_count: count,
+            next_take_cursor: nextCursor === null ? null : String(nextCursor),
+            takes_truncated: nextCursor !== null,
+            take_coverage_status: nextCursor === null ? "complete" : "paged",
+            take_coverage: { internally_complete: true },
+            truncated: true,
+          },
+          { logical_refresh: { transaction_id: refresh.transaction_id, scope: "takes", take_cursor: cursor, revision: "reaper-change-count:72" } },
+        ));
+        assert.equal(staged.ok, true, JSON.stringify(staged));
+        assert.deepEqual(runtime.adapter.snapshot().rows.takes.map((row) => row.ref), ["take:guid:{KEEP-TAKE}"]);
+      }
+
+      const committed = runtime.commitLogicalRefresh({
+        transaction_id: refresh.transaction_id,
+        observed_revision: "reaper-change-count:72",
+      });
+      assert.equal(committed.ok, true, JSON.stringify(committed));
+      assert.deepEqual(committed.row_counts, { takes: 65 });
+      assert.equal(runtime.adapter.snapshot().rows.takes.length, 65);
+      assert.equal(runtime.adapter.snapshot().rows.takes.at(-1).ref, "take:guid:{TAKE-65}");
+      assert.equal(runtime.adapter.snapshot().rows.takes[0].item_ref, "item:guid:{ITEM-1}");
+      assert.equal(runtime.adapter.snapshot().freshness_scopes.takes.coverage_status, "complete");
+    } finally {
+      runtime?.close();
+      await fixture.cleanup();
+    }
+  });
+
   it("atomically commits complete 14-envelope knowledge across hidden automation pages and marks it stale after a write", async () => {
     const fixture = await makeFixture();
     let runtime;

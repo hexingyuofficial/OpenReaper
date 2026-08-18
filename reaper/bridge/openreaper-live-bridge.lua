@@ -2694,6 +2694,7 @@ local function read_project_summary(request)
   local ok_changes, change_count = call_reaper("GetProjectStateChangeCount", project)
   local ok_sample_rate, sample_rate = call_reaper("GetSetProjectInfo", project, "PROJECT_SRATE", 0, false)
   local include_counts = request.params.include_counts == true
+  local include_media_counts = request.params.include_media_counts == true
 
   local summary = {
     kind = "project_summary",
@@ -2710,6 +2711,28 @@ local function read_project_summary(request)
     summary.marker_count = ok_markers and first_number(marker_count) or 0
     summary.region_count = ok_markers and first_number(region_count) or 0
     summary.change_count = ok_changes and first_number(change_count) or 0
+  end
+  if include_media_counts then
+    local total_takes = 0
+    local midi_takes = 0
+    local total_items = ok_items and math.max(0, math.floor(first_number(item_count) or 0)) or 0
+    for item_index = 0, total_items - 1 do
+      local ok_item, item = call_reaper("GetMediaItem", project, item_index)
+      if ok_item and item then
+        local ok_take_count, take_count = call_reaper("CountTakes", item)
+        local item_take_count = ok_take_count and math.max(0, math.floor(first_number(take_count) or 0)) or 0
+        total_takes = total_takes + item_take_count
+        for take_index = 0, item_take_count - 1 do
+          local ok_take, take = call_reaper("GetTake", item, take_index)
+          if ok_take and take then
+            local ok_midi, is_midi = call_reaper("TakeIsMIDI", take)
+            if ok_midi and (is_midi == true or is_midi == 1) then midi_takes = midi_takes + 1 end
+          end
+        end
+      end
+    end
+    summary.take_count = total_takes
+    summary.midi_take_count = midi_takes
   end
   return summary
 end
@@ -6204,6 +6227,53 @@ local function d10_overview_item_ref(item)
   }
 end
 
+local function d10_overview_take_ref_string(take)
+  local ok, _, guid = call_reaper("GetSetMediaItemTakeInfo_String", take, "GUID", "", false)
+  local value = ok and first_string(guid) or nil
+  if type(value) == "string" and value ~= "" then return "take:guid:" .. value end
+  return nil
+end
+
+local function d10_overview_take_ref(take)
+  local ref = d10_overview_take_ref_string(take)
+  if not ref then return nil end
+  return {
+    kind = "take",
+    ref = ref,
+    identity = {
+      scheme = "guid",
+      value = ref:match("^take:guid:(.+)$"),
+    },
+  }
+end
+
+local function d10_overview_take_source_kind(take)
+  local ok_midi, is_midi = call_reaper("TakeIsMIDI", take)
+  if ok_midi and (is_midi == true or is_midi == 1) then return "midi" end
+  local ok_source, source = call_reaper("GetMediaItemTake_Source", take)
+  if ok_source and source then
+    local ok_type, source_type = call_reaper("GetMediaSourceType", source, "")
+    local value = ok_type and first_string(source_type) or nil
+    if type(value) == "string" and value ~= "" then return value:lower() end
+  end
+  return "unknown"
+end
+
+local function d10_overview_take_summary(take, item, track, take_index, active_take)
+  local take_ref = d10_overview_take_ref_string(take)
+  if not take_ref then return nil end
+  local ok_name, _, name = call_reaper("GetSetMediaItemTakeInfo_String", take, "P_NAME", "", false)
+  return {
+    take_ref = take_ref,
+    item_ref = d10_overview_item_ref_string(item),
+    track_ref = track and d10_overview_track_ref_string(track) or JSON_NULL,
+    index = take_index,
+    active = take == active_take,
+    name = bounded_string(ok_name and first_string(name) or "", 80),
+    source_kind = d10_overview_take_source_kind(take),
+  }
+end
+
 local function d10_overview_item_summary(item, track, item_index)
   local ok_take, take = call_reaper("GetActiveTake", item)
   local active_take_name = ""
@@ -6273,11 +6343,14 @@ end
 local function read_track_item_overview(request)
   local track_cursor = d10_overview_bounded_offset(request.params and request.params.track_cursor)
   local item_cursor = d10_overview_bounded_offset(request.params and request.params.item_cursor)
+  local take_cursor = d10_overview_bounded_offset(request.params and request.params.take_cursor)
   local max_tracks = d10_overview_budget_track_limit(request, request.params and request.params.max_tracks)
   local max_items = d10_overview_project_item_limit(request, request.params and request.params.max_items)
   local include_track_items = request.params and request.params.include_track_items ~= false
   local max_items_per_track = include_track_items and d10_overview_budget_item_limit(request, request.params and request.params.max_items_per_track, max_tracks) or 0
   local include_selected_items = request.params == nil or request.params.include_selected_items ~= false
+  local include_takes = request.params and request.params.include_takes == true
+  local max_takes = d10_overview_bounded_limit(request, request.params and request.params.max_takes, 64, 513)
   local max_selected_items = d10_overview_bounded_limit(request, request.params and request.params.max_selected_items, 4, 513)
   local selector_filter = request.params and request.params.selector_filter
   local ok_tracks, track_count = call_reaper("CountTracks", 0)
@@ -6287,6 +6360,7 @@ local function read_track_item_overview(request)
   local tracks = json_array({})
   local items = json_array({})
   local selected_items = json_array({})
+  local takes = json_array({})
   local refs = json_array({ d10_overview_project_ref() })
 
   local end_track = math.min(total_tracks, track_cursor + max_tracks)
@@ -6344,6 +6418,44 @@ local function read_track_item_overview(request)
     end
   end
 
+  local total_takes = 0
+  local visited_take_slots = 0
+  local takes_internally_complete = true
+  if include_takes then
+    for item_index = 0, total_items - 1 do
+      local ok_item, item = call_reaper("GetMediaItem", 0, item_index)
+      if not ok_item or not item then
+        takes_internally_complete = false
+      else
+        local ok_track, track = call_reaper("GetMediaItemTrack", item)
+        local ok_active, active_take = call_reaper("GetActiveTake", item)
+        local take_count = d10_overview_native_count("CountTakes", item)
+        if take_count == nil then
+          takes_internally_complete = false
+        else
+          for take_index = 0, take_count - 1 do
+            if total_takes >= take_cursor and #takes < max_takes then
+              visited_take_slots = visited_take_slots + 1
+              local ok_take, take = call_reaper("GetTake", item, take_index)
+              if ok_take and take then
+                local take_summary = d10_overview_take_summary(take, item, ok_track and track or nil, take_index, ok_active and active_take or nil)
+                if take_summary then
+                  takes[#takes + 1] = take_summary
+                  refs[#refs + 1] = d10_overview_take_ref(take)
+                else
+                  takes_internally_complete = false
+                end
+              else
+                takes_internally_complete = false
+              end
+            end
+            total_takes = total_takes + 1
+          end
+        end
+      end
+    end
+  end
+
   local summary = {
     project_ref = "project:current",
     tracks = tracks,
@@ -6372,6 +6484,17 @@ local function read_track_item_overview(request)
   end
   if end_item < total_items then
     summary.next_item_cursor = tostring(end_item)
+  end
+  if include_takes then
+    local next_take_cursor = math.min(total_takes, take_cursor + visited_take_slots)
+    summary.takes = takes
+    summary.take_count = total_takes
+    summary.take_cursor = take_cursor
+    summary.returned_take_count = #takes
+    summary.takes_truncated = next_take_cursor < total_takes
+    summary.take_coverage_status = not takes_internally_complete and "incomplete" or (next_take_cursor < total_takes and "paged" or "complete")
+    summary.take_coverage = { internally_complete = takes_internally_complete }
+    if next_take_cursor < total_takes then summary.next_take_cursor = tostring(next_take_cursor) end
   end
   return summary, nil, json_array({}), json_array({}), refs
 end
@@ -20918,6 +21041,7 @@ local D31_EVIDENCE_SPEC = {
   schema = "render.targets_evidence.v1",
 }
 local D31_ACTION_ID = 41824
+local D31_MEDIA_ONLINE_ACTION_ID = 40101
 local D31_MAX_TARGETS = 16
 local D31_NUMERIC_KEYS = {
   "RENDER_BOUNDSFLAG",
@@ -20976,6 +21100,8 @@ local D31_ERROR_CODE_MAP = {
   MAX_TARGETS_INVALID = "PARAMS_INVALID",
   TARGET_COUNT_EXCEEDED = "PARAMS_INVALID",
   OUTPUT_BASENAME_INVALID = "PARAMS_INVALID",
+  RENDER_SOURCE_READBACK_UNAVAILABLE = "VERIFY_FAILED",
+  RENDER_SOURCE_OFFLINE = "FILE_NOT_FOUND",
   RENDER_OUTPUT_ALL_ZERO = "VERIFY_FAILED",
   RESTORE_FAILED = "VERIFY_FAILED",
 }
@@ -21402,6 +21528,84 @@ local function d31_apply_item_selection(project, selected)
   return true
 end
 
+-- REAPER can take file-backed media offline while the application is inactive
+-- (`offlineinact=1`).  Action 40101 normally repairs that state, but a render
+-- must prove the target source is readable before Action 41824 is allowed to
+-- claim success.  MIDI/VSTi targets have no file-backed audio source and are
+-- intentionally excluded from this probe.
+local function d31_item_overlaps_target(project, item, target)
+  if target.item then
+    local item_guid = is_string(target.ref) and target.ref:match("^item:guid:(.+)$") or nil
+    if item_guid then
+      local ok_guid, _, candidate_guid = call_reaper("GetSetMediaItemInfo_String", item, "GUID", "", false)
+      return ok_guid and first_string(candidate_guid) == item_guid
+    end
+    return target.item == item
+  end
+  if target.track then
+    local ok_track, item_track = call_reaper("GetMediaItem_Track", item)
+    if not ok_track or not item_track then return false end
+    local track_guid = is_string(target.ref) and target.ref:match("^track:guid:(.+)$") or nil
+    if track_guid then
+      local ok_guid, candidate_guid = call_reaper("GetTrackGUID", item_track)
+      return ok_guid and first_string(candidate_guid) == track_guid
+    end
+    return item_track == target.track
+  end
+  if target.bounds == 0 and type(target.start_seconds) == "number" and type(target.end_seconds) == "number" then
+    local ok_position, position = call_reaper("GetMediaItemInfo_Value", item, "D_POSITION")
+    local ok_length, length = call_reaper("GetMediaItemInfo_Value", item, "D_LENGTH")
+    if not ok_position or not ok_length or type(position) ~= "number" or type(length) ~= "number" then return false end
+    return position < target.end_seconds and (position + math.max(0, length)) > target.start_seconds
+  end
+  return true
+end
+
+local function d31_target_source_preflight(project, target)
+  local ok_count, count = call_reaper("CountMediaItems", project)
+  if not ok_count or type(count) ~= "number" or count < 0 then
+    return d31_error("RENDER_SOURCE_READBACK_UNAVAILABLE", "Could not enumerate project media before rendering.", { target_identity = target.ref or target.label, api = "CountMediaItems" }, true)
+  end
+  for item_index = 0, math.floor(count) - 1 do
+    local ok_item, item = call_reaper("GetMediaItem", project, item_index)
+    if not ok_item or not item then
+      return d31_error("RENDER_SOURCE_READBACK_UNAVAILABLE", "Could not read a project media item before rendering.", { target_identity = target.ref or target.label, item_index = item_index, api = "GetMediaItem" }, true)
+    end
+    if d31_item_overlaps_target(project, item, target) then
+      local ok_take, take = call_reaper("GetActiveTake", item)
+      if not ok_take then
+        return d31_error("RENDER_SOURCE_READBACK_UNAVAILABLE", "Could not read the active Take before rendering.", { target_identity = target.ref or target.label, item_index = item_index, api = "GetActiveTake" }, true)
+      end
+      if take then
+        local ok_midi, is_midi = call_reaper("TakeIsMIDI", take)
+        if not ok_midi then
+          return d31_error("RENDER_SOURCE_READBACK_UNAVAILABLE", "Could not classify the active Take before rendering.", { target_identity = target.ref or target.label, item_index = item_index, api = "TakeIsMIDI" }, true)
+        end
+        if is_midi ~= true and is_midi ~= 1 then
+          local ok_source, source = call_reaper("GetMediaItemTake_Source", take)
+          if not ok_source or not source then
+            return d31_error("RENDER_SOURCE_READBACK_UNAVAILABLE", "The target audio Take has no readable media source.", { target_identity = target.ref or target.label, item_index = item_index, api = "GetMediaItemTake_Source" }, true)
+          end
+          local ok_type, source_type = call_reaper("GetMediaSourceType", source, "")
+          local ok_filename, filename = call_reaper("GetMediaSourceFileName", source, "")
+          local source_kind = ok_type and first_string(source_type) or ""
+          local source_path = ok_filename and first_string(filename) or ""
+          if not ok_type or not ok_filename or source_kind == "" then
+            return d31_error("RENDER_SOURCE_READBACK_UNAVAILABLE", "The target audio source identity could not be read before rendering.", { target_identity = target.ref or target.label, item_index = item_index, source_type = source_kind, api = "GetMediaSourceType/GetMediaSourceFileName" }, true)
+          end
+          if source_path == "" then
+            return d31_error("RENDER_SOURCE_READBACK_UNAVAILABLE", "The target audio source has no file identity and cannot be proven renderable.", { target_identity = target.ref or target.label, item_index = item_index, source_type = source_kind }, true)
+          end
+          if not file_exists(source_path) then
+            return d31_error("RENDER_SOURCE_OFFLINE", "The target audio source is still offline or missing after REAPER Set all media online.", { target_identity = target.ref or target.label, item_index = item_index, source_type = source_kind, source_path = bounded_string(source_path, 240), media_online_action_id = D31_MEDIA_ONLINE_ACTION_ID, render_action_id = D31_ACTION_ID, retry_requires_source_reconnect = true }, true)
+          end
+        end
+      end
+    end
+  end
+  return true
+end
+
 local function d31_refs(request)
   local groups = { region = json_array({}), item = json_array({}), track = json_array({}) }
   if not is_json_array(request.refs) then return d31_error("PARAMS_INVALID", "D31 render targets requires normalized object refs.", {}, false) end
@@ -21743,6 +21947,16 @@ local function d31_render_targets(request)
       end
       local settings_ok, setting_key = d31_apply_settings(project, target, output, request.params, format)
       if not settings_ok then return { failure = { code = "RENDER_SETTINGS_WRITE_FAILED", message = "Could not configure REAPER project render settings.", details = { key = setting_key, target_index = index - 1 }, recoverable = false } } end
+      local online_ok = call_reaper("Main_OnCommandEx", D31_MEDIA_ONLINE_ACTION_ID, 0, project)
+      if not online_ok then return { failure = { code = "COMMAND_FAILED", message = "REAPER could not set project media online before rendering.", details = { media_online_action_id = D31_MEDIA_ONLINE_ACTION_ID, render_action_id = D31_ACTION_ID, target_index = index - 1 }, recoverable = true } } end
+      local source_ready, source_error = d31_target_source_preflight(project, target)
+      if not source_ready then
+        local details = source_error.details or {}
+        details.target_index = index - 1
+        details.media_online_action_id = D31_MEDIA_ONLINE_ACTION_ID
+        details.render_action_id = D31_ACTION_ID
+        return { failure = { code = source_error.code, message = source_error.message, details = details, recoverable = source_error.recoverable ~= false } }
+      end
       local action_ok = call_reaper("Main_OnCommandEx", D31_ACTION_ID, 0, project)
       if not action_ok then return { failure = { code = "COMMAND_FAILED", message = "The audited REAPER project-render action 41824 failed.", details = { action_id = D31_ACTION_ID, target_index = index - 1 }, recoverable = false } } end
       local size = d31_size(output.absolute_path)
@@ -21750,7 +21964,7 @@ local function d31_render_targets(request)
       if size <= 0 or not header_ok or actual_format ~= request.params.format or (format.mp3_bitrate_kbps and actual_bitrate ~= format.mp3_bitrate_kbps) then return { failure = { code = "VERIFY_FAILED", message = "Rendered output is absent, empty, or has the wrong container, MPEG layer, or bitrate.", details = { output_basename = output.output_basename, requested_format = request.params.format, actual_format = actual_format, requested_bitrate_kbps = format.mp3_bitrate_kbps, actual_bitrate_kbps = actual_bitrate, extension = output.extension, file_size_bytes = size, target_index = index - 1 }, recoverable = false } } end
       local measurement, measurement_error = d31_measure_output(output.absolute_path, output.extension)
       if not measurement then return { failure = { code = "VERIFY_FAILED", message = "Rendered output could not be measured without inferring audible content from file size.", details = { output_basename = output.output_basename, measurement_error = measurement_error and measurement_error.message or "unknown_measurement_failure", target_index = index - 1 }, recoverable = false } } end
-      if measurement.is_silent == true then return { failure = { code = "RENDER_OUTPUT_ALL_ZERO", message = "Rendered output decoded successfully but every measured sample was zero; the render is not accepted as successful.", details = { output_basename = output.output_basename, requested_format = request.params.format, actual_format = actual_format, measurement_status = measurement.measurement_status, measurement_scope = measurement.measurement_scope, silence_classification = measurement.silence_classification, measured_peak_linear = measurement.peak_linear, target_identity = target.ref or target.label, target_index = index - 1 }, recoverable = false } } end
+      if measurement.is_silent == true then return { failure = { code = "RENDER_OUTPUT_ALL_ZERO", message = "Rendered output decoded successfully but every measured sample was zero; media was explicitly brought online first, so the render is not accepted as successful.", details = { output_basename = output.output_basename, requested_format = request.params.format, actual_format = actual_format, measurement_status = measurement.measurement_status, measurement_scope = measurement.measurement_scope, silence_classification = measurement.silence_classification, measured_peak_linear = measurement.peak_linear, target_identity = target.ref or target.label, target_index = index - 1, media_online_action_id = D31_MEDIA_ONLINE_ACTION_ID, render_action_id = D31_ACTION_ID, probable_causes = json_array({ "intentionally_silent_target", "unavailable_source_or_instrument", "silent_signal_path" }), retry_requires_fresh_output_basename = true, audio_device_required = false }, recoverable = true } } end
       local project_copy_path = output.absolute_path .. ".RPP"
       local project_copy_retained = file_exists(project_copy_path)
       result_outputs[#result_outputs + 1] = {
@@ -21793,8 +22007,8 @@ local function d31_render_targets(request)
   local manifest_summary = { job_ref = job_ref.ref, format = request.params.format, mp3_bitrate_kbps = format.mp3_bitrate_kbps, requested_output_basename = requested_basename, file_count = #outcome.outputs, max_targets = max_targets, output_policy = request.params.output_policy, collision_policy = request.params.collision_policy, truncated = false }
   local manifest, manifest_error = write_a2_artifact(request, D31_MANIFEST_SPEC, manifest_summary, { target_kind = request.params.target_kind, outputs = outcome.outputs })
   if not manifest then return d31_error(manifest_error.code, manifest_error.message, manifest_error.details, manifest_error.recoverable) end
-  local evidence_summary = { job_ref = job_ref.ref, output_artifact_ref = manifest.ref, verification_status = "passed", render_settings_restored = true, selections_restored = true, truncated = false }
-  local evidence, evidence_error = write_a2_artifact(request, D31_EVIDENCE_SPEC, evidence_summary, { action_id = D31_ACTION_ID, target_kind = request.params.target_kind, render_request = { format = request.params.format, output_basename = requested_basename, sample_rate_hz = request.params.sample_rate_hz, channel_count = request.params.channel_count, wav_bit_depth = format.wav_bit_depth, ogg_quality = format.ogg_quality, mp3_bitrate_kbps = format.mp3_bitrate_kbps, max_targets = max_targets }, restoration = { render_settings = true, track_selection = true, item_selection = true }, outputs = outcome.outputs })
+  local evidence_summary = { job_ref = job_ref.ref, output_artifact_ref = manifest.ref, verification_status = "passed", media_online_verified = true, render_settings_restored = true, selections_restored = true, truncated = false }
+  local evidence, evidence_error = write_a2_artifact(request, D31_EVIDENCE_SPEC, evidence_summary, { action_id = D31_ACTION_ID, media_online_action_id = D31_MEDIA_ONLINE_ACTION_ID, source_online_preflight = true, render_action_id = D31_ACTION_ID, target_kind = request.params.target_kind, render_request = { format = request.params.format, output_basename = requested_basename, sample_rate_hz = request.params.sample_rate_hz, channel_count = request.params.channel_count, wav_bit_depth = format.wav_bit_depth, ogg_quality = format.ogg_quality, mp3_bitrate_kbps = format.mp3_bitrate_kbps, max_targets = max_targets }, restoration = { render_settings = true, track_selection = true, item_selection = true }, outputs = outcome.outputs })
   if not evidence then return d31_error(evidence_error.code, evidence_error.message, evidence_error.details, evidence_error.recoverable) end
   return { job_ref = job_ref.ref, output_artifact_ref = manifest.ref, evidence_artifact_ref = evidence.ref, format = request.params.format, output_policy = request.params.output_policy, collision_policy = request.params.collision_policy, file_count = #outcome.outputs, outputs = outcome.outputs, restoration = { render_settings = true, track_selection = true, item_selection = true }, truncated = false }, nil, json_array({ manifest.object_ref, evidence.object_ref }), json_array({ job_ref })
 end

@@ -88,6 +88,19 @@ const LOGICAL_REFRESH_SCOPE_CONFIG = Object.freeze({
     source_template_id: "template.project.read_track_item_overview",
     truncated_field: "items_truncated",
   }),
+  takes: Object.freeze({
+    projection_scope: "takes",
+    store_method: "replaceTakes",
+    row_noun: "take",
+    row_plural: "takes",
+    declared_count_field: "declared_take_count",
+    returned_count_field: "returned_take_count",
+    cursor_field: "take_cursor",
+    next_cursor_field: "next_take_cursor",
+    count_mismatch_code: "LOGICAL_REFRESH_TAKE_COUNT_MISMATCH",
+    source_template_id: "template.project.read_track_item_overview",
+    truncated_field: "takes_truncated",
+  }),
   routing: Object.freeze({
     projection_scope: "routing",
     store_method: "replaceSends",
@@ -873,7 +886,7 @@ function createRuntime({ adapter, backend, blockers, dbPath, degradedReason, ide
     const scope = scopes.length === 1 ? scopes[0] : null;
     const scopeConfig = logicalRefreshScopeConfig(scope);
     if (!scopeConfig) {
-      return logicalRefreshFailure("unsupported_scope", "LOGICAL_REFRESH_SCOPE_UNSUPPORTED", "This bounded runtime supports one complete logical refresh scope at a time: tracks, items, routing, or automation.", { scopes });
+      return logicalRefreshFailure("unsupported_scope", "LOGICAL_REFRESH_SCOPE_UNSUPPORTED", "This bounded runtime supports one complete logical refresh scope at a time: tracks, items, takes, routing, or automation.", { scopes });
     }
     const requestedRevision = input.expected_revision ?? input.expectedRevision;
     const expectedRevision = typeof requestedRevision === "string" ? normalizeProjectRevisionToken(requestedRevision) : null;
@@ -1373,6 +1386,14 @@ function logicalRefreshDeclaredCountEvidence(scope, ...sources) {
         source.total_item_count,
         source.declared_counts?.items,
       );
+    } else if (scope === "takes") {
+      candidates.push(
+        source.declared_take_count,
+        source.declaredTakeCount,
+        source.take_count,
+        source.total_take_count,
+        source.declared_counts?.takes,
+      );
     } else if (scope === "routing") {
       candidates.push(
         source.declared_send_count,
@@ -1487,6 +1508,8 @@ function logicalRefreshPageCoverage({ scope, projection, readback, overview, pag
     ? readback?.coverage?.project_map ?? readback?.coverage?.tracks
     : scope === "items"
       ? readback?.item_coverage_status ?? readback?.coverage?.items
+      : scope === "takes"
+        ? readback?.take_coverage_status ?? readback?.coverage?.takes
       : scope === "routing"
         ? readback?.coverage_status ?? readback?.coverage?.routing
         : readback?.coverage?.automation ?? readback?.coverage?.envelopes;
@@ -1795,6 +1818,7 @@ function projectReadback(templateId, readback, projectRef) {
       return projectMapPayload(readback, projectRef, {
         tracks: readback.truncated === true ? "paged" : "complete",
         items: readback.item_coverage_status,
+        takes: readback.take_coverage_status,
         selected_items: readback.selected_items_truncated === true ? "bounded" : "selected_only",
       }, { requireTrackSelection: true });
     case "template.project.create_observation_bundle": {
@@ -1875,7 +1899,7 @@ function projectMapPayload(overview, projectRef, coverage = {}, options = {}) {
   const selectedItems = mapItems(overview.selected_items);
   const itemSource = [...arrayOf(overview.items), ...nestedItems, ...arrayOf(overview.selected_items)];
   const items = dedupeRows([...projectItems, ...mapItems(nestedItems), ...selectedItems]);
-  const takes = mapTakesFromItems(itemSource);
+  const takes = dedupeRows([...mapTakesFromItems(itemSource), ...mapTakes(overview.takes)]);
   const selectedItemRefs = new Set(selectedItems.map((row) => row.ref));
   const selectedContext = projectHeadRows(overview, projectRef, [
     ...tracks.filter((row) => row.selected === true).map((row) => ({
@@ -1895,10 +1919,13 @@ function projectMapPayload(overview, projectRef, coverage = {}, options = {}) {
       coverage.items ?? overview.item_coverage_status ?? coverage.track_items,
       overview.items_truncated ? "paged" : (Array.isArray(overview.items) ? "complete" : (overview.truncated ? "paged" : "partial")),
     ),
-    takes: normalizeCoverage(coverage.track_items, overview.truncated ? "paged" : "partial"),
+    takes: normalizeCoverage(
+      coverage.takes ?? overview.take_coverage_status ?? coverage.track_items,
+      overview.takes_truncated ? "paged" : (Array.isArray(overview.takes) ? "complete" : (overview.truncated ? "paged" : "partial")),
+    ),
     selected_context: normalizeCoverage(coverage.selected_items, "selected_only"),
   };
-  const takeShapePresent = itemSource.some((item) => Array.isArray(item?.takes));
+  const takeShapePresent = Array.isArray(overview.takes) || itemSource.some((item) => Array.isArray(item?.takes));
   if (takeShapePresent || overview.item_count === 0) scopes.takes = takes;
   if (overview.track_count === 0 && overview.truncated !== true) {
     scopes.fx = [];
@@ -1993,6 +2020,31 @@ function mapTakesFromItems(rows) {
     }
   }
   return dedupeRows(takes);
+}
+
+function mapTakes(rows) {
+  return arrayOf(rows).map((take) => {
+    const ref = canonicalRefFrom(take, ["ref", "take_ref"], "take");
+    const itemRef = canonicalRefFrom(take, ["item_ref", "owner_ref"], "item");
+    if (!ref || !itemRef) return null;
+    const takeFxCount = integerOrNull(take.take_fx_count ?? take.fx_count);
+    return {
+      ref,
+      owner_ref: itemRef,
+      item_ref: itemRef,
+      track_ref: canonicalRefFrom(take, ["track_ref"], "track"),
+      active: take.active === true || take.is_active === true,
+      selected: take.selected === true,
+      source_kind: stringOrNull(take.source_kind),
+      source_ref: canonicalRefFrom(take, ["source_ref", "file_ref"]),
+      pitch_semitones: finiteOrNull(take.pitch_semitones ?? take.pitch),
+      playrate: finiteOrNull(take.playrate ?? take.play_rate),
+      preserve_pitch: booleanOrNull(take.preserve_pitch),
+      reverse: booleanOrNull(take.reverse ?? take.reversed),
+      has_take_fx: booleanOrNull(take.has_take_fx) ?? (takeFxCount === null ? null : takeFxCount > 0),
+      summary: compactObject(take),
+    };
+  }).filter(Boolean);
 }
 
 function mapTakeSources(readback) {

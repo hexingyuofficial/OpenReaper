@@ -301,7 +301,12 @@ export async function executeAlpha3_2_5CRenderTargetsMacro({ request = {}, execu
     renderStage.status = execution?.ok === true ? "completed" : "failed";
     renderStage.summary = typeof execution?.result?.summary === "string" ? execution.result.summary : "Audited render route completed.";
     renderStage.evidence_refs = evidenceRefs(execution);
-    if (execution?.ok !== true) throw Object.assign(new Error(execution?.error?.message ?? "Audited render route failed."), { code: execution?.error?.code ?? "RENDER_TEMPLATE_FAILED" });
+    if (execution?.ok !== true) {
+      throw Object.assign(new Error(execution?.error?.message ?? "Audited render route failed."), {
+        code: execution?.error?.code ?? "RENDER_TEMPLATE_FAILED",
+        details: renderFailureDetails(execution?.error?.details),
+      });
+    }
     const result = execution.result ?? {};
     const payload = renderAtomicPayload(result);
     const readback = isPlainObject(result.readback) ? result.readback : {};
@@ -420,7 +425,11 @@ export async function executeAlpha3_2_5CRenderTargetsMacro({ request = {}, execu
       now,
       status: partial ? "partial_failure" : "failed",
       stages,
-      blockers: [blocker(error.code ?? "RENDER_EXECUTION_FAILED", error.message ?? "Render-target Macro failed.")],
+      blockers: [blocker(
+        error.code ?? "RENDER_EXECUTION_FAILED",
+        error.message ?? "Render-target Macro failed.",
+        renderFailureDetails(error.details),
+      )],
       summary: error.message ?? "Render-target Macro failed.",
       data: partial ? partialResult.data : { preview: publicPreview, managed_root: true, managed_render_root: managedRoot, external_encoder: false },
       canonicalRefs: partial ? partialResult.canonicalRefs : [],
@@ -713,6 +722,7 @@ function executableRenderPreview(preview) {
 
 function renderEnvelope({ entry, request, startedAt, now, status, stages, blockers, summary, data = {}, canonicalRefs = [], verification = { status: "not_required", evidence_refs: [] }, changes = [], sqlite = null }) {
   const failed = status !== "completed" && status !== "dry_run_completed";
+  const primaryBlocker = failed ? blockers[0] ?? null : null;
   const envelope = {
     contract: MACRO_EXECUTION_CONTRACT, ok: !failed,
     macro: { id: entry.macro_id, program_id: entry.program_id, program_version: entry.program_version, risk: entry.risk },
@@ -720,21 +730,90 @@ function renderEnvelope({ entry, request, startedAt, now, status, stages, blocke
     execution: { status, started_at: startedAt, completed_at: safeNowIso(now), stage_count: stages.length, stages },
     sqlite: sqlite ?? { used: false, source: "not_used", freshness: "not_applicable", snapshot_ref: null, revision: null, refreshed: false },
     result: { summary, canonical_refs: canonicalRefs, changes, verification: failed ? { status: "not_required", evidence_refs: verification.evidence_refs ?? [] } : verification, artifact_refs: data.artifact_refs ?? [], data },
-    blockers: failed ? blockers : [], error: failed ? { code: blockers[0]?.code ?? "RENDER_FAILED", message: summary, recoverable: true } : null,
-    recovery: failed ? {
-      action: status === "partial_failure"
-        ? "Keep the reported managed outputs and evidence, repair the post-render blocker, inspect dirty state, then save if recommended before retrying."
-        : "Repair the typed render blocker and retry the same registered Macro.",
-      partial_changes_possible: status === "partial_failure",
-      rendered_outputs_retained: status === "partial_failure" && Array.isArray(data.audio_outputs) && data.audio_outputs.length > 0,
-      sqlite_rows_authorize_writes: false,
+    blockers: failed ? blockers : [], error: failed ? {
+      code: primaryBlocker?.code ?? "RENDER_FAILED",
+      message: summary,
+      recoverable: primaryBlocker?.recoverable !== false,
+      ...(isPlainObject(primaryBlocker?.details) ? { details: primaryBlocker.details } : {}),
     } : null,
+    recovery: failed ? renderFailureRecovery({ request, status, blocker: primaryBlocker, data }) : null,
     budget: { max_bytes: entry.result_budget.max_bytes, actual_bytes: 0, truncated: false, artifact_fallback: false },
   };
   for (let attempt = 0; attempt < 3; attempt += 1) envelope.budget.actual_bytes = Buffer.byteLength(JSON.stringify(envelope));
   const validation = validateMacroExecutionEnvelope(envelope);
   if (!validation.valid) throw new TypeError(`Invalid render Macro envelope: ${validation.errors.join("; ")}`);
   return deepFreeze(envelope);
+}
+
+function renderFailureDetails(value) {
+  if (!isPlainObject(value)) return undefined;
+  const fields = [
+    "local_code",
+    "source_path",
+    "source_type",
+    "target_identity",
+    "item_index",
+    "target_index",
+    "media_online_action_id",
+    "render_action_id",
+    "retry_requires_source_reconnect",
+    "output_basename",
+    "requested_format",
+    "actual_format",
+    "measurement_status",
+    "measurement_scope",
+    "silence_classification",
+    "measured_peak_linear",
+    "retry_requires_fresh_output_basename",
+    "audio_device_required",
+    "zero_write",
+    "outcome",
+    "mutations_may_have_happened",
+  ];
+  const details = {};
+  for (const field of fields) {
+    const fieldValue = value[field];
+    if (["string", "number", "boolean"].includes(typeof fieldValue)) details[field] = fieldValue;
+  }
+  if (Array.isArray(value.probable_causes)) {
+    details.probable_causes = value.probable_causes
+      .filter((entry) => typeof entry === "string")
+      .slice(0, 8);
+  }
+  return Object.keys(details).length > 0 ? details : undefined;
+}
+
+function renderFailureRecovery({ request, status, blocker, data }) {
+  const details = isPlainObject(blocker?.details) ? blocker.details : {};
+  const localCode = details.local_code;
+  const base = {
+    action: status === "partial_failure"
+      ? "Keep the reported managed outputs and evidence, repair the post-render blocker, inspect dirty state, then save if recommended before retrying."
+      : "Repair the typed render blocker and retry the same registered Macro.",
+    partial_changes_possible: status === "partial_failure",
+    rendered_outputs_retained: status === "partial_failure" && Array.isArray(data.audio_outputs) && data.audio_outputs.length > 0,
+    sqlite_rows_authorize_writes: false,
+  };
+  if (localCode === "RENDER_SOURCE_OFFLINE") {
+    return {
+      ...base,
+      action: "Restore or relink the exact source_path, then retry the same Macro. OpenReaper will run stock REAPER Action 40101 immediately before rendering; reconnect or restart is not the first recovery step.",
+      request_patch: { id: ALPHA3_2E_RENDER_TARGETS_MACRO_ID, input: structuredClone(request.input ?? {}) },
+      source_path: details.source_path ?? null,
+      reconnect_required: false,
+      restart_reaper_required: false,
+      audio_device_required: false,
+    };
+  }
+  if (localCode === "RENDER_OUTPUT_ALL_ZERO") {
+    return {
+      ...base,
+      action: "Check whether the target is intentionally silent and verify its source, instrument, and signal path. Retry only with a fresh output_basename; an audio device is not required for offline Render.",
+      fresh_output_basename_required: true,
+      audio_device_required: false,
+    };
+  }
+  return base;
 }
 
 function evidenceRefs(execution) {

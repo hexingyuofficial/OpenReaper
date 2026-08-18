@@ -430,6 +430,99 @@ describe("Alpha3.2.5-B executable project understanding", () => {
     }
   });
 
+  it("repairs a false-fresh zero Take index from live media counts before returning rows", async () => {
+    const fixture = await makeFixture();
+    const projectTakes = Array.from({ length: 8 }, (_, index) => ({
+      take_ref: `take:guid:{LIVE-TAKE-${index + 1}}`,
+      item_ref: `item:guid:{LIVE-ITEM-${index + 1}}`,
+      track_ref: "track:guid:{TRACK-1}",
+      active: true,
+      name: `Live Take ${index + 1}`,
+      source_kind: "midi",
+    }));
+    const state = { revision: 81, trackName: "Dialogue", projectTakes, calls: [], atomicRequests: [] };
+    let indexRuntime;
+    try {
+      indexRuntime = await openIndex(fixture);
+      const runtime = createRuntime({ fixture, indexRuntime, state });
+      const warm = await runtime.call_template({
+        id: "macro.project.query",
+        input: { entity: "tracks", refresh_policy: "if_stale", limit: 1 },
+        context: callContext(1, "take-repair-warm"),
+      });
+      assert.equal(warm.ok, true, JSON.stringify(warm));
+      replaceTakeIndex(indexRuntime, []);
+
+      const repaired = await runtime.call_template({
+        id: "macro.project.query",
+        input: { entity: "takes", filters: { source_kind: "midi" }, refresh_policy: "if_stale", limit: 25 },
+        context: callContext(2, "take-repair-query"),
+      });
+      assert.equal(repaired.ok, true, JSON.stringify(repaired));
+      assert.equal(repaired.result.data.rows.length, 8);
+      assert.equal(repaired.result.data.coverage.indexed_row_count, 8);
+      assert.equal(repaired.result.data.refresh.logical_refresh.coverage.takes, "complete");
+      assert.equal(indexRuntime.adapter.snapshot().rows.takes.length, 8);
+      const takeReads = state.atomicRequests.filter((entry) => entry.operation.name === "project.read_track_item_overview" && entry.params.include_takes === true);
+      assert.equal(takeReads.length, 1);
+      assert.equal(takeReads[0].params.max_takes, 64);
+      assert.equal(state.atomicRequests.some((entry) => entry.operation.name === "project.read_summary" && entry.params.include_media_counts === true), true);
+
+      const legitimateZero = await runtime.call_template({
+        id: "macro.project.query",
+        input: { entity: "takes", filters: { source_kind: "audio-that-does-not-exist" }, refresh_policy: "if_stale", limit: 25 },
+        context: callContext(3, "take-filter-zero"),
+      });
+      assert.equal(legitimateZero.ok, true, JSON.stringify(legitimateZero));
+      assert.equal(legitimateZero.result.data.rows.length, 0);
+    } finally {
+      indexRuntime?.close();
+      await fixture.cleanup();
+    }
+  });
+
+  it("fails typed on a persistent live/index contradiction and accepts a genuinely empty project", async () => {
+    for (const testCase of [
+      { liveTakeCount: 8, expectedOk: false },
+      { liveTakeCount: 0, expectedOk: true },
+    ]) {
+      const fixture = await makeFixture();
+      const state = { revision: 82, trackName: "Empty", projectTakes: [], liveTakeCount: testCase.liveTakeCount, calls: [], atomicRequests: [] };
+      let indexRuntime;
+      try {
+        indexRuntime = await openIndex(fixture);
+        const runtime = createRuntime({ fixture, indexRuntime, state });
+        const warm = await runtime.call_template({
+          id: "macro.project.query",
+          input: { entity: "tracks", refresh_policy: "if_stale", limit: 1 },
+          context: callContext(10 + testCase.liveTakeCount, "take-contradiction-warm"),
+        });
+        assert.equal(warm.ok, true, JSON.stringify(warm));
+        replaceTakeIndex(indexRuntime, []);
+        const result = await runtime.call_template({
+          id: "macro.project.query",
+          input: { entity: "takes", refresh_policy: "if_stale", limit: 25 },
+          context: callContext(20 + testCase.liveTakeCount, "take-contradiction-query"),
+        });
+        assert.equal(result.ok, testCase.expectedOk, JSON.stringify(result));
+        if (testCase.expectedOk) {
+          assert.equal(result.result.data.rows.length, 0);
+          assert.equal(state.atomicRequests.filter((entry) => entry.operation.name === "project.read_track_item_overview" && entry.params.include_takes === true).length, 0);
+        } else {
+          assert.equal(result.error.code, "INDEX_LIVE_CONTRADICTION");
+          assert.equal(result.result.data.index_live_contradiction.live_count, 8);
+          assert.equal(result.result.data.index_live_contradiction.indexed_count, 0);
+          assert.equal(result.blockers[0].details.request_patch.input.refresh_policy, "force_read_only_refresh");
+          assert.equal(result.recovery.request_patch.input.refresh_policy, "force_read_only_refresh");
+          assert.equal(result.result.data.zero_write, true);
+        }
+      } finally {
+        indexRuntime?.close();
+        await fixture.cleanup();
+      }
+    }
+  });
+
   it("blocks conflicting query budgets and unsupported filters before any live read", async () => {
     const fixture = await makeFixture();
     const state = { revision: 14, trackName: "Highway 01", calls: [], atomicRequests: [] };
@@ -902,6 +995,7 @@ describe("Alpha3.2.5-B executable project understanding", () => {
       trackName: "Media",
       calls: [],
       atomicRequests: [],
+      projectItems: [],
       liveItems: new Map(),
       itemReadRefs: [],
     };
@@ -918,13 +1012,15 @@ describe("Alpha3.2.5-B executable project understanding", () => {
       assert.equal(initial.ok, true, JSON.stringify(initial));
       assert.equal(initial.result.data.rows.some((row) => row.ref === newItemRef), false);
 
-      state.liveItems.set(newItemRef, {
+      const newItem = {
         item_ref: newItemRef,
         track_ref: "track:guid:{TRACK-1}",
         position_seconds: 8,
         length_seconds: 2,
         take_count: 0,
-      });
+      };
+      state.liveItems.set(newItemRef, newItem);
+      state.projectItems = [newItem];
       state.revision = 2;
       const invalidation = indexRuntime.invalidateScopes({ scopes: ["items"], observed_at: NOW });
       assert.equal(invalidation.ok, true, JSON.stringify(invalidation));
@@ -1533,14 +1629,16 @@ function createRuntime({ fixture, indexRuntime, state }) {
           change_count: state.revision,
           track_count: state.trackNames?.length ?? 1,
           item_count: state.projectItems?.length ?? 1,
+          ...(request.params.include_media_counts === true ? { take_count: state.liveTakeCount ?? state.projectTakes?.length ?? 1, midi_take_count: state.projectTakes?.filter((take) => take.source_kind === "midi").length ?? 1 } : {}),
           marker_count: 0,
           region_count: 1,
         };
         response.result.readback = response.result.summary;
       } else if (request.operation.name === "project.read_track_item_overview") {
-        const rows = state.projectItems ?? [];
-        const cursor = Number(request.params.item_cursor ?? 0);
-        const limit = request.params.max_items ?? 64;
+        const takeInventory = request.params.include_takes === true;
+        const rows = takeInventory ? state.projectTakes ?? [] : state.projectItems ?? [];
+        const cursor = Number(takeInventory ? request.params.take_cursor ?? 0 : request.params.item_cursor ?? 0);
+        const limit = takeInventory ? request.params.max_takes ?? 64 : request.params.max_items ?? 64;
         const end = Math.min(rows.length, cursor + limit);
         const truncated = end < rows.length;
         const internallyComplete = state.itemCoverageInternallyComplete !== false;
@@ -1553,19 +1651,30 @@ function createRuntime({ fixture, indexRuntime, state }) {
           track_cursor: request.params.track_cursor ?? 0,
           returned_track_count: 0,
           truncated: true,
-          items: structuredClone(rows.slice(cursor, end)),
+          items: takeInventory ? [] : structuredClone(rows.slice(cursor, end)),
           item_cursor: cursor,
           returned_item_count: end - cursor,
           next_item_cursor: truncated ? String(end) : null,
           items_truncated: truncated,
           item_coverage_status: internallyComplete ? (truncated ? "paged" : "complete") : "incomplete",
           item_coverage: { internally_complete: internallyComplete },
+          ...(takeInventory ? {
+            item_count: state.projectItems?.length ?? rows.length,
+            takes: structuredClone(rows.slice(cursor, end)),
+            take_count: rows.length,
+            take_cursor: cursor,
+            returned_take_count: end - cursor,
+            next_take_cursor: truncated ? String(end) : null,
+            takes_truncated: truncated,
+            take_coverage_status: internallyComplete ? (truncated ? "paged" : "complete") : "incomplete",
+            take_coverage: { internally_complete: internallyComplete },
+          } : {}),
         };
         response.result.readback = response.result.summary;
         response.result.refs = rows.slice(cursor, end).map((row) => ({
-          kind: "item",
-          ref: row.item_ref,
-          identity: { scheme: "guid", value: row.item_ref.slice("item:guid:".length) },
+          kind: takeInventory ? "take" : "item",
+          ref: takeInventory ? row.take_ref : row.item_ref,
+          identity: { scheme: "guid", value: (takeInventory ? row.take_ref : row.item_ref).slice(takeInventory ? "take:guid:".length : "item:guid:".length) },
         }));
       } else if (request.operation.name === "routing.project_graph.read") {
         const rows = state.routingEdges ?? [];
@@ -1868,6 +1977,23 @@ function openIndex(fixture) {
     logicalSessionKey: "alpha325-b-test",
     now: () => new Date(NOW),
   });
+}
+
+function replaceTakeIndex(indexRuntime, rows) {
+  const snapshot = indexRuntime.adapter.snapshot();
+  const result = indexRuntime.adapter.replaceTakes({
+    snapshot_id: snapshot.snapshot_id ?? "snapshot:alpha325-b:test-takes",
+    observed_at: NOW,
+    source_template_id: "template.project.read_track_item_overview",
+    projectRef: indexRuntime.identity.project_ref,
+    bridgeOwner: indexRuntime.identity.bridge_owner,
+    bridgeGeneration: indexRuntime.identity.bridge_generation,
+    sessionId: indexRuntime.identity.session_id,
+    rows,
+    coverage_status: "complete",
+    freshness_status: "fresh",
+  });
+  assert.notEqual(result?.ok, false, JSON.stringify(result));
 }
 
 function callContext(requestSequence, clientId = "alpha325-b-test") {

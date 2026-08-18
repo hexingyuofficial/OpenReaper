@@ -146,7 +146,7 @@ describe("Wave 1A project template descriptors", () => {
     assert.equal(deleteRegion.risk, "destructive");
     assert.equal(renameMarker.risk, "write");
     assert.equal(renameRegion.risk, "write");
-    assert.deepEqual(overview.refs.output.map(({ kind }) => kind), ["project", "track", "item"]);
+    assert.deepEqual(overview.refs.output.map(({ kind }) => kind), ["project", "track", "item", "take"]);
     assert.equal(overview.bridge.operation_name, "project.read_track_item_overview");
   });
 

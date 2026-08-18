@@ -178,6 +178,53 @@ local function d10_overview_item_ref(item)
   }
 end
 
+local function d10_overview_take_ref_string(take)
+  local ok, _, guid = call_reaper("GetSetMediaItemTakeInfo_String", take, "GUID", "", false)
+  local value = ok and first_string(guid) or nil
+  if type(value) == "string" and value ~= "" then return "take:guid:" .. value end
+  return nil
+end
+
+local function d10_overview_take_ref(take)
+  local ref = d10_overview_take_ref_string(take)
+  if not ref then return nil end
+  return {
+    kind = "take",
+    ref = ref,
+    identity = {
+      scheme = "guid",
+      value = ref:match("^take:guid:(.+)$"),
+    },
+  }
+end
+
+local function d10_overview_take_source_kind(take)
+  local ok_midi, is_midi = call_reaper("TakeIsMIDI", take)
+  if ok_midi and (is_midi == true or is_midi == 1) then return "midi" end
+  local ok_source, source = call_reaper("GetMediaItemTake_Source", take)
+  if ok_source and source then
+    local ok_type, source_type = call_reaper("GetMediaSourceType", source, "")
+    local value = ok_type and first_string(source_type) or nil
+    if type(value) == "string" and value ~= "" then return value:lower() end
+  end
+  return "unknown"
+end
+
+local function d10_overview_take_summary(take, item, track, take_index, active_take)
+  local take_ref = d10_overview_take_ref_string(take)
+  if not take_ref then return nil end
+  local ok_name, _, name = call_reaper("GetSetMediaItemTakeInfo_String", take, "P_NAME", "", false)
+  return {
+    take_ref = take_ref,
+    item_ref = d10_overview_item_ref_string(item),
+    track_ref = track and d10_overview_track_ref_string(track) or JSON_NULL,
+    index = take_index,
+    active = take == active_take,
+    name = bounded_string(ok_name and first_string(name) or "", 80),
+    source_kind = d10_overview_take_source_kind(take),
+  }
+end
+
 local function d10_overview_item_summary(item, track, item_index)
   local ok_take, take = call_reaper("GetActiveTake", item)
   local active_take_name = ""
@@ -247,11 +294,14 @@ end
 local function read_track_item_overview(request)
   local track_cursor = d10_overview_bounded_offset(request.params and request.params.track_cursor)
   local item_cursor = d10_overview_bounded_offset(request.params and request.params.item_cursor)
+  local take_cursor = d10_overview_bounded_offset(request.params and request.params.take_cursor)
   local max_tracks = d10_overview_budget_track_limit(request, request.params and request.params.max_tracks)
   local max_items = d10_overview_project_item_limit(request, request.params and request.params.max_items)
   local include_track_items = request.params and request.params.include_track_items ~= false
   local max_items_per_track = include_track_items and d10_overview_budget_item_limit(request, request.params and request.params.max_items_per_track, max_tracks) or 0
   local include_selected_items = request.params == nil or request.params.include_selected_items ~= false
+  local include_takes = request.params and request.params.include_takes == true
+  local max_takes = d10_overview_bounded_limit(request, request.params and request.params.max_takes, 64, 513)
   local max_selected_items = d10_overview_bounded_limit(request, request.params and request.params.max_selected_items, 4, 513)
   local selector_filter = request.params and request.params.selector_filter
   local ok_tracks, track_count = call_reaper("CountTracks", 0)
@@ -261,6 +311,7 @@ local function read_track_item_overview(request)
   local tracks = json_array({})
   local items = json_array({})
   local selected_items = json_array({})
+  local takes = json_array({})
   local refs = json_array({ d10_overview_project_ref() })
 
   local end_track = math.min(total_tracks, track_cursor + max_tracks)
@@ -318,6 +369,44 @@ local function read_track_item_overview(request)
     end
   end
 
+  local total_takes = 0
+  local visited_take_slots = 0
+  local takes_internally_complete = true
+  if include_takes then
+    for item_index = 0, total_items - 1 do
+      local ok_item, item = call_reaper("GetMediaItem", 0, item_index)
+      if not ok_item or not item then
+        takes_internally_complete = false
+      else
+        local ok_track, track = call_reaper("GetMediaItemTrack", item)
+        local ok_active, active_take = call_reaper("GetActiveTake", item)
+        local take_count = d10_overview_native_count("CountTakes", item)
+        if take_count == nil then
+          takes_internally_complete = false
+        else
+          for take_index = 0, take_count - 1 do
+            if total_takes >= take_cursor and #takes < max_takes then
+              visited_take_slots = visited_take_slots + 1
+              local ok_take, take = call_reaper("GetTake", item, take_index)
+              if ok_take and take then
+                local take_summary = d10_overview_take_summary(take, item, ok_track and track or nil, take_index, ok_active and active_take or nil)
+                if take_summary then
+                  takes[#takes + 1] = take_summary
+                  refs[#refs + 1] = d10_overview_take_ref(take)
+                else
+                  takes_internally_complete = false
+                end
+              else
+                takes_internally_complete = false
+              end
+            end
+            total_takes = total_takes + 1
+          end
+        end
+      end
+    end
+  end
+
   local summary = {
     project_ref = "project:current",
     tracks = tracks,
@@ -346,6 +435,17 @@ local function read_track_item_overview(request)
   end
   if end_item < total_items then
     summary.next_item_cursor = tostring(end_item)
+  end
+  if include_takes then
+    local next_take_cursor = math.min(total_takes, take_cursor + visited_take_slots)
+    summary.takes = takes
+    summary.take_count = total_takes
+    summary.take_cursor = take_cursor
+    summary.returned_take_count = #takes
+    summary.takes_truncated = next_take_cursor < total_takes
+    summary.take_coverage_status = not takes_internally_complete and "incomplete" or (next_take_cursor < total_takes and "paged" or "complete")
+    summary.take_coverage = { internally_complete = takes_internally_complete }
+    if next_take_cursor < total_takes then summary.next_take_cursor = tostring(next_take_cursor) end
   end
   return summary, nil, json_array({}), json_array({}), refs
 end

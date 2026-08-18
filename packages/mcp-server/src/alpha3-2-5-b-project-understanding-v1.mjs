@@ -39,6 +39,7 @@ const PROJECT_INDEX_HYDRATION_TRACK_LIMIT = 32;
 const PROJECT_INDEX_HYDRATION_AUTOMATION_LIMIT = 32;
 const PROJECT_INDEX_MAX_TRACK_CHUNKS = 128;
 const PROJECT_INDEX_MAX_ITEM_PAGES = 128;
+const PROJECT_INDEX_MAX_TAKE_PAGES = 128;
 const PROJECT_INDEX_MAX_ROUTING_PAGES = 128;
 const PROJECT_INDEX_MAX_AUTOMATION_PAGES = 128;
 const PROJECT_INDEX_LOGICAL_REFRESH_ATTEMPTS = 2;
@@ -329,6 +330,13 @@ async function executeProjectQuery({
     ));
   }
 
+  const initialLiveContradiction = projectIndexLiveCountContradiction({
+    request,
+    plan,
+    revision,
+    projectIndexRuntime,
+  });
+
   const hydration = await hydrateForQuery({
     request,
     plan,
@@ -337,6 +345,7 @@ async function executeProjectQuery({
     executeAtomic,
     forceColdBundle: initialCold && refreshPolicy !== "never",
     expectedRevision: revisionKey(revision),
+    forceLiveCountRefresh: initialLiveContradiction !== null,
     now,
   });
   stages.push(stageResult(
@@ -388,6 +397,41 @@ async function executeProjectQuery({
       },
       blockers: plan.blockers,
       data: queryData(plan),
+    });
+  }
+
+
+  const persistentLiveContradiction = projectIndexLiveCountContradiction({
+    request,
+    plan,
+    revision,
+    projectIndexRuntime,
+  });
+  if (persistentLiveContradiction) {
+    stages.push(stageResult(
+      "query-index-read",
+      "sqlite_query",
+      "failed",
+      "SQLite complete-coverage counts still contradict the live REAPER inventory after bounded refresh.",
+    ));
+    return executionFailure({
+      entry,
+      request,
+      startedAt,
+      now,
+      stages,
+      projectIndexRuntime,
+      error: {
+        code: "INDEX_LIVE_CONTRADICTION",
+        message: "The Project Index result contradicts the live REAPER inventory and was not returned as truth.",
+        recoverable: true,
+      },
+      blockers: [indexLiveContradictionBlocker(request, persistentLiveContradiction)],
+      data: {
+        index_live_contradiction: persistentLiveContradiction,
+        refresh: hydrationEvidence(hydration),
+      },
+      recovery: indexLiveContradictionRecovery(request),
     });
   }
 
@@ -726,10 +770,13 @@ async function hydrateForQuery({
   executeAtomic,
   forceColdBundle,
   expectedRevision,
+  forceLiveCountRefresh = false,
   now = () => new Date(),
 }) {
   const refreshPolicy = request.input?.refresh_policy ?? "if_stale";
-  const forceRefresh = refreshPolicy === "required" || refreshPolicy === "force_read_only_refresh";
+  const forceRefresh = refreshPolicy === "required"
+    || refreshPolicy === "force_read_only_refresh"
+    || forceLiveCountRefresh;
   if (refreshPolicy === "never") return emptyHydration("Refresh policy forbids live hydration.");
   const exactSelectorRefreshRequired = exactSelectorRefreshRequests(request, projectIndexRuntime).length > 0;
   const completeProjectFxRefresh = request.input?.entity === "fx"
@@ -775,6 +822,9 @@ async function hydrateForQuery({
   const completeItems = request.input?.entity === "items"
     && exactSelectorRequestedRefs(request).length === 0
     && (forceColdBundle || forceRefresh || plan.ok !== true);
+  const completeTakes = request.input?.entity === "takes"
+    && exactSelectorRequestedRefs(request).length === 0
+    && (forceColdBundle || forceRefresh || plan.ok !== true);
   const completeRouting = request.input?.entity === "routing"
     && (forceColdBundle || forceRefresh || plan.ok !== true);
   const completeAutomation = request.input?.entity === "automation"
@@ -796,6 +846,20 @@ async function hydrateForQuery({
     liveTrackRows = cold.liveTrackRows ?? [];
   } else if (completeItems) {
     const cold = await runCompleteItemRefresh({
+      request,
+      projectIndexRuntime,
+      executeAtomic,
+      expectedRevision,
+      now,
+    });
+    if (!cold.ok) return cold;
+    executions.push(...cold.executions);
+    artifactRefs.push(...cold.artifactRefs);
+    evidenceRefs.push(...cold.evidenceRefs);
+    logicalRefresh = cold.logicalRefresh ?? null;
+    revisionProbeCount += cold.revisionProbeCount ?? 0;
+  } else if (completeTakes) {
+    const cold = await runCompleteTakeRefresh({
       request,
       projectIndexRuntime,
       executeAtomic,
@@ -1435,6 +1499,20 @@ async function runCompleteItemRefresh(options) {
   });
 }
 
+async function runCompleteTakeRefresh(options) {
+  return runCompleteDirectLogicalRefresh({
+    ...options,
+    scope: "takes",
+    templateId: ITEM_OVERVIEW_ID,
+    maxPages: PROJECT_INDEX_MAX_TAKE_PAGES,
+    cursorField: "take_cursor",
+    requestForCursor: takeInventoryRequest,
+    pageFacts: takePageFacts,
+    pageLabel: "Take inventory",
+    countField: "declared_take_count",
+  });
+}
+
 async function runCompleteRoutingRefresh(options) {
   return runCompleteDirectLogicalRefresh({
     ...options,
@@ -1823,9 +1901,10 @@ async function runCompleteAutomationRefresh({
 }
 
 async function runRevisionProbe({ request, projectIndexRuntime, executeAtomic }) {
+  const includeMediaCounts = request.input?.entity === "items" || request.input?.entity === "takes";
   const execution = await executeAtomic({
     id: READ_SUMMARY_ID,
-    input: { include_counts: true },
+    input: { include_counts: true, ...(includeMediaCounts ? { include_media_counts: true } : {}) },
     refs: [],
     context: request.context,
     budget: internalReadBudget(request),
@@ -2096,6 +2175,86 @@ function refreshScopeForEntity(entity) {
   }[entity] ?? null;
 }
 
+function projectIndexLiveCountContradiction({ request, plan, revision, projectIndexRuntime }) {
+  const entity = request.input?.entity;
+  if (entity !== "items" && entity !== "takes") return null;
+  if (!isProjectScopeCountComparableQuery(request.input)) return null;
+  if (plan?.ok !== true || plan?.coverage?.complete !== true) return null;
+  const liveCountField = entity === "items" ? "item_count" : "take_count";
+  const liveCount = revision?.readback?.[liveCountField];
+  if (!Number.isInteger(liveCount) || liveCount < 0) return null;
+  const snapshot = projectIndexRuntime?.adapter?.snapshot?.();
+  const indexedRows = snapshot?.rows?.[entity];
+  const indexedCount = Array.isArray(indexedRows) ? indexedRows.length : null;
+  const scope = snapshot?.freshness_scopes?.[entity] ?? {};
+  if (!Number.isInteger(indexedCount)
+    || scope.status !== "fresh"
+    || scope.coverage_status !== "complete"
+    || indexedCount === liveCount) {
+    return null;
+  }
+  return {
+    entity,
+    live_count_field: liveCountField,
+    live_count: liveCount,
+    indexed_count: indexedCount,
+    index_freshness_status: scope.status,
+    index_coverage_status: scope.coverage_status,
+    live_revision: revisionKey(revision),
+    zero_result_contradiction: indexedCount === 0 && liveCount > 0,
+    sqlite_rows_accepted_as_truth: false,
+  };
+}
+
+function isProjectScopeCountComparableQuery(input) {
+  if (!isObject(input)) return false;
+  const scope = input.scope ?? "project";
+  if (scope !== "project" && scope !== input.entity) return false;
+  if (input.cursor !== undefined && input.cursor !== null) return false;
+  if (Array.isArray(input.refs) && input.refs.length > 0) return false;
+  if (isObject(input.selectors) && Object.keys(input.selectors).length > 0) return false;
+  if (input.time_range !== undefined && input.time_range !== null) return false;
+  return true;
+}
+
+function indexLiveContradictionBlocker(request, contradiction) {
+  return {
+    code: "INDEX_LIVE_CONTRADICTION",
+    message: "Do not treat this SQLite result as definitive; retry one bounded read-only refresh, then reconnect only if the contradiction persists.",
+    recoverable: true,
+    details: {
+      ...contradiction,
+      request_patch: {
+        input: {
+          ...clone(request.input ?? {}),
+          refresh_policy: "force_read_only_refresh",
+        },
+      },
+      retry_limit: 1,
+      reconnect_after_retry_exhausted: true,
+    },
+  };
+}
+
+function indexLiveContradictionRecovery(request) {
+  const forcedAlready = request.input?.refresh_policy === "force_read_only_refresh";
+  return {
+    action: forcedAlready
+      ? "The forced read-only refresh still contradicted live REAPER. Reconnect the managed OpenReaper session, then retry once; restart REAPER only if reconnect cannot restore live reads."
+      : "Apply request_patch and retry this same query once with force_read_only_refresh. Reconnect only if the typed contradiction persists.",
+    request_patch: forcedAlready ? null : {
+      input: {
+        ...clone(request.input ?? {}),
+        refresh_policy: "force_read_only_refresh",
+      },
+    },
+    retry_limit: forcedAlready ? 0 : 1,
+    reconnect_required: forcedAlready,
+    restart_reaper_only_after_reconnect_failure: true,
+    stale_sqlite_rows_used_for_write: false,
+  };
+}
+
 async function runDirectRead({ id, input, request, executeAtomic }) {
   const execution = await executeAtomic({
     id,
@@ -2237,6 +2396,7 @@ function executionFailure({
   error,
   blockers = [],
   data = {},
+  recovery = null,
 }) {
   const activeBudget = responseBudget(request, entry);
   return finalizeMacroEnvelope({
@@ -2266,7 +2426,7 @@ function executionFailure({
       message: error?.message ?? "Project-understanding Macro failed.",
       recoverable: error?.recoverable !== false,
     },
-    recovery: {
+    recovery: recovery ?? {
       action: "Use ping or openreaper-doctor to restore the managed bridge/index route, then retry the same Macro.",
       stale_sqlite_rows_used_for_write: false,
     },
@@ -2563,6 +2723,27 @@ function itemInventoryRequest(itemCursor = 0) {
   };
 }
 
+function takeInventoryRequest(takeCursor = 0) {
+  return {
+    id: ITEM_OVERVIEW_ID,
+    input: {
+      max_tracks: 1,
+      max_items_per_track: 0,
+      max_items: 1,
+      max_takes: 64,
+      max_selected_items: 1,
+      track_cursor: 0,
+      item_cursor: 0,
+      take_cursor: takeCursor,
+      include_selected_items: false,
+      include_track_items: false,
+      include_takes: true,
+    },
+    refs: [],
+    read_only: true,
+  };
+}
+
 function routingInventoryRequest(edgeCursor = 0) {
   return {
     id: ROUTING_GRAPH_ID,
@@ -2672,6 +2853,24 @@ function itemPageFacts(readback, expectedCursor, priorItemCount) {
     scopeFullyEnumerated: true,
     noun: "Item",
     codePrefix: "PROJECT_INDEX_ITEM",
+  });
+}
+
+function takePageFacts(readback, expectedCursor, priorTakeCount) {
+  return pagedInventoryFacts({
+    readback,
+    expectedCursor,
+    priorCount: priorTakeCount,
+    rows: readback?.takes,
+    totalCount: readback?.take_count,
+    returnedCount: readback?.returned_take_count,
+    truncated: readback?.takes_truncated,
+    nextCursor: readback?.next_take_cursor,
+    coverageStatus: readback?.take_coverage_status,
+    internallyComplete: readback?.take_coverage?.internally_complete,
+    scopeFullyEnumerated: true,
+    noun: "Take",
+    codePrefix: "PROJECT_INDEX_TAKE",
   });
 }
 

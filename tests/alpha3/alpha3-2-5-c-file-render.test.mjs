@@ -618,6 +618,78 @@ describe("Alpha3.2.5-C executable file/render Macros", () => {
     assert.deepEqual(validateMacroExecutionEnvelope(response), { valid: true, errors: [] });
   });
 
+  it("preserves typed offline/all-zero details and mechanical recovery at the public Macro boundary", async () => {
+    for (const testCase of [
+      {
+        bridgeCode: "FILE_NOT_FOUND",
+        localCode: "RENDER_SOURCE_OFFLINE",
+        message: "The target audio source is still offline or missing after REAPER Set all media online.",
+        details: {
+          source_path: "/Users/Shared/中文 素材/dialogue.wav",
+          source_type: "WAVE",
+          target_identity: "item:guid:{OFFLINE}",
+          media_online_action_id: 40101,
+          render_action_id: 41824,
+          retry_requires_source_reconnect: true,
+        },
+      },
+      {
+        bridgeCode: "VERIFY_FAILED",
+        localCode: "RENDER_OUTPUT_ALL_ZERO",
+        message: "Rendered output decoded successfully but every measured sample was zero.",
+        details: {
+          output_basename: "silent-output",
+          silence_classification: "all_zero",
+          probable_causes: ["intentionally_silent_target", "unavailable_source_or_instrument", "silent_signal_path"],
+          retry_requires_fresh_output_basename: true,
+          audio_device_required: false,
+        },
+      },
+    ]) {
+      const response = await executeAlpha3_2_5CRenderTargetsMacro({
+        request: {
+          request_id: `render-${testCase.localCode}`,
+          input: { target_kind: "whole_project", format: "wav", output_basename: "trial", dry_run: false },
+        },
+        now,
+        managedRenderRoot,
+        executeAtomic: async ({ id }) => {
+          if (id === "template.project.read_dirty_state") return atomicExecution({ readback: { dirty: false } });
+          return {
+            contract: "template.execution.v1",
+            ok: false,
+            result: null,
+            error: {
+              code: testCase.bridgeCode,
+              message: testCase.message,
+              recoverable: true,
+              details: { local_code: testCase.localCode, ...testCase.details },
+            },
+          };
+        },
+      });
+
+      assert.equal(response.ok, false);
+      assert.equal(response.error.code, testCase.bridgeCode);
+      assert.equal(response.error.details.local_code, testCase.localCode);
+      assert.equal(response.blockers[0].details.local_code, testCase.localCode);
+      assert.equal(response.recovery.audio_device_required, false);
+      if (testCase.localCode === "RENDER_SOURCE_OFFLINE") {
+        assert.equal(response.error.details.source_path, testCase.details.source_path);
+        assert.equal(response.recovery.source_path, testCase.details.source_path);
+        assert.deepEqual(response.recovery.request_patch, {
+          id: "macro.render.targets",
+          input: { target_kind: "whole_project", format: "wav", output_basename: "trial", dry_run: false },
+        });
+        assert.equal(response.recovery.restart_reaper_required, false);
+      } else {
+        assert.deepEqual(response.error.details.probable_causes, testCase.details.probable_causes);
+        assert.equal(response.recovery.fresh_output_basename_required, true);
+      }
+      assert.deepEqual(validateMacroExecutionEnvelope(response), { valid: true, errors: [] });
+    }
+  });
+
   it("live-resolves explicit track, item, and region targets into full object refs before rendering", async () => {
     const cases = [
       {

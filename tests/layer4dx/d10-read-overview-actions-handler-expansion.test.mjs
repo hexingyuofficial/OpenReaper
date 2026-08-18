@@ -175,6 +175,7 @@ describe("D10 read overview/actions live handler expansion", () => {
     assert.match(PROJECT_HANDLER_SOURCE, /IsTrackSelected/);
     assert.match(PROJECT_HANDLER_SOURCE, /track_cursor = d10_overview_bounded_offset/);
     assert.match(PROJECT_HANDLER_SOURCE, /item_cursor = d10_overview_bounded_offset/);
+    assert.match(PROJECT_HANDLER_SOURCE, /take_cursor = d10_overview_bounded_offset/);
     assert.match(PROJECT_HANDLER_SOURCE, /call_reaper\("GetMediaItem", 0, index\)/);
     assert.match(PROJECT_HANDLER_SOURCE, /max_items_per_track_effective/);
     assert.match(PROJECT_HANDLER_SOURCE, /summary\.next_track_cursor = tostring\(end_track\)/);
@@ -254,6 +255,78 @@ assert(tostring(failure):find("invalid Track selection value", 1, true) ~= nil)
     assert.equal(status, lua.LUA_OK, loadMessage);
     const callStatus = lua.lua_pcall(state, 0, 0, 0);
     const callMessage = callStatus === lua.LUA_OK ? "D10 Lua executed" : to_jsstring(lua.lua_tostring(state, -1));
+    assert.equal(callStatus, lua.LUA_OK, callMessage);
+  });
+
+  it("pages a canonical native Take inventory and omits Take count claims when not requested", () => {
+    const assertions = String.raw`
+local media_items = {
+  { guid = "{ITEM-A}", takes = { { guid = "{TAKE-A1}", midi = true, name = "MIDI 甲" }, { guid = "{TAKE-A2}", source_type = "WAVE", name = "Audio A" } } },
+  { guid = "{ITEM-B}", takes = { { guid = "{TAKE-B1}", midi = true, name = "MIDI B" } } },
+}
+reaper.CountMediaItems = function() return #media_items end
+reaper.GetMediaItem = function(_, index) return media_items[index + 1] end
+reaper.GetMediaItemTrack = function() return tracks[1] end
+reaper.GetSetMediaItemInfo_String = function(item, key) assert(key == "GUID"); return true, item.guid end
+reaper.GetMediaItemInfo_Value = function(_, key)
+  if key == "D_POSITION" then return 0 end
+  if key == "D_LENGTH" then return 1 end
+  return 0
+end
+reaper.CountTakes = function(item) return #item.takes end
+reaper.GetTake = function(item, index) return item.takes[index + 1] end
+reaper.GetActiveTake = function(item) return item.takes[1] end
+reaper.GetSetMediaItemTakeInfo_String = function(take, key)
+  if key == "GUID" then return true, take.guid end
+  if key == "P_NAME" then return true, take.name end
+  return false, ""
+end
+reaper.TakeIsMIDI = function(take) return take.midi == true end
+reaper.GetMediaItemTake_Source = function(take) return take end
+reaper.GetMediaSourceType = function(source) return source.source_type or "MIDI" end
+
+local unrequested = select(1, read_track_item_overview({
+  params = { include_track_items = false, include_selected_items = false, max_tracks = 1, max_items = 1 },
+  budget = { max_items = 64, max_response_bytes = 65536, max_inline_value_bytes = 4096 },
+}))
+assert(unrequested.takes == nil)
+assert(unrequested.take_count == nil)
+
+local first, _, _, _, refs = read_track_item_overview({
+  params = { include_track_items = false, include_selected_items = false, include_takes = true, max_tracks = 1, max_items = 1, max_takes = 2 },
+  budget = { max_items = 64, max_response_bytes = 65536, max_inline_value_bytes = 4096 },
+})
+assert(first.take_count == 3)
+assert(first.returned_take_count == 2)
+assert(first.takes_truncated == true)
+assert(first.next_take_cursor == "2")
+assert(first.take_coverage_status == "paged")
+assert(first.takes[1].take_ref == "take:guid:{TAKE-A1}")
+assert(first.takes[1].source_kind == "midi")
+assert(first.takes[2].source_kind == "wave")
+assert(refs[#refs].kind == "take" and refs[#refs].ref == "take:guid:{TAKE-A2}")
+
+local second = select(1, read_track_item_overview({
+  params = { include_track_items = false, include_selected_items = false, include_takes = true, max_tracks = 1, max_items = 1, max_takes = 2, take_cursor = 2 },
+  budget = { max_items = 64, max_response_bytes = 65536, max_inline_value_bytes = 4096 },
+}))
+assert(second.take_cursor == 2)
+assert(second.returned_take_count == 1)
+assert(second.takes[1].take_ref == "take:guid:{TAKE-B1}")
+assert(second.takes_truncated == false)
+assert(second.next_take_cursor == nil)
+assert(second.take_coverage_status == "complete")
+`;
+    const state = lauxlib.luaL_newstate();
+    lualib.luaL_openlibs(state);
+    const status = lauxlib.luaL_loadstring(
+      state,
+      to_luastring(`${LUA_COUNT_PRELUDE}\n${PROJECT_HANDLER_SOURCE}\n${assertions}`),
+    );
+    const loadMessage = status === lua.LUA_OK ? "Take inventory Lua loaded" : to_jsstring(lua.lua_tostring(state, -1));
+    assert.equal(status, lua.LUA_OK, loadMessage);
+    const callStatus = lua.lua_pcall(state, 0, 0, 0);
+    const callMessage = callStatus === lua.LUA_OK ? "Take inventory Lua executed" : to_jsstring(lua.lua_tostring(state, -1));
     assert.equal(callStatus, lua.LUA_OK, callMessage);
   });
 });
