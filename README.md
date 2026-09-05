@@ -15,8 +15,13 @@ Evidence-bound MCP bridge and task runtime for REAPER.
 [Agent Start Here](docs/AGENT_START_HERE.md) ·
 [支持矩阵](docs/SUPPORT_MATRIX.md)
 
+**[English](#english) · [中文](#中文)**
+
+_Developed by [Hexingyu](https://github.com/hexingyuofficial)_
+
 </div>
 
+<a id="english"></a>
 <details open>
 <summary><strong>English</strong></summary>
 
@@ -122,6 +127,7 @@ Recipe contracts. Live REAPER evidence is opt-in and uses a fresh evidence root.
 
 </details>
 
+<a id="中文"></a>
 <details>
 <summary><strong>中文</strong></summary>
 
