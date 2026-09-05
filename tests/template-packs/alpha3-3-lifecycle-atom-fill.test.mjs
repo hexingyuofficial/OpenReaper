@@ -131,11 +131,25 @@ describe("Alpha3.3 exact lifecycle atom descriptors", () => {
     assert.equal(freezeTrack.bridge.timeout_ms, 300_000);
     assert.deepEqual(freezeTrack.inputSchema.properties.mode.enum, ["mono", "stereo", "multichannel"]);
     assert.deepEqual(freezeTrack.inputSchema.required, ["mode"]);
+    assert.deepEqual(freezeTrack.inputSchema.properties.target_binding.properties.cardinality.properties, {
+      minimum: { const: 1 },
+      maximum: { const: 64 },
+    });
+    assert.deepEqual(freezeTrack.inputSchema.properties.target_binding.required, ["domain"]);
+    assert.equal(freezeTrack.examples.some(({ name, input }) => name === "freeze_selected_tracks_default" && Object.hasOwn(input, "target_binding") === false), true);
+    assert.equal(freezeTrack.examples.some(({ name, input }) => name === "freeze_selected_tracks_binding" && input.target_binding?.domain === "tracks"), true);
+    assert.equal(freezeTrack.refs.input[0].required, false);
+    assert.equal(freezeTrack.outputSchema.properties.target_refs.maxItems, 64);
     assert.equal(Object.hasOwn(freezeTrack.outputSchema.properties, "action_id"), false);
     assert.deepEqual(freezeTrack.verification.checks.map(({ name }) => name), ["freeze_count_increased", "selection_restored"]);
 
     assert.equal(unfreezeTrack.risk, "destructive");
-    assert.equal(unfreezeTrack.bridge.timeout_ms, 60_000);
+    assert.equal(unfreezeTrack.bridge.timeout_ms, 300_000);
+    assert.equal(unfreezeTrack.inputSchema.properties.target_binding.properties.selector.const, "selected");
+    assert.deepEqual(unfreezeTrack.inputSchema.properties.target_binding.required, ["domain"]);
+    assert.equal(unfreezeTrack.examples.some(({ name, input }) => name === "unfreeze_selected_tracks_default" && Object.hasOwn(input, "target_binding") === false), true);
+    assert.equal(unfreezeTrack.refs.input[0].required, false);
+    assert.equal(unfreezeTrack.outputSchema.properties.targets.maxItems, 64);
     assert.equal(Object.hasOwn(unfreezeTrack.outputSchema.properties, "action_id"), false);
     assert.deepEqual(unfreezeTrack.verification.checks.map(({ name }) => name), ["freeze_count_decreased", "selection_restored"]);
 

@@ -13,6 +13,7 @@ import {
   executableRevisionDiscoveryProjection,
   hashExecutableRecipeContent,
   normalizeExecutableRecipeDraft,
+  normalizeExecutableRecipeTargetSet,
   normalizeExecutableRecipeRevision,
   sealExecutableRecipeRevision,
   validateExecutableRecipeDraft,
@@ -29,6 +30,35 @@ import {
 import { TOOL_ABI_V1_TOOL_NAMES } from "../../packages/mcp-server/src/tool-abi-v1.mjs";
 
 describe("Alpha3.4-E0 executable recipe revision contract", () => {
+  it("accepts named run-start target sets and validates every stage reference", () => {
+    const catalog = makeCatalog();
+    const draft = makeDraft();
+    draft.target_sets = [{
+      id: "selected_items",
+      resolve_at: "run_start",
+      domain: "items",
+      selector: "selected",
+      aggregation: "batch",
+      cardinality: { minimum: 1, maximum: 64 },
+    }];
+    draft.stages[0].target_set_id = "selected_items";
+    const validated = validateExecutableRecipeDraft(draft, { catalog });
+    assert.equal(validated.ok, true, validated.errors.join("\n"));
+    const normalized = normalizeExecutableRecipeTargetSet(draft.target_sets[0]);
+    assert.equal(normalized.ok, true);
+    assert.equal(normalized.binding.bind_at, "run_start");
+    assert.equal(normalized.binding.selector, "selected");
+    assert.equal(normalizeExecutableRecipeDraft(draft, { catalog }).target_sets.length, 1);
+
+    const missing = structuredClone(draft);
+    missing.stages[0].target_set_id = "not_declared";
+    assert.match(validateExecutableRecipeDraft(missing, { catalog }).errors.join("\n"), /unknown target_set_id not_declared/u);
+
+    const invalid = structuredClone(draft);
+    invalid.target_sets[0].resolve_at = "each_stage";
+    assert.match(validateExecutableRecipeDraft(invalid, { catalog }).errors.join("\n"), /resolve_at must be run_start/u);
+  });
+
   it("normalizes deterministic content hashes and seals immutable revisions", () => {
     const catalog = makeCatalog();
     const draft = makeDraft();

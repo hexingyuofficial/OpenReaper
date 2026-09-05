@@ -6,6 +6,10 @@ import {
   validateMacroExecutionEnvelope,
   validateMacroProgramRequest,
 } from "./macro-runtime-contract-v1.mjs";
+import {
+  normalizeTargetBinding,
+  resolveTargetSet,
+} from "../../core/src/target-binding-v1.mjs";
 
 export const ALPHA3_3_B1C_ITEMS_APPLY_MACRO_ID = "macro.items.apply";
 export const ALPHA3_3_B1C_ITEMS_APPLY_CONTRACT = "alpha3.3.b1c.items_apply.v1";
@@ -28,6 +32,8 @@ export const ALPHA3_3_B1C_ITEMS_APPLY_MODES = deepFreeze([
   "align_onsets",
   "set_item_take_controls",
   "create_variations",
+  "reverse",
+  "glue",
 ]);
 export const ALPHA3_3_B1C_ITEMS_BATCH_ITEM_FIELDS = deepFreeze([
   "position_seconds",
@@ -107,6 +113,10 @@ export const ALPHA3_3_B1C_ITEMS_APPLY_TEMPLATE_IDS = deepFreeze([
   "template.items.list_items_on_track",
   "template.items.copy_item_to_track",
   "template.items.set_take_start_in_source",
+  "template.items.set_reverse",
+  "template.items.glue_item",
+  "template.project.read_track_item_overview",
+  "template.transport.read_state",
 ]);
 
 const RESOLVE_ITEM_ID = "template.items.resolve_item_ref";
@@ -133,8 +143,15 @@ const SPLIT_BY_SILENCE_ID = "template.items.split_item_by_silence";
 const LIST_TRACK_ITEMS_ID = "template.items.list_items_on_track";
 const COPY_ITEM_TO_TRACK_ID = "template.items.copy_item_to_track";
 const SET_TAKE_START_IN_SOURCE_ID = "template.items.set_take_start_in_source";
+const SET_REVERSE_ID = "template.items.set_reverse";
+const GLUE_ITEM_ID = "template.items.glue_item";
+const READ_TARGET_INVENTORY_ID = "template.project.read_track_item_overview";
+const READ_TRANSPORT_STATE_ID = "template.transport.read_state";
 const MAX_TARGETS = 128;
 const AUDIO_BATCH_MAX_TARGETS = 64;
+const TARGET_INVENTORY_PAGE_SIZE = 64;
+const TARGET_INVENTORY_MAX_OBJECTS = 512;
+const TARGET_INVENTORY_MAX_PAGES = 16;
 const AUDIO_BATCH_RELEASE_GATE_MS = 30000;
 const DEFAULT_TARGET_LIMIT = 128;
 const AGGREGATE_INLINE_SAMPLE_LIMIT = 8;
@@ -144,6 +161,7 @@ const INPUT_FIELDS = new Set([
   "mode",
   "target",
   "target_refs",
+  "target_binding",
   "selection_mode",
   "adjacent_audio",
   "limit",
@@ -187,7 +205,7 @@ const REGISTRY_ENTRY = deepFreeze({
   contract: MACRO_PROGRAM_REGISTRY_CONTRACT,
   macro_id: ALPHA3_3_B1C_ITEMS_APPLY_MACRO_ID,
   program_id: "openreaper.macro.items.apply",
-  program_version: "1.7.1",
+  program_version: "1.8.0",
   implementation_status: "executable",
   risk: "destructive",
   input_schema: {
@@ -197,6 +215,20 @@ const REGISTRY_ENTRY = deepFreeze({
       mode: { type: "string", enum: ALPHA3_3_B1C_ITEMS_APPLY_MODES },
       target: { type: "string", enum: ["selected", "exact"] },
       target_refs: { type: "array", maxItems: MAX_TARGETS, items: { type: "string" } },
+      target_binding: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          bind_at: { type: "string", enum: ["execution", "run_start"] },
+          domain: { const: "items" },
+          selector: { type: "string", enum: ["selected", "explicit_refs", "all"] },
+          refs: { type: "array", maxItems: MAX_TARGETS, items: { type: "string" } },
+          constraints: { type: "array", maxItems: 8, items: { type: "object" } },
+          cardinality: { type: "object" },
+          aggregation: { type: "string" },
+        },
+        required: ["domain"],
+      },
       selection_mode: { type: "string", enum: ["replace", "add", "remove"] },
       adjacent_audio: { type: "string", enum: ["left", "right", "both"] },
       changes: {
@@ -395,7 +427,7 @@ export function createAlpha3_3B1cItemsApplyDiscoveryItems({ liveRunnableNow = fa
     support_state: "supported_with_live_readback",
     live_runnable_now: liveRunnableNow,
     known_blocker: liveRunnableNow ? null : "macro_fixed_dependencies_not_available",
-    summary: "Arrange selected or exact Items, remove silence, align audio onsets, move exact Items onto existing Tracks, create bounded Item variations, set accepted properties, choose exact Active Takes, apply bounded fades/trims/Take playback/snap offsets, or batch Item and Active-Take controls.",
+    summary: "Arrange selected, exact, or execution-bound Items; reverse or glue bounded Item sets; remove silence; align audio onsets; move exact Items onto existing Tracks; create bounded Item variations; set accepted properties; choose exact Active Takes; apply bounded fades/trims/Take playback/snap offsets; or batch Item and Active-Take controls.",
     inputSchema: clone(REGISTRY_ENTRY.input_schema),
     supported_modes: ALPHA3_3_B1C_ITEMS_APPLY_MODES,
     held_modes: ALPHA3_3_B1C_ITEMS_APPLY_HELD_MODES,
@@ -412,6 +444,8 @@ export function createAlpha3_3B1cItemsApplyDiscoveryItems({ liveRunnableNow = fa
       { name: "remove_silence", input: { mode: "remove_silence", target_refs: ["item:guid:{ITEM-GUID}"], silence_threshold_dbfs: -60, min_silence_ms: 250, silence_scope: "all", dry_run: false } },
       { name: "normalize_level", input: { mode: "normalize_level", target: "exact", target_refs: ["item:guid:{ITEM-GUID}"], normalization_metric: "lufs_i", normalization_target: -18, dry_run: false } },
       { name: "align_audio_onsets", input: { mode: "align_onsets", target_refs: ["item:guid:{ITEM-A}", "item:guid:{ITEM-B}"], dry_run: false } },
+      { name: "reverse_selected_items", input: { mode: "reverse", target_binding: { domain: "items", selector: "selected" }, dry_run: false } },
+      { name: "glue_items_on_selected_tracks_in_time_selection", input: { mode: "glue", target_binding: { domain: "items", selector: "all", constraints: [{ kind: "owner_in", source: { domain: "tracks", selector: "selected" } }, { kind: "time_relation", relation: "overlaps", source: { domain: "time_range", selector: "time_selection" } }] }, dry_run: false } },
       {
         name: "batch_item_take_controls",
         input: {
@@ -443,6 +477,11 @@ export function createAlpha3_3B1cItemsApplyExactManual() {
     id: ALPHA3_3_B1C_ITEMS_APPLY_MACRO_ID,
     rollout_slice: "Alpha3.3-B1c",
     action_manual: {
+      default_target_bindings: [{
+        when: { mode: ["reverse", "glue"], target_fields_absent: true },
+        target_binding: { bind_at: "execution", domain: "items", selector: "selected", aggregation: "batch", cardinality: { minimum: 1, maximum: 64 } },
+        zero_write_when_empty_or_over_limit: true,
+      }],
       when_to_use: [
         "Use one fixed arrangement mode for selected or exact Items, with dry_run first when the calculated positions should be inspected.",
         "Use set_properties for Item-level volume_db, muted, locked, or loop_source only.",
@@ -451,6 +490,7 @@ export function createAlpha3_3B1cItemsApplyExactManual() {
         "Use apply_fades, trim_exact, set_take_playback, set_snap_offset, remove_silence, or align_onsets for bounded common edits backed by accepted native Item/Take atoms.",
         "Use set_item_take_controls for one-call multi-Item multi-field Item/Active-Take control rows with exact item_ref and take_ref when Take fields are present; Item pan remains unsupported.",
         "Use create_variations to copy 1-64 exact source Items onto existing exact Tracks at explicit positions, preserving and proving each active-Take FX chain and optionally setting a source offset per new variation.",
+        "Use reverse or glue with target_binding to consume the user's current Item selection, explicit refs, or Track/time-range intersections without enumerating one public call per Item.",
       ],
       when_not_to_use: [
         "Do not reinterpret trim_exact as silence analysis, or apply_fades as crossfade construction; normalization, arbitrary transient splitting, and crossfades remain held.",
@@ -466,6 +506,7 @@ export function createAlpha3_3B1cItemsApplyExactManual() {
         mode: ALPHA3_3_B1C_ITEMS_APPLY_MODES.join(" | "),
         target: "selected; used by arrangement/property modes when target_refs or exact request refs are absent. Forbidden for set_active_take, set_item_take_controls, and create_variations.",
         target_refs: "Optional array of at most eight exact canonical item:guid refs for arrangement/property modes. Forbidden for set_active_take, set_item_take_controls, and create_variations.",
+        target_binding: "Optional execution-time target set for ordinary Item modes: {domain:'items',selector:'selected'|'explicit_refs'|'all',refs?,constraints?,cardinality?}. owner_in selected Tracks and overlaps/within current time selection constraints are supported. It cannot be mixed with target, target_refs, or outer request refs.",
         changes: "For set_item_take_controls only: 1-64 rows of {id,item_ref,take_ref?,item?,take?}. id is 1-12 ASCII [A-Za-z0-9_-]. take_ref is required exactly when take fields are present. Item fields: volume_db,length_seconds,fade_in_seconds,fade_out_seconds,snap_offset_seconds. Take fields: volume_db,pan,pitch_semitones,playrate,preserve_pitch. Item pan remains unsupported.",
         variations: "For create_variations only: 1-64 rows of {id,source_item_ref,target_track_ref,position_seconds,source_offset_seconds?}. Every ref must be an exact canonical GUID ref. All source Items and destination Tracks resolve before the first copy; each result returns the new exact Item/Take refs plus take_fx_copy.slots[].target_fx_ref after complete active-Take FX copy/readback.",
         dry_run: "Defaults to true. false is required to mutate REAPER.",
@@ -646,6 +687,15 @@ export async function executeAlpha3_3B1cItemsApplyMacro({
     return failureEnvelope({ entry, request, startedAt, now, stages, state, activeBudget, code: "ITEM_APPLY_LIVE_EXECUTOR_REQUIRED", message: "macro.items.apply requires the managed OpenReaper live executor." });
   }
 
+  if (normalized.input.target_binding) {
+    const bound = await resolveBoundItemTargetSet({ request, input: normalized.input, executeAtomic, state });
+    if (!bound.ok) {
+      pushStage(stages, "items-apply-targets", "live_ref_resolve", "blocked", bound.message, state.evidenceRefs);
+      return failureEnvelope({ entry, request, startedAt, now, stages, state, activeBudget, code: bound.code, message: bound.message, blockers: bound.blockers, data: targetData(state) });
+    }
+    normalized.input = bound.input;
+  }
+
   if (normalized.input.mode === "select_exact") {
     return executeExactSelectionMacro({
       entry,
@@ -679,7 +729,8 @@ export async function executeAlpha3_3B1cItemsApplyMacro({
 
   const useConsolidatedNative = executeAtomic.supportsItemTakeControlsBatch === true
     && isConsolidatedNativeItemMode(normalized.input.mode);
-  state.aggregateProjection = useConsolidatedNative;
+  const useNativeLifecycleBatch = isNativeLifecycleBatchMode(normalized.input.mode);
+  state.aggregateProjection = useConsolidatedNative || useNativeLifecycleBatch;
   let facts;
   if (useConsolidatedNative) {
     facts = await readConsolidatedNativePlanFacts({ request, input: normalized.input, executeAtomic, state });
@@ -727,6 +778,8 @@ export async function executeAlpha3_3B1cItemsApplyMacro({
     executionFailure = await executeConsolidatedNativeItemPlan({ plan, request, executeAtomic, state });
   } else if (["set_properties", "set_active_take", "stack_on_existing_tracks"].includes(normalized.input.mode)) {
     executionFailure = await executePropertyPlan({ plan, request, executeAtomic, state });
+  } else if (useNativeLifecycleBatch) {
+    executionFailure = await executeNativeLifecycleBatch({ plan, input: normalized.input, request, executeAtomic, state });
   } else if (["apply_fades", "trim_exact", "set_take_playback", "set_snap_offset"].includes(normalized.input.mode)) {
     executionFailure = await executePropertyPlan({ plan, request, executeAtomic, state });
   } else {
@@ -766,7 +819,15 @@ export async function executeAlpha3_3B1cItemsApplyMacro({
       code: executionFailure.code,
       message: executionFailure.message,
       blockers: executionFailure.blockers,
-      data: resultData(normalized.input, state),
+      data: {
+        ...resultData(normalized.input, state),
+        ...(executionFailure.details?.zero_write === true ? {
+          zero_write: true,
+          native_action_count: executionFailure.details.native_action_count,
+          selection_restored: executionFailure.details.selection_restored,
+          active_take_restored: executionFailure.details.active_take_restored,
+        } : {}),
+      },
     });
   }
   if (indexResult.ok === false) {
@@ -813,6 +874,10 @@ function isConsolidatedNativeItemMode(mode) {
     "trim_exact",
     "set_snap_offset",
   ].includes(mode);
+}
+
+function isNativeLifecycleBatchMode(mode) {
+  return mode === "reverse" || mode === "glue";
 }
 
 async function executeConsolidatedNativeItemPlan({ plan, request, executeAtomic, state }) {
@@ -1097,6 +1162,229 @@ async function resolveTargets({ request, input, executeAtomic, state }) {
   return { ok: true, refs: uniqueRefs };
 }
 
+async function resolveBoundItemTargetSet({ request, input, executeAtomic, state }) {
+  if (Object.keys(plainObject(request.refs)).length > 0) {
+    return { ...failed("ITEM_APPLY_TARGET_BINDING_CONFLICT", "target_binding cannot be mixed with outer request refs."), zero_write: true };
+  }
+  let summary;
+  if (isDirectSelectedItemBinding(input.target_binding)) {
+    let selected;
+    try {
+      selected = await runAtomic(executeAtomic, request, {
+        id: LIST_SELECTED_ID,
+        input: { limit: input.limit, include_track_refs: false },
+        refs: {},
+      });
+    } catch (error) {
+      return executionError(error, LIST_SELECTED_ID, "preflight");
+    }
+    collectExecutionEvidence(state, selected);
+    if (selected?.ok !== true) return atomicFailure(selected, LIST_SELECTED_ID);
+    const selectedSummary = executionSummary(selected);
+    if (selectedSummary.truncated === true || integerOr(selectedSummary.selected_count, 0) > input.limit) {
+      return { ...failed("ITEM_APPLY_TARGET_LIMIT_EXCEEDED", `Selected Item count ${integerOr(selectedSummary.selected_count, 0)} exceeds the bounded write limit ${input.limit}; no partial target set was mutated.`), zero_write: true };
+    }
+    const selectedRows = Array.isArray(selectedSummary.items) ? selectedSummary.items : [];
+    summary = {
+      tracks: [],
+      items: selectedRows,
+      selected_items: selectedRows,
+      item_coverage_status: "complete",
+      truncated: false,
+      items_truncated: false,
+      selected_items_truncated: false,
+    };
+  } else {
+    const inventory = await readCompleteBoundItemInventory({ request, executeAtomic, state });
+    if (!inventory.ok) return inventory;
+    summary = inventory.summary;
+  }
+  const selectedItems = Array.isArray(summary.selected_items) ? summary.selected_items : [];
+  const items = Array.isArray(summary.items) ? summary.items : [];
+  const tracks = Array.isArray(summary.tracks) ? summary.tracks : [];
+  if (summary.selected_items_truncated === true) {
+    return { ...failed("ITEM_APPLY_TARGET_COVERAGE_INCOMPLETE", "Selected Item inventory exceeded the bounded target resolver limit; no partial target set was mutated."), zero_write: true };
+  }
+  if (bindingNeedsCompleteItems(input.target_binding) && (summary.items_truncated === true || summary.item_coverage_status !== "complete")) {
+    return { ...failed("ITEM_APPLY_TARGET_COVERAGE_INCOMPLETE", "Item inventory was not complete enough to resolve the requested target_binding; no partial target set was mutated."), zero_write: true };
+  }
+  if (bindingUsesDomain(input.target_binding, "tracks") && summary.truncated === true) {
+    return { ...failed("ITEM_APPLY_TARGET_COVERAGE_INCOMPLETE", "Track inventory was not complete enough to resolve the requested owner constraint; no partial target set was mutated."), zero_write: true };
+  }
+
+  let timeSelection = null;
+  if (bindingUsesDomain(input.target_binding, "time_range")) {
+    let transport;
+    try {
+      transport = await runAtomic(executeAtomic, request, { id: READ_TRANSPORT_STATE_ID, input: {}, refs: {} });
+    } catch (error) {
+      return executionError(error, READ_TRANSPORT_STATE_ID, "preflight");
+    }
+    collectExecutionEvidence(state, transport);
+    if (transport?.ok !== true) return atomicFailure(transport, READ_TRANSPORT_STATE_ID);
+    timeSelection = executionSummary(transport).time_selection ?? null;
+  }
+
+  const itemRows = uniqueInventoryRows([...items, ...selectedItems], "item_ref");
+  const resolved = resolveTargetSet({
+    binding: input.target_binding,
+    inventory: { items: itemRows, tracks },
+    selection: {
+      items: selectedItems,
+      tracks: tracks.filter((row) => row?.selected === true),
+      time_range: timeSelection,
+    },
+    timeSelection,
+    operation: `${ALPHA3_3_B1C_ITEMS_APPLY_MACRO_ID}:${input.mode}`,
+  });
+  if (!resolved.ok) return resolved;
+  const refs = resolved.target_set.member_refs;
+  if (refs.some((ref) => !isExactGuidRef(ref, "item"))) {
+    return { ...failed("ITEM_APPLY_EXACT_TARGET_REQUIRED", "The resolved target set contained a non-canonical Item ref."), zero_write: true };
+  }
+  if (refs.length > input.limit || refs.length > maxTargetsForMode(input.mode)) {
+    return { ...failed("ITEM_APPLY_TARGET_LIMIT_EXCEEDED", `Resolved Item targets exceed the bounded write limit of ${Math.min(input.limit, maxTargetsForMode(input.mode))}.`), zero_write: true };
+  }
+  state.targetBinding = input.target_binding;
+  state.targetFingerprint = resolved.target_set.fingerprint;
+  state.targetScope = `target_binding:${input.target_binding.selector}`;
+  state.totalTargetCount = refs.length;
+  state.returnedTargetCount = refs.length;
+  state.targetsTruncated = false;
+  return {
+    ok: true,
+    input: {
+      ...input,
+      target: "exact",
+      target_refs: [...refs],
+    },
+  };
+}
+
+async function readCompleteBoundItemInventory({ request, executeAtomic, state }) {
+  const tracks = [];
+  const items = [];
+  let trackCursor = 0;
+  let itemCursor = 0;
+  let tracksComplete = false;
+  let itemsComplete = false;
+
+  for (let pageIndex = 0; pageIndex < TARGET_INVENTORY_MAX_PAGES; pageIndex += 1) {
+    let execution;
+    try {
+      execution = await runAtomic(executeAtomic, request, {
+        id: READ_TARGET_INVENTORY_ID,
+        input: {
+          max_tracks: tracksComplete ? 1 : TARGET_INVENTORY_PAGE_SIZE,
+          max_items: itemsComplete ? 1 : TARGET_INVENTORY_PAGE_SIZE,
+          max_selected_items: 1,
+          max_items_per_track: 0,
+          track_cursor: trackCursor,
+          item_cursor: itemCursor,
+          include_track_items: false,
+          include_selected_items: false,
+        },
+        refs: {},
+      });
+    } catch (error) {
+      return executionError(error, READ_TARGET_INVENTORY_ID, "preflight");
+    }
+    collectExecutionEvidence(state, execution);
+    if (execution?.ok !== true) return atomicFailure(execution, READ_TARGET_INVENTORY_ID);
+    const page = executionSummary(execution);
+    const trackCount = page.track_count;
+    const itemCount = page.item_count;
+    if (!Number.isInteger(trackCount) || !Number.isInteger(itemCount) || trackCount < 0 || itemCount < 0) {
+      return { ...failed("ITEM_APPLY_TARGET_COVERAGE_INCOMPLETE", "The live target inventory omitted valid Track or Item totals."), zero_write: true };
+    }
+    if (trackCount > TARGET_INVENTORY_MAX_OBJECTS || itemCount > TARGET_INVENTORY_MAX_OBJECTS) {
+      return { ...failed("ITEM_APPLY_TARGET_INVENTORY_LIMIT_EXCEEDED", `The live target inventory exceeds the ${TARGET_INVENTORY_MAX_OBJECTS}-Track/Item resolver ceiling; no partial target set was mutated.`), zero_write: true };
+    }
+
+    if (!tracksComplete) {
+      if (!Array.isArray(page.tracks)) return { ...failed("ITEM_APPLY_TARGET_COVERAGE_INCOMPLETE", "A live Track target page omitted its row array."), zero_write: true };
+      tracks.push(...page.tracks);
+      if (page.truncated === true) {
+        const next = advancingInventoryCursor(page.next_track_cursor, trackCursor, trackCount);
+        if (next === null) return { ...failed("ITEM_APPLY_TARGET_CURSOR_INVALID", "A live Track target page did not provide a strictly advancing cursor."), zero_write: true };
+        trackCursor = next;
+      } else {
+        tracksComplete = true;
+        trackCursor = trackCount;
+      }
+    }
+
+    if (!itemsComplete) {
+      if (!Array.isArray(page.items) || page.item_coverage?.internally_complete === false || page.item_coverage_status === "incomplete") {
+        return { ...failed("ITEM_APPLY_TARGET_COVERAGE_INCOMPLETE", "A live Item target page did not prove internally complete native coverage."), zero_write: true };
+      }
+      items.push(...page.items);
+      if (page.items_truncated === true || page.item_coverage_status === "paged") {
+        const next = advancingInventoryCursor(page.next_item_cursor, itemCursor, itemCount);
+        if (next === null) return { ...failed("ITEM_APPLY_TARGET_CURSOR_INVALID", "A live Item target page did not provide a strictly advancing cursor."), zero_write: true };
+        itemCursor = next;
+      } else if (page.item_coverage_status === "complete") {
+        itemsComplete = true;
+        itemCursor = itemCount;
+      } else {
+        return { ...failed("ITEM_APPLY_TARGET_COVERAGE_INCOMPLETE", "A live Item target page omitted complete coverage truth."), zero_write: true };
+      }
+    }
+
+    if (tracksComplete && itemsComplete) {
+      const uniqueTracks = uniqueInventoryRows(tracks, "track_ref");
+      const uniqueItems = uniqueInventoryRows(items, "item_ref");
+      if (uniqueTracks.length !== trackCount || uniqueItems.length !== itemCount) {
+        return { ...failed("ITEM_APPLY_TARGET_COVERAGE_INCOMPLETE", "Paged live target rows did not match the declared complete totals."), zero_write: true };
+      }
+      return {
+        ok: true,
+        summary: {
+          tracks: uniqueTracks,
+          items: uniqueItems,
+          selected_items: uniqueItems.filter((row) => row?.selected === true),
+          item_coverage_status: "complete",
+          truncated: false,
+          items_truncated: false,
+          selected_items_truncated: false,
+        },
+      };
+    }
+  }
+  return { ...failed("ITEM_APPLY_TARGET_PAGE_LIMIT_EXCEEDED", "The live target inventory did not complete within its bounded page limit."), zero_write: true };
+}
+
+function advancingInventoryCursor(value, current, total) {
+  const parsed = typeof value === "string" && /^(?:0|[1-9][0-9]*)$/u.test(value) ? Number(value) : value;
+  return Number.isInteger(parsed) && parsed > current && parsed <= total ? parsed : null;
+}
+
+function bindingUsesDomain(binding, domain) {
+  if (binding?.domain === domain) return true;
+  return Array.isArray(binding?.constraints)
+    && binding.constraints.some((constraint) => bindingUsesDomain(constraint?.source, domain));
+}
+
+function isDirectSelectedItemBinding(binding) {
+  return binding?.domain === "items"
+    && binding.selector === "selected"
+    && binding.constraints.length === 0;
+}
+
+function bindingNeedsCompleteItems(binding) {
+  return binding?.domain === "items" && binding?.selector !== "selected";
+}
+
+function uniqueInventoryRows(rows, key) {
+  const seen = new Set();
+  return rows.filter((row) => {
+    const ref = row?.[key];
+    if (typeof ref !== "string" || seen.has(ref)) return false;
+    seen.add(ref);
+    return true;
+  });
+}
+
 async function resolveActiveTakeAssignments({ request, assignments, executeAtomic, state }) {
   if (Object.keys(plainObject(request.refs)).length > 0) {
     return failed("ITEM_APPLY_ACTIVE_TAKE_ASSIGNMENTS_INVALID", "set_active_take accepts only active_take_assignments rows; separate request refs cannot preserve explicit Item/Take pairing.");
@@ -1174,6 +1462,7 @@ async function readTargetFacts({ targets, assignments = [], input, request, exec
       length_seconds: summary.length_seconds,
       end_seconds: summary.position_seconds + summary.length_seconds,
       active_take_ref: stringOrNull(summary.active_take_ref),
+      reverse: typeof summary.reverse === "boolean" ? summary.reverse : null,
       snap_offset_seconds: finiteOrNull(summary.snap_offset_seconds),
       fade_in_seconds: finiteOrNull(summary.fade_in_seconds),
       fade_out_seconds: finiteOrNull(summary.fade_out_seconds),
@@ -1291,6 +1580,40 @@ async function readConsolidatedNativePlanFacts({ request, input, executeAtomic, 
 }
 
 function buildOperationPlan(input, facts) {
+  if (input.mode === "reverse") {
+    const noTake = facts.find((fact) => !fact.active_take_ref);
+    if (noTake) return failed("ITEM_APPLY_ACTIVE_TAKE_REQUIRED", `${noTake.item_ref.ref} has no Active Take; no reverse mutation was run.`);
+    return {
+      ok: true,
+      operations: facts.map((fact) => ({
+        operation_id: `item-${fact.target_order + 1}-reverse`,
+        kind: "set_reverse",
+        template_id: SET_REVERSE_ID,
+        item_ref: fact.item_ref,
+        field: "reverse",
+        before_value: fact.reverse,
+        requested_value: true,
+        input: { reverse: true },
+      })),
+    };
+  }
+  if (input.mode === "glue") {
+    const noTake = facts.find((fact) => !fact.active_take_ref);
+    if (noTake) return failed("ITEM_APPLY_ACTIVE_TAKE_REQUIRED", `${noTake.item_ref.ref} has no Active Take; no glue mutation was run.`);
+    return {
+      ok: true,
+      operations: facts.map((fact) => ({
+        operation_id: `item-${fact.target_order + 1}-glue`,
+        kind: "glue_item",
+        template_id: GLUE_ITEM_ID,
+        item_ref: fact.item_ref,
+        field: "glued_item_ref",
+        before_value: fact.item_ref.ref,
+        requested_value: "native_glued_replacement",
+        input: {},
+      })),
+    };
+  }
   if (input.mode === "remove_silence") {
     return {
       ok: true,
@@ -1503,11 +1826,29 @@ async function executePropertyPlan({ plan, request, executeAtomic, state }) {
     }
     change.mutation = { status: "completed", template_id: operation.template_id };
     const summary = executionSummary(execution);
-    const observed = Array.isArray(operation.verify_fields)
+    if (operation.kind === "move_item_to_track") {
+      change.mutation.changed = summary.changed !== false;
+      change.mutation.native_dispatched = summary.native_move_dispatched !== false;
+      if (summary.already_on_target === true) change.already_on_target = true;
+    }
+    const observed = operation.kind === "glue_item"
+      ? summary.glued_item_ref
+      : Array.isArray(operation.verify_fields)
       ? Object.fromEntries(operation.verify_fields.map((field) => [field, summary[field]]))
       : summary[operation.field];
-    const targetMatches = summary.item_ref === operation.item_ref.ref;
-    const valueMatches = Array.isArray(operation.verify_fields)
+    const targetMatches = operation.kind === "glue_item"
+      ? summary.source_item_ref === operation.item_ref.ref
+      : summary.item_ref === operation.item_ref.ref;
+    const valueMatches = operation.kind === "glue_item"
+      ? isExactGuidRef(summary.glued_item_ref, "item")
+        && summary.glued_item_ref !== operation.item_ref.ref
+        && isExactGuidRef(summary.glued_take_ref, "take")
+        && summary.old_item_guid_absent === true
+        && summary.new_item_unique === true
+        && summary.item_count_unchanged === true
+        && summary.selection_restored === true
+        && summary.active_take_restored === true
+      : Array.isArray(operation.verify_fields)
       ? operation.verify_fields.every((field) => valuesMatch(summary[field], operation.requested_value[field]))
       : valuesMatch(observed, operation.requested_value);
     const preservationMatches = operation.kind !== "move_item_to_track" || summary.track_count_unchanged === true;
@@ -1522,12 +1863,132 @@ async function executePropertyPlan({ plan, request, executeAtomic, state }) {
       return failedReadback(operation, observed, summary.item_ref);
     }
     change.status = "applied";
+    if (operation.kind === "glue_item") {
+      change.result_item_ref = summary.glued_item_ref;
+      change.result_take_ref = summary.glued_take_ref;
+      state.canonicalRefs.push(summary.glued_item_ref, summary.glued_take_ref);
+    }
     change.live_readback = {
       status: "passed",
       source: operation.kind === "set_active_take" ? "exact_active_take_readback" : operation.kind === "move_item_to_track" ? "exact_item_track_readback" : "accepted_template_live_readback",
       observed_value: observed,
     };
   }
+  return null;
+}
+
+async function executeNativeLifecycleBatch({ plan, input, request, executeAtomic, state }) {
+  const templateId = input.mode === "reverse" ? SET_REVERSE_ID : GLUE_ITEM_ID;
+  const batch = plan.operations.map((operation, index) => ({
+    id: `i${String(index + 1).padStart(3, "0")}`,
+    item_ref: operation.item_ref.ref,
+  }));
+  let execution;
+  try {
+    execution = await runAtomic(executeAtomic, request, {
+      id: templateId,
+      input: compactObject({
+        batch,
+        reverse: input.mode === "reverse" ? true : undefined,
+        dry_run: false,
+      }),
+      refs: {},
+    });
+  } catch (error) {
+    return { ...executionError(error, templateId, "mutation"), phase: "mutation" };
+  }
+  collectExecutionEvidence(state, execution);
+  if (execution?.ok !== true) return { ...atomicFailure(execution, templateId), phase: "mutation" };
+
+  const summary = executionSummary(execution);
+  const rows = Array.isArray(summary.rows) ? summary.rows : [];
+  const undo = plainObject(execution?.undo ?? execution?.result?.undo);
+  const undoOpened = summary.undo_opened === true || undo.opened === true;
+  const undoClosed = summary.undo_closed === true || undo.closed === true;
+  const aggregateValid = rows.length === plan.operations.length
+    && summary.row_count === plan.operations.length
+    && summary.readback_status === "passed"
+    && summary.selection_restored === true
+    && summary.active_take_restored === true
+    && Number.isInteger(summary.native_action_count)
+    && summary.native_action_count >= 0
+    && summary.native_action_count <= 1
+    && undoOpened
+    && undoClosed;
+  if (!aggregateValid) {
+    return {
+      ...failed("ITEM_APPLY_BATCH_READBACK_INVALID", `${templateId} did not return complete one-action, one-Undo aggregate readback for every target.`),
+      phase: "readback",
+    };
+  }
+
+  const rowsBySource = new Map();
+  for (const row of rows) {
+    if (!isExactGuidRef(row?.item_ref ?? row?.source_item_ref, "item")) {
+      return { ...failed("ITEM_APPLY_BATCH_READBACK_INVALID", `${templateId} returned a malformed source Item identity.`), phase: "readback" };
+    }
+    const sourceRef = row.item_ref ?? row.source_item_ref;
+    if (rowsBySource.has(sourceRef)) {
+      return { ...failed("ITEM_APPLY_BATCH_READBACK_INVALID", `${templateId} returned duplicate readback for ${sourceRef}.`), phase: "readback" };
+    }
+    rowsBySource.set(sourceRef, row);
+  }
+
+  const changes = [];
+  for (const operation of plan.operations) {
+    const sourceRef = operation.item_ref.ref;
+    const row = rowsBySource.get(sourceRef);
+    if (!row) return { ...failed("ITEM_APPLY_BATCH_READBACK_INVALID", `${templateId} omitted readback for ${sourceRef}.`), phase: "readback" };
+    const readbackStatus = typeof row.live_readback === "string" ? row.live_readback : row.live_readback?.status;
+    const rowValid = input.mode === "reverse"
+      ? row.reverse === true
+        && isExactGuidRef(row.active_take_ref, "take")
+        && readbackStatus === "passed"
+      : isExactGuidRef(row.glued_item_ref, "item")
+        && isExactGuidRef(row.glued_take_ref, "take")
+        && row.old_item_guid_absent === true
+        && row.new_item_unique === true
+        && readbackStatus === "passed";
+    if (!rowValid) {
+      return { ...failed("ITEM_APPLY_BATCH_READBACK_INVALID", `${templateId} returned unverified row truth for ${sourceRef}.`), phase: "readback" };
+    }
+    const change = pendingChange(operation);
+    change.status = "applied";
+    change.mutation = {
+      status: "completed",
+      template_id: templateId,
+      changed: row.changed !== false,
+      native_dispatched: summary.native_action_count === 1,
+    };
+    change.live_readback = {
+      status: "passed",
+      source: "native_lifecycle_batch_aggregate",
+      observed_value: input.mode === "reverse" ? true : row.glued_item_ref,
+    };
+    if (input.mode === "glue") {
+      change.result_item_ref = row.glued_item_ref;
+      change.result_take_ref = row.glued_take_ref;
+    }
+    changes.push(change);
+  }
+
+  state.changes = changes;
+  state.nativeBatchEvidence = {
+    template_id: templateId,
+    dispatch_count: 1,
+    native_action_count: summary.native_action_count,
+    undo_opened: undoOpened,
+    undo_closed: undoClosed,
+    selection_restored: true,
+    active_take_restored: true,
+    readback_status: "passed",
+  };
+  state.canonicalRefs.push(...rows.flatMap((row) => [
+    row.item_ref ?? row.source_item_ref,
+    row.active_take_ref,
+    row.glued_item_ref,
+    row.glued_take_ref,
+  ].filter(Boolean)));
   return null;
 }
 
@@ -2004,7 +2465,14 @@ function audioBatchData(input, state, extra = {}) {
   const inlineReadback = state.audioBatchEvidence?.inline_readback !== false;
   return {
     mode: input.mode,
-    target_scope: state.targetScope,
+    target_scope: state.targetBinding ? `target_binding:${state.targetBinding.selector}` : state.targetScope,
+    target_set: state.targetBinding ? {
+      contract: "target_set_resolver.v1",
+      fingerprint: state.targetFingerprint,
+      domain: "items",
+      count: state.totalTargetCount,
+      bind_at: state.targetBinding.bind_at,
+    } : undefined,
     adjacent_audio: input.adjacent_audio,
     target_count: state.totalTargetCount,
     returned_target_count: state.returnedTargetCount,
@@ -3312,10 +3780,45 @@ function normalizeInput(input) {
     return isAudioBatchMode(mode) ? { ...result, zero_write: true } : result;
   }
   const maxTargets = maxTargetsForMode(mode);
+  let targetBinding = null;
+  const omittedNativeLifecycleTarget = isNativeLifecycleBatchMode(mode)
+    && input.target === undefined
+    && input.target_refs === undefined
+    && input.target_binding === undefined;
+  const requestedTargetBinding = input.target_binding ?? (omittedNativeLifecycleTarget
+    ? {
+        bind_at: "execution",
+        domain: "items",
+        selector: "selected",
+        aggregation: "batch",
+        cardinality: { minimum: 1, maximum: maxTargets },
+      }
+    : null);
+  if (requestedTargetBinding !== null) {
+    if (input.target !== undefined || input.target_refs !== undefined) {
+      return { ...failed("ITEM_APPLY_TARGET_BINDING_CONFLICT", "target_binding cannot be mixed with target or target_refs."), zero_write: true };
+    }
+    const normalizedBinding = normalizeTargetBinding({
+      ...requestedTargetBinding,
+      cardinality: requestedTargetBinding.cardinality ?? { minimum: 1, maximum: maxTargets },
+    });
+    if (!normalizedBinding.ok) return normalizedBinding;
+    if (normalizedBinding.value.domain !== "items") {
+      return { ...failed("ITEM_APPLY_TARGET_BINDING_DOMAIN_INVALID", "macro.items.apply target_binding domain must be items."), zero_write: true };
+    }
+    if (normalizedBinding.value.cardinality.maximum > maxTargets) {
+      return { ...failed("ITEM_APPLY_TARGET_LIMIT_EXCEEDED", `target_binding cardinality.maximum exceeds the bounded write limit of ${maxTargets}.`), zero_write: true };
+    }
+    targetBinding = normalizedBinding.value;
+  }
   // Audio batches must reach executeAudioBatchMacro so its explicit 65-target
   // guard emits typed zero-write truth without resolving or dispatching refs.
   if (targetRefs.length > maxTargets && !isAudioBatchMode(mode)) return failed("ITEM_APPLY_TARGET_LIMIT_EXCEEDED", `target_refs exceeds the maximum of ${maxTargets}; zero_write=true and no REAPER analysis or mutation was started.`);
-  const limit = input.limit ?? (isAudioBatchMode(mode) ? AUDIO_BATCH_MAX_TARGETS : DEFAULT_TARGET_LIMIT);
+  const limit = input.limit ?? (targetBinding !== null
+    ? maxTargets
+    : isAudioBatchMode(mode)
+      ? AUDIO_BATCH_MAX_TARGETS
+      : DEFAULT_TARGET_LIMIT);
   if (!Number.isInteger(limit) || limit < 1 || limit > maxTargets) return failed("ITEM_APPLY_REQUEST_INVALID", `limit must be an integer from 1 to ${maxTargets}.`);
   const dryRun = input.dry_run !== false;
   if (typeof input.dry_run !== "undefined" && typeof input.dry_run !== "boolean") return failed("ITEM_APPLY_REQUEST_INVALID", "dry_run must be boolean.");
@@ -3367,7 +3870,7 @@ function normalizeInput(input) {
     const normalizedAssignments = normalizeActiveTakeAssignments(input.active_take_assignments);
     if (!normalizedAssignments.ok) return normalizedAssignments;
     activeTakeAssignments = normalizedAssignments.value;
-    if (input.target !== undefined || targetRefs.length > 0 || input.limit !== undefined || input.properties !== undefined || anchor.value !== null || gap.value !== null) {
+    if (input.target !== undefined || targetRefs.length > 0 || targetBinding !== null || input.limit !== undefined || input.properties !== undefined || anchor.value !== null || gap.value !== null) {
       return failed("ITEM_APPLY_ACTIVE_TAKE_ASSIGNMENTS_INVALID", "set_active_take accepts only active_take_assignments and dry_run; selection, target_refs, limit, properties, anchor_seconds, and gap_seconds are forbidden.");
     }
   } else if (mode === "stack_on_existing_tracks") {
@@ -3402,7 +3905,7 @@ function normalizeInput(input) {
     if (!Number.isFinite(input.snap_offset_seconds) || input.snap_offset_seconds < 0) return failed("ITEM_APPLY_SNAP_OFFSET_INVALID", "set_snap_offset snap_offset_seconds must be a non-negative finite number.");
     snapOffsetSeconds = input.snap_offset_seconds;
   } else if (mode === "remove_silence") {
-    const unsupported = Object.keys(input).filter((field) => !["mode", "target", "target_refs", "limit", "dry_run", "adjacent_audio", "silence_threshold_dbfs", "min_silence_ms", "silence_scope", "keep_before_ms", "keep_after_ms", "min_kept_audio_ms", "fade_ms"].includes(field));
+    const unsupported = Object.keys(input).filter((field) => !["mode", "target", "target_refs", "target_binding", "limit", "dry_run", "adjacent_audio", "silence_threshold_dbfs", "min_silence_ms", "silence_scope", "keep_before_ms", "keep_after_ms", "min_kept_audio_ms", "fade_ms"].includes(field));
     if (unsupported.length > 0) return failed("ITEM_APPLY_REQUEST_INVALID", `remove_silence does not accept field(s): ${unsupported.join(", ")}.`);
     if (target !== "selected" && target !== "exact") return failed("ITEM_APPLY_TARGET_SELECTOR_UNSUPPORTED", "remove_silence target must be selected or exact.");
     silenceThresholdDbfs = input.silence_threshold_dbfs ?? -60;
@@ -3420,7 +3923,7 @@ function normalizeInput(input) {
       if (!Number.isFinite(value) || value < minimum || value > maximum) return failed("ITEM_APPLY_SILENCE_PARAMETER_INVALID", `${field} must be a finite number from ${minimum} to ${maximum}.`);
     }
   } else if (mode === "normalize_level") {
-    const unsupported = Object.keys(input).filter((field) => !["mode", "target", "target_refs", "limit", "dry_run", "adjacent_audio", "normalization_metric", "normalization_target"].includes(field));
+    const unsupported = Object.keys(input).filter((field) => !["mode", "target", "target_refs", "target_binding", "limit", "dry_run", "adjacent_audio", "normalization_metric", "normalization_target"].includes(field));
     if (unsupported.length > 0) return failed("ITEM_APPLY_REQUEST_INVALID", `normalize_level does not accept field(s): ${unsupported.join(", ")}.`);
     if (target !== "selected" && target !== "exact") return failed("ITEM_APPLY_TARGET_SELECTOR_UNSUPPORTED", "normalize_level target must be selected or exact.");
     normalizationMetric = input.normalization_metric;
@@ -3429,7 +3932,7 @@ function normalizeInput(input) {
     if (!["lufs_i", "rms_i", "peak", "true_peak", "lufs_m_max", "lufs_s_max"].includes(normalizationMetric)) return failed("ITEM_APPLY_NORMALIZATION_METRIC_INVALID", "normalization_metric must be one of lufs_i, rms_i, peak, true_peak, lufs_m_max, or lufs_s_max.");
     if (!Number.isFinite(normalizationTarget) || normalizationTarget > 0) return failed("ITEM_APPLY_NORMALIZATION_TARGET_INVALID", "normalization_target must be a finite dB/LUFS target at or below 0.");
   } else if (mode === "align_onsets") {
-    const unsupported = Object.keys(input).filter((field) => !["mode", "target", "target_refs", "limit", "dry_run", "anchor_seconds", "transient_delta_linear", "min_transient_gap_ms"].includes(field));
+    const unsupported = Object.keys(input).filter((field) => !["mode", "target", "target_refs", "target_binding", "limit", "dry_run", "anchor_seconds", "transient_delta_linear", "min_transient_gap_ms"].includes(field));
     if (unsupported.length > 0) return failed("ITEM_APPLY_REQUEST_INVALID", `align_onsets does not accept field(s): ${unsupported.join(", ")}.`);
     transientDeltaLinear = input.transient_delta_linear ?? 0.25;
     minTransientGapMs = input.min_transient_gap_ms ?? 30;
@@ -3453,6 +3956,7 @@ function normalizeInput(input) {
       mode,
       target,
       target_refs: [...targetRefs],
+      ...(targetBinding ? { target_binding: targetBinding } : {}),
       selection_mode: selectionMode,
       adjacent_audio: adjacentAudio,
       limit,
@@ -3508,7 +4012,7 @@ function isAudioBatchMode(mode) {
 }
 
 function maxTargetsForMode(mode) {
-  return isAudioBatchMode(mode) ? AUDIO_BATCH_MAX_TARGETS : MAX_TARGETS;
+  return isAudioBatchMode(mode) || isNativeLifecycleBatchMode(mode) ? AUDIO_BATCH_MAX_TARGETS : MAX_TARGETS;
 }
 
 function normalizeTrackAssignments(value) {
@@ -4022,12 +4526,20 @@ function resultData(input, state) {
     held_modes: ALPHA3_3_B1C_ITEMS_APPLY_HELD_MODES,
     supported_property_fields: ALPHA3_3_B1C_ITEMS_APPLY_PROPERTY_FIELDS,
     held_property_fields: ALPHA3_3_B1C_ITEMS_APPLY_HELD_PROPERTY_FIELDS,
-    target_scope: state.targetScope,
+    target_scope: state.targetBinding ? `target_binding:${state.targetBinding.selector}` : state.targetScope,
+    target_set: state.targetBinding ? {
+      contract: "target_set_resolver.v1",
+      fingerprint: state.targetFingerprint,
+      domain: "items",
+      count: state.totalTargetCount,
+      bind_at: state.targetBinding.bind_at,
+    } : undefined,
     total_target_count: state.totalTargetCount,
     returned_target_count: state.returnedTargetCount,
     targets_truncated: state.targetsTruncated,
     undo_policy: REGISTRY_ENTRY.undo_policy,
     source_media_deleted: false,
+    ...(state.nativeBatchEvidence ? { native_batch: state.nativeBatchEvidence } : {}),
     outcome: {
       mutation: { status: completed.length > 0 ? "completed" : input.dry_run ? "not_run" : "not_completed", completed_count: completed.length, total_count: state.operations.length },
       live_readback: { status: completed.length > 0 && passed.length === completed.length ? "passed" : passed.length > 0 ? "partial" : input.dry_run ? "not_run" : "not_passed", passed_count: passed.length, total_count: completed.length },
@@ -4048,7 +4560,14 @@ function resultData(input, state) {
 
 function targetData(state) {
   return {
-    target_scope: state.targetScope,
+    target_scope: state.targetBinding ? `target_binding:${state.targetBinding.selector}` : state.targetScope,
+    target_set: state.targetBinding ? {
+      contract: "target_set_resolver.v1",
+      fingerprint: state.targetFingerprint,
+      domain: "items",
+      count: state.totalTargetCount,
+      bind_at: state.targetBinding.bind_at,
+    } : undefined,
     total_target_count: state.totalTargetCount,
     returned_target_count: state.returnedTargetCount,
     targets_truncated: state.targetsTruncated,
@@ -4062,11 +4581,14 @@ function createState() {
     totalTargetCount: 0,
     returnedTargetCount: 0,
     targetsTruncated: false,
+    targetBinding: null,
+    targetFingerprint: null,
     operations: [],
     changes: [],
     canonicalRefs: [],
     evidenceRefs: [],
     audioBatchEvidence: null,
+    nativeBatchEvidence: null,
     sqlite: null,
     batchMode: false,
     aggregateProjection: false,
@@ -4120,9 +4642,15 @@ function executionError(error, templateId, phase) {
 }
 
 function atomicFailure(execution, templateId) {
-  const code = execution?.error?.code ?? "ITEM_APPLY_ATOMIC_FAILED";
+  const bridgeCode = execution?.error?.details?.bridge_code;
+  const code = bridgeCode === "PROJECT_LOCKING_ENABLED"
+    ? bridgeCode
+    : execution?.error?.code ?? "ITEM_APPLY_ATOMIC_FAILED";
   const message = execution?.error?.message ?? `${templateId} failed.`;
-  return failed(code, message, [blocker(code, message, execution?.error?.recoverable !== false)]);
+  return {
+    ...failed(code, message, [blocker(code, message, execution?.error?.recoverable !== false)]),
+    details: plainObject(execution?.error?.details),
+  };
 }
 
 function collectExecutionEvidence(state, execution) {

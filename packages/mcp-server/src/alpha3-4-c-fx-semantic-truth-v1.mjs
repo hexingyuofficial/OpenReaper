@@ -188,11 +188,27 @@ export function normalizeAlpha34CFxSetControlsInput(input = {}) {
           message: `changes[${index}] requires param_index, or one exact param_name/param_ident.`,
         };
       }
-      if (typeof row.normalized_value !== "number" || !Number.isFinite(row.normalized_value) || row.normalized_value < 0 || row.normalized_value > 1) {
+      const hasNormalizedValue = Object.hasOwn(row, "normalized_value");
+      const hasDisplayValue = Object.hasOwn(row, "display_value");
+      if (hasNormalizedValue === hasDisplayValue) {
+        return {
+          ok: false,
+          code: "FX_EXACT_PARAMETERS_VALUE_INVALID",
+          message: `changes[${index}] requires exactly one normalized_value or display_value.`,
+        };
+      }
+      if (hasNormalizedValue && (typeof row.normalized_value !== "number" || !Number.isFinite(row.normalized_value) || row.normalized_value < 0 || row.normalized_value > 1)) {
         return {
           ok: false,
           code: "FX_EXACT_PARAMETERS_VALUE_INVALID",
           message: `changes[${index}].normalized_value must be a finite number in [0,1].`,
+        };
+      }
+      if (hasDisplayValue && (typeof row.display_value !== "string" || row.display_value.trim().length < 1 || row.display_value.length > 80)) {
+        return {
+          ok: false,
+          code: "FX_EXACT_PARAMETERS_DISPLAY_VALUE_INVALID",
+          message: `changes[${index}].display_value must be one bounded native-formatted target string.`,
         };
       }
       const targetKey = hasIndex
@@ -209,7 +225,8 @@ export function normalizeAlpha34CFxSetControlsInput(input = {}) {
         param_index: hasIndex ? row.param_index : null,
         param_ident: hasIdent ? row.param_ident.trim() : null,
         param_name: hasName ? row.param_name.trim() : null,
-        normalized_value: row.normalized_value,
+        ...(hasNormalizedValue ? { normalized_value: row.normalized_value } : {}),
+        ...(hasDisplayValue ? { display_value: row.display_value.trim() } : {}),
         requested_formatted_value: typeof row.requested_formatted_value === "string" ? row.requested_formatted_value : null,
       });
     }
@@ -472,7 +489,9 @@ export function createAlpha34CExactParametersPublicResult({
       param_index: change.param_index,
       param_ident: change.param_ident ?? null,
       name: change.name ?? null,
-      requested_normalized_value: change.normalized_value,
+      requested_normalized_value: change.display_value == null ? change.normalized_value : null,
+      requested_display_value: change.display_value ?? null,
+      requested_value: change.display_value == null ? null : change.value,
     })),
     suggestions: [],
     readback: readbackRows,

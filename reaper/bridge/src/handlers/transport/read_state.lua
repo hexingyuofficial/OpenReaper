@@ -24,14 +24,18 @@ local function read_transport_state_loop_time_range(is_loop)
   local ok, start_time, end_time = call_reaper("GetSet_LoopTimeRange", false, is_loop, 0, 0, false)
   if ok and type(start_time) == "number" and type(end_time) == "number" then
     return {
+      read_status = "available",
       start_seconds = start_time,
       end_seconds = end_time,
+      length_seconds = math.max(0, end_time - start_time),
       active = end_time > start_time,
     }
   end
   return {
+    read_status = "unavailable",
     start_seconds = 0,
     end_seconds = 0,
+    length_seconds = 0,
     active = false,
   }
 end

@@ -1364,6 +1364,7 @@ function stockPluginControlInputSchema() {
     param_ident: { type: "string", minLength: 1 },
     param_name: { type: "string", minLength: 1 },
     normalized_value: { type: "number", minimum: 0, maximum: 1 },
+    display_value: { type: "string", minLength: 1, maxLength: 80 },
     requested_formatted_value: { type: "string", minLength: 1 },
   };
   const assignmentProperties = {
@@ -1373,15 +1374,51 @@ function stockPluginControlInputSchema() {
     param_ident: { type: "string", minLength: 1 },
     param_name: { type: "string", minLength: 1 },
     normalized_value: { type: "number", minimum: 0, maximum: 1 },
+    display_value: { type: "string", minLength: 1, maxLength: 80 },
     requested_formatted_value: { type: "string", minLength: 1 },
+  };
+  const naturalControlProperties = {
+    id: { type: "string", minLength: 1, maxLength: 24, pattern: "^[A-Za-z0-9_-]{1,24}$" },
+    param_index: { type: "integer", minimum: 0 },
+    param_ident: { type: "string", minLength: 1 },
+    param_name: { type: "string", minLength: 1 },
+    natural_value: { type: "string", minLength: 1, maxLength: 80 },
+    display_value: { type: "string", minLength: 1, maxLength: 80 },
+    tolerance: { type: "number", minimum: 0 },
+  };
+  const naturalControlsSchema = {
+    type: "array",
+    minItems: 1,
+    maxItems: 8,
+    items: {
+      type: "object",
+      required: ["id"],
+      properties: naturalControlProperties,
+      additionalProperties: false,
+      allOf: [
+        { oneOf: [{ required: ["natural_value"] }, { required: ["display_value"] }] },
+        { anyOf: [
+          { required: ["param_index"] },
+          { required: ["param_ident"] },
+          { required: ["param_name"] },
+        ] },
+      ],
+    },
   };
   return {
     type: "object",
     required: [],
     properties: {
-      mode: { enum: ["semantic", "exact_parameters", "exact_assignments", "reaeq_bands"] },
+      mode: { enum: ["semantic", "exact_parameters", "exact_assignments", "reaeq_bands", "inspect_set", "shared_plan"] },
       plugin: { type: "string", minLength: 1 },
-      controls: { type: "object", additionalProperties: true },
+      controls: {
+        oneOf: [
+          { type: "object", additionalProperties: true },
+          naturalControlsSchema,
+        ],
+      },
+      fx_set_ref: { type: "string", pattern: "^fx-set:v1:" },
+      parameter_plan_ref: { type: "string", pattern: "^fx-parameter-plan:v1:" },
       starter_action: { type: "string", minLength: 1 },
       action_parameters: { type: "object", additionalProperties: true },
       control_overrides: { type: "object", additionalProperties: true },
@@ -1392,13 +1429,15 @@ function stockPluginControlInputSchema() {
         maxItems: 8,
         items: {
           type: "object",
-          required: ["normalized_value"],
           properties: targetProperties,
           additionalProperties: false,
-          oneOf: [
-            { required: ["param_index"] },
-            { required: ["param_ident"], not: { required: ["param_index"] } },
-            { required: ["param_name"], not: { anyOf: [{ required: ["param_index"] }, { required: ["param_ident"] }] } },
+          allOf: [
+            { oneOf: [{ required: ["normalized_value"] }, { required: ["display_value"] }] },
+            { oneOf: [
+              { required: ["param_index"] },
+              { required: ["param_ident"], not: { required: ["param_index"] } },
+              { required: ["param_name"], not: { anyOf: [{ required: ["param_index"] }, { required: ["param_ident"] }] } },
+            ] },
           ],
         },
       },
@@ -1408,13 +1447,16 @@ function stockPluginControlInputSchema() {
         maxItems: 64,
         items: {
           type: "object",
-          required: ["id", "fx_ref", "normalized_value"],
+          required: ["id", "fx_ref"],
           properties: assignmentProperties,
           additionalProperties: false,
-          oneOf: [
-            { required: ["param_index"] },
-            { required: ["param_ident"], not: { required: ["param_index"] } },
-            { required: ["param_name"], not: { anyOf: [{ required: ["param_index"] }, { required: ["param_ident"] }] } },
+          allOf: [
+            { oneOf: [{ required: ["normalized_value"] }, { required: ["display_value"] }] },
+            { oneOf: [
+              { required: ["param_index"] },
+              { required: ["param_ident"], not: { required: ["param_index"] } },
+              { required: ["param_name"], not: { anyOf: [{ required: ["param_index"] }, { required: ["param_ident"] }] } },
+            ] },
           ],
         },
       },
@@ -1436,6 +1478,7 @@ function stockPluginControlInputSchema() {
       {
         properties: {
           mode: { const: "semantic" },
+          controls: { type: "object", additionalProperties: true },
         },
         not: {
           anyOf: [
@@ -1493,6 +1536,50 @@ function stockPluginControlInputSchema() {
                 { required: ["control_overrides"] },
                 { required: ["changes"] },
                 { required: ["assignments"] },
+              ],
+            },
+          },
+          {
+            required: ["mode", "fx_set_ref"],
+            properties: {
+              mode: { const: "inspect_set" },
+              controls: naturalControlsSchema,
+            },
+            not: {
+              anyOf: [
+                { required: ["plugin"] },
+                { required: ["starter_action"] },
+                { required: ["action_parameters"] },
+                { required: ["control_overrides"] },
+                { required: ["selector"] },
+                { required: ["changes"] },
+                { required: ["assignments"] },
+                { required: ["bands"] },
+                { required: ["parameter_plan_ref"] },
+                { required: ["dry_run"] },
+              ],
+            },
+          },
+          {
+            required: ["mode", "fx_set_ref"],
+            properties: {
+              mode: { const: "shared_plan" },
+              controls: naturalControlsSchema,
+            },
+            oneOf: [
+              { required: ["parameter_plan_ref"], not: { required: ["controls"] } },
+              { required: ["controls"], not: { required: ["parameter_plan_ref"] } },
+            ],
+            not: {
+              anyOf: [
+                { required: ["plugin"] },
+                { required: ["starter_action"] },
+                { required: ["action_parameters"] },
+                { required: ["control_overrides"] },
+                { required: ["selector"] },
+                { required: ["changes"] },
+                { required: ["assignments"] },
+                { required: ["bands"] },
               ],
             },
           },

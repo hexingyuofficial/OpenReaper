@@ -44,6 +44,35 @@ local function skip_ws(source, position)
   return (next_position or (position - 1)) + 1
 end
 
+local function codepoint_to_utf8(codepoint, position)
+  if codepoint < 0 or codepoint > 0x10FFFF or (codepoint >= 0xD800 and codepoint <= 0xDFFF) then
+    parse_error("invalid unicode codepoint", position)
+  end
+  if utf8 and utf8.char then
+    return utf8.char(codepoint)
+  end
+  if codepoint <= 0x7F then
+    return string.char(codepoint)
+  elseif codepoint <= 0x7FF then
+    return string.char(
+      0xC0 + math.floor(codepoint / 0x40),
+      0x80 + (codepoint % 0x40)
+    )
+  elseif codepoint <= 0xFFFF then
+    return string.char(
+      0xE0 + math.floor(codepoint / 0x1000),
+      0x80 + (math.floor(codepoint / 0x40) % 0x40),
+      0x80 + (codepoint % 0x40)
+    )
+  end
+  return string.char(
+    0xF0 + math.floor(codepoint / 0x40000),
+    0x80 + (math.floor(codepoint / 0x1000) % 0x40),
+    0x80 + (math.floor(codepoint / 0x40) % 0x40),
+    0x80 + (codepoint % 0x40)
+  )
+end
+
 local function parse_string(source, position)
   if source:sub(position, position) ~= '"' then
     parse_error("expected string", position)
@@ -81,18 +110,33 @@ local function parse_string(source, position)
           parse_error("invalid unicode escape", position)
         end
         local codepoint = tonumber(hex, 16)
-        if utf8 and utf8.char then
-          parts[#parts + 1] = utf8.char(codepoint)
-        elseif codepoint <= 127 then
-          parts[#parts + 1] = string.char(codepoint)
-        else
-          parts[#parts + 1] = "?"
+        local consumed = 6
+        if codepoint >= 0xD800 and codepoint <= 0xDBFF then
+          if source:sub(position + 6, position + 7) ~= "\\u" then
+            parse_error("missing unicode low surrogate", position)
+          end
+          local low_hex = source:sub(position + 8, position + 11)
+          if not low_hex:match("^[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]$") then
+            parse_error("invalid unicode low surrogate", position)
+          end
+          local low = tonumber(low_hex, 16)
+          if low < 0xDC00 or low > 0xDFFF then
+            parse_error("invalid unicode low surrogate", position)
+          end
+          codepoint = 0x10000 + ((codepoint - 0xD800) * 0x400) + (low - 0xDC00)
+          consumed = 12
+        elseif codepoint >= 0xDC00 and codepoint <= 0xDFFF then
+          parse_error("unexpected unicode low surrogate", position)
         end
-        position = position + 6
+        parts[#parts + 1] = codepoint_to_utf8(codepoint, position)
+        position = position + consumed
       else
         parse_error("invalid string escape", position)
       end
     else
+      if char:byte() < 0x20 then
+        parse_error("unescaped control character", position)
+      end
       parts[#parts + 1] = char
       position = position + 1
     end
@@ -244,9 +288,20 @@ local ESCAPES = {
 }
 
 local function encode_string(value)
-  return '"' .. value:gsub('[%c\\"]', function(char)
-    return ESCAPES[char] or string.format("\\u%04x", char:byte())
-  end) .. '"'
+  local parts = { '"' }
+  for index = 1, #value do
+    local char = value:sub(index, index)
+    local byte = char:byte()
+    if ESCAPES[char] then
+      parts[#parts + 1] = ESCAPES[char]
+    elseif byte < 0x20 then
+      parts[#parts + 1] = string.format("\\u%04x", byte)
+    else
+      parts[#parts + 1] = char
+    end
+  end
+  parts[#parts + 1] = '"'
+  return table.concat(parts)
 end
 
 local function is_finite_number(value)
@@ -321,10 +376,19 @@ local function parse_generation(value)
   return number
 end
 
-local ACTIVE_OWNER = non_empty(os.getenv(OWNER_ENV)) or DEFAULT_OWNER
-local ACTIVE_GENERATION = parse_generation(os.getenv(GENERATION_ENV))
-local ARTIFACT_ROOT = non_empty(os.getenv(ARTIFACT_ROOT_ENV))
-local RENDER_ROOT = non_empty(os.getenv(RENDER_ROOT_ENV))
+local function configured_value(env_name, global_name)
+  local from_environment = non_empty(os.getenv(env_name))
+  if from_environment then return from_environment end
+  if global_name and type(_G) == "table" then
+    return non_empty(rawget(_G, global_name))
+  end
+  return nil
+end
+
+local ACTIVE_OWNER = configured_value(OWNER_ENV, "__OPENREAPER_DEFAULT_OWNER") or DEFAULT_OWNER
+local ACTIVE_GENERATION = parse_generation(configured_value(GENERATION_ENV, "__OPENREAPER_DEFAULT_GENERATION"))
+local ARTIFACT_ROOT = configured_value(ARTIFACT_ROOT_ENV, "__OPENREAPER_DEFAULT_ARTIFACT_ROOT")
+local RENDER_ROOT = configured_value(RENDER_ROOT_ENV, "__OPENREAPER_DEFAULT_RENDER_ROOT")
 local function path_separator(path)
   return type(path) == "string" and path:find("\\", 1, true) and "\\" or "/"
 end
@@ -562,6 +626,28 @@ local function bounded_string(value, max_length)
   return utf8_prefix_by_bytes(text, limit - 3) .. "..."
 end
 
+local function has_control_byte(value)
+  if type(value) ~= "string" then
+    return false
+  end
+  for index = 1, #value do
+    local byte = value:byte(index)
+    if byte < 0x20 or byte == 0x7F then
+      return true
+    end
+  end
+  return false
+end
+
+local function read_track_name(track, max_length)
+  local ok_name, success, explicit_name = call_reaper("GetSetMediaTrackInfo_String", track, "P_NAME", "", false)
+  if ok_name and success ~= false and type(explicit_name) == "string" and explicit_name ~= "" then
+    return bounded_string(explicit_name, max_length or 160)
+  end
+  local ok_display, _, display_name = call_reaper("GetTrackName", track, "")
+  return bounded_string(ok_display and first_string(display_name) or "", max_length or 160)
+end
+
 local function is_object(value)
   return type(value) == "table" and value ~= JSON_NULL and not is_json_array(value)
 end
@@ -660,6 +746,9 @@ local function normalize_bridge_error_code(code)
   end
   if code == "VIDEO_PROCESSOR_NOT_FOUND" then
     return "FX_NOT_FOUND", code
+  end
+  if code == "PROJECT_LOCKING_ENABLED" then
+    return "COMMAND_FAILED", code
   end
   return code, nil
 end
@@ -2809,14 +2898,18 @@ local function read_transport_state_loop_time_range(is_loop)
   local ok, start_time, end_time = call_reaper("GetSet_LoopTimeRange", false, is_loop, 0, 0, false)
   if ok and type(start_time) == "number" and type(end_time) == "number" then
     return {
+      read_status = "available",
       start_seconds = start_time,
       end_seconds = end_time,
+      length_seconds = math.max(0, end_time - start_time),
       active = end_time > start_time,
     }
   end
   return {
+    read_status = "unavailable",
     start_seconds = 0,
     end_seconds = 0,
+    length_seconds = 0,
     active = false,
   }
 end
@@ -3530,8 +3623,7 @@ local function resolve_track_ref_error(code, message, details, recoverable)
 end
 
 local function resolve_track_ref_track_name(track)
-  local ok, _, name = call_reaper("GetTrackName", track, "")
-  return bounded_string(ok and first_string(name) or "", 160)
+  return read_track_name(track, 160)
 end
 
 local function resolve_track_ref_track_guid(track)
@@ -3851,6 +3943,34 @@ local function read_item_summary_linear_to_db(value)
   return 20 * math.log(linear) / math.log(10)
 end
 
+local function read_item_summary_source_basename(path)
+  if type(path) ~= "string" or path == "" then return "" end
+  local posix_style = path:sub(1, 1) == "/"
+  local normalized = posix_style and path:gsub("/+$", "") or path:gsub("[\\/]+$", "")
+  local separator = normalized:match("^.*()/") or 0
+  if not posix_style then separator = math.max(separator, normalized:match("^.*()\\") or 0) end
+  return normalized:sub(separator + 1)
+end
+
+local function read_item_summary_source_identity(take, source)
+  local ok_midi, is_midi = call_reaper("TakeIsMIDI", take)
+  if ok_midi and (is_midi == true or is_midi == 1) then
+    return "midi", JSON_NULL, JSON_NULL, JSON_NULL, "not_file_backed"
+  end
+  local source_kind = "unknown"
+  if source then
+    local ok_type, source_type = call_reaper("GetMediaSourceType", source, "")
+    source_type = ok_type and first_string(source_type) or nil
+    if type(source_type) == "string" and source_type ~= "" then source_kind = source_type:lower() end
+    local ok_path, path = call_reaper("GetMediaSourceFileName", source, "")
+    path = ok_path and first_string(path) or nil
+    if type(path) == "string" and path ~= "" then
+      return source_kind, "file:path:" .. path, path, read_item_summary_source_basename(path), "available"
+    end
+  end
+  return source_kind, JSON_NULL, JSON_NULL, JSON_NULL, "unavailable"
+end
+
 local function read_item_summary_track_guid(track)
   local ok, guid = call_reaper("GetTrackGUID", track)
   guid = ok and first_string(guid) or nil
@@ -4103,6 +4223,11 @@ local function read_item_summary_value(item, include_take_summary)
     end
     summary.active_take_ref = JSON_NULL
     summary.active_take_name = ""
+    summary.active_take_source_kind = "unknown"
+    summary.active_take_source_ref = JSON_NULL
+    summary.active_take_source_path = JSON_NULL
+    summary.active_take_source_basename = JSON_NULL
+    summary.active_take_source_identity_status = "no_active_take"
     return summary
   end
 
@@ -4178,6 +4303,8 @@ local function read_item_summary_value(item, include_take_summary)
       reverse = available == true and (reversed == true or reversed == 1) or false
     end
   end
+  local source_kind, source_ref, source_path, source_basename, source_identity_status =
+    read_item_summary_source_identity(take, ok_source and source or nil)
   local ok_take_fx, take_fx_count_raw = call_reaper("TakeFX_GetCount", take)
   local take_fx_count = ok_take_fx and read_item_summary_finite_number(first_number(take_fx_count_raw)) or nil
   if take_fx_count ~= nil and (take_fx_count < 0 or take_fx_count ~= math.floor(take_fx_count)) then
@@ -4190,6 +4317,11 @@ local function read_item_summary_value(item, include_take_summary)
   summary.playrate = playrate
   summary.preserve_pitch = ppitch == 1
   summary.reverse = reverse == nil and JSON_NULL or reverse
+  summary.active_take_source_kind = source_kind
+  summary.active_take_source_ref = source_ref
+  summary.active_take_source_path = source_path
+  summary.active_take_source_basename = source_basename
+  summary.active_take_source_identity_status = source_identity_status
   summary.take_fx_count = take_fx_count == nil and JSON_NULL or take_fx_count
   summary.has_take_fx = take_fx_count == nil and JSON_NULL or take_fx_count > 0
   return summary
@@ -4622,7 +4754,7 @@ local function project_file_save_as_structural_target(request)
     })
   end
   local target = request.params.target_path
-  if target == "" or #target > PROJECT_FILE_SAVE_PATH_MAX_BYTES or target:find("[%c%z]") then
+  if target == "" or #target > PROJECT_FILE_SAVE_PATH_MAX_BYTES or has_control_byte(target) then
     return project_file_save_error("PARAMS_INVALID", "save_project_as target failed bounded structural validation.", {
       blocker = "target_structure_invalid",
     })
@@ -5718,8 +5850,7 @@ local function d9_tracks_ref_string(track)
 end
 
 local function d9_tracks_name(track)
-  local ok, _, name = call_reaper("GetTrackName", track, "")
-  return bounded_string(ok and first_string(name) or "", 160)
+  return read_track_name(track, 160)
 end
 
 local function d9_tracks_object_ref(track)
@@ -6196,8 +6327,7 @@ local function d10_overview_track_ref(track)
 end
 
 local function d10_overview_track_name(track)
-  local ok, _, name = call_reaper("GetTrackName", track, "")
-  return bounded_string(ok and first_string(name) or "", 80)
+  return read_track_name(track, 80)
 end
 
 local function d10_overview_track_selected(track)
@@ -6286,31 +6416,118 @@ local function d10_overview_take_ref(take)
   }
 end
 
-local function d10_overview_take_source_kind(take)
+local function d10_overview_source_basename(path)
+  if type(path) ~= "string" or path == "" then return "" end
+  local posix_style = path:sub(1, 1) == "/"
+  local normalized = posix_style and path:gsub("/+$", "") or path:gsub("[\\/]+$", "")
+  local separator = normalized:match("^.*()/") or 0
+  if not posix_style then
+    separator = math.max(separator, normalized:match("^.*()\\") or 0)
+  end
+  return normalized:sub(separator + 1)
+end
+
+local function d10_overview_take_source_identity(take)
   local ok_midi, is_midi = call_reaper("TakeIsMIDI", take)
-  if ok_midi and (is_midi == true or is_midi == 1) then return "midi" end
+  if ok_midi and (is_midi == true or is_midi == 1) then
+    return {
+      source_kind = "midi",
+      source_ref = JSON_NULL,
+      source_path = JSON_NULL,
+      source_basename = JSON_NULL,
+      source_identity_status = "not_file_backed",
+    }
+  end
   local ok_source, source = call_reaper("GetMediaItemTake_Source", take)
+  local source_kind = "unknown"
   if ok_source and source then
     local ok_type, source_type = call_reaper("GetMediaSourceType", source, "")
     local value = ok_type and first_string(source_type) or nil
-    if type(value) == "string" and value ~= "" then return value:lower() end
+    if type(value) == "string" and value ~= "" then source_kind = value:lower() end
+    local ok_path, path = call_reaper("GetMediaSourceFileName", source, "")
+    path = ok_path and first_string(path) or nil
+    if type(path) == "string" and path ~= "" then
+      return {
+        source_kind = source_kind,
+        source_ref = "file:path:" .. path,
+        source_path = path,
+        source_basename = d10_overview_source_basename(path),
+        source_identity_status = "available",
+      }
+    end
   end
-  return "unknown"
+  return {
+    source_kind = source_kind,
+    source_ref = JSON_NULL,
+    source_path = JSON_NULL,
+    source_basename = JSON_NULL,
+    source_identity_status = "unavailable",
+  }
 end
 
-local function d10_overview_take_summary(take, item, track, take_index, active_take)
+local d10_overview_native_count
+
+local function d10_overview_take_fx_rows(take, take_ref)
+  local count = d10_overview_native_count("TakeFX_GetCount", take)
+  if count == nil or count > 32 then
+    return json_array({}), count, false
+  end
+  local rows = json_array({})
+  for slot_index = 0, count - 1 do
+    local ok_guid, fx_guid = call_reaper("TakeFX_GetFXGUID", take, slot_index)
+    fx_guid = ok_guid and first_string(fx_guid) or nil
+    local ok_name, name_ok, name = call_reaper("TakeFX_GetFXName", take, slot_index, "")
+    name = ok_name and name_ok ~= false and first_string(name) or nil
+    local ok_enabled, enabled = call_reaper("TakeFX_GetEnabled", take, slot_index)
+    if not fx_guid or fx_guid == "" or type(name) ~= "string" or not ok_enabled or type(enabled) ~= "boolean" then
+      return json_array({}), count, false
+    end
+    local ok_ident, ident_ok, ident = call_reaper("TakeFX_GetNamedConfigParm", take, slot_index, "fx_ident")
+    ident = ok_ident and ident_ok ~= false and first_string(ident) or nil
+    rows[#rows + 1] = {
+      fx_ref = "fx:" .. take_ref .. ":" .. tostring(slot_index),
+      owner_kind = "take",
+      owner_ref = take_ref,
+      fx_guid = fx_guid,
+      slot_index = slot_index,
+      name = bounded_string(name, 160),
+      plugin_id = type(ident) == "string" and ident ~= "" and bounded_string(ident, 256) or JSON_NULL,
+      enabled = enabled,
+      bypassed = not enabled,
+    }
+  end
+  return rows, count, true
+end
+
+local function d10_overview_take_summary(take, item, track, take_index, active_take, include_take_fx)
   local take_ref = d10_overview_take_ref_string(take)
-  if not take_ref then return nil end
+  if not take_ref then return nil, json_array({}), false end
   local ok_name, _, name = call_reaper("GetSetMediaItemTakeInfo_String", take, "P_NAME", "", false)
-  return {
+  local take_fx = json_array({})
+  local take_fx_count = nil
+  local take_fx_complete = true
+  if include_take_fx then
+    take_fx, take_fx_count, take_fx_complete = d10_overview_take_fx_rows(take, take_ref)
+  end
+  local source_identity = d10_overview_take_source_identity(take)
+  local summary = {
     take_ref = take_ref,
     item_ref = d10_overview_item_ref_string(item),
     track_ref = track and d10_overview_track_ref_string(track) or JSON_NULL,
     index = take_index,
     active = take == active_take,
     name = bounded_string(ok_name and first_string(name) or "", 80),
-    source_kind = d10_overview_take_source_kind(take),
+    source_kind = source_identity.source_kind,
+    source_ref = source_identity.source_ref,
+    source_path = source_identity.source_path,
+    source_basename = source_identity.source_basename,
+    source_identity_status = source_identity.source_identity_status,
   }
+  if include_take_fx then
+    summary.take_fx_count = take_fx_count == nil and JSON_NULL or take_fx_count
+    summary.has_take_fx = take_fx_count == nil and JSON_NULL or take_fx_count > 0
+  end
+  return summary, take_fx, take_fx_complete
 end
 
 local function d10_overview_item_summary(item, track, item_index)
@@ -6320,6 +6537,13 @@ local function d10_overview_item_summary(item, track, item_index)
     local ok_name, _, take_name = call_reaper("GetSetMediaItemTakeInfo_String", take, "P_NAME", "", false)
     if ok_name then active_take_name = bounded_string(first_string(take_name) or "", 80) end
   end
+  local source_identity = ok_take and take and d10_overview_take_source_identity(take) or {
+    source_kind = "unknown",
+    source_ref = JSON_NULL,
+    source_path = JSON_NULL,
+    source_basename = JSON_NULL,
+    source_identity_status = "no_active_take",
+  }
   return {
     item_ref = d10_overview_item_ref_string(item),
     track_ref = track and d10_overview_track_ref_string(track) or JSON_NULL,
@@ -6330,6 +6554,11 @@ local function d10_overview_item_summary(item, track, item_index)
     muted = (first_number(select(2, call_reaper("GetMediaItemInfo_Value", item, "B_MUTE"))) or 0) == 1,
     locked = (first_number(select(2, call_reaper("GetMediaItemInfo_Value", item, "C_LOCK"))) or 0) ~= 0,
     active_take_name = active_take_name,
+    active_take_source_kind = source_identity.source_kind,
+    active_take_source_ref = source_identity.source_ref,
+    active_take_source_path = source_identity.source_path,
+    active_take_source_basename = source_identity.source_basename,
+    active_take_source_identity_status = source_identity.source_identity_status,
   }
 end
 
@@ -6343,7 +6572,7 @@ local function d10_overview_selector_matches(summary, filter)
   )
 end
 
-local function d10_overview_native_count(api_name, ...)
+d10_overview_native_count = function(api_name, ...)
   local ok, value = call_reaper(api_name, ...)
   if not ok or type(value) ~= "number" or value ~= value or value == math.huge or value == -math.huge then
     return nil
@@ -6389,6 +6618,7 @@ local function read_track_item_overview(request)
   local max_items_per_track = include_track_items and d10_overview_budget_item_limit(request, request.params and request.params.max_items_per_track, max_tracks) or 0
   local include_selected_items = request.params == nil or request.params.include_selected_items ~= false
   local include_takes = request.params and request.params.include_takes == true
+  local include_take_fx = include_takes and request.params.include_take_fx == true
   local max_takes = d10_overview_bounded_limit(request, request.params and request.params.max_takes, 64, 513)
   local max_selected_items = d10_overview_bounded_limit(request, request.params and request.params.max_selected_items, 4, 513)
   local selector_filter = request.params and request.params.selector_filter
@@ -6400,6 +6630,7 @@ local function read_track_item_overview(request)
   local items = json_array({})
   local selected_items = json_array({})
   local takes = json_array({})
+  local take_fx = json_array({})
   local refs = json_array({ d10_overview_project_ref() })
 
   local end_track = math.min(total_tracks, track_cursor + max_tracks)
@@ -6477,10 +6708,29 @@ local function read_track_item_overview(request)
               visited_take_slots = visited_take_slots + 1
               local ok_take, take = call_reaper("GetTake", item, take_index)
               if ok_take and take then
-                local take_summary = d10_overview_take_summary(take, item, ok_track and track or nil, take_index, ok_active and active_take or nil)
+                local take_summary, take_fx_rows, take_fx_complete = d10_overview_take_summary(
+                  take,
+                  item,
+                  ok_track and track or nil,
+                  take_index,
+                  ok_active and active_take or nil,
+                  include_take_fx
+                )
                 if take_summary then
                   takes[#takes + 1] = take_summary
                   refs[#refs + 1] = d10_overview_take_ref(take)
+                  if include_take_fx then
+                    if not take_fx_complete then takes_internally_complete = false end
+                    for fx_index = 1, #take_fx_rows do
+                      local fx = take_fx_rows[fx_index]
+                      take_fx[#take_fx + 1] = fx
+                      refs[#refs + 1] = {
+                        kind = "fx",
+                        ref = fx.fx_ref,
+                        identity = { scheme = "take_fx", value = fx.owner_ref .. ":" .. tostring(fx.slot_index) },
+                      }
+                    end
+                  end
                 else
                   takes_internally_complete = false
                 end
@@ -6533,6 +6783,12 @@ local function read_track_item_overview(request)
     summary.takes_truncated = next_take_cursor < total_takes
     summary.take_coverage_status = not takes_internally_complete and "incomplete" or (next_take_cursor < total_takes and "paged" or "complete")
     summary.take_coverage = { internally_complete = takes_internally_complete }
+    if include_take_fx then
+      summary.take_fx = take_fx
+      summary.returned_take_fx_count = #take_fx
+      summary.take_fx_coverage_status = summary.take_coverage_status
+      summary.take_fx_coverage = { internally_complete = takes_internally_complete }
+    end
     if next_take_cursor < total_takes then summary.next_take_cursor = tostring(next_take_cursor) end
   end
   return summary, nil, json_array({}), json_array({}), refs
@@ -7259,6 +7515,16 @@ __openreaper_register_handler_module("items/d13_items_core_route.lua", function(
 -- Extracted D13 handler: items core read/write controls.
 
 local D13_ITEMS_TOGGLE_TAKE_REVERSE_ACTION_ID = 41051
+local D13_ITEMS_GLOBAL_LOCKING_ACTION_ID = 1135
+
+local function d13_items_global_locking_enabled()
+  local ok, state = call_reaper(
+    "GetToggleCommandStateEx",
+    0,
+    D13_ITEMS_GLOBAL_LOCKING_ACTION_ID
+  )
+  return ok and first_number(state) == 1
+end
 
 local function d13_items_error(code, message, details, recoverable)
   return nil, {
@@ -7369,8 +7635,7 @@ local function d13_items_find_track_by_guid(guid)
 end
 
 local function d13_items_track_name(track)
-  local ok, _, name = call_reaper("GetTrackName", track, "")
-  return bounded_string(ok and first_string(name) or "", 160)
+  return read_track_name(track, 160)
 end
 
 local function d13_items_find_track_by_name(name)
@@ -8873,6 +9138,15 @@ local function d13_items_apply_item_selection(items, target_item)
   return true
 end
 
+local function d13_items_apply_item_selection_set(items, selected_items)
+  for index = 1, #items do
+    local selected = selected_items[items[index].item] == true
+    local ok_set, accepted = call_reaper("SetMediaItemSelected", items[index].item, selected)
+    if not ok_set or accepted == false then return false end
+  end
+  return true
+end
+
 local function d13_items_restore_reverse_context(snapshot)
   local selection_ok = d13_items_clear_track_selection()
   for index = 1, #snapshot.selected_tracks do
@@ -8909,7 +9183,175 @@ local function d13_items_restore_reverse_context(snapshot)
   return selection_ok, active_ok
 end
 
+local function d13_items_set_reverse_batch(request)
+  local batch = request.params.batch
+  if not is_json_array(batch) or #batch < 1 or #batch > 64 then
+    return d13_items_error("PARAMS_INVALID", "Take reverse batch must contain 1-64 exact Item rows.", {
+      row_count = is_json_array(batch) and #batch or 0,
+      zero_write = true,
+    })
+  end
+  if request.params.reverse ~= true and request.params.reverse ~= false then
+    return d13_items_error("PARAMS_INVALID", "Take reverse batch requires a boolean reverse value.", { zero_write = true })
+  end
+
+  local items = d13_items_all_items()
+  local selected_tracks = d13_items_selected_tracks()
+  if not items or not selected_tracks then
+    return d13_items_error("COMMAND_FAILED", "Take reverse batch could not snapshot complete Item, Track-selection, and Active-Take state.", { zero_write = true }, false)
+  end
+  local by_ref = {}
+  local ref_counts = {}
+  for index = 1, #items do
+    local ref = d13_items_item_ref_string(items[index].item)
+    ref_counts[ref] = (ref_counts[ref] or 0) + 1
+    by_ref[ref] = items[index]
+  end
+
+  local targets = {}
+  local requested_refs = {}
+  for index = 1, #batch do
+    local row = batch[index]
+    local ref = is_object(row) and row.item_ref or nil
+    if not is_string(ref) or not ref:match("^item:guid:[^:]+$") then
+      return d13_items_error("REF_INVALID", "Take reverse batch accepts only exact item:guid rows.", { row_index = index, zero_write = true })
+    end
+    if requested_refs[ref] then
+      return d13_items_error("REF_INVALID", "Take reverse batch repeats an Item ref.", { item_ref = ref, zero_write = true })
+    end
+    requested_refs[ref] = true
+    local saved = by_ref[ref]
+    if not saved or ref_counts[ref] ~= 1 then
+      return d13_items_error("REF_INVALID", "Take reverse batch Item GUID was missing or duplicated in the live project.", {
+        item_ref = ref,
+        duplicate_count = ref_counts[ref] or 0,
+        zero_write = true,
+      })
+    end
+    if not saved.active_take then
+      return d13_items_error("TAKE_NOT_FOUND", "Take reverse batch requires every Item to expose an active Take.", { item_ref = ref, zero_write = true })
+    end
+    local before = d13_items_take_reverse_state(saved.active_take)
+    if before == nil then
+      return d13_items_error("COMMAND_FAILED", "Take reverse batch could not read every active Take reverse state before mutation.", { item_ref = ref, zero_write = true }, false)
+    end
+    targets[#targets + 1] = {
+      id = is_string(row.id) and bounded_string(row.id, 80) or ("i" .. tostring(index)),
+      item_ref = ref,
+      item = saved.item,
+      take = saved.active_take,
+      before = before,
+    }
+  end
+
+  local snapshot = { items = items, selected_tracks = selected_tracks }
+  local action_set = {}
+  local action_count = 0
+  for index = 1, #targets do
+    if targets[index].before ~= request.params.reverse then
+      action_set[targets[index].item] = true
+      action_count = action_count + 1
+    end
+  end
+  if action_count > 0 and d13_items_global_locking_enabled() then
+    return d13_items_error("PROJECT_LOCKING_ENABLED", "REAPER project Locking is enabled; disable Locking and retry the same Take reverse request.", {
+      zero_write = true,
+      locking_action_id = D13_ITEMS_GLOBAL_LOCKING_ACTION_ID,
+      native_action_count = 0,
+      selection_restored = true,
+      active_take_restored = true,
+    })
+  end
+  if not d13_items_apply_item_selection_set(items, action_set) then
+    local selection_restored, active_take_restored = d13_items_restore_reverse_context(snapshot)
+    return d13_items_error("COMMAND_FAILED", "Take reverse batch could not stage the exact Item selection.", {
+      zero_write = true,
+      selection_restored = selection_restored,
+      active_take_restored = active_take_restored,
+    }, false)
+  end
+  for index = 1, #targets do
+    local target = targets[index]
+    local ok_set, accepted = call_reaper("SetActiveTake", target.take)
+    local ok_read, active = call_reaper("GetActiveTake", target.item)
+    if not ok_set or accepted == false or not ok_read or active ~= target.take then
+      local selection_restored, active_take_restored = d13_items_restore_reverse_context(snapshot)
+      return d13_items_error("COMMAND_FAILED", "Take reverse batch could not stage every exact active Take.", {
+        item_ref = target.item_ref,
+        zero_write = true,
+        selection_restored = selection_restored,
+        active_take_restored = active_take_restored,
+      }, false)
+    end
+  end
+
+  local native_action_count = 0
+  if action_count > 0 then
+    local command_ok, command_result = call_reaper("Main_OnCommandEx", D13_ITEMS_TOGGLE_TAKE_REVERSE_ACTION_ID, 0, 0)
+    if not command_ok or command_result == false then
+      local selection_restored, active_take_restored = d13_items_restore_reverse_context(snapshot)
+      return d13_items_error("COMMAND_FAILED", "REAPER rejected the fixed native Take reverse batch action.", {
+        selection_restored = selection_restored,
+        active_take_restored = active_take_restored,
+      }, false)
+    end
+    native_action_count = 1
+    for index = 1, #targets do call_reaper("UpdateItemInProject", targets[index].item) end
+    call_reaper("UpdateArrange")
+  end
+
+  local rows = json_array({})
+  local refs = json_array({})
+  local readback_ok = true
+  for index = 1, #targets do
+    local target = targets[index]
+    local observed = d13_items_take_reverse_state(target.take)
+    if observed ~= request.params.reverse then readback_ok = false end
+    local take_ref = d13_items_take_ref_string(target.take)
+    rows[#rows + 1] = {
+      id = target.id,
+      item_ref = target.item_ref,
+      active_take_ref = take_ref,
+      before_reverse = target.before,
+      reverse = observed == true,
+      changed = target.before ~= request.params.reverse,
+      status = observed == request.params.reverse and "applied" or "readback_failed",
+      live_readback = { status = observed == request.params.reverse and "passed" or "failed" },
+    }
+    refs[#refs + 1] = d13_items_item_object_ref(target.item)
+    local take_guid = take_ref:match("^take:guid:(.+)$")
+    if take_guid then refs[#refs + 1] = { kind = "take", ref = take_ref, identity = { scheme = "guid", value = take_guid } } end
+  end
+  local selection_restored, active_take_restored = d13_items_restore_reverse_context(snapshot)
+  if not readback_ok or not selection_restored or not active_take_restored then
+    return d13_items_error("VERIFY_FAILED", "Take reverse batch aggregate readback or context restoration failed.", {
+      row_count = #rows,
+      native_action_count = native_action_count,
+      readback_status = readback_ok and "passed" or "failed",
+      selection_restored = selection_restored,
+      active_take_restored = active_take_restored,
+    }, false)
+  end
+  return {
+    kind = "take_reverse_batch",
+    rows = rows,
+    row_count = #rows,
+    requested_reverse = request.params.reverse,
+    changed_count = action_count,
+    native_action_count = native_action_count,
+    fixed_action_id = D13_ITEMS_TOGGLE_TAKE_REVERSE_ACTION_ID,
+    selection_restored = true,
+    active_take_restored = true,
+    readback_status = "passed",
+    undo_opened = request.__openreaper_undo_opened == true,
+    source_media_deleted = false,
+  }, nil, json_array({}), json_array({}), refs
+end
+
 local function d13_items_set_reverse(request)
+  if is_json_array(request.params and request.params.batch) then
+    return d13_items_set_reverse_batch(request)
+  end
   local item, failure = d13_items_item_for_write(request)
   if not item then return d13_items_error(failure.code, failure.message, failure.details) end
   local take, take_failure = d13_items_take_for_write(request, item)
@@ -8928,6 +9370,17 @@ local function d13_items_set_reverse(request)
     summary.selection_restored = true
     summary.active_take_restored = true
     return summary, err, artifacts, jobs, refs
+  end
+
+  if d13_items_global_locking_enabled() then
+    return d13_items_error("PROJECT_LOCKING_ENABLED", "REAPER project Locking is enabled; disable Locking and retry the same Take reverse request.", {
+      item_ref = d13_items_item_ref_string(item),
+      zero_write = true,
+      locking_action_id = D13_ITEMS_GLOBAL_LOCKING_ACTION_ID,
+      native_action_count = 0,
+      selection_restored = true,
+      active_take_restored = true,
+    })
   end
 
   local items = d13_items_all_items()
@@ -10141,8 +10594,7 @@ local function d16_tracks_index(track)
 end
 
 local function d16_tracks_name(track)
-  local ok, _, name = call_reaper("GetTrackName", track, "")
-  return bounded_string(ok and first_string(name) or "", 160)
+  return read_track_name(track, 160)
 end
 
 local function d16_tracks_ref_string(track)
@@ -14206,6 +14658,20 @@ local function e2_fx_read_name(owner_kind, owner, slot_index)
   return bounded_string(ok and first_string(name) or "", 160)
 end
 
+local function e2_fx_read_guid(owner_kind, owner, slot_index)
+  local api = owner_kind == "take" and "TakeFX_GetFXGUID" or "TrackFX_GetFXGUID"
+  local ok, guid = call_reaper(api, owner, slot_index)
+  guid = ok and first_string(guid) or nil
+  return type(guid) == "string" and guid ~= "" and guid or nil
+end
+
+local function e2_fx_read_plugin_id(owner_kind, owner, slot_index)
+  local api = owner_kind == "take" and "TakeFX_GetNamedConfigParm" or "TrackFX_GetNamedConfigParm"
+  local ok, available, ident = call_reaper(api, owner, slot_index, "fx_ident")
+  ident = ok and available ~= false and first_string(ident) or nil
+  return type(ident) == "string" and ident ~= "" and bounded_string(ident, 256) or nil
+end
+
 local function e2_fx_read_enabled(owner_kind, owner, slot_index)
   local ok, enabled
   if owner_kind == "take" then
@@ -14279,6 +14745,15 @@ end
 local function e2_fx_format_param_normalized(owner_kind, owner, slot_index, param_index, normalized_value)
   local api = owner_kind == "take" and "TakeFX_FormatParamValueNormalized" or "TrackFX_FormatParamValueNormalized"
   local ok, formatted_ok, formatted = call_reaper(api, owner, slot_index, param_index, normalized_value, "")
+  if not ok or formatted_ok == false then
+    return nil
+  end
+  return bounded_string(first_string(formatted) or "", 160)
+end
+
+local function e2_fx_format_param_value(owner_kind, owner, slot_index, param_index, value)
+  local api = owner_kind == "take" and "TakeFX_FormatParamValue" or "TrackFX_FormatParamValue"
+  local ok, formatted_ok, formatted = call_reaper(api, owner, slot_index, param_index, value)
   if not ok or formatted_ok == false then
     return nil
   end
@@ -14398,8 +14873,10 @@ local function e2_fx_read_fx_summary(owner_kind, owner, slot_index)
     fx_ref = e2_fx_read_fx_ref_string(owner_kind, owner_ref, slot_index),
     owner_kind = owner_kind,
     owner_ref = owner_ref,
+    fx_guid = e2_fx_read_guid(owner_kind, owner, slot_index) or JSON_NULL,
     slot_index = slot_index,
     name = name,
+    plugin_id = e2_fx_read_plugin_id(owner_kind, owner, slot_index) or JSON_NULL,
     enabled = e2_fx_read_enabled(owner_kind, owner, slot_index),
     parameter_count = e2_fx_read_param_count(owner_kind, owner, slot_index),
   }, e2_fx_read_fx_object_ref(owner_kind, owner_ref, slot_index, name)
@@ -14488,7 +14965,12 @@ local function read_fx_summary(request)
   return e2_fx_read_summary(request, summary), nil, json_array({}), json_array({}), e2_fx_read_refs(ref)
 end
 
+local E2_FX_HOMOGENEOUS_SET = {}
+
 local function list_fx_parameters(request)
+  if is_object(request.params) and request.params.mode == "inspect_set" then
+    return E2_FX_HOMOGENEOUS_SET.inspect(request)
+  end
   local owner_kind, owner, slot_index = e2_fx_read_fx_from_request_refs(request)
   if not owner then
     return e2_fx_read_error("FX_REF_NOT_FOUND", "E2 FX-L1 list_fx_parameters requires a resolvable FX ref.")
@@ -14559,7 +15041,12 @@ local function read_fx_parameter(request)
   local step_sizes = e2_fx_read_param_step_sizes(owner_kind, owner, slot_index, param_index)
   local normalized_value = e2_fx_read_param_normalized(owner_kind, owner, slot_index, param_index)
   local formatted_value = e2_fx_read_param_formatted(owner_kind, owner, slot_index, param_index)
-  if request.params and request.params.probe_normalized_value ~= nil then
+  local has_normalized_probe = request.params and request.params.probe_normalized_value ~= nil
+  local has_display_probe = request.params and request.params.probe_display_value ~= nil
+  if has_normalized_probe and has_display_probe then
+    return e2_fx_read_error("PARAMS_INVALID", "E2 FX-L1 accepts exactly one probe_normalized_value or probe_display_value.")
+  end
+  if has_normalized_probe then
     local probe_normalized_value = tonumber(request.params.probe_normalized_value)
     if not probe_normalized_value or probe_normalized_value < 0 or probe_normalized_value > 1 then
       return e2_fx_read_error("PARAMS_INVALID", "E2 FX-L1 probe_normalized_value must be between 0 and 1.", {
@@ -14575,6 +15062,26 @@ local function read_fx_parameter(request)
     end
     normalized_value = probe_normalized_value
     formatted_value = probe_formatted
+  elseif has_display_probe then
+    local probe_display_value = request.params.probe_display_value
+    if not is_string(probe_display_value) or probe_display_value == "" or #probe_display_value > 80 then
+      return e2_fx_read_error("PARAMS_INVALID", "E2 FX-L1 probe_display_value must be one bounded native-formatted target string.")
+    end
+    local compiled_value, compiled_formatted = E2_FX_HOMOGENEOUS_SET.search_formatted({
+      owner_kind = owner_kind,
+      owner = owner,
+      slot_index = slot_index,
+    }, param_index, probe_display_value)
+    if not compiled_value then
+      return e2_fx_read_error("FX_DISPLAY_VALUE_UNREACHABLE", "REAPER native formatting could not reach the requested FX display value without mutation.", {
+        param_index = param_index,
+        display_value = bounded_string(probe_display_value, 80),
+        zero_write = true,
+      })
+    end
+    values.value = compiled_value
+    normalized_value = JSON_NULL
+    formatted_value = compiled_formatted
   end
   local _, ref = e2_fx_read_fx_summary(owner_kind, owner, slot_index)
   return e2_fx_read_summary(request, {
@@ -14972,7 +15479,1260 @@ local function add_track_fx(request)
   return e2_fx_write_summary(request, summary), nil, json_array({}), json_array({}), e2_fx_read_refs(ref)
 end
 
+local E2_FX_TAKE_FANOUT_MAX_TARGETS = 64
+local E2_FX_LAYOUT_MAX_PARAMETERS = 4096
+local E2_FX_CHAIN_MAX_INSTANCES = 4096
+
+local function e2_fx_fingerprint_segments(prefix, segments)
+  local lane_a = 104729
+  local lane_b = 130363
+  local byte_index = 0
+  for segment_index = 1, #segments do
+    local value = tostring(segments[segment_index] or "")
+    local framed = tostring(#value) .. ":" .. value .. ";"
+    for index = 1, #framed do
+      local byte = framed:byte(index)
+      byte_index = byte_index + 1
+      lane_a = (lane_a * 131 + byte + byte_index) % 2147483647
+      lane_b = (lane_b * 257 + byte + segment_index) % 2147483629
+    end
+  end
+  return prefix .. ":" .. string.format("%08x", lane_a) .. string.format("%08x", lane_b)
+end
+
+local function e2_fx_parameter_layout(owner_kind, owner, slot_index, plugin_id, plugin_name)
+  local count_api = owner_kind == "take" and "TakeFX_GetNumParams" or "TrackFX_GetNumParams"
+  local ok_count, raw_parameter_count = call_reaper(count_api, owner, slot_index)
+  local parameter_count = ok_count and first_number(raw_parameter_count) or nil
+  if type(parameter_count) ~= "number" or parameter_count < 0
+      or parameter_count ~= math.floor(parameter_count) then
+    return nil, "FX_PARAMETER_LAYOUT_UNAVAILABLE"
+  end
+  if parameter_count > E2_FX_LAYOUT_MAX_PARAMETERS then
+    return nil, "FX_PARAMETER_LAYOUT_LIMIT_EXCEEDED"
+  end
+  local segments = { "openreaper.fx_parameter_layout.v1", plugin_id, plugin_name, parameter_count }
+  for param_index = 0, parameter_count - 1 do
+    local param_ident = e2_fx_read_param_ident(owner_kind, owner, slot_index, param_index)
+    if not param_ident then
+      return nil, "FX_PARAMETER_IDENTITY_UNAVAILABLE"
+    end
+    local name_api = owner_kind == "take" and "TakeFX_GetParamName" or "TrackFX_GetParamName"
+    local ok_name, name_available, raw_param_name = call_reaper(name_api, owner, slot_index, param_index, "")
+    local param_name = ok_name and name_available ~= false and first_string(raw_param_name) or nil
+    if type(param_name) ~= "string" then
+      return nil, "FX_PARAMETER_NAME_UNAVAILABLE"
+    end
+    segments[#segments + 1] = param_index
+    segments[#segments + 1] = param_ident
+    segments[#segments + 1] = bounded_string(param_name, 160)
+  end
+  return {
+    parameter_count = parameter_count,
+    layout_fingerprint = e2_fx_fingerprint_segments("fx-layout-v1", segments),
+  }
+end
+
+local function e2_fx_native_item_guid(item)
+  local ok, _, guid = call_reaper("GetSetMediaItemInfo_String", item, "GUID", "", false)
+  if not ok or not is_string(guid) or guid == "" then
+    return nil
+  end
+  return guid
+end
+
+local function e2_fx_exact_fanout_track(request)
+  if not is_json_array(request.refs) or #request.refs ~= 1 then
+    return nil, nil, "FX_SET_TRACK_REF_INVALID"
+  end
+  local ref = request.refs[1]
+  local identity = is_object(ref) and is_object(ref.identity) and ref.identity or {}
+  local guid = is_object(ref) and is_string(ref.ref) and ref.ref:match("^track:guid:(.+)$") or nil
+  if not guid or ref.kind ~= "track" or identity.scheme ~= "guid" or identity.value ~= guid then
+    return nil, nil, "FX_SET_TRACK_REF_INVALID"
+  end
+  local track = e2_fx_read_find_track_by_guid(guid)
+  if not track or e2_fx_read_track_guid(track) ~= guid then
+    return nil, nil, "TRACK_NOT_FOUND"
+  end
+  return track, ref.ref, nil
+end
+
+local function e2_fx_fanout_binding_valid(binding)
+  if not is_object(binding) then return false end
+  for key in pairs(binding) do
+    if key ~= "bind_at" and key ~= "domain" and key ~= "selector" and key ~= "owner"
+        and key ~= "aggregation" and key ~= "cardinality" then
+      return false
+    end
+  end
+  local owner = binding.owner
+  local cardinality = binding.cardinality
+  if not is_object(owner) or not is_object(cardinality) then return false end
+  for key in pairs(owner) do
+    if key ~= "domain" and key ~= "selector" and key ~= "items" then return false end
+  end
+  for key in pairs(cardinality) do
+    if key ~= "minimum" and key ~= "maximum" then return false end
+  end
+  return binding.bind_at == "execution"
+    and binding.domain == "takes"
+    and binding.selector == "active_take_of_items"
+    and binding.aggregation == "batch"
+    and owner.domain == "tracks"
+    and owner.selector == "explicit_refs"
+    and owner.items == "all"
+    and cardinality.minimum == 1
+    and cardinality.maximum == E2_FX_TAKE_FANOUT_MAX_TARGETS
+end
+
+local function e2_fx_exact_installed_plugin(plugin_name)
+  local inventory, blocker = e2_fx_installed_inventory()
+  if not inventory then return nil, blocker or "installed_inventory_unavailable" end
+  local matched = nil
+  for index = 1, #inventory do
+    local candidate = inventory[index]
+    if candidate.name == plugin_name then
+      if not is_string(candidate.ident) or candidate.ident == "" then
+        return nil, "installed_plugin_identity_unavailable"
+      end
+      if matched and matched.ident ~= candidate.ident then
+        return nil, "installed_plugin_identity_ambiguous"
+      end
+      matched = candidate
+    end
+  end
+  if not matched then return nil, "installed_plugin_not_found" end
+  return matched, nil
+end
+
+local function e2_fx_installed_identity_matches_live(installed_identity, live_identity)
+  if not is_string(installed_identity) or installed_identity == ""
+      or not is_string(live_identity) or live_identity == "" then
+    return false
+  end
+  if live_identity == installed_identity then return true end
+  if installed_identity:find("<", 1, true)
+      or live_identity:sub(1, #installed_identity) ~= installed_identity then
+    return false
+  end
+  return live_identity:sub(#installed_identity + 1):match("^<%d+$") ~= nil
+end
+
+local function e2_fx_current_project_truth()
+  local ok, project, project_path = call_reaper("EnumProjects", -1, "")
+  if not ok or not project or type(project_path) ~= "string" then return nil end
+  local ok_change, state_change_count = call_reaper("GetProjectStateChangeCount", project)
+  if not ok_change or type(state_change_count) ~= "number" then return nil end
+  return {
+    project = project,
+    project_ref = "project:current",
+    project_path = bounded_string(project_path, 4096),
+    project_instance_id = e2_fx_fingerprint_segments("native-project-v1", { tostring(project) }),
+    state_change_count = math.floor(state_change_count),
+  }
+end
+
+local E2_FX_SET_FOUNDATION_ERROR_CODES = {
+  PARAMS_INVALID = true,
+  PROJECT_NOT_FOUND = true,
+  FX_NOT_FOUND = true,
+  COMMAND_FAILED = true,
+  VERIFY_FAILED = true,
+}
+
+function E2_FX_HOMOGENEOUS_SET.contract_error(code, message, details, recoverable)
+  details = details or {}
+  if details.zero_write == nil then details.zero_write = true end
+  local public_code = E2_FX_SET_FOUNDATION_ERROR_CODES[code] and code or "PARAMS_INVALID"
+  if public_code ~= code and details.reason_code == nil then details.reason_code = code end
+  return e2_fx_read_error(public_code, message, details, recoverable)
+end
+
+function E2_FX_HOMOGENEOUS_SET.error(code, message, details, recoverable)
+  local _, failure = E2_FX_HOMOGENEOUS_SET.contract_error(code, message, details, recoverable)
+  return failure
+end
+
+function E2_FX_HOMOGENEOUS_SET.only_fields(value, allowed)
+  if not is_object(value) then return false, nil end
+  for key in pairs(value) do
+    if not allowed[key] then return false, key end
+  end
+  return true, nil
+end
+
+function E2_FX_HOMOGENEOUS_SET.finite(value)
+  return type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge
+end
+
+function E2_FX_HOMOGENEOUS_SET.exact_ref(ref)
+  if not is_object(ref) or ref.kind ~= "fx" or not is_string(ref.ref) then return nil end
+  local take_ref, slot_text = ref.ref:match("^fx:(take:guid:.+):(%d+)$")
+  local identity = is_object(ref.identity) and ref.identity or {}
+  local slot_index = tonumber(slot_text)
+  if not take_ref or not slot_index or identity.scheme ~= "take_fx"
+      or identity.value ~= take_ref .. ":" .. tostring(math.floor(slot_index)) then
+    return nil
+  end
+  return take_ref, math.floor(slot_index)
+end
+
+function E2_FX_HOMOGENEOUS_SET.validate_request(request, mode)
+  local params = is_object(request.params) and request.params or {}
+  local allowed = mode == "inspect_set" and {
+    mode = true,
+    expected_set_fingerprint = true,
+    expected_plugin_identity = true,
+    expected_layout_fingerprint = true,
+    expected_representative_fx_ref = true,
+    expected_members = true,
+    controls = true,
+  } or {
+    mode = true,
+    dry_run = true,
+    batch = true,
+    set_fingerprint = true,
+    plan_hash = true,
+    expected_plugin_identity = true,
+    expected_layout_fingerprint = true,
+    expected_representative_fx_ref = true,
+    expected_members = true,
+    controls = true,
+  }
+  local fields_ok, unexpected = E2_FX_HOMOGENEOUS_SET.only_fields(params, allowed)
+  if not fields_ok then
+    return nil, E2_FX_HOMOGENEOUS_SET.error("FX_SET_REQUEST_INVALID", "Homogeneous FX-set request contains an unsupported field.", {
+      field = bounded_string(tostring(unexpected), 120),
+    })
+  end
+  if params.mode ~= mode then
+    return nil, E2_FX_HOMOGENEOUS_SET.error("FX_SET_MODE_INVALID", "Homogeneous FX-set request mode does not match its native route.")
+  end
+  local set_fingerprint = mode == "inspect_set" and params.expected_set_fingerprint or params.set_fingerprint
+  if not is_string(set_fingerprint) or #set_fingerprint ~= 64 or not set_fingerprint:match("^[0-9a-f]+$") then
+    return nil, E2_FX_HOMOGENEOUS_SET.error("FX_SET_FINGERPRINT_INVALID", "Homogeneous FX-set request requires one exact SHA-256 set fingerprint.")
+  end
+  if mode == "shared_plan" then
+    if not is_json_array(params.batch) or #params.batch ~= 0 then
+      return nil, E2_FX_HOMOGENEOUS_SET.error("FX_SHARED_PLAN_BATCH_SENTINEL_INVALID", "Shared FX plan requires the exact empty legacy batch sentinel.")
+    end
+    if type(params.dry_run) ~= "boolean" then
+      return nil, E2_FX_HOMOGENEOUS_SET.error("FX_SHARED_PLAN_DRY_RUN_INVALID", "Shared FX plan requires explicit boolean dry_run.")
+    end
+    if not is_string(params.plan_hash) or #params.plan_hash ~= 64 or not params.plan_hash:match("^[0-9a-f]+$") then
+      return nil, E2_FX_HOMOGENEOUS_SET.error("FX_PARAMETER_PLAN_HASH_INVALID", "Shared FX plan requires one exact SHA-256 plan hash.")
+    end
+  end
+  local plugin = params.expected_plugin_identity
+  local plugin_fields_ok, plugin_unexpected = E2_FX_HOMOGENEOUS_SET.only_fields(plugin, {
+    name = true,
+    plugin_id = true,
+    installed_index = true,
+  })
+  if not plugin_fields_ok or not is_string(plugin.name) or plugin.name == ""
+      or not is_string(plugin.plugin_id) or plugin.plugin_id == "" then
+    return nil, E2_FX_HOMOGENEOUS_SET.error("FX_SET_PLUGIN_IDENTITY_INVALID", "Homogeneous FX-set request lacks one exact plug-in identity.", {
+      field = plugin_unexpected and bounded_string(tostring(plugin_unexpected), 120) or JSON_NULL,
+    })
+  end
+  if not is_string(params.expected_layout_fingerprint) or params.expected_layout_fingerprint == "" then
+    return nil, E2_FX_HOMOGENEOUS_SET.error("FX_SET_LAYOUT_FINGERPRINT_INVALID", "Homogeneous FX-set request lacks one exact parameter-layout fingerprint.")
+  end
+  if not is_json_array(params.expected_members) or #params.expected_members < 1
+      or #params.expected_members > E2_FX_TAKE_FANOUT_MAX_TARGETS then
+    return nil, E2_FX_HOMOGENEOUS_SET.error("FX_SET_CARDINALITY_INVALID", "Homogeneous FX-set request accepts 1-64 expected members.", {
+      target_count = is_json_array(params.expected_members) and #params.expected_members or 0,
+    })
+  end
+  if not is_json_array(request.refs) or #request.refs ~= #params.expected_members then
+    return nil, E2_FX_HOMOGENEOUS_SET.error("FX_SET_REF_COVERAGE_INVALID", "Every retained FX-set member requires exactly one native FX object ref.", {
+      expected_count = #params.expected_members,
+      ref_count = is_json_array(request.refs) and #request.refs or 0,
+    })
+  end
+  return {
+    params = params,
+    set_fingerprint = set_fingerprint,
+    plugin = plugin,
+    layout_fingerprint = params.expected_layout_fingerprint,
+  }, nil
+end
+
+function E2_FX_HOMOGENEOUS_SET.resolve_members(request, validated)
+  local params = validated.params
+  local ref_map = {}
+  local returned_refs = json_array({})
+  for index = 1, #request.refs do
+    local ref = request.refs[index]
+    local take_ref = E2_FX_HOMOGENEOUS_SET.exact_ref(ref)
+    if not take_ref or ref_map[ref.ref] then
+      return nil, nil, E2_FX_HOMOGENEOUS_SET.error("FX_SET_MEMBER_REF_INVALID", "Homogeneous FX-set request contains a malformed or duplicate exact Take-FX ref.", {
+        ref_index = index,
+      })
+    end
+    ref_map[ref.ref] = ref
+    returned_refs[#returned_refs + 1] = ref
+  end
+
+  local prepared = {}
+  local seen_takes = {}
+  local seen_fx_guids = {}
+  local expected_fields = {
+    fx_ref = true,
+    take_ref = true,
+    fx_guid = true,
+    plugin_id = true,
+    parameter_count = true,
+    layout_fingerprint = true,
+  }
+  for index = 1, #params.expected_members do
+    local expected = params.expected_members[index]
+    local fields_ok, unexpected = E2_FX_HOMOGENEOUS_SET.only_fields(expected, expected_fields)
+    local ref = fields_ok and is_string(expected.fx_ref) and ref_map[expected.fx_ref] or nil
+    local take_ref, slot_index = ref and E2_FX_HOMOGENEOUS_SET.exact_ref(ref) or nil, nil
+    if ref then take_ref, slot_index = E2_FX_HOMOGENEOUS_SET.exact_ref(ref) end
+    if not fields_ok or not ref or take_ref ~= expected.take_ref or not is_string(expected.fx_guid)
+        or expected.fx_guid == "" or not is_string(expected.plugin_id) or expected.plugin_id == ""
+        or type(expected.parameter_count) ~= "number" or expected.parameter_count < 0
+        or expected.parameter_count ~= math.floor(expected.parameter_count)
+        or not is_string(expected.layout_fingerprint) or expected.layout_fingerprint == ""
+        or unexpected ~= nil then
+      return nil, nil, E2_FX_HOMOGENEOUS_SET.error("FX_SET_EXPECTED_MEMBER_INVALID", "A retained FX-set member lacks exact owner, FX, plug-in, count, or layout identity.", {
+        member_index = index,
+        field = unexpected and bounded_string(tostring(unexpected), 120) or JSON_NULL,
+      })
+    end
+    if expected.plugin_id ~= validated.plugin.plugin_id
+        or expected.layout_fingerprint ~= validated.layout_fingerprint or seen_takes[take_ref] then
+      return nil, nil, E2_FX_HOMOGENEOUS_SET.error("FX_SET_EXPECTED_MEMBER_MISMATCH", "Retained FX-set members do not share the declared exact plug-in/layout identity.", {
+        member_index = index,
+      })
+    end
+    local owner_kind, take, live_slot = e2_fx_read_fx_owner_from_ref_object(ref, request)
+    local take_guid = take and e2_fx_read_take_guid(take) or nil
+    local expected_take_guid = take_ref:match("^take:guid:(.+)$")
+    if owner_kind ~= "take" or not take or live_slot ~= slot_index or take_guid ~= expected_take_guid then
+      return nil, nil, E2_FX_HOMOGENEOUS_SET.error("FX_SET_MEMBER_STALE", "A retained Take-FX owner no longer resolves to the exact native Take and slot.", {
+        member_index = index,
+        fx_ref = expected.fx_ref,
+      })
+    end
+    local live_fx_guid = e2_fx_read_guid("take", take, slot_index)
+    local live_plugin_id = e2_fx_read_plugin_id("take", take, slot_index)
+    local layout, layout_blocker = e2_fx_parameter_layout(
+      "take",
+      take,
+      slot_index,
+      live_plugin_id or "",
+      validated.plugin.name
+    )
+    if live_fx_guid ~= expected.fx_guid or seen_fx_guids[live_fx_guid]
+        or live_plugin_id ~= expected.plugin_id or not layout
+        or layout.parameter_count ~= expected.parameter_count
+        or layout.layout_fingerprint ~= expected.layout_fingerprint then
+      return nil, nil, E2_FX_HOMOGENEOUS_SET.error("FX_SET_MEMBER_IDENTITY_STALE", "A retained Take-FX instance no longer matches its exact native GUID, plug-in, count, or layout.", {
+        member_index = index,
+        fx_ref = expected.fx_ref,
+        blocker = layout_blocker or JSON_NULL,
+        expected_fx_guid = expected.fx_guid,
+        live_fx_guid = live_fx_guid or JSON_NULL,
+      })
+    end
+    seen_takes[take_ref] = true
+    seen_fx_guids[live_fx_guid] = true
+    prepared[#prepared + 1] = {
+      expected = expected,
+      ref = ref,
+      take = take,
+      slot_index = slot_index,
+      layout = layout,
+    }
+  end
+  if not ref_map[params.expected_representative_fx_ref] then
+    return nil, nil, E2_FX_HOMOGENEOUS_SET.error("FX_SET_REPRESENTATIVE_STALE", "The retained representative FX is not a member of the exact native set.")
+  end
+  local representative = nil
+  for index = 1, #prepared do
+    if prepared[index].expected.fx_ref == params.expected_representative_fx_ref then
+      representative = prepared[index]
+      break
+    end
+  end
+  if not representative then
+    return nil, nil, E2_FX_HOMOGENEOUS_SET.error("FX_SET_REPRESENTATIVE_STALE", "The exact native representative FX could not be resolved.")
+  end
+  return prepared, { refs = returned_refs, representative = representative }, nil
+end
+
+function E2_FX_HOMOGENEOUS_SET.parameter_inventory(member)
+  local parameters = json_array({})
+  for param_index = 0, member.layout.parameter_count - 1 do
+    local param_ident = e2_fx_read_param_ident("take", member.take, member.slot_index, param_index)
+    local name = e2_fx_read_param_name("take", member.take, member.slot_index, param_index)
+    local normalized = e2_fx_read_param_normalized("take", member.take, member.slot_index, param_index)
+    local formatted = e2_fx_read_param_formatted("take", member.take, member.slot_index, param_index)
+    if not is_string(param_ident) or param_ident == "" or not is_string(name)
+        or not E2_FX_HOMOGENEOUS_SET.finite(normalized) or not is_string(formatted) or formatted == "" then
+      return nil, E2_FX_HOMOGENEOUS_SET.error("FX_SET_PARAMETER_INVENTORY_INCOMPLETE", "Representative FX did not expose one complete native parameter inventory.", {
+        param_index = param_index,
+      })
+    end
+    local values = e2_fx_read_param_value("take", member.take, member.slot_index, param_index)
+    parameters[#parameters + 1] = {
+      param_index = param_index,
+      param_ident = param_ident,
+      name = name,
+      value = values.value,
+      min_value = values.min_value,
+      max_value = values.max_value,
+      normalized_value = normalized,
+      formatted_value = formatted,
+    }
+  end
+  return parameters, nil
+end
+
+function E2_FX_HOMOGENEOUS_SET.formatted_quantity(value)
+  if not is_string(value) then return nil end
+  local number_text, unit_text = value:match("^%s*([-+]?%d*[.,]?%d+)%s*([^%s]*)%s*$")
+  local number = number_text and tonumber((number_text:gsub(",", "."))) or nil
+  if not E2_FX_HOMOGENEOUS_SET.finite(number) then return nil end
+  local unit = (unit_text or ""):lower()
+  local family = unit
+  local scale = 1
+  if unit == "hz" then
+    family = "hz"
+  elseif unit == "khz" then
+    family = "hz"
+    scale = 1000
+  elseif unit == "mhz" then
+    family = "hz"
+    scale = 1000000
+  elseif unit == "s" then
+    family = "seconds"
+  elseif unit == "ms" then
+    family = "seconds"
+    scale = 0.001
+  end
+  return { value = number * scale, family = family }
+end
+
+function E2_FX_HOMOGENEOUS_SET.formatted_matches(formatted, target, target_quantity)
+  if formatted == target then return true end
+  local candidate = E2_FX_HOMOGENEOUS_SET.formatted_quantity(formatted)
+  local expected = target_quantity or E2_FX_HOMOGENEOUS_SET.formatted_quantity(target)
+  if not candidate or not expected or candidate.family ~= expected.family then return false end
+  local magnitude = math.max(1, math.abs(candidate.value), math.abs(expected.value))
+  return math.abs(candidate.value - expected.value) <= magnitude * 0.000000001
+end
+
+function E2_FX_HOMOGENEOUS_SET.formatted_readback_matches(readback, requested)
+  if E2_FX_HOMOGENEOUS_SET.formatted_matches(readback, requested) then return true end
+  local candidate = E2_FX_HOMOGENEOUS_SET.formatted_quantity(readback)
+  local expected = E2_FX_HOMOGENEOUS_SET.formatted_quantity(requested)
+  if not candidate or not expected or candidate.family ~= "" or expected.family == "" then return false end
+  local magnitude = math.max(1, math.abs(candidate.value), math.abs(expected.value))
+  return math.abs(candidate.value - expected.value) <= magnitude * 0.000000001
+end
+
+function E2_FX_HOMOGENEOUS_SET.format_at_normalized(member, param_index, normalized)
+  if not E2_FX_HOMOGENEOUS_SET.finite(normalized) or normalized < 0 or normalized > 1 then
+    return nil
+  end
+  local owner_kind = member.owner_kind or "take"
+  local owner = member.owner or member.take
+  return e2_fx_format_param_normalized(
+    owner_kind,
+    owner,
+    member.slot_index,
+    param_index,
+    normalized
+  )
+end
+
+function E2_FX_HOMOGENEOUS_SET.format_at_value(member, param_index, value)
+  if not E2_FX_HOMOGENEOUS_SET.finite(value) then return nil end
+  local owner_kind = member.owner_kind or "take"
+  local owner = member.owner or member.take
+  return e2_fx_format_param_value(owner_kind, owner, member.slot_index, param_index, value)
+end
+
+function E2_FX_HOMOGENEOUS_SET.comparable_formatted_number(value, target_quantity)
+  local quantity = E2_FX_HOMOGENEOUS_SET.formatted_quantity(value)
+  if not quantity or not target_quantity or quantity.family ~= target_quantity.family then return nil end
+  return quantity.value
+end
+
+function E2_FX_HOMOGENEOUS_SET.search_formatted(member, param_index, target)
+  local owner_kind = member.owner_kind or "take"
+  local owner = member.owner or member.take
+  local values = e2_fx_read_param_value(owner_kind, owner, member.slot_index, param_index)
+  local minimum = values.min_value
+  local maximum = values.max_value
+  if not E2_FX_HOMOGENEOUS_SET.finite(minimum)
+      or not E2_FX_HOMOGENEOUS_SET.finite(maximum) or maximum < minimum then
+    return nil
+  end
+  local function formatted_at(value)
+    return E2_FX_HOMOGENEOUS_SET.format_at_value(member, param_index, value)
+  end
+  local target_quantity = E2_FX_HOMOGENEOUS_SET.formatted_quantity(target)
+  local function matched(value)
+    local formatted = formatted_at(value)
+    if E2_FX_HOMOGENEOUS_SET.formatted_matches(formatted, target, target_quantity) then
+      return true, formatted
+    end
+    return false, formatted
+  end
+  local current = values.value
+  if E2_FX_HOMOGENEOUS_SET.finite(current) then
+    local current_matches, current_formatted = matched(current)
+    if current_matches then return current, current_formatted end
+  end
+  local target_number = target_quantity and target_quantity.value or nil
+  local span = maximum - minimum
+  local previous_value = minimum
+  local previous_formatted = formatted_at(minimum)
+  if E2_FX_HOMOGENEOUS_SET.formatted_matches(previous_formatted, target, target_quantity) then
+    return minimum, previous_formatted
+  end
+  local previous_number = E2_FX_HOMOGENEOUS_SET.comparable_formatted_number(previous_formatted, target_quantity)
+  for sample_index = 1, 256 do
+    local value = minimum + span * sample_index / 256
+    local formatted = formatted_at(value)
+    if E2_FX_HOMOGENEOUS_SET.formatted_matches(formatted, target, target_quantity) then
+      return value, formatted
+    end
+    local number = E2_FX_HOMOGENEOUS_SET.comparable_formatted_number(formatted, target_quantity)
+    if target_number and previous_number and number and number ~= previous_number
+        and target_number >= math.min(previous_number, number)
+        and target_number <= math.max(previous_number, number) then
+      local low = previous_value
+      local high = value
+      local low_number = previous_number
+      local high_number = number
+      for _ = 1, 64 do
+        local middle = (low + high) / 2
+        local middle_formatted = formatted_at(middle)
+        if E2_FX_HOMOGENEOUS_SET.formatted_matches(middle_formatted, target, target_quantity) then
+          return middle, middle_formatted
+        end
+        local middle_number = E2_FX_HOMOGENEOUS_SET.comparable_formatted_number(middle_formatted, target_quantity)
+        if not middle_number then break end
+        if target_number >= math.min(low_number, middle_number)
+            and target_number <= math.max(low_number, middle_number) then
+          high = middle
+          high_number = middle_number
+        else
+          low = middle
+          low_number = middle_number
+        end
+      end
+    end
+    previous_value = value
+    previous_formatted = formatted
+    previous_number = number
+  end
+  for sample_index = 0, 4096 do
+    local value = minimum + span * sample_index / 4096
+    local is_match, formatted = matched(value)
+    if is_match then return value, formatted end
+  end
+  return nil
+end
+
+function E2_FX_HOMOGENEOUS_SET.compile_controls(member, parameters, controls)
+  if controls == nil then return json_array({}), nil end
+  if not is_json_array(controls) or #controls < 1 or #controls > 8 then
+    return nil, E2_FX_HOMOGENEOUS_SET.error("FX_SET_CONTROLS_SIZE_INVALID", "FX-set inspection accepts 1-8 natural-unit controls.")
+  end
+  local compiled = json_array({})
+  local seen_ids = {}
+  local seen_targets = {}
+  for index = 1, #controls do
+    local control = controls[index]
+    local fields_ok, unexpected = E2_FX_HOMOGENEOUS_SET.only_fields(control, {
+      id = true,
+      param_index = true,
+      param_ident = true,
+      param_name = true,
+      natural_value = true,
+      display_value = true,
+      tolerance = true,
+    })
+    local display_value = control.display_value or control.natural_value
+    if not fields_ok or not is_string(control.id) or #control.id < 1 or #control.id > 24
+        or not control.id:match("^[%w_-]+$") or seen_ids[control.id]
+        or (control.display_value ~= nil and control.natural_value ~= nil)
+        or not is_string(display_value) or display_value == "" then
+      return nil, E2_FX_HOMOGENEOUS_SET.error("FX_SET_CONTROL_INVALID", "A natural-unit FX control is malformed or duplicated.", {
+        control_index = index,
+        field = unexpected and bounded_string(tostring(unexpected), 120) or JSON_NULL,
+      })
+    end
+    local param_index = tonumber(control.param_index)
+    if param_index ~= nil and (param_index < 0 or param_index ~= math.floor(param_index)) then param_index = nil end
+    local matches = {}
+    for candidate_index = 1, #parameters do
+      local parameter = parameters[candidate_index]
+      local matched = false
+      if control.param_name ~= nil then
+        matched = is_string(control.param_name) and parameter.name == control.param_name
+      elseif param_index ~= nil then
+        matched = parameter.param_index == param_index
+          and (control.param_ident == nil or parameter.param_ident == control.param_ident)
+      elseif is_string(control.param_ident) and control.param_ident ~= "" then
+        matched = parameter.param_ident == control.param_ident
+      end
+      if matched then matches[#matches + 1] = parameter end
+    end
+    if #matches ~= 1 then
+      return nil, E2_FX_HOMOGENEOUS_SET.error("FX_SET_PARAMETER_SELECTOR_AMBIGUOUS", "Each natural-unit FX control must resolve exactly one representative parameter.", {
+        control_index = index,
+        match_count = #matches,
+      })
+    end
+    local parameter = matches[1]
+    local target_key = tostring(parameter.param_index) .. ":" .. parameter.param_ident
+    if seen_targets[target_key] then
+      return nil, E2_FX_HOMOGENEOUS_SET.error("FX_SET_CONTROL_TARGET_DUPLICATE", "Natural-unit controls contain a duplicate exact parameter target.", {
+        control_index = index,
+      })
+    end
+    local value, native_formatted = E2_FX_HOMOGENEOUS_SET.search_formatted(
+      member,
+      parameter.param_index,
+      display_value
+    )
+    if not value then
+      return nil, E2_FX_HOMOGENEOUS_SET.error("FX_SET_NATURAL_VALUE_UNREACHABLE", "REAPER native formatting could not reach the requested natural-unit value without mutation.", {
+        control_index = index,
+        param_index = parameter.param_index,
+        display_value = bounded_string(display_value, 80),
+      })
+    end
+    local owner_kind = member.owner_kind or "take"
+    local owner = member.owner or member.take
+    local step_sizes = e2_fx_read_param_step_sizes(owner_kind, owner, member.slot_index, parameter.param_index)
+    local tolerance = tonumber(control.tolerance)
+    if not E2_FX_HOMOGENEOUS_SET.finite(tolerance) or tolerance < 0 then
+      tolerance = step_sizes.is_discrete == true and 0 or 0.000001
+    end
+    seen_ids[control.id] = true
+    seen_targets[target_key] = true
+    compiled[#compiled + 1] = {
+      id = control.id,
+      param_index = parameter.param_index,
+      param_ident = parameter.param_ident,
+      param_name = parameter.name,
+      natural_value = display_value,
+      display_value = display_value,
+      value = value,
+      requested_formatted_value = native_formatted,
+      tolerance = tolerance,
+    }
+  end
+  return compiled, nil
+end
+
+function E2_FX_HOMOGENEOUS_SET.member_checks(members)
+  local checks = json_array({})
+  for index = 1, #members do
+    local member = members[index]
+    checks[#checks + 1] = {
+      fx_ref = member.expected.fx_ref,
+      take_ref = member.expected.take_ref,
+      fx_guid = member.expected.fx_guid,
+      plugin_id = member.expected.plugin_id,
+      parameter_count = member.expected.parameter_count,
+      layout_fingerprint = member.expected.layout_fingerprint,
+      status = "passed",
+    }
+  end
+  return checks
+end
+
+function E2_FX_HOMOGENEOUS_SET.inspect(request)
+  local validated, validation_failure = E2_FX_HOMOGENEOUS_SET.validate_request(request, "inspect_set")
+  if not validated then return nil, validation_failure end
+  local project_before = e2_fx_current_project_truth()
+  if not project_before then
+    return nil, E2_FX_HOMOGENEOUS_SET.error("PROJECT_NOT_FOUND", "FX-set inspection could not bind the active native project instance.")
+  end
+  local members, resolved, member_failure = E2_FX_HOMOGENEOUS_SET.resolve_members(request, validated)
+  if not members then return nil, member_failure end
+  local parameters, inventory_failure = E2_FX_HOMOGENEOUS_SET.parameter_inventory(resolved.representative)
+  if not parameters then return nil, inventory_failure end
+  local compiled, compile_failure = E2_FX_HOMOGENEOUS_SET.compile_controls(
+    resolved.representative,
+    parameters,
+    validated.params.controls
+  )
+  if not compiled then return nil, compile_failure end
+  local project_after = e2_fx_current_project_truth()
+  if not project_after or project_after.project_instance_id ~= project_before.project_instance_id then
+    return nil, E2_FX_HOMOGENEOUS_SET.error("FX_SET_PROJECT_STALE", "The active native project changed during FX-set inspection.")
+  end
+  return e2_fx_read_summary(request, {
+    mode = "inspect_set",
+    set_fingerprint = validated.set_fingerprint,
+    plugin_identity = validated.plugin,
+    layout_fingerprint = validated.layout_fingerprint,
+    representative_fx_ref = validated.params.expected_representative_fx_ref,
+    member_count = #members,
+    member_checks = E2_FX_HOMOGENEOUS_SET.member_checks(members),
+    parameter_count = #parameters,
+    parameters = parameters,
+    compiled_controls = compiled,
+    returned_count = #parameters,
+    truncated = false,
+    inventory_complete = true,
+    coverage_status = "complete",
+    project_instance_id = project_after.project_instance_id,
+    native_project_instance_verified = true,
+  }), nil, json_array({}), json_array({}), resolved.refs
+end
+
+function E2_FX_HOMOGENEOUS_SET.validate_compiled_controls(member, controls)
+  if not is_json_array(controls) or #controls < 1 or #controls > 8 then
+    return nil, E2_FX_HOMOGENEOUS_SET.error("FX_PARAMETER_PLAN_SIZE_INVALID", "Shared FX plan accepts 1-8 compiled controls.")
+  end
+  local prepared = {}
+  local seen_ids = {}
+  local seen_targets = {}
+  for index = 1, #controls do
+    local control = controls[index]
+    local fields_ok, unexpected = E2_FX_HOMOGENEOUS_SET.only_fields(control, {
+      id = true,
+      param_index = true,
+      param_ident = true,
+      param_name = true,
+      natural_value = true,
+      value = true,
+      requested_formatted_value = true,
+      tolerance = true,
+    })
+    local param_index = is_object(control) and tonumber(control.param_index) or nil
+    local value = is_object(control) and tonumber(control.value) or nil
+    local tolerance = is_object(control) and tonumber(control.tolerance) or nil
+    if not fields_ok or not is_string(control.id) or #control.id < 1 or #control.id > 24
+        or not control.id:match("^[%w_-]+$") or seen_ids[control.id]
+        or not param_index or param_index < 0 or param_index ~= math.floor(param_index)
+        or param_index >= member.layout.parameter_count
+        or not is_string(control.param_ident) or control.param_ident == ""
+        or not is_string(control.natural_value) or control.natural_value == ""
+        or not is_string(control.requested_formatted_value) or control.requested_formatted_value == ""
+        or not E2_FX_HOMOGENEOUS_SET.finite(value)
+        or not E2_FX_HOMOGENEOUS_SET.finite(tolerance) or tolerance < 0 then
+      return nil, E2_FX_HOMOGENEOUS_SET.error("FX_PARAMETER_PLAN_CONTROL_INVALID", "A compiled shared FX control is malformed, stale, or duplicated.", {
+        control_index = index,
+        field = unexpected and bounded_string(tostring(unexpected), 120) or JSON_NULL,
+      })
+    end
+    local live_ident = e2_fx_read_param_ident("take", member.take, member.slot_index, param_index)
+    local live_name = e2_fx_read_param_name("take", member.take, member.slot_index, param_index)
+    local native_formatted = E2_FX_HOMOGENEOUS_SET.format_at_value(
+      member,
+      param_index,
+      value
+    )
+    local target_key = tostring(param_index) .. ":" .. control.param_ident
+    if live_ident ~= control.param_ident
+        or (control.param_name ~= nil and live_name ~= control.param_name)
+        or native_formatted ~= control.requested_formatted_value or seen_targets[target_key] then
+      return nil, E2_FX_HOMOGENEOUS_SET.error("FX_PARAMETER_PLAN_STALE", "A compiled shared FX control no longer matches native parameter identity or formatting.", {
+        control_index = index,
+        param_index = param_index,
+        native_formatted_value = native_formatted or JSON_NULL,
+      })
+    end
+    seen_ids[control.id] = true
+    seen_targets[target_key] = true
+    prepared[#prepared + 1] = {
+      id = control.id,
+      param_index = param_index,
+      param_ident = control.param_ident,
+      value = value,
+      requested_formatted_value = control.requested_formatted_value,
+      tolerance = tolerance,
+    }
+  end
+  return prepared, nil
+end
+
+function E2_FX_HOMOGENEOUS_SET.member_results(members, controls, status)
+  local results = json_array({})
+  for index = 1, #members do
+    local member = members[index]
+    results[#results + 1] = {
+      fx_ref = member.expected.fx_ref,
+      take_ref = member.expected.take_ref,
+      fx_guid = member.expected.fx_guid,
+      plugin_id = member.expected.plugin_id,
+      parameter_count = member.expected.parameter_count,
+      layout_fingerprint = member.expected.layout_fingerprint,
+      control_count = #controls,
+      status = status,
+    }
+  end
+  return results
+end
+
+function E2_FX_HOMOGENEOUS_SET.apply(request)
+  local validated, validation_failure = E2_FX_HOMOGENEOUS_SET.validate_request(request, "shared_plan")
+  if not validated then return nil, validation_failure end
+  local project_before = e2_fx_current_project_truth()
+  if not project_before then
+    return nil, E2_FX_HOMOGENEOUS_SET.error("PROJECT_NOT_FOUND", "Shared FX plan could not bind the active native project instance.")
+  end
+  local members, resolved, member_failure = E2_FX_HOMOGENEOUS_SET.resolve_members(request, validated)
+  if not members then return nil, member_failure end
+  local controls, controls_failure = E2_FX_HOMOGENEOUS_SET.validate_compiled_controls(
+    resolved.representative,
+    validated.params.controls
+  )
+  if not controls then return nil, controls_failure end
+  for member_index = 1, #members do
+    local member = members[member_index]
+    for control_index = 1, #controls do
+      local control = controls[control_index]
+      local live_ident = e2_fx_read_param_ident("take", member.take, member.slot_index, control.param_index)
+      local native_formatted = E2_FX_HOMOGENEOUS_SET.format_at_value(
+        member,
+        control.param_index,
+        control.value
+      )
+      if live_ident ~= control.param_ident or native_formatted ~= control.requested_formatted_value then
+        return nil, E2_FX_HOMOGENEOUS_SET.error("FX_PARAMETER_PLAN_MEMBER_STALE", "A shared FX control does not match every member's native parameter identity and formatting.", {
+          member_index = member_index,
+          control_index = control_index,
+          fx_ref = member.expected.fx_ref,
+        })
+      end
+    end
+  end
+  if validated.params.dry_run == true then
+    return e2_fx_write_summary(request, {
+      mode = "shared_plan",
+      set_fingerprint = validated.set_fingerprint,
+      plan_hash = validated.params.plan_hash,
+      layout_fingerprint = validated.layout_fingerprint,
+      target_count = #members,
+      control_count = #controls,
+      mutation_count = 0,
+      undo_block_count = 0,
+      mutation_attempted = false,
+      zero_write = true,
+      member_results = E2_FX_HOMOGENEOUS_SET.member_results(members, controls, "planned"),
+      project_instance_id = project_before.project_instance_id,
+      native_project_instance_verified = true,
+    }), nil, json_array({}), json_array({}), resolved.refs
+  end
+
+  local mutation_count = 0
+  for member_index = 1, #members do
+    local member = members[member_index]
+    for control_index = 1, #controls do
+      local control = controls[control_index]
+      if not e2_fx_set_param_value(
+        "take",
+        member.take,
+        member.slot_index,
+        control.param_index,
+        control.value
+      ) then
+        return nil, E2_FX_HOMOGENEOUS_SET.error("COMMAND_FAILED", "REAPER rejected one shared FX parameter setter.", {
+          member_index = member_index,
+          control_index = control_index,
+          mutation_attempted = mutation_count > 0,
+          completed_mutations = mutation_count,
+          zero_write = mutation_count == 0,
+        }, false)
+      end
+      mutation_count = mutation_count + 1
+    end
+  end
+
+  for member_index = 1, #members do
+    local member = members[member_index]
+    if e2_fx_read_guid("take", member.take, member.slot_index) ~= member.expected.fx_guid
+        or e2_fx_read_plugin_id("take", member.take, member.slot_index) ~= member.expected.plugin_id then
+      return nil, E2_FX_HOMOGENEOUS_SET.error("VERIFY_FAILED", "Shared FX aggregate readback lost exact member identity.", {
+        member_index = member_index,
+        mutation_attempted = true,
+        completed_mutations = mutation_count,
+        zero_write = false,
+      }, false)
+    end
+    for control_index = 1, #controls do
+      local control = controls[control_index]
+      local values = e2_fx_read_param_value("take", member.take, member.slot_index, control.param_index)
+      local formatted = e2_fx_read_param_formatted("take", member.take, member.slot_index, control.param_index)
+      local updated = E2_FX_HOMOGENEOUS_SET.finite(values.value)
+        and math.abs(values.value - control.value) <= control.tolerance
+        and E2_FX_HOMOGENEOUS_SET.formatted_readback_matches(
+          formatted,
+          control.requested_formatted_value
+        )
+      if not updated then
+        return nil, E2_FX_HOMOGENEOUS_SET.error("VERIFY_FAILED", "Shared FX aggregate readback did not match every native control target.", {
+          member_index = member_index,
+          control_index = control_index,
+          mutation_attempted = true,
+          completed_mutations = mutation_count,
+          zero_write = false,
+          readback_value = values.value,
+          readback_formatted_value = formatted,
+        }, false)
+      end
+    end
+  end
+  local project_after = e2_fx_current_project_truth()
+  if not project_after or project_after.project_instance_id ~= project_before.project_instance_id then
+    return nil, E2_FX_HOMOGENEOUS_SET.error("FX_SET_PROJECT_STALE", "The active native project changed during shared FX mutation/readback.", {
+      mutation_attempted = true,
+      completed_mutations = mutation_count,
+      zero_write = false,
+    }, false)
+  end
+  return e2_fx_write_summary(request, {
+    mode = "shared_plan",
+    set_fingerprint = validated.set_fingerprint,
+    plan_hash = validated.params.plan_hash,
+    layout_fingerprint = validated.layout_fingerprint,
+    target_count = #members,
+    control_count = #controls,
+    mutation_count = mutation_count,
+    undo_block_count = 1,
+    mutation_attempted = true,
+    zero_write = false,
+    member_results = E2_FX_HOMOGENEOUS_SET.member_results(members, controls, "passed"),
+    project_instance_id = project_after.project_instance_id,
+    native_project_instance_verified = true,
+  }), nil, json_array({}), json_array({}), resolved.refs
+end
+
+local function e2_fx_take_fanout_error(code, message, details, recoverable)
+  return E2_FX_HOMOGENEOUS_SET.contract_error(code, message, details, recoverable)
+end
+
+local function e2_fx_add_take_fx_fanout(request)
+  local params = is_object(request.params) and request.params or {}
+  if params.duplicate_policy ~= "reuse_exact" or params.include_parameter_layout ~= true
+      or params.dry_run ~= false or not e2_fx_fanout_binding_valid(params.target_binding) then
+    return e2_fx_take_fanout_error(
+      "FX_SET_REQUEST_INVALID",
+      "Track-owned Take-FX fanout requires duplicate_policy=reuse_exact, include_parameter_layout=true, dry_run=false, and the exact active-Take batch binding."
+    )
+  end
+  for key in pairs(params) do
+    if key ~= "plugin_name" and key ~= "duplicate_policy" and key ~= "include_parameter_layout"
+        and key ~= "dry_run" and key ~= "target_binding" then
+      return e2_fx_take_fanout_error("FX_SET_REQUEST_INVALID", "Track-owned Take-FX fanout received an unsupported parameter.", {
+        field = bounded_string(tostring(key), 120),
+      })
+    end
+  end
+
+  local track, track_ref, track_blocker = e2_fx_exact_fanout_track(request)
+  if not track then
+    return e2_fx_take_fanout_error(track_blocker, "Track-owned Take-FX fanout requires one live exact Track GUID object ref.")
+  end
+  local plugin_name = e2_fx_plugin_name(request)
+  if not plugin_name then
+    return e2_fx_take_fanout_error("PARAMS_INVALID", "Track-owned Take-FX fanout requires one exact installed plugin_name.")
+  end
+  local installed, installed_blocker = e2_fx_exact_installed_plugin(plugin_name)
+  if not installed then
+    return e2_fx_take_fanout_error("FX_NOT_FOUND", "Track-owned Take-FX fanout could not prove one exact installed plug-in identity.", {
+      plugin_name = plugin_name,
+      blocker = installed_blocker,
+    })
+  end
+  local project_truth = e2_fx_current_project_truth()
+  if not project_truth then
+    return e2_fx_take_fanout_error("PROJECT_NOT_FOUND", "Track-owned Take-FX fanout could not bind the active native project instance.")
+  end
+
+  local ok_count, raw_item_count = call_reaper("CountTrackMediaItems", track)
+  local item_count = ok_count and first_number(raw_item_count) or nil
+  if type(item_count) ~= "number" or item_count < 0 or item_count ~= math.floor(item_count) then
+    return e2_fx_take_fanout_error("API_UNAVAILABLE", "REAPER did not return the target Track Item count.", {
+      api = "CountTrackMediaItems",
+    })
+  end
+  if item_count < 1 or item_count > E2_FX_TAKE_FANOUT_MAX_TARGETS then
+    return e2_fx_take_fanout_error("FX_SET_CARDINALITY_INVALID", "Track-owned Take-FX fanout accepts 1-64 active audio Take targets.", {
+      target_count = item_count,
+      maximum = E2_FX_TAKE_FANOUT_MAX_TARGETS,
+    })
+  end
+
+  local prepared = {}
+  local seen_items = {}
+  local seen_takes = {}
+  local expected_layout = nil
+  local expected_plugin_id = nil
+  for item_index = 0, item_count - 1 do
+    local ok_item, item = call_reaper("GetTrackMediaItem", track, item_index)
+    local item_guid = ok_item and item and e2_fx_native_item_guid(item) or nil
+    if not item_guid or seen_items[item_guid] then
+      return e2_fx_take_fanout_error("FX_SET_ITEM_IDENTITY_INVALID", "Track-owned Take-FX fanout could not prove one unique native Item GUID for every target.", {
+        item_index = item_index,
+      })
+    end
+    seen_items[item_guid] = true
+    local ok_take, take = call_reaper("GetActiveTake", item)
+    if not ok_take or not take then
+      return e2_fx_take_fanout_error("FX_SET_ACTIVE_TAKE_MISSING", "A target Item has no active Take; the complete FX set remains zero-write.", {
+        item_ref = "item:guid:" .. item_guid,
+      })
+    end
+    local ok_midi, is_midi = call_reaper("TakeIsMIDI", take)
+    if not ok_midi then
+      return e2_fx_take_fanout_error("API_UNAVAILABLE", "REAPER could not classify an active Take as audio or MIDI.", {
+        api = "TakeIsMIDI",
+        item_ref = "item:guid:" .. item_guid,
+      })
+    end
+    if is_midi == true then
+      return e2_fx_take_fanout_error("FX_SET_MIDI_UNSUPPORTED", "Track-owned Take-FX fanout accepts audio active Takes only.", {
+        item_ref = "item:guid:" .. item_guid,
+      })
+    end
+    local take_guid = e2_fx_read_take_guid(take)
+    if not take_guid or seen_takes[take_guid] then
+      return e2_fx_take_fanout_error("FX_SET_TAKE_IDENTITY_INVALID", "Track-owned Take-FX fanout could not prove one unique native Take GUID for every target.", {
+        item_ref = "item:guid:" .. item_guid,
+      })
+    end
+    seen_takes[take_guid] = true
+
+    local ok_fx_count, raw_fx_count = call_reaper("TakeFX_GetCount", take)
+    local fx_count = ok_fx_count and first_number(raw_fx_count) or nil
+    if type(fx_count) ~= "number" or fx_count < 0 or fx_count ~= math.floor(fx_count)
+        or fx_count > E2_FX_CHAIN_MAX_INSTANCES then
+      return e2_fx_take_fanout_error("FX_SET_CHAIN_COVERAGE_INVALID", "An active Take did not expose one complete bounded FX chain.", {
+        take_ref = "take:guid:" .. take_guid,
+      })
+    end
+    local matched_slot = nil
+    local matched_plugin_id = nil
+    for slot_index = 0, fx_count - 1 do
+      local live_plugin_id = e2_fx_read_plugin_id("take", take, slot_index)
+      if not live_plugin_id then
+        return e2_fx_take_fanout_error("FX_SET_PLUGIN_IDENTITY_UNAVAILABLE", "An existing Take FX lacks native plug-in identity, so duplicate analysis cannot complete safely.", {
+          take_ref = "take:guid:" .. take_guid,
+          slot_index = slot_index,
+        })
+      elseif e2_fx_installed_identity_matches_live(installed.ident, live_plugin_id) then
+        if matched_slot ~= nil then
+          return e2_fx_take_fanout_error("FX_SET_DUPLICATE_AMBIGUOUS", "An active Take contains multiple instances of the exact requested plug-in identity.", {
+            take_ref = "take:guid:" .. take_guid,
+            plugin_id = installed.ident,
+          })
+        end
+        matched_slot = slot_index
+        matched_plugin_id = live_plugin_id
+      end
+    end
+
+    local layout = nil
+    local fx_guid = nil
+    if matched_slot ~= nil then
+      if expected_plugin_id and expected_plugin_id ~= matched_plugin_id then
+        return e2_fx_take_fanout_error("FX_SET_PLUGIN_IDENTITY_MISMATCH", "Reusable Take FX instances do not share one exact native plug-in identity.", {
+          take_ref = "take:guid:" .. take_guid,
+          expected_plugin_id = expected_plugin_id,
+          live_plugin_id = matched_plugin_id,
+        })
+      end
+      expected_plugin_id = expected_plugin_id or matched_plugin_id
+      fx_guid = e2_fx_read_guid("take", take, matched_slot)
+      if not fx_guid then
+        return e2_fx_take_fanout_error("FX_SET_FX_GUID_UNAVAILABLE", "A reusable Take FX did not expose an exact native FX GUID.", {
+          take_ref = "take:guid:" .. take_guid,
+          slot_index = matched_slot,
+        })
+      end
+      local layout_blocker
+      layout, layout_blocker = e2_fx_parameter_layout("take", take, matched_slot, matched_plugin_id, plugin_name)
+      if not layout then
+        return e2_fx_take_fanout_error(layout_blocker, "A reusable Take FX did not expose a complete stable parameter layout.", {
+          take_ref = "take:guid:" .. take_guid,
+          slot_index = matched_slot,
+        })
+      end
+      if expected_layout and expected_layout.layout_fingerprint ~= layout.layout_fingerprint then
+        return e2_fx_take_fanout_error("FX_SET_LAYOUT_MISMATCH", "Reusable Take FX instances do not share one exact parameter layout.", {
+          take_ref = "take:guid:" .. take_guid,
+          expected_layout_fingerprint = expected_layout.layout_fingerprint,
+          live_layout_fingerprint = layout.layout_fingerprint,
+        })
+      end
+      expected_layout = expected_layout or layout
+    end
+    prepared[#prepared + 1] = {
+      item = item,
+      take = take,
+      item_ref = "item:guid:" .. item_guid,
+      take_ref = "take:guid:" .. take_guid,
+      fx_count_before = fx_count,
+      slot_index = matched_slot,
+      fx_guid = fx_guid,
+      layout = layout,
+      status = matched_slot ~= nil and "reused" or "created",
+    }
+  end
+
+  local mutation_count = 0
+  for index = 1, #prepared do
+    local member = prepared[index]
+    if member.slot_index == nil then
+      local slot_index = e2_fx_take_add_by_name(member.take, plugin_name, member.fx_count_before)
+      mutation_count = mutation_count + 1
+      local fx_count_after = e2_fx_read_count("take", member.take)
+      if not slot_index or slot_index < 0 or fx_count_after ~= member.fx_count_before + 1 then
+        return e2_fx_take_fanout_error("COMMAND_FAILED", "REAPER rejected one prepared Take-FX creation.", {
+          member_index = index,
+          item_ref = member.item_ref,
+          mutation_attempted = true,
+          zero_write = false,
+          completed_mutations = mutation_count - 1,
+        }, false)
+      end
+      member.slot_index = slot_index
+      member.fx_guid = e2_fx_read_guid("take", member.take, slot_index)
+      local live_plugin_id = e2_fx_read_plugin_id("take", member.take, slot_index)
+      local layout, layout_blocker = e2_fx_parameter_layout("take", member.take, slot_index, live_plugin_id or "", plugin_name)
+      if not member.fx_guid or not e2_fx_installed_identity_matches_live(installed.ident, live_plugin_id) or not layout then
+        return e2_fx_take_fanout_error("VERIFY_FAILED", "A created Take FX did not preserve exact native plug-in, GUID, and layout identity.", {
+          member_index = index,
+          item_ref = member.item_ref,
+          blocker = layout_blocker,
+          mutation_attempted = true,
+          zero_write = false,
+          completed_mutations = mutation_count,
+        }, false)
+      end
+      if expected_plugin_id and expected_plugin_id ~= live_plugin_id then
+        return e2_fx_take_fanout_error("FX_SET_PLUGIN_IDENTITY_MISMATCH", "A created Take FX did not match the homogeneous set native plug-in identity.", {
+          member_index = index,
+          item_ref = member.item_ref,
+          expected_plugin_id = expected_plugin_id,
+          live_plugin_id = live_plugin_id,
+          mutation_attempted = true,
+          zero_write = false,
+          completed_mutations = mutation_count,
+        }, false)
+      end
+      expected_plugin_id = expected_plugin_id or live_plugin_id
+      if expected_layout and expected_layout.layout_fingerprint ~= layout.layout_fingerprint then
+        return e2_fx_take_fanout_error("FX_SET_LAYOUT_MISMATCH", "A created Take FX did not match the homogeneous set parameter layout.", {
+          member_index = index,
+          item_ref = member.item_ref,
+          expected_layout_fingerprint = expected_layout.layout_fingerprint,
+          live_layout_fingerprint = layout.layout_fingerprint,
+          mutation_attempted = true,
+          zero_write = false,
+          completed_mutations = mutation_count,
+        }, false)
+      end
+      expected_layout = expected_layout or layout
+      member.layout = layout
+    end
+  end
+
+  local members = json_array({})
+  local refs = json_array({})
+  local created_count = 0
+  local reused_count = 0
+  local seen_fx_guids = {}
+  for index = 1, #prepared do
+    local member = prepared[index]
+    local live_plugin_id = e2_fx_read_plugin_id("take", member.take, member.slot_index)
+    local live_fx_guid = e2_fx_read_guid("take", member.take, member.slot_index)
+    local live_layout, layout_blocker = e2_fx_parameter_layout(
+      "take",
+      member.take,
+      member.slot_index,
+      live_plugin_id or "",
+      plugin_name
+    )
+    if not e2_fx_installed_identity_matches_live(installed.ident, live_plugin_id)
+        or live_plugin_id ~= expected_plugin_id or live_fx_guid ~= member.fx_guid or not live_layout
+        or live_layout.layout_fingerprint ~= expected_layout.layout_fingerprint or seen_fx_guids[live_fx_guid] then
+      return e2_fx_take_fanout_error("VERIFY_FAILED", "Aggregate Take-FX set readback did not preserve exact unique member identity and layout truth.", {
+        member_index = index,
+        item_ref = member.item_ref,
+        blocker = layout_blocker,
+        mutation_attempted = mutation_count > 0,
+        zero_write = mutation_count == 0,
+        completed_mutations = mutation_count,
+      }, false)
+    end
+    seen_fx_guids[live_fx_guid] = true
+    local fx_ref = e2_fx_read_fx_object_ref("take", member.take_ref, member.slot_index, plugin_name)
+    refs[#refs + 1] = fx_ref
+    members[#members + 1] = {
+      track_ref = track_ref,
+      item_ref = member.item_ref,
+      take_ref = member.take_ref,
+      fx_ref = fx_ref.ref,
+      fx_guid = live_fx_guid,
+      plugin_id = live_plugin_id,
+      parameter_count = live_layout.parameter_count,
+      layout_fingerprint = live_layout.layout_fingerprint,
+      status = member.status,
+    }
+    if member.status == "created" then created_count = created_count + 1 else reused_count = reused_count + 1 end
+  end
+  local after_truth = e2_fx_current_project_truth()
+  if not after_truth or after_truth.project_instance_id ~= project_truth.project_instance_id then
+    return e2_fx_take_fanout_error("VERIFY_FAILED", "The active native project instance changed during Take-FX fanout.", {
+      mutation_attempted = mutation_count > 0,
+      zero_write = mutation_count == 0,
+      completed_mutations = mutation_count,
+    }, false)
+  end
+
+  return e2_fx_write_summary(request, {
+    mode = "track_owned_active_take_fx_set",
+    track_ref = track_ref,
+    member_count = #members,
+    members = members,
+    representative_fx_ref = members[1].fx_ref,
+    plugin_identity = {
+      name = plugin_name,
+      plugin_id = expected_plugin_id,
+      installed_index = installed.index,
+    },
+    layout_fingerprint = expected_layout.layout_fingerprint,
+    project_ref = project_truth.project_ref,
+    project_path = project_truth.project_path,
+    project_instance_id = project_truth.project_instance_id,
+    native_project_instance_verified = true,
+    project_state_change_count_before = project_truth.state_change_count,
+    project_state_change_count_after = after_truth.state_change_count,
+    created_count = created_count,
+    reused_count = reused_count,
+    mutation_attempted = mutation_count > 0,
+    native_mutation_count = mutation_count,
+    aggregate_verification = {
+      status = "passed",
+      member_count = #members,
+      exact_identity = true,
+      homogeneous_layout = true,
+      project_instance_preserved = true,
+    },
+  }), nil, json_array({}), json_array({}), refs
+end
+
 local function add_take_fx(request)
+  if is_object(request.params) and request.params.target_binding ~= nil then
+    return e2_fx_add_take_fx_fanout(request)
+  end
   local take = e2_fx_read_take_from_request_refs(request)
   if not take then
     return e2_fx_read_error("TAKE_NOT_FOUND", "E2 FX-B1 add_take_fx requires a resolvable take ref.")
@@ -15050,11 +16810,20 @@ local function set_fx_parameter_normalized(request)
   if not param_index or param_index < 0 or param_index ~= math.floor(param_index) then
     return e2_fx_read_error("FX_PARAMETER_INVALID", "E2 FX-B1 set_fx_parameter_normalized requires a non-negative integer param_index.")
   end
-  local normalized_value = tonumber(request.params and request.params.normalized_value)
-  if not normalized_value or normalized_value < 0 or normalized_value > 1 then
+  local has_normalized_value = request.params and request.params.normalized_value ~= nil
+  local has_display_value = request.params and request.params.display_value ~= nil
+  if has_normalized_value == has_display_value then
+    return e2_fx_read_error("PARAMS_INVALID", "E2 FX-B1 requires exactly one normalized_value or display_value.")
+  end
+  local normalized_value = has_normalized_value and tonumber(request.params.normalized_value) or nil
+  if has_normalized_value and (not normalized_value or normalized_value < 0 or normalized_value > 1) then
     return e2_fx_read_error("PARAMS_INVALID", "E2 FX-B1 normalized_value must be between 0 and 1.", {
-      normalized_value = request.params and request.params.normalized_value,
+      normalized_value = request.params.normalized_value,
     })
+  end
+  local display_value = has_display_value and request.params.display_value or nil
+  if has_display_value and (not is_string(display_value) or display_value == "" or #display_value > 80) then
+    return e2_fx_read_error("PARAMS_INVALID", "E2 FX-B1 display_value must be one bounded native-formatted target string.")
   end
   local count = e2_fx_read_param_count(owner_kind, owner, slot_index)
   if param_index >= count then
@@ -15077,24 +16846,48 @@ local function set_fx_parameter_normalized(request)
     })
   end
   local step_sizes = e2_fx_read_param_step_sizes(owner_kind, owner, slot_index, param_index)
-  local requested_formatted_value = e2_fx_format_param_normalized(
-    owner_kind,
-    owner,
-    slot_index,
-    param_index,
-    normalized_value
-  )
-  if not e2_fx_set_param_normalized(owner_kind, owner, slot_index, param_index, normalized_value) then
+  local requested_value
+  local requested_formatted_value
+  if has_display_value then
+    requested_value, requested_formatted_value = E2_FX_HOMOGENEOUS_SET.search_formatted({
+      owner_kind = owner_kind,
+      owner = owner,
+      slot_index = slot_index,
+    }, param_index, display_value)
+    if not requested_value then
+      return e2_fx_read_error("FX_DISPLAY_VALUE_UNREACHABLE", "REAPER native formatting could not reach the requested FX display value without mutation.", {
+        param_index = param_index,
+        display_value = bounded_string(display_value, 80),
+        zero_write = true,
+      })
+    end
+  else
+    requested_formatted_value = e2_fx_format_param_normalized(
+      owner_kind,
+      owner,
+      slot_index,
+      param_index,
+      normalized_value
+    )
+  end
+  local accepted
+  if has_display_value then
+    accepted = e2_fx_set_param_value(owner_kind, owner, slot_index, param_index, requested_value)
+  else
+    accepted = e2_fx_set_param_normalized(owner_kind, owner, slot_index, param_index, normalized_value)
+  end
+  if not accepted then
     return e2_fx_read_error("COMMAND_FAILED", "REAPER rejected the FX parameter update.", {}, false)
   end
-  local tolerance = tonumber(request.params and request.params.tolerance) or 0.001
+  local tolerance = tonumber(request.params and request.params.tolerance)
+    or (has_display_value and 0.000001 or 0.001)
   if tolerance < 0 then
-    tolerance = 0.001
+    tolerance = has_display_value and 0.000001 or 0.001
   end
   local values = e2_fx_read_param_value(owner_kind, owner, slot_index, param_index)
   local readback_normalized = e2_fx_read_param_normalized(owner_kind, owner, slot_index, param_index)
   local readback_formatted_value = e2_fx_read_param_formatted(owner_kind, owner, slot_index, param_index)
-  if step_sizes.is_discrete ~= true
+  if not has_display_value and step_sizes.is_discrete ~= true
       and type(requested_formatted_value) == "string"
       and requested_formatted_value == readback_formatted_value
       and e2_fx_infer_native_discrete_format(
@@ -15106,17 +16899,31 @@ local function set_fx_parameter_normalized(request)
       ) then
     step_sizes.is_discrete = true
   end
-  local updated, verification_mode = e2_fx_parameter_readback_matches(
-    normalized_value,
-    requested_formatted_value,
-    readback_normalized,
-    readback_formatted_value,
-    tolerance,
-    step_sizes
-  )
+  local updated
+  local verification_mode
+  if has_display_value then
+    updated = E2_FX_HOMOGENEOUS_SET.finite(values.value)
+      and math.abs(values.value - requested_value) <= tolerance
+      and E2_FX_HOMOGENEOUS_SET.formatted_readback_matches(
+        readback_formatted_value,
+        requested_formatted_value
+      )
+    verification_mode = "native_display_value"
+  else
+    updated, verification_mode = e2_fx_parameter_readback_matches(
+      normalized_value,
+      requested_formatted_value,
+      readback_normalized,
+      readback_formatted_value,
+      tolerance,
+      step_sizes
+    )
+  end
   if not updated then
-    return e2_fx_read_error("VERIFY_FAILED", "E2 FX-B1 set_fx_parameter_normalized did not read back the requested continuous value or native discrete value.", {
-      requested_normalized_value = normalized_value,
+    return e2_fx_read_error("VERIFY_FAILED", "E2 FX-B1 set_fx_parameter_normalized did not read back the requested normalized or native display value.", {
+      requested_normalized_value = has_normalized_value and normalized_value or JSON_NULL,
+      requested_display_value = has_display_value and display_value or JSON_NULL,
+      requested_value = has_display_value and requested_value or JSON_NULL,
       requested_formatted_value = requested_formatted_value or JSON_NULL,
       readback_normalized_value = readback_normalized,
       readback_formatted_value = readback_formatted_value,
@@ -15142,7 +16949,9 @@ local function set_fx_parameter_normalized(request)
     max_value = values.max_value,
     normalized_value = readback_normalized,
     formatted_value = readback_formatted_value,
-    requested_normalized_value = normalized_value,
+    requested_normalized_value = has_normalized_value and normalized_value or JSON_NULL,
+    requested_display_value = has_display_value and display_value or JSON_NULL,
+    requested_value = has_display_value and requested_value or JSON_NULL,
     requested_formatted_value = requested_formatted_value or JSON_NULL,
     tolerance = tolerance,
     verification_mode = verification_mode,
@@ -15238,7 +17047,8 @@ local function e2_fx_batch_validate_rows(request, ref_map)
     end
     for key in pairs(row) do
       if key ~= "id" and key ~= "fx_ref" and key ~= "param_index" and key ~= "param_ident"
-          and key ~= "param_name" and key ~= "normalized_value" and key ~= "requested_formatted_value" then
+          and key ~= "param_name" and key ~= "normalized_value" and key ~= "display_value"
+          and key ~= "requested_formatted_value" then
         return nil, e2_fx_batch_row_failure("PARAMS_INVALID", "FX assignment batch row contains an unsupported field.", index, { field = key })
       end
     end
@@ -15259,9 +17069,17 @@ local function e2_fx_batch_validate_rows(request, ref_map)
     if has_index and (not param_index or param_index < 0 or param_index ~= math.floor(param_index)) then
       return nil, e2_fx_batch_row_failure("PARAMS_INVALID", "FX assignment batch param_index must be a non-negative integer.", index)
     end
-    local normalized_value = tonumber(row.normalized_value)
-    if not e2_fx_batch_finite(normalized_value) or normalized_value < 0 or normalized_value > 1 then
+    local has_normalized_value = row.normalized_value ~= nil
+    local has_display_value = row.display_value ~= nil
+    if has_normalized_value == has_display_value then
+      return nil, e2_fx_batch_row_failure("PARAMS_INVALID", "FX assignment batch row requires exactly one normalized_value or display_value.", index)
+    end
+    local normalized_value = has_normalized_value and tonumber(row.normalized_value) or nil
+    if has_normalized_value and (not e2_fx_batch_finite(normalized_value) or normalized_value < 0 or normalized_value > 1) then
       return nil, e2_fx_batch_row_failure("PARAMS_INVALID", "FX assignment batch normalized_value must be finite and between 0 and 1.", index)
+    end
+    if has_display_value and (not is_string(row.display_value) or row.display_value == "" or #row.display_value > 80) then
+      return nil, e2_fx_batch_row_failure("PARAMS_INVALID", "FX assignment batch display_value must be one bounded native-formatted target string.", index)
     end
     if row.requested_formatted_value ~= nil and (not is_string(row.requested_formatted_value) or row.requested_formatted_value == "") then
       return nil, e2_fx_batch_row_failure("PARAMS_INVALID", "FX assignment batch requested_formatted_value must be a non-empty string.", index)
@@ -15296,11 +17114,27 @@ local function e2_fx_batch_validate_rows(request, ref_map)
     if has_name and (type(live_name) ~= "string" or string.lower(live_name) ~= string.lower(row.param_name)) then
       return nil, e2_fx_batch_row_failure("FX_PARAMETER_NAME_MISMATCH", "FX assignment batch param_name does not match native name.", index, { live_param_name = live_name })
     end
-    local formatted = e2_fx_format_param_normalized(owner_kind, owner, slot_index, param_index, normalized_value)
+    local value
+    local formatted
+    if has_display_value then
+      value, formatted = E2_FX_HOMOGENEOUS_SET.search_formatted({
+        owner_kind = owner_kind,
+        owner = owner,
+        slot_index = slot_index,
+      }, param_index, row.display_value)
+      if not value then
+        return nil, e2_fx_batch_row_failure("FX_DISPLAY_VALUE_UNREACHABLE", "REAPER native formatting could not reach the requested FX display value without mutation.", index, {
+          display_value = bounded_string(row.display_value, 80),
+        })
+      end
+    else
+      formatted = e2_fx_format_param_normalized(owner_kind, owner, slot_index, param_index, normalized_value)
+    end
     if not is_string(formatted) or formatted == "" then
       return nil, e2_fx_batch_row_failure("API_UNAVAILABLE", "FX assignment batch could not format the native target value.", index)
     end
-    if is_string(row.requested_formatted_value) and row.requested_formatted_value ~= formatted then
+    if is_string(row.requested_formatted_value)
+        and not E2_FX_HOMOGENEOUS_SET.formatted_readback_matches(formatted, row.requested_formatted_value) then
       return nil, e2_fx_batch_row_failure("FX_ASSIGNMENTS_FORMATTED_TARGET_MISMATCH", "FX assignment batch requested formatted value does not match native formatting.", index, { requested_formatted_value = row.requested_formatted_value, native_formatted_value = formatted })
     end
     local step_sizes = e2_fx_read_param_step_sizes(owner_kind, owner, slot_index, param_index)
@@ -15313,15 +17147,20 @@ local function e2_fx_batch_validate_rows(request, ref_map)
       param_ident = live_ident,
       name = live_name,
       normalized_value = normalized_value,
+      value = value,
+      display_value = row.display_value,
       requested_formatted_value = formatted,
       step_sizes = step_sizes,
-      tolerance = step_sizes.is_discrete == true and 0 or 0.001,
+      tolerance = has_display_value and 0.000001 or step_sizes.is_discrete == true and 0 or 0.001,
     }
   end
   return prepared
 end
 
 local function e2_fx_parameter_assignments_batch(request)
+  if is_object(request.params) and request.params.mode == "shared_plan" then
+    return E2_FX_HOMOGENEOUS_SET.apply(request)
+  end
   local ref_map, ref_failure = e2_fx_batch_ref_map(request)
   if not ref_map then return nil, ref_failure end
   local prepared, validation_failure = e2_fx_batch_validate_rows(request, ref_map)
@@ -15345,12 +17184,16 @@ local function e2_fx_parameter_assignments_batch(request)
         param_index = item.param_index,
         param_ident = item.param_ident,
         name = item.name,
-        normalized_value = item.normalized_value,
+        value = item.display_value ~= nil and item.value or JSON_NULL,
+        normalized_value = item.normalized_value or JSON_NULL,
         formatted_value = item.requested_formatted_value,
-        requested_normalized_value = item.normalized_value,
+        requested_normalized_value = item.display_value == nil and item.normalized_value or JSON_NULL,
+        requested_display_value = item.display_value or JSON_NULL,
+        requested_value = item.display_value ~= nil and item.value or JSON_NULL,
         requested_formatted_value = item.requested_formatted_value,
         tolerance = item.tolerance,
-        verification_mode = item.tolerance == 0 and "native_discrete_format" or "numeric_tolerance",
+        verification_mode = item.display_value ~= nil and "native_display_value"
+          or item.tolerance == 0 and "native_discrete_format" or "numeric_tolerance",
         updated = true,
         readback_status = "preflight_passed",
       }
@@ -15365,7 +17208,13 @@ local function e2_fx_parameter_assignments_batch(request)
     for index = chunk_start, chunk_end do
       local item = prepared[index]
       batch_timings.native_mutation_count = batch_timings.native_mutation_count + 1
-      if not e2_fx_set_param_normalized(item.owner_kind, item.owner, item.slot_index, item.param_index, item.normalized_value) then
+      local accepted
+      if item.display_value ~= nil then
+        accepted = e2_fx_set_param_value(item.owner_kind, item.owner, item.slot_index, item.param_index, item.value)
+      else
+        accepted = e2_fx_set_param_normalized(item.owner_kind, item.owner, item.slot_index, item.param_index, item.normalized_value)
+      end
+      if not accepted then
         mutation_failure = e2_fx_batch_row_failure("COMMAND_FAILED", "REAPER rejected an FX assignment batch setter.", index, { mutation_attempted = true, zero_write = false })
         break
       end
@@ -15381,10 +17230,18 @@ local function e2_fx_parameter_assignments_batch(request)
     local normalized_value = e2_fx_read_param_normalized(item.owner_kind, item.owner, item.slot_index, item.param_index)
     local formatted_value = e2_fx_read_param_formatted(item.owner_kind, item.owner, item.slot_index, item.param_index)
     local values = e2_fx_read_param_value(item.owner_kind, item.owner, item.slot_index, item.param_index)
-    local updated = item.tolerance == 0
-      and formatted_value == item.requested_formatted_value
-      or e2_fx_batch_finite(normalized_value) and math.abs(normalized_value - item.normalized_value) <= item.tolerance
-    if not e2_fx_batch_finite(normalized_value) or not is_string(formatted_value) or formatted_value == "" or not updated then
+    local updated
+    if item.display_value ~= nil then
+      updated = e2_fx_batch_finite(values.value)
+        and math.abs(values.value - item.value) <= item.tolerance
+        and E2_FX_HOMOGENEOUS_SET.formatted_readback_matches(formatted_value, item.requested_formatted_value)
+    else
+      updated = item.tolerance == 0
+        and formatted_value == item.requested_formatted_value
+        or e2_fx_batch_finite(normalized_value) and math.abs(normalized_value - item.normalized_value) <= item.tolerance
+    end
+    if not e2_fx_batch_finite(values.value) or not e2_fx_batch_finite(normalized_value)
+        or not is_string(formatted_value) or formatted_value == "" or not updated then
       readback_failure = e2_fx_batch_row_failure("VERIFY_FAILED", "FX assignment batch aggregate readback did not match native identity or value truth.", index, { mutation_attempted = batch_timings.native_mutation_count > 0, zero_write = false })
       break
     end
@@ -15402,10 +17259,13 @@ local function e2_fx_parameter_assignments_batch(request)
       max_value = values.max_value,
       normalized_value = normalized_value,
       formatted_value = formatted_value,
-      requested_normalized_value = item.normalized_value,
+      requested_normalized_value = item.display_value == nil and item.normalized_value or JSON_NULL,
+      requested_display_value = item.display_value or JSON_NULL,
+      requested_value = item.display_value ~= nil and item.value or JSON_NULL,
       requested_formatted_value = item.requested_formatted_value,
       tolerance = item.tolerance,
-      verification_mode = item.tolerance == 0 and "native_discrete_format" or "numeric_tolerance",
+      verification_mode = item.display_value ~= nil and "native_display_value"
+        or item.tolerance == 0 and "native_discrete_format" or "numeric_tolerance",
       step_sizes_available = item.step_sizes.step_sizes_available,
       step_size = item.step_sizes.step_size,
       small_step_size = item.step_sizes.small_step_size,
@@ -17768,6 +19628,21 @@ local function e5_automation_envelope_from_request(request)
     end
   end
   local parent_kind = request.params.parent_kind
+  if parent_kind == "selected" then
+    local ok_selected, selected = call_reaper("GetSelectedEnvelope", 0)
+    if not ok_selected or not selected then
+      return nil
+    end
+    local guid = e5_automation_envelope_guid(selected)
+    if not guid then
+      return nil
+    end
+    local envelope, info = e5_automation_envelope_by_guid(guid)
+    if not envelope or envelope ~= selected or not is_object(info) then
+      return nil
+    end
+    return envelope, "envelope:guid:" .. guid, info.parent_kind, info.key, info.name, info
+  end
   if parent_kind == "track" or parent_kind == nil or parent_kind == JSON_NULL then
     local track = e5_routing_track_from_request_refs(request) or e5_routing_resolve_track_token("track:index:0")
     if track then
@@ -21082,6 +22957,7 @@ local D31_EVIDENCE_SPEC = {
 local D31_ACTION_ID = 41824
 local D31_MEDIA_ONLINE_ACTION_ID = 40101
 local D31_MAX_TARGETS = 16
+local D31_VIDEO_FINALIZATION_WAIT_SECONDS = 5
 local D31_NUMERIC_KEYS = {
   "RENDER_BOUNDSFLAG",
   "RENDER_STARTPOS",
@@ -21116,6 +22992,15 @@ local D31_MP3_FORMATS = {
   [256] = "bDNwbQABAAAAAAAAAAAAAP////8EAAAAAAEAAAAAAAA=",
   [320] = "bDNwbUABAAAAAAAAAAAAAP////8EAAAAQAEAAAAAAAA=",
 }
+local D31_VIDEO_FRAME_RATE_BYTES = {
+  [24] = string.char(0x00, 0x00, 0xC0, 0x41),
+  [25] = string.char(0x00, 0x00, 0xC8, 0x41),
+  [30] = string.char(0x00, 0x00, 0xF0, 0x41),
+  [50] = string.char(0x00, 0x00, 0x48, 0x42),
+  [60] = string.char(0x00, 0x00, 0x70, 0x42),
+}
+local D31_AUDIO_BITRATES = { [64] = true, [96] = true, [128] = true, [192] = true, [256] = true, [320] = true }
+local D31_BASE64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 
 local D31_ERROR_CODE_MAP = {
   RENDER_SETTINGS_UNAVAILABLE = "INTERNAL_ERROR",
@@ -21130,6 +23015,14 @@ local D31_ERROR_CODE_MAP = {
   WAV_BIT_DEPTH_REQUIRED = "PARAMS_INVALID",
   OGG_QUALITY_REQUIRED = "PARAMS_INVALID",
   MP3_BITRATE_REQUIRED = "PARAMS_INVALID",
+  VIDEO_WIDTH_REQUIRED = "PARAMS_INVALID",
+  VIDEO_HEIGHT_REQUIRED = "PARAMS_INVALID",
+  VIDEO_FRAME_RATE_REQUIRED = "PARAMS_INVALID",
+  VIDEO_CODEC_REQUIRED = "PARAMS_INVALID",
+  VIDEO_BITRATE_REQUIRED = "PARAMS_INVALID",
+  VIDEO_AUDIO_CODEC_REQUIRED = "PARAMS_INVALID",
+  VIDEO_AUDIO_BITRATE_REQUIRED = "PARAMS_INVALID",
+  VIDEO_DESTINATION_UNSUPPORTED = "PARAMS_INVALID",
   FORMAT_INVALID = "PARAMS_INVALID",
   TIME_SELECTION_EMPTY = "PARAMS_INVALID",
   TARGET_REFS_DUPLICATE = "REF_INVALID",
@@ -21143,10 +23036,73 @@ local D31_ERROR_CODE_MAP = {
   RENDER_SOURCE_OFFLINE = "FILE_NOT_FOUND",
   RENDER_OUTPUT_ALL_ZERO = "VERIFY_FAILED",
   RENDER_OVERWRITE_REMOVE_FAILED = "INTERNAL_ERROR",
+  STEM_MODE_INVALID = "PARAMS_INVALID",
+  STEM_SOURCE_MUTED = "PARAMS_INVALID",
+  STEM_IMPORT_FAILED = "COMMAND_FAILED",
+  STEM_READBACK_FAILED = "VERIFY_FAILED",
   RESTORE_FAILED = "VERIFY_FAILED",
 }
 
-local function d31_error(code, message, details, recoverable)
+local d31_error
+
+local function d31_u32le_bytes(value)
+  return string.char(
+    value % 256,
+    math.floor(value / 256) % 256,
+    math.floor(value / 65536) % 256,
+    math.floor(value / 16777216) % 256
+  )
+end
+
+local function d31_base64_encode(bytes)
+  local output = {}
+  for index = 1, #bytes, 3 do
+    local a = bytes:byte(index) or 0
+    local b = bytes:byte(index + 1)
+    local c = bytes:byte(index + 2)
+    local packed = a * 65536 + (b or 0) * 256 + (c or 0)
+    output[#output + 1] = D31_BASE64_ALPHABET:sub(math.floor(packed / 262144) % 64 + 1, math.floor(packed / 262144) % 64 + 1)
+    output[#output + 1] = D31_BASE64_ALPHABET:sub(math.floor(packed / 4096) % 64 + 1, math.floor(packed / 4096) % 64 + 1)
+    output[#output + 1] = b and D31_BASE64_ALPHABET:sub(math.floor(packed / 64) % 64 + 1, math.floor(packed / 64) % 64 + 1) or "="
+    output[#output + 1] = c and D31_BASE64_ALPHABET:sub(packed % 64 + 1, packed % 64 + 1) or "="
+  end
+  return table.concat(output)
+end
+
+local function d31_avfoundation_format(params)
+  local width = tonumber(params.video_width)
+  local height = tonumber(params.video_height)
+  local frame_rate = tonumber(params.video_frame_rate)
+  local video_bitrate = tonumber(params.video_bitrate_kbps)
+  local audio_bitrate = tonumber(params.audio_bitrate_kbps)
+  if not width or width ~= math.floor(width) or width < 16 or width > 7680 or width % 2 ~= 0 then return d31_error("VIDEO_WIDTH_REQUIRED", "MP4/MOV video_width must be an even integer from 16 through 7680.", { video_width = params.video_width }, false) end
+  if not height or height ~= math.floor(height) or height < 16 or height > 4320 or height % 2 ~= 0 then return d31_error("VIDEO_HEIGHT_REQUIRED", "MP4/MOV video_height must be an even integer from 16 through 4320.", { video_height = params.video_height }, false) end
+  if not D31_VIDEO_FRAME_RATE_BYTES[frame_rate] then return d31_error("VIDEO_FRAME_RATE_REQUIRED", "MP4/MOV video_frame_rate must be 24, 25, 30, 50, or 60.", { video_frame_rate = params.video_frame_rate }, false) end
+  if params.video_codec ~= "h264" then return d31_error("VIDEO_CODEC_REQUIRED", "MP4/MOV video_codec must be h264.", { video_codec = params.video_codec }, false) end
+  if not video_bitrate or video_bitrate ~= math.floor(video_bitrate) or video_bitrate < 256 or video_bitrate > 100000 then return d31_error("VIDEO_BITRATE_REQUIRED", "MP4/MOV video_bitrate_kbps must be an integer from 256 through 100000.", { video_bitrate_kbps = params.video_bitrate_kbps }, false) end
+  if params.audio_codec ~= "aac" then return d31_error("VIDEO_AUDIO_CODEC_REQUIRED", "MP4/MOV audio_codec must be aac.", { audio_codec = params.audio_codec }, false) end
+  if not audio_bitrate or not D31_AUDIO_BITRATES[audio_bitrate] then return d31_error("VIDEO_AUDIO_BITRATE_REQUIRED", "MP4/MOV audio_bitrate_kbps must be 64, 96, 128, 192, 256, or 320.", { audio_bitrate_kbps = params.audio_bitrate_kbps }, false) end
+  if params.destination ~= nil and params.destination ~= "managed_file" then return d31_error("VIDEO_DESTINATION_UNSUPPORTED", "MP4/MOV support managed_file destination only.", { destination = params.destination }, false) end
+  local container = params.format == "mov" and 2 or 0
+  local bytes = "FVAX" .. d31_u32le_bytes(container) .. d31_u32le_bytes(0) ..
+    d31_u32le_bytes(video_bitrate) .. d31_u32le_bytes(0) .. d31_u32le_bytes(audio_bitrate) ..
+    d31_u32le_bytes(width) .. d31_u32le_bytes(height) .. D31_VIDEO_FRAME_RATE_BYTES[frame_rate] ..
+    d31_u32le_bytes(1) .. d31_u32le_bytes(95) .. string.char(0, 0)
+  return {
+    extension = params.format,
+    config = d31_base64_encode(bytes),
+    video_width = width,
+    video_height = height,
+    video_frame_rate = frame_rate,
+    video_codec = "h264",
+    video_bitrate_kbps = video_bitrate,
+    audio_codec = "aac",
+    audio_bitrate_kbps = audio_bitrate,
+    video = true,
+  }
+end
+
+d31_error = function(code, message, details, recoverable)
   local mapped = D31_ERROR_CODE_MAP[code] or code
   local bounded_details = details or {}
   if mapped ~= code then bounded_details.local_code = code end
@@ -21182,7 +23138,7 @@ local function d31_output_basename(value)
     return nil, "output_basename contains a path, wildcard, reserved, control, or unsafe trailing character."
   end
   local lower = value:lower()
-  if lower:match("%.wav$") or lower:match("%.ogg$") or lower:match("%.mp3$") then
+  if lower:match("%.wav$") or lower:match("%.ogg$") or lower:match("%.mp3$") or lower:match("%.mp4$") or lower:match("%.mov$") then
     return nil, "output_basename is a filename stem and must not include the output extension."
   end
   return value
@@ -21229,6 +23185,165 @@ local function d31_mp3_probe(header)
   return false
 end
 
+local function d31_be_u32(bytes, offset)
+  local a, b, c, d = bytes:byte(offset, offset + 3)
+  if not a or not b or not c or not d then return nil end
+  return a * 16777216 + b * 65536 + c * 256 + d
+end
+
+local function d31_atom_header(bytes, offset, limit)
+  if offset + 7 > limit then return nil end
+  local size = d31_be_u32(bytes, offset)
+  local kind = bytes:sub(offset + 4, offset + 7)
+  local header_size = 8
+  if size == 1 then
+    local high = d31_be_u32(bytes, offset + 8)
+    local low = d31_be_u32(bytes, offset + 12)
+    if not high or not low then return nil end
+    size = high * 4294967296 + low
+    header_size = 16
+  elseif size == 0 then
+    size = limit - offset + 1
+  end
+  if size < header_size or offset + size - 1 > limit then return nil end
+  return kind, offset + header_size, offset + size - 1, offset + size
+end
+
+local D31_ISO_CONTAINERS = {
+  mdia = true,
+  minf = true,
+  stbl = true,
+  dinf = true,
+  edts = true,
+}
+
+local function d31_walk_track_atoms(bytes, start_offset, limit, state, depth)
+  if depth > 8 then return end
+  local offset = start_offset
+  while offset and offset <= limit do
+    local kind, payload_start, atom_end, next_offset = d31_atom_header(bytes, offset, limit)
+    if not kind then return end
+    if kind == "tkhd" and atom_end - payload_start + 1 >= 8 then
+      state.width = (d31_be_u32(bytes, atom_end - 7) or 0) / 65536
+      state.height = (d31_be_u32(bytes, atom_end - 3) or 0) / 65536
+    elseif kind == "hdlr" and payload_start + 11 <= atom_end then
+      local handler = bytes:sub(payload_start + 8, payload_start + 11)
+      if handler == "vide" or handler == "soun" then state.handler = handler end
+    elseif kind == "mdhd" then
+      local version = bytes:byte(payload_start)
+      local timescale_offset = version == 1 and payload_start + 20 or payload_start + 12
+      state.timescale = d31_be_u32(bytes, timescale_offset)
+    elseif kind == "stts" and payload_start + 7 <= atom_end then
+      local entry_count = d31_be_u32(bytes, payload_start + 4) or 0
+      local cursor = payload_start + 8
+      local sample_count = 0
+      local sample_duration = 0
+      for _ = 1, math.min(entry_count, 100000) do
+        local count = d31_be_u32(bytes, cursor)
+        local delta = d31_be_u32(bytes, cursor + 4)
+        if not count or not delta then break end
+        sample_count = sample_count + count
+        sample_duration = sample_duration + count * delta
+        cursor = cursor + 8
+      end
+      state.sample_count = sample_count
+      state.sample_duration = sample_duration
+    elseif kind == "stsd" then
+      local payload = bytes:sub(payload_start, atom_end)
+      if payload:find("avc1", 1, true) or payload:find("avc3", 1, true) then state.video_codec = "h264" end
+      if payload:find("mp4a", 1, true) then state.audio_codec = "aac" end
+    end
+    if D31_ISO_CONTAINERS[kind] then d31_walk_track_atoms(bytes, payload_start, atom_end, state, depth + 1) end
+    offset = next_offset
+  end
+end
+
+local function d31_parse_moov(moov_bytes, moov_payload_start)
+  local tracks = json_array({})
+  local offset = moov_payload_start
+  while offset and offset <= #moov_bytes do
+    local kind, payload_start, atom_end, next_offset = d31_atom_header(moov_bytes, offset, #moov_bytes)
+    if not kind then break end
+    if kind == "trak" then
+      local track = {}
+      d31_walk_track_atoms(moov_bytes, payload_start, atom_end, track, 0)
+      if track.timescale and track.timescale > 0 and track.sample_count and track.sample_count > 0 and track.sample_duration and track.sample_duration > 0 then
+        track.frame_rate = track.timescale * track.sample_count / track.sample_duration
+      end
+      tracks[#tracks + 1] = track
+    end
+    offset = next_offset
+  end
+  return tracks
+end
+
+local function d31_probe_iso_bmff(path_value)
+  local handle = io.open(path_value, "rb")
+  if not handle then return nil end
+  local file_size = handle:seek("end") or 0
+  local offset = 0
+  local state = { ftyp = false, moov = false, mdat = false, brand = nil, tracks = json_array({}) }
+  while offset + 8 <= file_size do
+    handle:seek("set", offset)
+    local header = handle:read(16) or ""
+    if #header < 8 then break end
+    local size = d31_be_u32(header, 1)
+    local kind = header:sub(5, 8)
+    local header_size = 8
+    if size == 1 then
+      local high = d31_be_u32(header, 9)
+      local low = d31_be_u32(header, 13)
+      if not high or not low then break end
+      size = high * 4294967296 + low
+      header_size = 16
+    elseif size == 0 then
+      size = file_size - offset
+    end
+    if not size or size < header_size or offset + size > file_size then break end
+    if kind == "ftyp" then
+      state.ftyp = true
+      handle:seek("set", offset + header_size)
+      state.brand = handle:read(4)
+    elseif kind == "moov" then
+      state.moov = true
+      if size <= 16777216 then
+        handle:seek("set", offset)
+        local bytes = handle:read(size) or ""
+        state.tracks = d31_parse_moov(bytes, header_size + 1)
+      end
+    elseif kind == "mdat" then
+      state.mdat = true
+    end
+    offset = offset + size
+  end
+  handle:close()
+  local video_track = nil
+  local audio_track = nil
+  local video_count = 0
+  local audio_count = 0
+  for index = 1, #state.tracks do
+    local track = state.tracks[index]
+    if track.handler == "vide" then video_count = video_count + 1; video_track = video_track or track end
+    if track.handler == "soun" then audio_count = audio_count + 1; audio_track = audio_track or track end
+  end
+  local actual_format = state.brand == "qt  " and "mov" or "mp4"
+  return {
+    ok = state.ftyp and state.moov and state.mdat and video_track ~= nil and video_track.video_codec == "h264",
+    actual_format = actual_format,
+    major_brand = state.brand,
+    ftyp_verified = state.ftyp,
+    moov_verified = state.moov,
+    mdat_verified = state.mdat,
+    video_track_count = video_count,
+    audio_track_count = audio_count,
+    width = video_track and math.floor((video_track.width or 0) + 0.5) or nil,
+    height = video_track and math.floor((video_track.height or 0) + 0.5) or nil,
+    frame_rate = video_track and video_track.frame_rate or nil,
+    video_codec = video_track and video_track.video_codec or nil,
+    audio_codec = audio_track and audio_track.audio_codec or nil,
+  }
+end
+
 local function d31_probe_output(path_value, extension)
   local handle = io.open(path_value, "rb")
   if not handle then return false end
@@ -21240,7 +23355,33 @@ local function d31_probe_output(path_value, extension)
     local ok, bitrate = d31_mp3_probe(header)
     return ok, ok and "mp3" or nil, bitrate
   end
+  if extension == "mp4" or extension == "mov" then
+    local probe = d31_probe_iso_bmff(path_value)
+    return probe ~= nil and probe.ok == true and probe.actual_format == extension, probe and probe.actual_format or nil, nil, probe
+  end
   return false
+end
+
+local function d31_monotonic_seconds()
+  local ok, value = call_reaper("time_precise")
+  if ok and type(value) == "number" then return value end
+  return os.clock()
+end
+
+local function d31_wait_for_final_video(path_value, extension)
+  local started_at = d31_monotonic_seconds()
+  local attempts = 0
+  local size = 0
+  local header_ok, actual_format, actual_bitrate, video_probe = false, nil, nil, nil
+  repeat
+    attempts = attempts + 1
+    size = d31_size(path_value)
+    if size > 0 then
+      header_ok, actual_format, actual_bitrate, video_probe = d31_probe_output(path_value, extension)
+      if header_ok then return size, header_ok, actual_format, actual_bitrate, video_probe, attempts end
+    end
+  until d31_monotonic_seconds() - started_at >= D31_VIDEO_FINALIZATION_WAIT_SECONDS
+  return size, header_ok, actual_format, actual_bitrate, video_probe, attempts
 end
 
 local function d31_u16(bytes, offset)
@@ -21574,6 +23715,22 @@ end
 -- claim success.  MIDI/VSTi targets have no file-backed audio source and are
 -- intentionally excluded from this probe.
 local function d31_item_overlaps_target(project, item, target)
+  if target.tracks then
+    local ok_track, item_track = call_reaper("GetMediaItem_Track", item)
+    if not ok_track or not item_track then return false end
+    local matched = false
+    for index = 1, #target.tracks do
+      if target.tracks[index] == item_track then matched = true break end
+    end
+    if not matched then return false end
+    if target.bounds == 0 and type(target.start_seconds) == "number" and type(target.end_seconds) == "number" then
+      local ok_position, position = call_reaper("GetMediaItemInfo_Value", item, "D_POSITION")
+      local ok_length, length = call_reaper("GetMediaItemInfo_Value", item, "D_LENGTH")
+      if not ok_position or not ok_length or type(position) ~= "number" or type(length) ~= "number" then return false end
+      return position < target.end_seconds and (position + math.max(0, length)) > target.start_seconds
+    end
+    return true
+  end
   if target.item then
     local item_guid = is_string(target.ref) and target.ref:match("^item:guid:(.+)$") or nil
     if item_guid then
@@ -21772,6 +23929,153 @@ local function d31_track_name(track, fallback)
   return ok and is_string(name) and name ~= "" and name or fallback
 end
 
+local function d31_take_ref(take, fallback)
+  local ok, _, guid = call_reaper("GetSetMediaItemTakeInfo_String", take, "GUID", "", false)
+  local value = ok and first_string(guid) or ""
+  return value ~= "" and ("take:guid:" .. value) or ("take:take_index:" .. tostring(fallback or 0))
+end
+
+local function d31_track_mix_snapshot(project)
+  local ok_count, count = call_reaper("CountTracks", project)
+  if not ok_count or type(count) ~= "number" then return d31_error("SELECTION_UNAVAILABLE", "Could not snapshot Track mix state before Stem rendering.", {}, false) end
+  local rows = json_array({})
+  for index = 0, math.floor(count) - 1 do
+    local ok_track, track = call_reaper("GetTrack", project, index)
+    local ok_mute, mute = false, nil
+    local ok_solo, solo = false, nil
+    if track then
+      ok_mute, mute = call_reaper("GetMediaTrackInfo_Value", track, "B_MUTE")
+      ok_solo, solo = call_reaper("GetMediaTrackInfo_Value", track, "I_SOLO")
+    end
+    if not ok_track or not track or not ok_mute or type(mute) ~= "number" or not ok_solo or type(solo) ~= "number" then
+      return d31_error("SELECTION_UNAVAILABLE", "Could not read exact Track mute/solo state before Stem rendering.", { track_index = index }, false)
+    end
+    rows[#rows + 1] = { track = track, muted = mute, solo = solo }
+  end
+  return rows
+end
+
+local function d31_write_track_number(track, key, value)
+  local ok, accepted = call_reaper("SetMediaTrackInfo_Value", track, key, value)
+  if not ok or accepted == false then return false end
+  local ok_read, actual = call_reaper("GetMediaTrackInfo_Value", track, key)
+  return ok_read and type(actual) == "number" and math.abs(actual - value) < 0.000001
+end
+
+local function d31_restore_track_mix(snapshot)
+  if not snapshot then return true end
+  for index = 1, #snapshot do
+    local row = snapshot[index]
+    if not d31_write_track_number(row.track, "B_MUTE", row.muted) or not d31_write_track_number(row.track, "I_SOLO", row.solo) then return false end
+  end
+  return true
+end
+
+local function d31_isolate_stem_tracks(target, snapshot)
+  local members = {}
+  for index = 1, #target.tracks do members[target.tracks[index]] = true end
+  for index = 1, #snapshot do
+    local row = snapshot[index]
+    if members[row.track] and row.muted ~= 0 then
+      return d31_error("STEM_SOURCE_MUTED", "Stem source Tracks must be audible before rendering; OpenReaper does not silently unmute them.", { track_ref = d31_track_ref(row.track, index - 1), zero_write = true }, true)
+    end
+  end
+  for index = 1, #snapshot do
+    local row = snapshot[index]
+    if not d31_write_track_number(row.track, "I_SOLO", members[row.track] and 2 or 0) then
+      return d31_error("SELECTION_SET_FAILED", "Could not apply temporary Stem source isolation.", { track_index = index - 1 }, false)
+    end
+  end
+  return true
+end
+
+local function d31_stem_rollback(project, context)
+  local track_deleted = true
+  if context and context.created_track then
+    local ok_delete, accepted = call_reaper("DeleteTrack", context.created_track)
+    track_deleted = ok_delete and accepted ~= false
+  end
+  local mix_restored = d31_restore_track_mix(context and context.mix_snapshot)
+  local tracks_restored = d31_apply_track_selection(project, context and context.prior_tracks or json_array({}))
+  local items_restored = d31_apply_item_selection(project, context and context.prior_items or json_array({}))
+  return track_deleted and mix_restored and tracks_restored and items_restored, {
+    destination_track_deleted = track_deleted,
+    source_mix_restored = mix_restored,
+    track_selection_restored = tracks_restored,
+    item_selection_restored = items_restored,
+  }
+end
+
+local function d31_import_verified_stem(project, request, target, output, mix_snapshot, prior_tracks, prior_items)
+  local context = { created_track = nil, mix_snapshot = mix_snapshot, prior_tracks = prior_tracks, prior_items = prior_items }
+  local ok_source, source = call_reaper("PCM_Source_CreateFromFile", output.absolute_path)
+  if not ok_source or not source then return d31_error("STEM_IMPORT_FAILED", "Verified Stem output could not be reopened for project import.", { output_basename = output.output_basename }, false) end
+  local source_owned = false
+  local function fail(code, message, details, recoverable)
+    if not source_owned then call_reaper("PCM_Source_Destroy", source) end
+    local rolled_back, recovery = d31_stem_rollback(project, context)
+    details = details or {}
+    details.recovery = recovery
+    if not rolled_back then return d31_error("RESTORE_FAILED", "Stem import failed and exact project recovery did not complete.", details, false) end
+    return d31_error(code, message, details, recoverable)
+  end
+  local ok_length, length, length_is_qn = call_reaper("GetMediaSourceLength", source)
+  if not ok_length or type(length) ~= "number" or length <= 0 or length_is_qn == true then return fail("STEM_READBACK_FAILED", "Stem source length could not be verified in seconds.", {}, false) end
+  local ok_count, count = call_reaper("CountTracks", project)
+  if not ok_count or type(count) ~= "number" then return fail("STEM_IMPORT_FAILED", "Could not resolve the destination Track index.", {}, false) end
+  local track_index = math.floor(count)
+  local ok_insert, accepted_insert = call_reaper("InsertTrackAtIndex", track_index, true)
+  if not ok_insert or accepted_insert == false then return fail("STEM_IMPORT_FAILED", "Could not create the Stem destination Track.", { track_index = track_index }, false) end
+  local ok_track, track = call_reaper("GetTrack", project, track_index)
+  if not ok_track or not track then return fail("STEM_READBACK_FAILED", "Created Stem destination Track could not be read back.", { track_index = track_index }, false) end
+  context.created_track = track
+  local expected_name = request.params.output_track_name or output.output_basename
+  local ok_name, accepted_name = call_reaper("GetSetMediaTrackInfo_String", track, "P_NAME", expected_name, true)
+  if not ok_name or accepted_name == false or d31_track_name(track, "") ~= expected_name then return fail("STEM_READBACK_FAILED", "Stem destination Track name did not read back exactly.", { expected_name = bounded_string(expected_name, 160) }, false) end
+  local ok_item, item = call_reaper("AddMediaItemToTrack", track)
+  if not ok_item or not item then return fail("STEM_IMPORT_FAILED", "Could not create the Stem destination Item.", {}, false) end
+  local position = target.start_seconds or 0
+  local ok_position, accepted_position = call_reaper("SetMediaItemInfo_Value", item, "D_POSITION", position)
+  local ok_item_length, accepted_length = call_reaper("SetMediaItemInfo_Value", item, "D_LENGTH", length)
+  if not ok_position or accepted_position == false or not ok_item_length or accepted_length == false then return fail("STEM_IMPORT_FAILED", "Could not set exact Stem Item bounds.", { position = position, length = length }, false) end
+  local ok_take, take = call_reaper("AddTakeToMediaItem", item)
+  if not ok_take or not take then return fail("STEM_IMPORT_FAILED", "Could not create the Stem destination Take.", {}, false) end
+  local ok_attach, accepted_attach = call_reaper("SetMediaItemTake_Source", take, source)
+  if not ok_attach or accepted_attach == false then return fail("STEM_IMPORT_FAILED", "Could not attach the verified Stem source to its Take.", {}, false) end
+  source_owned = true
+  local ok_update, accepted_update = call_reaper("UpdateItemInProject", item)
+  if not ok_update or accepted_update == false then return fail("STEM_IMPORT_FAILED", "Could not refresh the imported Stem Item.", {}, false) end
+  local ok_items, item_count = call_reaper("CountTrackMediaItems", track)
+  local ok_first, actual_item = call_reaper("GetTrackMediaItem", track, 0)
+  local ok_active, actual_take = call_reaper("GetActiveTake", item)
+  local ok_attached, actual_source = call_reaper("GetMediaItemTake_Source", take)
+  local ok_path, actual_path = false, nil
+  if actual_source then ok_path, actual_path = call_reaper("GetMediaSourceFileName", actual_source, "") end
+  if not ok_items or item_count ~= 1 or not ok_first or actual_item ~= item or not ok_active or actual_take ~= take or not ok_attached or actual_source ~= source or not ok_path or first_string(actual_path) ~= output.absolute_path then
+    return fail("STEM_READBACK_FAILED", "Stem destination did not read back as exactly one Track, Item, Take, and exact source.", {}, false)
+  end
+  for index = 1, #target.tracks do
+    if not d31_write_track_number(target.tracks[index], "B_MUTE", 1) then return fail("STEM_READBACK_FAILED", "A source Track did not read back muted after verified Stem insertion.", { source_track_index = index - 1 }, false) end
+  end
+  if not d31_apply_track_selection(project, prior_tracks) or not d31_apply_item_selection(project, prior_items) then return fail("RESTORE_FAILED", "Stem succeeded but visible selection could not be restored.", {}, false) end
+  local source_refs = json_array({})
+  for index = 1, #target.tracks do source_refs[#source_refs + 1] = d31_track_ref(target.tracks[index], index - 1) end
+  return {
+    destination_track_ref = d31_track_ref(track, track_index),
+    destination_item_ref = d31_item_ref(item, 0),
+    destination_take_ref = d31_take_ref(take, 0),
+    output_basename = output.output_basename,
+    source_track_refs = source_refs,
+    source_track_count = #target.tracks,
+    source_tracks_muted = true,
+    destination_track_count = 1,
+    destination_item_count = 1,
+    destination_take_count = 1,
+    imported_source_verified = true,
+    non_silent_verified = output.is_silent == false,
+  }, context
+end
+
 local function d31_format(params)
   if params.format == "wav" then
     local depth = tonumber(params.wav_bit_depth)
@@ -21791,7 +24095,8 @@ local function d31_format(params)
     if not config then return d31_error("MP3_BITRATE_REQUIRED", "MP3 renders require mp3_bitrate_kbps 128, 192, 256, or 320.", { mp3_bitrate_kbps = params.mp3_bitrate_kbps }, false) end
     return { extension = "mp3", config = config, mp3_bitrate_kbps = bitrate }
   end
-  return d31_error("FORMAT_INVALID", "D31 supports only wav, ogg, and mp3.", { format = params.format }, false)
+  if params.format == "mp4" or params.format == "mov" then return d31_avfoundation_format(params) end
+  return d31_error("FORMAT_INVALID", "D31 supports only wav, ogg, mp3, mp4, and mov.", { format = params.format }, false)
 end
 
 local function d31_resolve_targets(project, request, groups)
@@ -21848,6 +24153,46 @@ local function d31_resolve_targets(project, request, groups)
     end
   else
     return d31_error("TARGET_KIND_INVALID", "Unsupported D31 target_kind.", { target_kind = kind }, false)
+  end
+  if request.params.destination == "new_project_track" then
+    if (kind ~= "selected_tracks" and kind ~= "explicit_tracks") or request.params.stem_mode ~= "mixdown" or request.params.source_post_action ~= "mute_after_verified_insert" or request.params.format ~= "wav" then
+      return d31_error("STEM_MODE_INVALID", "In-project Stem requires selected/explicit Tracks, WAV, mixdown, and mute_after_verified_insert.", { target_kind = kind, format = request.params.format }, false)
+    end
+    local source_tracks = json_array({})
+    local source_refs = json_array({})
+    for index = 1, #targets do
+      source_tracks[#source_tracks + 1] = targets[index].track
+      source_refs[#source_refs + 1] = targets[index].ref
+    end
+    local bounds = 1
+    local start_seconds = nil
+    local end_seconds = nil
+    local range = request.params.render_range
+    if is_object(range) then
+      if range.mode == "time_selection" then
+        local ok_range, start_pos, end_pos = call_reaper("GetSet_LoopTimeRange", false, false, 0, 0, false)
+        if not ok_range or type(start_pos) ~= "number" or type(end_pos) ~= "number" or end_pos <= start_pos then return d31_error("TIME_SELECTION_EMPTY", "Stem time_selection requires a non-empty time selection.", {}) end
+        start_seconds, end_seconds = start_pos, end_pos
+      elseif range.mode == "explicit_range" and type(range.start_seconds) == "number" and type(range.end_seconds) == "number" and range.end_seconds > range.start_seconds then
+        start_seconds, end_seconds = range.start_seconds, range.end_seconds
+      else
+        return d31_error("STEM_MODE_INVALID", "Stem render_range must be a non-empty explicit_range or time_selection.", {}, false)
+      end
+      bounds = 0
+    end
+    targets = json_array({ {
+      source = 0,
+      bounds = bounds,
+      start_seconds = start_seconds,
+      end_seconds = end_seconds,
+      tracks = source_tracks,
+      refs = source_refs,
+      source_name = request.params.output_track_name or "OpenReaper_Stem",
+      label = "project_stem",
+      ref = "target-set:stem",
+    } })
+  elseif request.params.destination ~= nil and request.params.destination ~= "managed_file" then
+    return d31_error("STEM_MODE_INVALID", "destination must be managed_file or new_project_track.", { destination = request.params.destination }, false)
   end
   return targets
 end
@@ -21955,13 +24300,15 @@ local function d31_job_ref(request)
   return { kind = "job", ref = "job:job_id:" .. job_id, identity = { scheme = "job_id", value = job_id }, summary = { template_id = "template.render.render_targets", pack = "render" } }
 end
 
-local function d31_finish_render_attempt(project, settings, prior_tracks, prior_items, call_ok, outcome)
+local function d31_finish_render_attempt(project, settings, prior_tracks, prior_items, call_ok, outcome, mix_snapshot)
   local settings_restored, failed_settings = d31_restore_settings(project, settings)
+  local mix_restored = d31_restore_track_mix(mix_snapshot)
   local tracks_restored = d31_apply_track_selection(project, prior_tracks)
   local items_restored = d31_apply_item_selection(project, prior_items)
-  if not settings_restored or not tracks_restored or not items_restored then
+  if not settings_restored or not mix_restored or not tracks_restored or not items_restored then
     return d31_error("RESTORE_FAILED", "D31 could not restore pre-render settings or selections.", {
       failed_render_setting_keys = failed_settings,
+      track_mix_restored = mix_restored,
       track_selection_restored = tracks_restored,
       item_selection_restored = items_restored,
       render_attempt_failed = not call_ok or (is_object(outcome) and outcome.failure ~= nil),
@@ -22013,7 +24360,8 @@ local function d31_render_targets(request)
   if not refs_ok then return nil, refs_error end
   local targets, targets_error = d31_resolve_targets(project, request, groups)
   if not targets then return nil, targets_error end
-  if #targets < 1 or #targets > max_targets or #targets > D31_MAX_TARGETS then return d31_error("TARGET_COUNT_EXCEEDED", "Resolved targets exceed max_targets.", { resolved_target_count = #targets, max_targets = max_targets, hard_max_targets = D31_MAX_TARGETS }, false) end
+  local resolved_target_count = targets[1] and targets[1].tracks and #targets[1].tracks or #targets
+  if #targets < 1 or resolved_target_count > max_targets or resolved_target_count > D31_MAX_TARGETS then return d31_error("TARGET_COUNT_EXCEEDED", "Resolved targets exceed max_targets.", { resolved_target_count = resolved_target_count, max_targets = max_targets, hard_max_targets = D31_MAX_TARGETS }, false) end
   local outputs, collision_suffix_index_or_error = d31_resolve_outputs(request, targets, format.extension, requested_basename)
   if not outputs then return nil, collision_suffix_index_or_error end
   local collision_suffix_index = collision_suffix_index_or_error
@@ -22026,9 +24374,20 @@ local function d31_render_targets(request)
   if not prior_tracks then return nil, tracks_error end
   local prior_items, items_error = d31_selected_items(project)
   if not prior_items then return nil, items_error end
+  local mix_snapshot = nil
+  if request.params.destination == "new_project_track" then
+    mix_snapshot, items_error = d31_track_mix_snapshot(project)
+    if not mix_snapshot then return nil, items_error end
+  end
 
   local function render_all()
     local result_outputs = json_array({})
+    if mix_snapshot then
+      local isolated, isolation_error = d31_isolate_stem_tracks(targets[1], mix_snapshot)
+      if not isolated then
+        return { failure = { code = isolation_error.details and isolation_error.details.local_code or isolation_error.code, message = isolation_error.message, details = isolation_error.details, recoverable = isolation_error.recoverable } }
+      end
+    end
     for index = 1, #outputs do
       local output = outputs[index]
       local target = output.target
@@ -22069,12 +24428,26 @@ local function d31_render_targets(request)
       end
       local action_ok = call_reaper("Main_OnCommandEx", D31_ACTION_ID, 0, project)
       if not action_ok then return { failure = { code = "COMMAND_FAILED", message = "The audited REAPER project-render action 41824 failed.", details = { action_id = D31_ACTION_ID, target_index = index - 1 }, recoverable = false } } end
-      local size = d31_size(output.absolute_path)
-      local header_ok, actual_format, actual_bitrate = d31_probe_output(output.absolute_path, output.extension)
-      if size <= 0 or not header_ok or actual_format ~= request.params.format or (format.mp3_bitrate_kbps and actual_bitrate ~= format.mp3_bitrate_kbps) then return { failure = { code = "VERIFY_FAILED", message = "Rendered output is absent, empty, or has the wrong container, MPEG layer, or bitrate.", details = { output_basename = output.output_basename, requested_format = request.params.format, actual_format = actual_format, requested_bitrate_kbps = format.mp3_bitrate_kbps, actual_bitrate_kbps = actual_bitrate, extension = output.extension, file_size_bytes = size, target_index = index - 1 }, recoverable = false } } end
-      local measurement, measurement_error = d31_measure_output(output.absolute_path, output.extension)
-      if not measurement then return { failure = { code = "VERIFY_FAILED", message = "Rendered output could not be measured without inferring audible content from file size.", details = { output_basename = output.output_basename, measurement_error = measurement_error and measurement_error.message or "unknown_measurement_failure", target_index = index - 1 }, recoverable = false } } end
-      if measurement.is_silent == true then return { failure = { code = "RENDER_OUTPUT_ALL_ZERO", message = "Rendered output decoded successfully but every measured sample was zero; media was explicitly brought online first, so the render is not accepted as successful.", details = { output_basename = output.output_basename, requested_format = request.params.format, actual_format = actual_format, measurement_status = measurement.measurement_status, measurement_scope = measurement.measurement_scope, silence_classification = measurement.silence_classification, measured_peak_linear = measurement.peak_linear, target_identity = target.ref or target.label, target_index = index - 1, media_online_action_id = D31_MEDIA_ONLINE_ACTION_ID, render_action_id = D31_ACTION_ID, probable_causes = json_array({ "intentionally_silent_target", "unavailable_source_or_instrument", "silent_signal_path" }), retry_requires_fresh_output_basename = true, audio_device_required = false }, recoverable = true } } end
+      local size, header_ok, actual_format, actual_bitrate, video_probe, finalization_poll_count
+      if format.video then
+        size, header_ok, actual_format, actual_bitrate, video_probe, finalization_poll_count = d31_wait_for_final_video(output.absolute_path, output.extension)
+      else
+        size = d31_size(output.absolute_path)
+        header_ok, actual_format, actual_bitrate, video_probe = d31_probe_output(output.absolute_path, output.extension)
+      end
+      if size <= 0 or not header_ok or actual_format ~= request.params.format or (format.mp3_bitrate_kbps and actual_bitrate ~= format.mp3_bitrate_kbps) then return { failure = { code = "VERIFY_FAILED", message = "Rendered output is absent, empty, or has the wrong container, MPEG layer, bitrate, or video atom structure.", details = { output_basename = output.output_basename, requested_format = request.params.format, actual_format = actual_format, requested_bitrate_kbps = format.mp3_bitrate_kbps, actual_bitrate_kbps = actual_bitrate, extension = output.extension, file_size_bytes = size, target_index = index - 1, video_probe = video_probe }, recoverable = false } } end
+      local measurement = nil
+      if format.video then
+        local frame_rate_matches = video_probe and type(video_probe.frame_rate) == "number" and math.abs(video_probe.frame_rate - format.video_frame_rate) <= 0.02
+        if not video_probe or video_probe.width ~= format.video_width or video_probe.height ~= format.video_height or not frame_rate_matches or video_probe.video_codec ~= "h264" or video_probe.audio_codec ~= "aac" then
+          return { failure = { code = "VERIFY_FAILED", message = "Rendered video container did not prove the requested dimensions, frame rate, H.264 video track, and AAC audio track.", details = { output_basename = output.output_basename, requested_video_width = format.video_width, requested_video_height = format.video_height, requested_video_frame_rate = format.video_frame_rate, requested_video_codec = format.video_codec, requested_audio_codec = format.audio_codec, video_probe = video_probe, target_index = index - 1 }, recoverable = false } }
+        end
+      else
+        local measurement_error
+        measurement, measurement_error = d31_measure_output(output.absolute_path, output.extension)
+        if not measurement then return { failure = { code = "VERIFY_FAILED", message = "Rendered output could not be measured without inferring audible content from file size.", details = { output_basename = output.output_basename, measurement_error = measurement_error and measurement_error.message or "unknown_measurement_failure", target_index = index - 1 }, recoverable = false } } end
+        if measurement.is_silent == true then return { failure = { code = "RENDER_OUTPUT_ALL_ZERO", message = "Rendered output decoded successfully but every measured sample was zero; media was explicitly brought online first, so the render is not accepted as successful.", details = { output_basename = output.output_basename, requested_format = request.params.format, actual_format = actual_format, measurement_status = measurement.measurement_status, measurement_scope = measurement.measurement_scope, silence_classification = measurement.silence_classification, measured_peak_linear = measurement.peak_linear, target_identity = target.ref or target.label, target_index = index - 1, media_online_action_id = D31_MEDIA_ONLINE_ACTION_ID, render_action_id = D31_ACTION_ID, probable_causes = json_array({ "intentionally_silent_target", "unavailable_source_or_instrument", "silent_signal_path" }), retry_requires_fresh_output_basename = true, audio_device_required = false }, recoverable = true } } end
+      end
       local project_copy_path = output.absolute_path .. ".RPP"
       local project_copy_retained = file_exists(project_copy_path)
       result_outputs[#result_outputs + 1] = {
@@ -22087,19 +24460,39 @@ local function d31_render_targets(request)
         actual_format = actual_format,
         requested_bitrate_kbps = format.mp3_bitrate_kbps or JSON_NULL,
         actual_bitrate_kbps = actual_bitrate or JSON_NULL,
-        measurement_status = measurement.measurement_status,
-        measurement_scope = measurement.measurement_scope,
-        measurement_format = measurement.measurement_format,
-        sample_rate_hz = measurement.sample_rate_hz or JSON_NULL,
-        measured_channel_count = measurement.channel_count or JSON_NULL,
-        frame_count = measurement.frame_count or JSON_NULL,
-        sample_count = measurement.sample_count or JSON_NULL,
-        measured_peak_linear = measurement.peak_linear,
-        measured_peak_dbfs = measurement.peak_dbfs,
-        measured_rms_linear = measurement.rms_linear,
-        measured_rms_dbfs = measurement.rms_dbfs,
-        silence_classification = measurement.silence_classification,
-        is_silent = measurement.is_silent,
+        measurement_status = format.video and "video_container_verified" or measurement.measurement_status,
+        measurement_scope = format.video and "iso_bmff_atoms_and_track_metadata" or measurement.measurement_scope,
+        measurement_format = format.video and request.params.format or measurement.measurement_format,
+        sample_rate_hz = measurement and measurement.sample_rate_hz or JSON_NULL,
+        measured_channel_count = measurement and measurement.channel_count or JSON_NULL,
+        frame_count = measurement and measurement.frame_count or JSON_NULL,
+        sample_count = measurement and measurement.sample_count or JSON_NULL,
+        measured_peak_linear = measurement and measurement.peak_linear or JSON_NULL,
+        measured_peak_dbfs = measurement and measurement.peak_dbfs or JSON_NULL,
+        measured_rms_linear = measurement and measurement.rms_linear or JSON_NULL,
+        measured_rms_dbfs = measurement and measurement.rms_dbfs or JSON_NULL,
+        silence_classification = format.video and "not_applicable_video" or measurement.silence_classification,
+        is_silent = format.video and JSON_NULL or measurement.is_silent,
+        requested_video_width = format.video and format.video_width or nil,
+        actual_video_width = format.video and video_probe.width or nil,
+        requested_video_height = format.video and format.video_height or nil,
+        actual_video_height = format.video and video_probe.height or nil,
+        requested_video_frame_rate = format.video and format.video_frame_rate or nil,
+        actual_video_frame_rate = format.video and video_probe.frame_rate or nil,
+        requested_video_codec = format.video and format.video_codec or nil,
+        actual_video_codec = format.video and video_probe.video_codec or nil,
+        requested_audio_codec = format.video and format.audio_codec or nil,
+        actual_audio_codec = format.video and video_probe.audio_codec or nil,
+        configured_video_bitrate_kbps = format.video and format.video_bitrate_kbps or nil,
+        configured_audio_bitrate_kbps = format.video and format.audio_bitrate_kbps or nil,
+        video_track_count = format.video and video_probe.video_track_count or nil,
+        audio_track_count = format.video and video_probe.audio_track_count or nil,
+        iso_bmff_major_brand = format.video and video_probe.major_brand or nil,
+        iso_bmff_ftyp_verified = format.video and video_probe.ftyp_verified or nil,
+        iso_bmff_moov_verified = format.video and video_probe.moov_verified or nil,
+        iso_bmff_mdat_verified = format.video and video_probe.mdat_verified or nil,
+        native_video_settings_readback_verified = format.video and true or nil,
+        video_finalization_poll_count = format.video and finalization_poll_count or nil,
         target_identity = target.ref or target.label,
         collision_policy = request.params.collision_policy,
         collision_suffix_index = output.collision_suffix_index,
@@ -22113,18 +24506,34 @@ local function d31_render_targets(request)
   end
 
   local call_ok, outcome = xpcall(render_all, function(message) return tostring(message) end)
-  local finished_outcome, finish_error = d31_finish_render_attempt(project, settings, prior_tracks, prior_items, call_ok, outcome)
+  local finished_outcome, finish_error = d31_finish_render_attempt(project, settings, prior_tracks, prior_items, call_ok, outcome, mix_snapshot)
   if not finished_outcome then return nil, finish_error end
   outcome = finished_outcome
 
+  local stem = nil
+  local stem_context = nil
+  if request.params.destination == "new_project_track" then
+    stem, stem_context = d31_import_verified_stem(project, request, targets[1], outcome.outputs[1], mix_snapshot, prior_tracks, prior_items)
+    if not stem then return nil, stem_context end
+  end
+
+  local audio_outputs = format.video and json_array({}) or outcome.outputs
+  local video_outputs = format.video and outcome.outputs or json_array({})
+
   local job_ref = d31_job_ref(request)
-  local manifest_summary = { job_ref = job_ref.ref, format = request.params.format, mp3_bitrate_kbps = format.mp3_bitrate_kbps, requested_output_basename = requested_basename, collision_suffix_index = collision_suffix_index, file_count = #outcome.outputs, max_targets = max_targets, output_policy = request.params.output_policy, collision_policy = request.params.collision_policy, truncated = false }
-  local manifest, manifest_error = write_a2_artifact(request, D31_MANIFEST_SPEC, manifest_summary, { target_kind = request.params.target_kind, outputs = outcome.outputs })
-  if not manifest then return d31_error(manifest_error.code, manifest_error.message, manifest_error.details, manifest_error.recoverable) end
+  local manifest_summary = { job_ref = job_ref.ref, format = request.params.format, mp3_bitrate_kbps = format.mp3_bitrate_kbps, video_width = format.video_width, video_height = format.video_height, video_frame_rate = format.video_frame_rate, video_codec = format.video_codec, video_bitrate_kbps = format.video_bitrate_kbps, audio_codec = format.audio_codec, audio_bitrate_kbps = format.audio_bitrate_kbps, requested_output_basename = requested_basename, collision_suffix_index = collision_suffix_index, file_count = #outcome.outputs, max_targets = max_targets, output_policy = request.params.output_policy, collision_policy = request.params.collision_policy, truncated = false }
+  local manifest, manifest_error = write_a2_artifact(request, D31_MANIFEST_SPEC, manifest_summary, { target_kind = request.params.target_kind, destination = request.params.destination or "managed_file", outputs = outcome.outputs, audio_outputs = audio_outputs, video_outputs = video_outputs, stem = stem })
+  if not manifest then
+    if stem_context then d31_stem_rollback(project, stem_context) end
+    return d31_error(manifest_error.code, manifest_error.message, manifest_error.details, manifest_error.recoverable)
+  end
   local evidence_summary = { job_ref = job_ref.ref, output_artifact_ref = manifest.ref, verification_status = "passed", media_online_verified = true, render_settings_restored = true, selections_restored = true, truncated = false }
-  local evidence, evidence_error = write_a2_artifact(request, D31_EVIDENCE_SPEC, evidence_summary, { action_id = D31_ACTION_ID, media_online_action_id = D31_MEDIA_ONLINE_ACTION_ID, source_online_preflight = true, render_action_id = D31_ACTION_ID, target_kind = request.params.target_kind, render_request = { format = request.params.format, output_basename = requested_basename, sample_rate_hz = request.params.sample_rate_hz, channel_count = request.params.channel_count, wav_bit_depth = format.wav_bit_depth, ogg_quality = format.ogg_quality, mp3_bitrate_kbps = format.mp3_bitrate_kbps, max_targets = max_targets }, restoration = { render_settings = true, track_selection = true, item_selection = true }, outputs = outcome.outputs })
-  if not evidence then return d31_error(evidence_error.code, evidence_error.message, evidence_error.details, evidence_error.recoverable) end
-  return { job_ref = job_ref.ref, output_artifact_ref = manifest.ref, evidence_artifact_ref = evidence.ref, format = request.params.format, output_policy = request.params.output_policy, collision_policy = request.params.collision_policy, collision_suffix_index = collision_suffix_index, file_count = #outcome.outputs, outputs = outcome.outputs, restoration = { render_settings = true, track_selection = true, item_selection = true }, truncated = false }, nil, json_array({ manifest.object_ref, evidence.object_ref }), json_array({ job_ref })
+  local evidence, evidence_error = write_a2_artifact(request, D31_EVIDENCE_SPEC, evidence_summary, { action_id = D31_ACTION_ID, media_online_action_id = D31_MEDIA_ONLINE_ACTION_ID, source_online_preflight = true, render_action_id = D31_ACTION_ID, target_kind = request.params.target_kind, destination = request.params.destination or "managed_file", render_request = { format = request.params.format, output_basename = requested_basename, sample_rate_hz = request.params.sample_rate_hz, channel_count = request.params.channel_count, wav_bit_depth = format.wav_bit_depth, ogg_quality = format.ogg_quality, mp3_bitrate_kbps = format.mp3_bitrate_kbps, video_width = format.video_width, video_height = format.video_height, video_frame_rate = format.video_frame_rate, video_codec = format.video_codec, video_bitrate_kbps = format.video_bitrate_kbps, audio_codec = format.audio_codec, audio_bitrate_kbps = format.audio_bitrate_kbps, max_targets = max_targets }, restoration = { render_settings = true, track_mix = true, track_selection = true, item_selection = true }, outputs = outcome.outputs, audio_outputs = audio_outputs, video_outputs = video_outputs, stem = stem })
+  if not evidence then
+    if stem_context then d31_stem_rollback(project, stem_context) end
+    return d31_error(evidence_error.code, evidence_error.message, evidence_error.details, evidence_error.recoverable)
+  end
+  return { job_ref = job_ref.ref, output_artifact_ref = manifest.ref, evidence_artifact_ref = evidence.ref, format = request.params.format, output_policy = request.params.output_policy, collision_policy = request.params.collision_policy, collision_suffix_index = collision_suffix_index, file_count = #outcome.outputs, outputs = outcome.outputs, audio_outputs = audio_outputs, video_outputs = video_outputs, stem = stem, restoration = { render_settings = true, track_mix = true, track_selection = true, item_selection = true }, truncated = false }, nil, json_array({ manifest.object_ref, evidence.object_ref }), json_array({ job_ref })
 end
 return {
   exports = { d31_render_targets = d31_render_targets },
@@ -22536,8 +24945,7 @@ local function d30_track_guid(track)
 end
 
 local function d30_track_name(track)
-  local ok, _, name = call_reaper("GetTrackName", track, "")
-  return ok and first_string(name) or nil
+  return read_track_name(track, 160)
 end
 
 local function d30_find_track_by_guid(project, guid)
@@ -23511,7 +25919,7 @@ local function d30_project_parse_project_ref(request)
 end
 
 local function d30_project_validate_open_path(path)
-  if not is_string(path) or path == "" or #path > D30_PROJECT_TAB_PATH_MAX_BYTES or path:find("[%c%z]") then
+  if not is_string(path) or path == "" or #path > D30_PROJECT_TAB_PATH_MAX_BYTES or has_control_byte(path) then
     return nil, "path_structure_invalid"
   end
   local posix_absolute = path:sub(1, 1) == "/"
@@ -31898,14 +34306,117 @@ local function native_color_from_hex(value)
   return 0
 end
 
-local function safe_write_create_region(request)
-  local start_seconds = bounded_number(request.params.start_seconds, 0)
-  local end_seconds = bounded_number(request.params.end_seconds, start_seconds + 1)
+local function create_region_has_value(value)
+  return value ~= nil and value ~= JSON_NULL
+end
+
+local function create_region_target_binding(request)
+  local params = is_object(request.params) and request.params or {}
+  local binding = params.target_binding
+  if binding == nil or binding == JSON_NULL then
+    return nil, nil
+  end
+  if not is_object(binding) then
+    return nil, {
+      code = "TARGET_BINDING_INVALID",
+      message = "create_region target_binding must be an object.",
+      details = { zero_write = true },
+    }
+  end
+  local allowed = { bind_at = true, domain = true, selector = true, aggregation = true, cardinality = true }
+  for key in pairs(binding) do
+    if not allowed[key] then
+      return nil, {
+        code = "TARGET_BINDING_INVALID",
+        message = "create_region target_binding contains an unsupported field.",
+        details = { field = bounded_string(key, 80), zero_write = true },
+      }
+    end
+  end
+  local cardinality = binding.cardinality
+  if binding.bind_at ~= "execution" or binding.domain ~= "time_range"
+      or binding.selector ~= "time_selection" or binding.aggregation ~= "single"
+      or not is_object(cardinality) or cardinality.minimum ~= 1 or cardinality.maximum ~= 1 then
+    return nil, {
+      code = "TARGET_BINDING_INVALID",
+      message = "create_region accepts only execution-time Time Selection binding with single cardinality.",
+      details = { zero_write = true },
+    }
+  end
+  for key in pairs(cardinality) do
+    if key ~= "minimum" and key ~= "maximum" then
+      return nil, {
+        code = "TARGET_BINDING_INVALID",
+        message = "create_region target_binding cardinality contains an unsupported field.",
+        details = { field = bounded_string(key, 80), zero_write = true },
+      }
+    end
+  end
+  return binding, nil
+end
+
+local function create_region_resolve_bounds(request)
+  local params = is_object(request.params) and request.params or {}
+  local has_start = create_region_has_value(params.start_seconds)
+  local has_end = create_region_has_value(params.end_seconds)
+  local binding, binding_failure = create_region_target_binding(request)
+  if binding_failure then return nil, nil, nil, binding_failure end
+  if has_start ~= has_end then
+    return nil, nil, nil, {
+      code = "PARAMS_INVALID",
+      message = "create_region explicit bounds require both start_seconds and end_seconds.",
+      details = { zero_write = true },
+    }
+  end
+  if binding and has_start then
+    return nil, nil, nil, {
+      code = "TARGET_BINDING_INVALID",
+      message = "create_region cannot combine explicit bounds with target_binding.",
+      details = { zero_write = true },
+    }
+  end
+  if not binding and not has_start then
+    return nil, nil, nil, {
+      code = "PARAMS_INVALID",
+      message = "create_region requires explicit bounds or target_binding.",
+      details = { zero_write = true },
+    }
+  end
+  if binding then
+    local ok, start_seconds, end_seconds = call_reaper("GetSet_LoopTimeRange", false, false, 0, 0, false)
+    if not ok or type(start_seconds) ~= "number" or type(end_seconds) ~= "number" then
+      return nil, nil, nil, {
+        code = "TARGET_BINDING_RESOLUTION_FAILED",
+        message = "create_region could not read the current Time Selection.",
+        details = { zero_write = true },
+        recoverable = false,
+      }
+    end
+    if end_seconds <= start_seconds then
+      return nil, nil, nil, {
+        code = "TARGET_BINDING_TIME_RANGE_UNAVAILABLE",
+        message = "create_region requires a non-empty current Time Selection.",
+        details = { resolved_count = 0, minimum = 1, maximum = 1, zero_write = true },
+      }
+    end
+    return start_seconds, end_seconds, "time_selection", nil
+  end
+  local start_seconds = bounded_number(params.start_seconds, 0)
+  local end_seconds = bounded_number(params.end_seconds, start_seconds)
   if end_seconds <= start_seconds then
-    return handler_error("PARAMS_INVALID", "Safe-Write-A region end_seconds must be greater than start_seconds.", {
-      start_seconds = start_seconds,
-      end_seconds = end_seconds,
-    })
+    return nil, nil, nil, {
+      code = "PARAMS_INVALID",
+      message = "Safe-Write-A region end_seconds must be greater than start_seconds.",
+      details = { start_seconds = start_seconds, end_seconds = end_seconds, zero_write = true },
+    }
+  end
+  return start_seconds, end_seconds, "explicit", nil
+end
+
+local function safe_write_create_region(request)
+  local start_seconds, end_seconds, target_mode, bounds_failure = create_region_resolve_bounds(request)
+  if bounds_failure then
+    return handler_error(bounds_failure.code, bounds_failure.message, bounds_failure.details, bounds_failure.recoverable)
   end
   local project = current_project()
   local color = native_color_from_hex(request.params.color)
@@ -31927,6 +34438,9 @@ local function safe_write_create_region(request)
     name = bounded_string(request.params.name, 160),
     start_seconds = start_seconds,
     end_seconds = end_seconds,
+    length_seconds = end_seconds - start_seconds,
+    target_mode = target_mode,
+    target_fingerprint = string.format("time-range-v1|%.9f|%.9f", start_seconds, end_seconds),
   }), nil, nil, nil, safe_write_a_refs(marker_object_ref("region", index_number, request.params.name))
 end
 return {
@@ -31997,8 +34511,7 @@ local function native_color_from_hex(value)
 end
 
 local function track_name(track)
-  local ok, _, name = call_reaper("GetTrackName", track, "")
-  return bounded_string(ok and first_string(name) or "", 160)
+  return read_track_name(track, 160)
 end
 
 local function track_guid(track)
@@ -32202,7 +34715,20 @@ local function safe_write_create_track(request)
       index = index,
     })
   end
-  call_reaper("GetSetMediaTrackInfo_String", track, "P_NAME", tostring(request.params.name or "OR_SAFE_WRITE_A_TARGET"), true)
+  local expected_name = tostring(request.params.name or "OR_SAFE_WRITE_A_TARGET")
+  local ok_name, success = call_reaper("GetSetMediaTrackInfo_String", track, "P_NAME", expected_name, true)
+  if not ok_name or success == false then
+    return handler_error("COMMAND_FAILED", "Could not name the inserted Safe-Write-A track.", {
+      index = index,
+    }, false)
+  end
+  if read_track_name(track, 160) ~= bounded_string(expected_name, 160) then
+    return handler_error("READBACK_MISMATCH", "Inserted Safe-Write-A track name did not read back exactly.", {
+      index = index,
+      expected_name = bounded_string(expected_name, 160),
+      actual_name = read_track_name(track, 160),
+    }, false)
+  end
   call_reaper("TrackList_AdjustWindows", false)
   local summary = track_summary(track)
   summary.created = true
@@ -32276,8 +34802,7 @@ local function native_color_from_hex(value)
 end
 
 local function track_name(track)
-  local ok, _, name = call_reaper("GetTrackName", track, "")
-  return bounded_string(ok and first_string(name) or "", 160)
+  return read_track_name(track, 160)
 end
 
 local function track_guid(track)
@@ -32466,13 +34991,25 @@ end
 
 local function safe_write_rename_track(request)
   return safe_write_track_update(request, function(track)
-    local ok, success = call_reaper("GetSetMediaTrackInfo_String", track, "P_NAME", tostring(request.params.name or ""), true)
+    local expected_name = tostring(request.params.name or "")
+    local ok, success = call_reaper("GetSetMediaTrackInfo_String", track, "P_NAME", expected_name, true)
     if not ok or success == false then
       return false, {
         code = "COMMAND_FAILED",
         message = "Could not rename Safe-Write-A track.",
         recoverable = false,
         details = {},
+      }
+    end
+    if read_track_name(track, 160) ~= bounded_string(expected_name, 160) then
+      return false, {
+        code = "READBACK_MISMATCH",
+        message = "Renamed Safe-Write-A track name did not read back exactly.",
+        recoverable = false,
+        details = {
+          expected_name = bounded_string(expected_name, 160),
+          actual_name = read_track_name(track, 160),
+        },
       }
     end
     return true
@@ -32546,8 +35083,7 @@ local function native_color_from_hex(value)
 end
 
 local function track_name(track)
-  local ok, _, name = call_reaper("GetTrackName", track, "")
-  return bounded_string(ok and first_string(name) or "", 160)
+  return read_track_name(track, 160)
 end
 
 local function track_guid(track)
@@ -32817,8 +35353,7 @@ local function native_color_from_hex(value)
 end
 
 local function track_name(track)
-  local ok, _, name = call_reaper("GetTrackName", track, "")
-  return bounded_string(ok and first_string(name) or "", 160)
+  return read_track_name(track, 160)
 end
 
 local function track_guid(track)
@@ -33099,8 +35634,7 @@ local function native_color_from_hex(value)
 end
 
 local function track_name(track)
-  local ok, _, name = call_reaper("GetTrackName", track, "")
-  return bounded_string(ok and first_string(name) or "", 160)
+  return read_track_name(track, 160)
 end
 
 local function track_guid(track)
@@ -33361,8 +35895,7 @@ local function native_color_from_hex(value)
 end
 
 local function track_name(track)
-  local ok, _, name = call_reaper("GetTrackName", track, "")
-  return bounded_string(ok and first_string(name) or "", 160)
+  return read_track_name(track, 160)
 end
 
 local function track_guid(track)
@@ -35247,8 +37780,7 @@ local function bounded_number(value, fallback)
 end
 
 local function track_name(track)
-  local ok, _, name = call_reaper("GetTrackName", track, "")
-  return bounded_string(ok and first_string(name) or "", 160)
+  return read_track_name(track, 160)
 end
 
 local function track_guid(track)
@@ -37239,6 +39771,35 @@ local function alpha33_move_item_to_track(request)
     })
   end
 
+  if source_guid == target_ref.value then
+    local source_ref = "track:guid:" .. source_guid
+    return {
+      kind = "item_moved_to_track",
+      capability = request.pack.capability,
+      pack = request.pack.id,
+      risk = request.pack.risk,
+      item_ref = item_ref.ref,
+      source_track_ref = source_ref,
+      target_track_ref = target_ref.ref,
+      position_seconds = position_before,
+      length_seconds = length_before,
+      take_count = takes_before.count,
+      take_refs = takes_before.refs,
+      active_take_ref = takes_before.active_ref,
+      track_count_unchanged = true,
+      changed = false,
+      already_on_target = true,
+      native_move_dispatched = false,
+      readback_status = "passed",
+      undo_evidence = "required",
+      artifacts_allowed = false,
+      truncated = false,
+    }, nil, json_array({}), json_array({}), json_array({
+      item_ref.object_ref,
+      alpha33_move_item_track_ref_object(target_ref.ref, target_ref.value),
+    })
+  end
+
   local command_ok, moved = call_reaper("MoveMediaItemToTrack", item, target_track)
   if not command_ok or moved == false then
     return alpha33_move_item_error("COMMAND_FAILED", "REAPER rejected exact Item move to the existing target Track.", {
@@ -37300,6 +39861,9 @@ local function alpha33_move_item_to_track(request)
     take_refs = takes_after.refs,
     active_take_ref = takes_after.active_ref,
     track_count_unchanged = true,
+    changed = true,
+    already_on_target = false,
+    native_move_dispatched = true,
     readback_status = "passed",
     undo_evidence = "required",
     artifacts_allowed = false,
@@ -37536,7 +40100,282 @@ local function alpha33_glue_item_source_readback(item)
   }
 end
 
+local function alpha33_glue_item_restore_batch(snapshot, source_items, replacement_item)
+  local current_items = alpha33_glue_item_list_items()
+  if not current_items then return false, false end
+  local track_ok = alpha33_glue_item_clear_track_selection()
+  for index = 1, #snapshot.selected_tracks do
+    if not call_reaper("SetTrackSelected", snapshot.selected_tracks[index], true) then track_ok = false end
+  end
+
+  local item_ok = true
+  for index = 1, #current_items do
+    if not call_reaper("SetMediaItemSelected", current_items[index].item, false) then item_ok = false end
+  end
+  local replacement_selected = false
+  for index = 1, #snapshot.selected_items do
+    local selected = snapshot.selected_items[index]
+    if source_items[selected] then
+      replacement_selected = true
+    elseif alpha33_glue_item_item_exists(selected, current_items) then
+      if not call_reaper("SetMediaItemSelected", selected, true) then item_ok = false end
+    else
+      item_ok = false
+    end
+  end
+  if replacement_selected and (not replacement_item or not call_reaper("SetMediaItemSelected", replacement_item, true)) then
+    item_ok = false
+  end
+
+  local active_ok = true
+  for index = 1, #snapshot.active_takes do
+    local saved = snapshot.active_takes[index]
+    if not source_items[saved.item] and alpha33_glue_item_item_exists(saved.item, current_items) and saved.take then
+      local ok_current, current_take = call_reaper("GetActiveTake", saved.item)
+      if not ok_current or current_take ~= saved.take then
+        if not call_reaper("SetActiveTake", saved.take) then active_ok = false end
+      end
+    end
+  end
+  return track_ok and item_ok, active_ok
+end
+
+local function alpha33_glue_item_select_set(items, selected_items)
+  for index = 1, #items do
+    if not call_reaper("SetMediaItemSelected", items[index].item, selected_items[items[index].item] == true) then return false end
+  end
+  return true
+end
+
+local function alpha33_glue_item_ref_object(kind, ref)
+  local scheme, value = ref:match("^" .. kind .. ":([^:]+):(.+)$")
+  return { kind = kind, ref = ref, identity = { scheme = scheme or "guid", value = tostring(value or "") } }
+end
+
+local function alpha33_glue_item_batch(request)
+  local batch = request.params.batch
+  if not is_json_array(batch) or #batch < 1 or #batch > 64 then
+    return alpha33_glue_item_error("PARAMS_INVALID", "glue_item batch must contain 1-64 exact Item rows.", {
+      row_count = is_json_array(batch) and #batch or 0,
+      zero_write = true,
+    })
+  end
+  local before_items = alpha33_glue_item_list_items()
+  if not before_items then
+    return alpha33_glue_item_error("COMMAND_FAILED", "glue_item batch could not read every Item GUID before mutation.", { zero_write = true }, false)
+  end
+  local selected_tracks = alpha33_glue_item_selected_tracks()
+  local selected_items = alpha33_glue_item_selected_items()
+  local active_takes = alpha33_glue_item_active_snapshot(before_items)
+  if not selected_tracks or not selected_items or not active_takes then
+    return alpha33_glue_item_error("COMMAND_FAILED", "glue_item batch could not snapshot Track, Item, and Active-Take state.", { zero_write = true }, false)
+  end
+  local snapshot = { selected_tracks = selected_tracks, selected_items = selected_items, active_takes = active_takes }
+
+  local live_by_ref = {}
+  local live_counts = {}
+  for index = 1, #before_items do
+    local ref = "item:guid:" .. before_items[index].guid
+    live_counts[ref] = (live_counts[ref] or 0) + 1
+    live_by_ref[ref] = before_items[index].item
+  end
+  local targets = {}
+  local source_set = {}
+  local requested_refs = {}
+  local owner_track = nil
+  local owner_track_guid = nil
+  local range_start = nil
+  local range_end = nil
+  for index = 1, #batch do
+    local row = batch[index]
+    local ref = is_object(row) and row.item_ref or nil
+    if not is_string(ref) or not ref:match("^item:guid:[^:]+$") then
+      return alpha33_glue_item_error("REF_INVALID", "glue_item batch accepts only exact item:guid rows.", { row_index = index, zero_write = true })
+    end
+    if requested_refs[ref] then
+      return alpha33_glue_item_error("REF_INVALID", "glue_item batch repeats an Item ref.", { item_ref = ref, zero_write = true })
+    end
+    requested_refs[ref] = true
+    local item = live_by_ref[ref]
+    if not item or live_counts[ref] ~= 1 then
+      return alpha33_glue_item_error("REF_INVALID", "glue_item batch Item GUID was missing or duplicated in the live project.", {
+        item_ref = ref,
+        duplicate_count = live_counts[ref] or 0,
+        zero_write = true,
+      })
+    end
+    local ok_take, take = call_reaper("GetActiveTake", item)
+    if not ok_take or not take then
+      return alpha33_glue_item_error("TAKE_NOT_FOUND", "glue_item batch requires every Item to expose an active Take.", { item_ref = ref, zero_write = true })
+    end
+    local source = alpha33_glue_item_source_readback(item)
+    if not source then
+      return alpha33_glue_item_error("COMMAND_FAILED", "glue_item batch could not read every source before mutation.", { item_ref = ref, zero_write = true }, false)
+    end
+    local source_type = string.upper(source.source_type or "")
+    if source_type:find("MIDI", 1, true) then
+      return alpha33_glue_item_error("PARAMS_INVALID", "glue_item batch supports audio Items only; MIDI and mixed source sets are zero-write.", {
+        item_ref = ref,
+        source_type = source.source_type,
+        zero_write = true,
+      })
+    end
+    local track = alpha33_glue_item_owner_track(item)
+    local track_guid = track and alpha33_glue_item_track_guid(track) or nil
+    local position = alpha33_glue_item_number(item, "D_POSITION")
+    local length = alpha33_glue_item_number(item, "D_LENGTH")
+    if not track_guid or position == nil or length == nil or length < 0 then
+      return alpha33_glue_item_error("COMMAND_FAILED", "glue_item batch could not read complete owner/range facts before mutation.", { item_ref = ref, zero_write = true }, false)
+    end
+    if owner_track and track ~= owner_track then
+      return alpha33_glue_item_error("PARAMS_INVALID", "glue_item batch supports Items on exactly one Track.", { item_ref = ref, zero_write = true })
+    end
+    owner_track = track
+    owner_track_guid = track_guid
+    range_start = range_start and math.min(range_start, position) or position
+    range_end = range_end and math.max(range_end, position + length) or (position + length)
+    source_set[item] = true
+    targets[#targets + 1] = {
+      id = is_string(row.id) and bounded_string(row.id, 80) or ("i" .. tostring(index)),
+      item_ref = ref,
+      item = item,
+      take = take,
+      source_filename = source.filename,
+      source_type = source.source_type,
+    }
+  end
+
+  if not alpha33_glue_item_select_set(before_items, source_set) then
+    local selection_restored, active_take_restored = alpha33_glue_item_restore_batch(snapshot, source_set, nil)
+    return alpha33_glue_item_error("COMMAND_FAILED", "glue_item batch could not stage the exact Item selection.", {
+      zero_write = true,
+      selection_restored = selection_restored,
+      active_take_restored = active_take_restored,
+    }, false)
+  end
+  for index = 1, #targets do
+    local ok_set, accepted = call_reaper("SetActiveTake", targets[index].take)
+    local ok_read, active = call_reaper("GetActiveTake", targets[index].item)
+    if not ok_set or accepted == false or not ok_read or active ~= targets[index].take then
+      local selection_restored, active_take_restored = alpha33_glue_item_restore_batch(snapshot, source_set, nil)
+      return alpha33_glue_item_error("COMMAND_FAILED", "glue_item batch could not stage every exact Active Take.", {
+        item_ref = targets[index].item_ref,
+        zero_write = true,
+        selection_restored = selection_restored,
+        active_take_restored = active_take_restored,
+      }, false)
+    end
+  end
+
+  local command_ok, command_result = call_reaper("Main_OnCommandEx", ALPHA3_3_GLUE_ITEM_ACTION_ID, 0, 0)
+  if not command_ok or command_result == false then
+    local selection_restored, active_take_restored = alpha33_glue_item_restore_batch(snapshot, source_set, nil)
+    return alpha33_glue_item_error("COMMAND_FAILED", "REAPER rejected the fixed native glue batch action.", {
+      selection_restored = selection_restored,
+      active_take_restored = active_take_restored,
+    }, false)
+  end
+  call_reaper("UpdateArrange")
+
+  local after_items = alpha33_glue_item_list_items()
+  local before_guid_set = {}
+  for index = 1, #before_items do before_guid_set[before_items[index].guid] = true end
+  local new_candidates = {}
+  if after_items then
+    for index = 1, #after_items do
+      if not before_guid_set[after_items[index].guid] then new_candidates[#new_candidates + 1] = after_items[index].item end
+    end
+  end
+  local old_absent = after_items ~= nil
+  for index = 1, #targets do
+    if after_items and alpha33_glue_item_find_guid(after_items, targets[index].item_ref:sub(#"item:guid:" + 1)) ~= nil then old_absent = false end
+  end
+  local replacement_item = #new_candidates == 1 and new_candidates[1] or nil
+  local replacement_track = replacement_item and alpha33_glue_item_owner_track(replacement_item) or nil
+  local replacement_position = replacement_item and alpha33_glue_item_number(replacement_item, "D_POSITION") or nil
+  local replacement_length = replacement_item and alpha33_glue_item_number(replacement_item, "D_LENGTH") or nil
+  local replacement_end = replacement_position and replacement_length and (replacement_position + replacement_length) or nil
+  local expected_count = #before_items - #targets + 1
+  local replacement_matches = replacement_item
+    and replacement_track == owner_track
+    and alpha33_glue_item_numbers_match(replacement_position, range_start)
+    and alpha33_glue_item_numbers_match(replacement_end, range_end)
+    and after_items and #after_items == expected_count
+  local replacement_source = replacement_item and alpha33_glue_item_source_readback(replacement_item) or nil
+  local selection_restored, active_take_restored = alpha33_glue_item_restore_batch(snapshot, source_set, replacement_item)
+  if not old_absent or not replacement_matches or not replacement_source or not selection_restored or not active_take_restored then
+    return alpha33_glue_item_error("VERIFY_FAILED", "glue_item batch could not prove one exact replacement and restore context.", {
+      old_item_guids_absent = old_absent,
+      new_item_candidate_count = #new_candidates,
+      item_count_before = #before_items,
+      item_count_after = after_items and #after_items or nil,
+      expected_item_count_after = expected_count,
+      owner_track_matches = replacement_track == owner_track,
+      range_start_matches = alpha33_glue_item_numbers_match(replacement_position, range_start),
+      range_end_matches = alpha33_glue_item_numbers_match(replacement_end, range_end),
+      selection_restored = selection_restored,
+      active_take_restored = active_take_restored,
+    }, false)
+  end
+
+  local glued_guid = alpha33_glue_item_guid(replacement_item)
+  local glued_item_ref = "item:guid:" .. glued_guid
+  local glued_take_ref = "take:guid:" .. replacement_source.take_guid
+  local source_item_refs = json_array({})
+  local rows = json_array({})
+  local refs = json_array({})
+  for index = 1, #targets do
+    local target = targets[index]
+    source_item_refs[#source_item_refs + 1] = target.item_ref
+    rows[#rows + 1] = {
+      id = target.id,
+      item_ref = target.item_ref,
+      source_item_ref = target.item_ref,
+      glued_item_ref = glued_item_ref,
+      glued_take_ref = glued_take_ref,
+      old_item_guid_absent = true,
+      new_item_unique = true,
+      status = "applied",
+      live_readback = { status = "passed" },
+    }
+    refs[#refs + 1] = alpha33_glue_item_ref_object("item", target.item_ref)
+  end
+  refs[#refs + 1] = alpha33_glue_item_ref_object("item", glued_item_ref)
+  refs[#refs + 1] = alpha33_glue_item_ref_object("take", glued_take_ref)
+  return {
+    kind = "items_glued_batch",
+    source_item_ref = source_item_refs[1],
+    source_item_refs = source_item_refs,
+    glued_item_ref = glued_item_ref,
+    glued_take_ref = glued_take_ref,
+    owner_track_ref = "track:guid:" .. owner_track_guid,
+    position_seconds = replacement_position,
+    length_seconds = replacement_length,
+    source_filename = replacement_source.filename,
+    source_type = replacement_source.source_type,
+    rows = rows,
+    row_count = #rows,
+    native_action_count = 1,
+    fixed_action_id = ALPHA3_3_GLUE_ITEM_ACTION_ID,
+    item_count_before = #before_items,
+    item_count_after = #after_items,
+    item_count_unchanged = #targets == 1,
+    old_item_guid_absent = true,
+    old_item_guids_absent = true,
+    new_item_unique = true,
+    selection_restored = true,
+    active_take_restored = true,
+    source_files_preserved = true,
+    source_media_deleted = false,
+    readback_status = "passed",
+    undo_opened = request.__openreaper_undo_opened == true,
+  }, nil, json_array({}), json_array({}), refs
+end
+
 local function alpha33_glue_item(request)
+  if is_json_array(request.params and request.params.batch) then
+    return alpha33_glue_item_batch(request)
+  end
   local exact, ref_failure = alpha33_glue_item_exact_ref(request)
   if not exact then return alpha33_glue_item_error(ref_failure.code, ref_failure.message, ref_failure.details) end
 
@@ -37838,13 +40677,13 @@ local function alpha33_freeze_track_clear_items()
   return true
 end
 
-local function alpha33_freeze_track_restore(selected_tracks, selected_items, before_items, target_track_guid)
+local function alpha33_freeze_track_restore(selected_tracks, selected_items, before_items, target_track_guids)
   local current_items = alpha33_freeze_track_items()
   if not current_items then return false end
   local before_guids = {}
   for index = 1, #before_items do before_guids[before_items[index].guid] = true end
   local selected_guids = {}
-  local target_mapping_needed = false
+  local target_mapping_needed = {}
   for index = 1, #selected_items do
     local selected = selected_items[index]
     local found = false
@@ -37856,20 +40695,22 @@ local function alpha33_freeze_track_restore(selected_tracks, selected_items, bef
       end
     end
     if not found then
-      if selected.owner_track_guid ~= target_track_guid then return false end
-      target_mapping_needed = true
+      if not target_track_guids[selected.owner_track_guid] then return false end
+      target_mapping_needed[selected.owner_track_guid] = true
     end
   end
-  if target_mapping_needed then
-    local mapped = 0
+  if next(target_mapping_needed) ~= nil then
+    local mapped = {}
     for index = 1, #current_items do
       local current = current_items[index]
-      if current.owner_track_guid == target_track_guid and not before_guids[current.guid] then
+      if target_mapping_needed[current.owner_track_guid] and not before_guids[current.guid] then
         selected_guids[current.guid] = true
-        mapped = mapped + 1
+        mapped[current.owner_track_guid] = (mapped[current.owner_track_guid] or 0) + 1
       end
     end
-    if mapped == 0 then return false end
+    for guid in pairs(target_mapping_needed) do
+      if not mapped[guid] then return false end
+    end
   end
 
   local ok = alpha33_freeze_track_clear_tracks() and alpha33_freeze_track_clear_items()
@@ -37896,8 +40737,12 @@ local function alpha33_freeze_track_restore(selected_tracks, selected_items, bef
     and selected_match
 end
 
-local function alpha33_freeze_track_select_only(track)
-  return alpha33_freeze_track_clear_tracks() and call_reaper("SetTrackSelected", track, true)
+local function alpha33_freeze_track_select_targets(targets)
+  if not alpha33_freeze_track_clear_tracks() then return false end
+  for index = 1, #targets do
+    if not call_reaper("SetTrackSelected", targets[index].track, true) then return false end
+  end
+  return true
 end
 
 local function alpha33_freeze_track_count(track)
@@ -37906,9 +40751,109 @@ local function alpha33_freeze_track_count(track)
   return count ~= nil and math.max(0, math.floor(count)) or nil
 end
 
-local function alpha33_freeze_track(request)
+local function alpha33_freeze_track_binding(request)
+  local params = is_object(request.params) and request.params or {}
+  local binding = params.target_binding
+  local has_exact_refs = is_json_array(request.refs) and #request.refs > 0
+  if binding == nil then
+    if has_exact_refs then return nil, nil end
+    binding = {}
+  end
+  if not is_object(binding) then
+    return nil, { code = "TARGET_BINDING_INVALID", message = "freeze_track target_binding must be an object.", details = { zero_write = true } }
+  end
+  local allowed = { bind_at = true, domain = true, selector = true, aggregation = true, cardinality = true }
+  for key in pairs(binding) do
+    if not allowed[key] then
+      return nil, { code = "TARGET_BINDING_INVALID", message = "freeze_track target_binding contains an unsupported field.", details = { field = bounded_string(key, 80), zero_write = true } }
+    end
+  end
+  local bind_at = binding.bind_at or "execution"
+  local domain = binding.domain or "tracks"
+  local selector = binding.selector or "selected"
+  local aggregation = binding.aggregation or "batch"
+  local cardinality = binding.cardinality or { minimum = 1, maximum = 64 }
+  if bind_at ~= "execution" or domain ~= "tracks" or selector ~= "selected"
+      or aggregation ~= "batch" or not is_object(cardinality)
+      or cardinality.minimum ~= 1 or cardinality.maximum ~= 64 then
+    return nil, {
+      code = "TARGET_BINDING_INVALID",
+      message = "freeze_track accepts only execution-time selected Track batch binding with cardinality 1-64.",
+      details = { zero_write = true },
+    }
+  end
+  for key in pairs(cardinality) do
+    if key ~= "minimum" and key ~= "maximum" then
+      return nil, { code = "TARGET_BINDING_INVALID", message = "freeze_track target_binding cardinality contains an unsupported field.", details = { field = bounded_string(key, 80), zero_write = true } }
+    end
+  end
+  if has_exact_refs then
+    return nil, { code = "TARGET_BINDING_INVALID", message = "freeze_track cannot combine target_binding with exact refs.", details = { zero_write = true } }
+  end
+  return {
+    bind_at = bind_at,
+    domain = domain,
+    selector = selector,
+    aggregation = aggregation,
+    cardinality = cardinality,
+  }, nil
+end
+
+local function alpha33_freeze_track_selected_targets()
+  local ok_count, count = call_reaper("CountSelectedTracks", 0)
+  if not ok_count then ok_count, count = call_reaper("CountSelectedTracks2", 0, false) end
+  if not ok_count then return nil, "COMMAND_FAILED" end
+  local total = math.max(0, math.floor(first_number(count) or 0))
+  if total < 1 or total > 64 then return nil, "TARGET_BINDING_CARDINALITY_INVALID", total end
+  local targets, seen = {}, {}
+  for index = 0, total - 1 do
+    local ok_track, track = call_reaper("GetSelectedTrack", 0, index)
+    if not ok_track then ok_track, track = call_reaper("GetSelectedTrack2", 0, index, false) end
+    local guid = ok_track and track and alpha33_freeze_track_guid(track) or nil
+    if not guid or seen[guid] then return nil, "TARGET_BINDING_RESOLUTION_FAILED", total end
+    seen[guid] = true
+    targets[#targets + 1] = {
+      track = track,
+      guid = guid,
+      ref = "track:guid:" .. guid,
+      object_ref = { kind = "track", ref = "track:guid:" .. guid, identity = { scheme = "guid", value = guid } },
+    }
+  end
+  return targets, nil, total
+end
+
+local function alpha33_freeze_track_targets(request)
+  local binding, binding_failure = alpha33_freeze_track_binding(request)
+  if binding_failure then return nil, nil, binding_failure end
+  if binding then
+    local targets, code, resolved_count = alpha33_freeze_track_selected_targets()
+    if not targets then
+      local message = code == "TARGET_BINDING_CARDINALITY_INVALID"
+        and "freeze_track selected Track target count must be between 1 and 64."
+        or "freeze_track could not resolve every selected Track to one unique GUID."
+      return nil, nil, { code = code, message = message, details = { resolved_count = resolved_count, minimum = 1, maximum = 64, zero_write = true } }
+    end
+    return targets, "selected", nil
+  end
+
   local exact, ref_failure = alpha33_freeze_track_exact_ref(request)
-  if not exact then return alpha33_freeze_track_error(ref_failure.code, ref_failure.message, ref_failure.details) end
+  if not exact then return nil, nil, ref_failure end
+  local track, matches = alpha33_freeze_track_find(exact.guid)
+  if matches == nil then
+    return nil, nil, { code = "COMMAND_FAILED", message = "freeze_track could not read the complete Track list.", details = {}, recoverable = false }
+  end
+  if not track or matches ~= 1 then
+    return nil, nil, {
+      code = matches == 0 and "TRACK_NOT_FOUND" or "REF_INVALID",
+      message = "freeze_track exact Track GUID was missing or duplicated.",
+      details = { track_ref = exact.ref, duplicate_count = matches },
+      recoverable = matches == 0,
+    }
+  end
+  return {{ track = track, guid = exact.guid, ref = exact.ref, object_ref = exact.object_ref }}, "exact", nil
+end
+
+local function alpha33_freeze_track(request)
   local mode = is_object(request.params) and request.params.mode or nil
   local action_id = is_string(mode) and ALPHA3_3_FREEZE_TRACK_ACTION_IDS[mode] or nil
   if not action_id then
@@ -37917,21 +40862,23 @@ local function alpha33_freeze_track(request)
     })
   end
 
-  local track, matches = alpha33_freeze_track_find(exact.guid)
-  if matches == nil then
-    return alpha33_freeze_track_error("COMMAND_FAILED", "freeze_track could not read the complete Track list.", {}, false)
+  local targets, target_mode, target_failure = alpha33_freeze_track_targets(request)
+  if not targets then
+    return alpha33_freeze_track_error(target_failure.code, target_failure.message, target_failure.details, target_failure.recoverable)
   end
-  if not track or matches ~= 1 then
-    return alpha33_freeze_track_error(matches == 0 and "TRACK_NOT_FOUND" or "REF_INVALID", "freeze_track exact Track GUID was missing or duplicated.", {
-      track_ref = exact.ref,
-      duplicate_count = matches,
-    }, matches == 0)
-  end
-  local count_before = alpha33_freeze_track_count(track)
-  if count_before == nil then
-    return alpha33_freeze_track_error("COMMAND_FAILED", "freeze_track could not read I_FREEZECOUNT before mutation.", {
-      track_ref = exact.ref,
-    }, false)
+  local target_guids, target_refs, output_refs = {}, {}, {}
+  for index = 1, #targets do
+    local target = targets[index]
+    target.count_before = alpha33_freeze_track_count(target.track)
+    if target.count_before == nil then
+      return alpha33_freeze_track_error("COMMAND_FAILED", "freeze_track could not read every I_FREEZECOUNT before mutation.", {
+        track_ref = target.ref,
+        zero_write = true,
+      }, false)
+    end
+    target_guids[target.guid] = true
+    target_refs[index] = target.ref
+    output_refs[index] = target.object_ref
   end
   local selected_tracks = alpha33_freeze_track_selected_tracks()
   local selected_items = alpha33_freeze_track_selected_items()
@@ -37939,16 +40886,16 @@ local function alpha33_freeze_track(request)
   if not selected_tracks or not selected_items or not before_items then
     return alpha33_freeze_track_error("COMMAND_FAILED", "freeze_track could not snapshot Track and Item selection.", {}, false)
   end
-  if not alpha33_freeze_track_select_only(track) then
-    local restored = alpha33_freeze_track_restore(selected_tracks, selected_items, before_items, exact.guid)
-    return alpha33_freeze_track_error("COMMAND_FAILED", "freeze_track could not select only the exact Track.", {
+  if not alpha33_freeze_track_select_targets(targets) then
+    local restored = alpha33_freeze_track_restore(selected_tracks, selected_items, before_items, target_guids)
+    return alpha33_freeze_track_error("COMMAND_FAILED", "freeze_track could not select exactly the frozen target set.", {
       selection_restored = restored,
     }, false)
   end
 
   local command_ok, command_result = call_reaper("Main_OnCommandEx", action_id, 0, 0)
   if not command_ok or command_result == false then
-    local restored = alpha33_freeze_track_restore(selected_tracks, selected_items, before_items, exact.guid)
+    local restored = alpha33_freeze_track_restore(selected_tracks, selected_items, before_items, target_guids)
     return alpha33_freeze_track_error("COMMAND_FAILED", "REAPER rejected the fixed native Track freeze action.", {
       mode = mode,
       selection_restored = restored,
@@ -37956,25 +40903,41 @@ local function alpha33_freeze_track(request)
   end
   call_reaper("UpdateArrange")
 
-  local readback_track, readback_matches = alpha33_freeze_track_find(exact.guid)
-  local count_after = readback_track and readback_matches == 1 and alpha33_freeze_track_count(readback_track) or nil
-  local selection_restored = alpha33_freeze_track_restore(selected_tracks, selected_items, before_items, exact.guid)
-  if not readback_track or readback_matches ~= 1 or count_after == nil or count_after <= count_before then
-    return alpha33_freeze_track_error("VERIFY_FAILED", "freeze_track I_FREEZECOUNT did not increase after action.", {
-      track_ref = exact.ref,
-      mode = mode,
-      freeze_count_before = count_before,
+  local rows, verification_failure = {}, nil
+  for index = 1, #targets do
+    local target = targets[index]
+    local readback_track, readback_matches = alpha33_freeze_track_find(target.guid)
+    local count_after = readback_track and readback_matches == 1 and alpha33_freeze_track_count(readback_track) or nil
+    target.count_after = count_after
+    rows[index] = {
+      track_ref = target.ref,
+      freeze_count_before = target.count_before,
       freeze_count_after = count_after,
-      track_match_count = readback_matches,
+      verified = count_after ~= nil and count_after > target.count_before,
+    }
+    if not rows[index].verified and not verification_failure then
+      verification_failure = { target = target, matches = readback_matches }
+    end
+  end
+  local selection_restored = alpha33_freeze_track_restore(selected_tracks, selected_items, before_items, target_guids)
+  if verification_failure then
+    local target = verification_failure.target
+    return alpha33_freeze_track_error("VERIFY_FAILED", "freeze_track I_FREEZECOUNT did not increase for every target after action.", {
+      track_ref = target.ref,
+      mode = mode,
+      freeze_count_before = target.count_before,
+      freeze_count_after = target.count_after,
+      track_match_count = verification_failure.matches,
+      target_count = #targets,
       selection_restored = selection_restored,
     }, false)
   end
   if not selection_restored then
     return alpha33_freeze_track_error("VERIFY_FAILED", "freeze_track could not restore Track and Item selection.", {
-      track_ref = exact.ref,
+      track_ref = targets[1].ref,
       mode = mode,
-      freeze_count_before = count_before,
-      freeze_count_after = count_after,
+      freeze_count_before = targets[1].count_before,
+      freeze_count_after = targets[1].count_after,
       selection_restored = false,
     }, false)
   end
@@ -37984,16 +40947,21 @@ local function alpha33_freeze_track(request)
     capability = request.pack.capability,
     pack = request.pack.id,
     risk = request.pack.risk,
-    track_ref = exact.ref,
+    track_ref = targets[1].ref,
+    target_mode = target_mode,
+    target_count = #targets,
+    target_refs = json_array(target_refs),
+    target_fingerprint = "track-set-v1|" .. table.concat(target_refs, "|"),
+    targets = json_array(rows),
     mode = mode,
-    freeze_count_before = count_before,
-    freeze_count_after = count_after,
+    freeze_count_before = targets[1].count_before,
+    freeze_count_after = targets[1].count_after,
     selection_restored = true,
     readback_status = "passed",
     undo_evidence = "required",
     artifacts_allowed = false,
     truncated = false,
-  }, nil, json_array({}), json_array({}), json_array({ exact.object_ref })
+  }, nil, json_array({}), json_array({}), json_array(output_refs)
 end
 return {
   exports = { alpha33_freeze_track = alpha33_freeze_track },
@@ -38140,13 +41108,13 @@ local function alpha33_unfreeze_track_clear_items()
   return true
 end
 
-local function alpha33_unfreeze_track_restore(selected_tracks, selected_items, before_items, target_track_guid)
+local function alpha33_unfreeze_track_restore(selected_tracks, selected_items, before_items, target_track_guids)
   local current_items = alpha33_unfreeze_track_items()
   if not current_items then return false end
   local before_guids = {}
   for index = 1, #before_items do before_guids[before_items[index].guid] = true end
   local selected_guids = {}
-  local target_mapping_needed = false
+  local target_mapping_needed = {}
   for index = 1, #selected_items do
     local selected = selected_items[index]
     local found = false
@@ -38158,20 +41126,22 @@ local function alpha33_unfreeze_track_restore(selected_tracks, selected_items, b
       end
     end
     if not found then
-      if selected.owner_track_guid ~= target_track_guid then return false end
-      target_mapping_needed = true
+      if not target_track_guids[selected.owner_track_guid] then return false end
+      target_mapping_needed[selected.owner_track_guid] = true
     end
   end
-  if target_mapping_needed then
-    local mapped = 0
+  if next(target_mapping_needed) ~= nil then
+    local mapped = {}
     for index = 1, #current_items do
       local current = current_items[index]
-      if current.owner_track_guid == target_track_guid and not before_guids[current.guid] then
+      if target_mapping_needed[current.owner_track_guid] and not before_guids[current.guid] then
         selected_guids[current.guid] = true
-        mapped = mapped + 1
+        mapped[current.owner_track_guid] = (mapped[current.owner_track_guid] or 0) + 1
       end
     end
-    if mapped == 0 then return false end
+    for guid in pairs(target_mapping_needed) do
+      if not mapped[guid] then return false end
+    end
   end
 
   local ok = alpha33_unfreeze_track_clear_tracks() and alpha33_unfreeze_track_clear_items()
@@ -38197,8 +41167,12 @@ local function alpha33_unfreeze_track_restore(selected_tracks, selected_items, b
     and selected_match
 end
 
-local function alpha33_unfreeze_track_select_only(track)
-  return alpha33_unfreeze_track_clear_tracks() and call_reaper("SetTrackSelected", track, true)
+local function alpha33_unfreeze_track_select_targets(targets)
+  if not alpha33_unfreeze_track_clear_tracks() then return false end
+  for index = 1, #targets do
+    if not call_reaper("SetTrackSelected", targets[index].track, true) then return false end
+  end
+  return true
 end
 
 local function alpha33_unfreeze_track_count(track)
@@ -38207,32 +41181,135 @@ local function alpha33_unfreeze_track_count(track)
   return count ~= nil and math.max(0, math.floor(count)) or nil
 end
 
-local function alpha33_unfreeze_track(request)
-  local exact, ref_failure = alpha33_unfreeze_track_exact_ref(request)
-  if not exact then return alpha33_unfreeze_track_error(ref_failure.code, ref_failure.message, ref_failure.details) end
+local function alpha33_unfreeze_track_binding(request)
+  local params = is_object(request.params) and request.params or {}
+  local binding = params.target_binding
+  local has_exact_refs = is_json_array(request.refs) and #request.refs > 0
+  if binding == nil then
+    if has_exact_refs then return nil, nil end
+    binding = {}
+  end
+  if not is_object(binding) then
+    return nil, { code = "TARGET_BINDING_INVALID", message = "unfreeze_track target_binding must be an object.", details = { zero_write = true } }
+  end
+  local allowed = { bind_at = true, domain = true, selector = true, aggregation = true, cardinality = true }
+  for key in pairs(binding) do
+    if not allowed[key] then
+      return nil, { code = "TARGET_BINDING_INVALID", message = "unfreeze_track target_binding contains an unsupported field.", details = { field = bounded_string(key, 80), zero_write = true } }
+    end
+  end
+  local bind_at = binding.bind_at or "execution"
+  local domain = binding.domain or "tracks"
+  local selector = binding.selector or "selected"
+  local aggregation = binding.aggregation or "batch"
+  local cardinality = binding.cardinality or { minimum = 1, maximum = 64 }
+  if bind_at ~= "execution" or domain ~= "tracks" or selector ~= "selected"
+      or aggregation ~= "batch" or not is_object(cardinality)
+      or cardinality.minimum ~= 1 or cardinality.maximum ~= 64 then
+    return nil, {
+      code = "TARGET_BINDING_INVALID",
+      message = "unfreeze_track accepts only execution-time selected Track batch binding with cardinality 1-64.",
+      details = { zero_write = true },
+    }
+  end
+  for key in pairs(cardinality) do
+    if key ~= "minimum" and key ~= "maximum" then
+      return nil, { code = "TARGET_BINDING_INVALID", message = "unfreeze_track target_binding cardinality contains an unsupported field.", details = { field = bounded_string(key, 80), zero_write = true } }
+    end
+  end
+  if has_exact_refs then
+    return nil, { code = "TARGET_BINDING_INVALID", message = "unfreeze_track cannot combine target_binding with exact refs.", details = { zero_write = true } }
+  end
+  return {
+    bind_at = bind_at,
+    domain = domain,
+    selector = selector,
+    aggregation = aggregation,
+    cardinality = cardinality,
+  }, nil
+end
 
+local function alpha33_unfreeze_track_selected_targets()
+  local ok_count, count = call_reaper("CountSelectedTracks", 0)
+  if not ok_count then ok_count, count = call_reaper("CountSelectedTracks2", 0, false) end
+  if not ok_count then return nil, "COMMAND_FAILED" end
+  local total = math.max(0, math.floor(first_number(count) or 0))
+  if total < 1 or total > 64 then return nil, "TARGET_BINDING_CARDINALITY_INVALID", total end
+  local targets, seen = {}, {}
+  for index = 0, total - 1 do
+    local ok_track, track = call_reaper("GetSelectedTrack", 0, index)
+    if not ok_track then ok_track, track = call_reaper("GetSelectedTrack2", 0, index, false) end
+    local guid = ok_track and track and alpha33_unfreeze_track_guid(track) or nil
+    if not guid or seen[guid] then return nil, "TARGET_BINDING_RESOLUTION_FAILED", total end
+    seen[guid] = true
+    targets[#targets + 1] = {
+      track = track,
+      guid = guid,
+      ref = "track:guid:" .. guid,
+      object_ref = { kind = "track", ref = "track:guid:" .. guid, identity = { scheme = "guid", value = guid } },
+    }
+  end
+  return targets, nil, total
+end
+
+local function alpha33_unfreeze_track_targets(request)
+  local binding, binding_failure = alpha33_unfreeze_track_binding(request)
+  if binding_failure then return nil, nil, binding_failure end
+  if binding then
+    local targets, code, resolved_count = alpha33_unfreeze_track_selected_targets()
+    if not targets then
+      local message = code == "TARGET_BINDING_CARDINALITY_INVALID"
+        and "unfreeze_track selected Track target count must be between 1 and 64."
+        or "unfreeze_track could not resolve every selected Track to one unique GUID."
+      return nil, nil, { code = code, message = message, details = { resolved_count = resolved_count, minimum = 1, maximum = 64, zero_write = true } }
+    end
+    return targets, "selected", nil
+  end
+
+  local exact, ref_failure = alpha33_unfreeze_track_exact_ref(request)
+  if not exact then return nil, nil, ref_failure end
   local track, matches = alpha33_unfreeze_track_find(exact.guid)
   if matches == nil then
-    return alpha33_unfreeze_track_error("COMMAND_FAILED", "unfreeze_track could not read the complete Track list.", {}, false)
+    return nil, nil, { code = "COMMAND_FAILED", message = "unfreeze_track could not read the complete Track list.", details = {}, recoverable = false }
   end
   if not track or matches ~= 1 then
-    return alpha33_unfreeze_track_error(matches == 0 and "TRACK_NOT_FOUND" or "REF_INVALID", "unfreeze_track exact Track GUID was missing or duplicated.", {
-      track_ref = exact.ref,
-      duplicate_count = matches,
-    }, matches == 0)
+    return nil, nil, {
+      code = matches == 0 and "TRACK_NOT_FOUND" or "REF_INVALID",
+      message = "unfreeze_track exact Track GUID was missing or duplicated.",
+      details = { track_ref = exact.ref, duplicate_count = matches },
+      recoverable = matches == 0,
+    }
   end
-  local count_before = alpha33_unfreeze_track_count(track)
-  if count_before == nil then
-    return alpha33_unfreeze_track_error("COMMAND_FAILED", "unfreeze_track could not read I_FREEZECOUNT before mutation.", {
-      track_ref = exact.ref,
-    }, false)
+  return {{ track = track, guid = exact.guid, ref = exact.ref, object_ref = exact.object_ref }}, "exact", nil
+end
+
+local function alpha33_unfreeze_track(request)
+  local targets, target_mode, target_failure = alpha33_unfreeze_track_targets(request)
+  if not targets then
+    return alpha33_unfreeze_track_error(target_failure.code, target_failure.message, target_failure.details, target_failure.recoverable)
   end
-  if count_before <= 0 then
-    return alpha33_unfreeze_track_error("COMMAND_FAILED", "unfreeze_track requires a Track with I_FREEZECOUNT greater than zero.", {
-      track_ref = exact.ref,
-      freeze_count_before = count_before,
-      reason_code = "TRACK_NOT_FROZEN",
-    })
+
+  local target_guids, target_refs, output_refs = {}, {}, {}
+  for index = 1, #targets do
+    local target = targets[index]
+    target.count_before = alpha33_unfreeze_track_count(target.track)
+    if target.count_before == nil then
+      return alpha33_unfreeze_track_error("COMMAND_FAILED", "unfreeze_track could not read every I_FREEZECOUNT before mutation.", {
+        track_ref = target.ref,
+        zero_write = true,
+      }, false)
+    end
+    if target.count_before <= 0 then
+      return alpha33_unfreeze_track_error("COMMAND_FAILED", "unfreeze_track requires every target Track to have I_FREEZECOUNT greater than zero.", {
+        track_ref = target.ref,
+        freeze_count_before = target.count_before,
+        reason_code = "TRACK_NOT_FROZEN",
+        zero_write = true,
+      })
+    end
+    target_guids[target.guid] = true
+    target_refs[index] = target.ref
+    output_refs[index] = target.object_ref
   end
   local selected_tracks = alpha33_unfreeze_track_selected_tracks()
   local selected_items = alpha33_unfreeze_track_selected_items()
@@ -38240,39 +41317,55 @@ local function alpha33_unfreeze_track(request)
   if not selected_tracks or not selected_items or not before_items then
     return alpha33_unfreeze_track_error("COMMAND_FAILED", "unfreeze_track could not snapshot Track and Item selection.", {}, false)
   end
-  if not alpha33_unfreeze_track_select_only(track) then
-    local restored = alpha33_unfreeze_track_restore(selected_tracks, selected_items, before_items, exact.guid)
-    return alpha33_unfreeze_track_error("COMMAND_FAILED", "unfreeze_track could not select only the exact Track.", {
+  if not alpha33_unfreeze_track_select_targets(targets) then
+    local restored = alpha33_unfreeze_track_restore(selected_tracks, selected_items, before_items, target_guids)
+    return alpha33_unfreeze_track_error("COMMAND_FAILED", "unfreeze_track could not select exactly the frozen target set.", {
       selection_restored = restored,
     }, false)
   end
 
   local command_ok, command_result = call_reaper("Main_OnCommandEx", ALPHA3_3_UNFREEZE_TRACK_ACTION_ID, 0, 0)
   if not command_ok or command_result == false then
-    local restored = alpha33_unfreeze_track_restore(selected_tracks, selected_items, before_items, exact.guid)
+    local restored = alpha33_unfreeze_track_restore(selected_tracks, selected_items, before_items, target_guids)
     return alpha33_unfreeze_track_error("COMMAND_FAILED", "REAPER rejected the fixed native Track unfreeze action.", {
       selection_restored = restored,
     }, false)
   end
   call_reaper("UpdateArrange")
 
-  local readback_track, readback_matches = alpha33_unfreeze_track_find(exact.guid)
-  local count_after = readback_track and readback_matches == 1 and alpha33_unfreeze_track_count(readback_track) or nil
-  local selection_restored = alpha33_unfreeze_track_restore(selected_tracks, selected_items, before_items, exact.guid)
-  if not readback_track or readback_matches ~= 1 or count_after == nil or count_after >= count_before then
-    return alpha33_unfreeze_track_error("VERIFY_FAILED", "unfreeze_track I_FREEZECOUNT did not decrease after action.", {
-      track_ref = exact.ref,
-      freeze_count_before = count_before,
+  local rows, verification_failure = {}, nil
+  for index = 1, #targets do
+    local target = targets[index]
+    local readback_track, readback_matches = alpha33_unfreeze_track_find(target.guid)
+    local count_after = readback_track and readback_matches == 1 and alpha33_unfreeze_track_count(readback_track) or nil
+    target.count_after = count_after
+    rows[index] = {
+      track_ref = target.ref,
+      freeze_count_before = target.count_before,
       freeze_count_after = count_after,
-      track_match_count = readback_matches,
+      verified = count_after ~= nil and count_after < target.count_before,
+    }
+    if not rows[index].verified and not verification_failure then
+      verification_failure = { target = target, matches = readback_matches }
+    end
+  end
+  local selection_restored = alpha33_unfreeze_track_restore(selected_tracks, selected_items, before_items, target_guids)
+  if verification_failure then
+    local target = verification_failure.target
+    return alpha33_unfreeze_track_error("VERIFY_FAILED", "unfreeze_track I_FREEZECOUNT did not decrease for every target after action.", {
+      track_ref = target.ref,
+      freeze_count_before = target.count_before,
+      freeze_count_after = target.count_after,
+      track_match_count = verification_failure.matches,
+      target_count = #targets,
       selection_restored = selection_restored,
     }, false)
   end
   if not selection_restored then
     return alpha33_unfreeze_track_error("VERIFY_FAILED", "unfreeze_track could not restore Track and Item selection.", {
-      track_ref = exact.ref,
-      freeze_count_before = count_before,
-      freeze_count_after = count_after,
+      track_ref = targets[1].ref,
+      freeze_count_before = targets[1].count_before,
+      freeze_count_after = targets[1].count_after,
       selection_restored = false,
     }, false)
   end
@@ -38282,15 +41375,20 @@ local function alpha33_unfreeze_track(request)
     capability = request.pack.capability,
     pack = request.pack.id,
     risk = request.pack.risk,
-    track_ref = exact.ref,
-    freeze_count_before = count_before,
-    freeze_count_after = count_after,
+    track_ref = targets[1].ref,
+    target_mode = target_mode,
+    target_count = #targets,
+    target_refs = json_array(target_refs),
+    target_fingerprint = "track-set-v1|" .. table.concat(target_refs, "|"),
+    targets = json_array(rows),
+    freeze_count_before = targets[1].count_before,
+    freeze_count_after = targets[1].count_after,
     selection_restored = true,
     readback_status = "passed",
     undo_evidence = "required",
     artifacts_allowed = false,
     truncated = false,
-  }, nil, json_array({}), json_array({}), json_array({ exact.object_ref })
+  }, nil, json_array({}), json_array({}), json_array(output_refs)
 end
 return {
   exports = { alpha33_unfreeze_track = alpha33_unfreeze_track },

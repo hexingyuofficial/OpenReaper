@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 
 const STARTUP_BEGIN = "-- >>> OpenReaper alpha MCP startup hook >>>";
 const STARTUP_END = "-- <<< OpenReaper alpha MCP startup hook <<<";
+const STARTUP_OWNED_SEPARATOR = "-- OpenReaper owns the preceding line ending";
 const LEGACY_STARTUP_HOOKS = Object.freeze([
   Object.freeze({
     relativePath: "__startup.eel",
@@ -37,7 +38,6 @@ const LEGACY_STARTUP_HOOKS = Object.freeze([
     ]),
   }),
 ]);
-const DEFAULT_PACKS = "core,cleanup,delivery,analysis,loop,pack_contract_fixture";
 const RENDER_ROOT_ENV = "OPENREAPER_LIVE_SMOKE_RENDER_ROOT";
 const MANAGED_RENDER_ROOT_RECORD = "managed-render-root.path";
 const WRITE_PROBE_ATTEMPTS = 4;
@@ -60,6 +60,8 @@ const S3_ACTIONS = Object.freeze([
     relativeScript: "OpenReaper/remove-silence.lua",
     commandId: `RS${createHash("sha1").update("openreaper.s3.remove_silence.v1").digest("hex")}`,
   }),
+]);
+const LEGACY_S3_ACTIONS = Object.freeze([
   Object.freeze({
     title: "OpenReaper: Repeat Remove Silence with Last Settings",
     relativeScript: "OpenReaper/repeat-remove-silence.lua",
@@ -87,6 +89,7 @@ const reaperResourceRoot = path.resolve(options.reaper_resource_root ?? defaultR
 const dryRun = options.dry_run === true;
 const skipClientConfig = options.skip_client_config === true;
 const skipStartupHook = options.skip_startup_hook === true;
+const registerActions = options.register_actions === true;
 const vitalAgentIncluded = existsSync(path.join(packageRoot, "bin", "vital-agent-mcp"))
   && existsSync(path.join(packageRoot, "vendor", "vital-agent-mcp", "dist", "src", "mcpServer.js"));
 
@@ -163,6 +166,7 @@ const report = {
     fallback_path: bridgeLauncherScript,
     fallback_mode: "trusted_package_manual_action_reascript",
     fallback_installed: false,
+    action_registration: registerActions ? "explicit_opt_in" : "disabled_by_default",
     backup_path: null,
     legacy_cleanup_paths: [],
     legacy_backup_paths: [],
@@ -294,6 +298,7 @@ async function runInstall() {
 
     if (!skipStartupHook) {
       await installS3Actions();
+      await cleanupLegacyS3Actions();
       await installBridgeAction();
       await installConditionalStartupHook();
       await cleanupLegacyStartupHooks();
@@ -472,10 +477,14 @@ async function installBridgeAction() {
   if (await readFile(bridgeActionScript, "utf8") !== script) {
     throw new Error(`Installed REAPER bridge Action does not match the trusted package launcher: ${bridgeActionScript}`);
   }
-  await upsertBridgeActionInReaperKb([
-    bridgeActionRegistryLine(),
-    ...(s3ActionsAvailable ? s3ActionRegistryLines() : []),
-  ]);
+  if (registerActions) {
+    await upsertBridgeActionInReaperKb([
+      bridgeActionRegistryLine(),
+      ...(s3ActionsAvailable ? s3ActionRegistryLines() : []),
+    ]);
+  } else {
+    report.skipped.push("REAPER Action registry unchanged; pass --register-actions to opt in");
+  }
 }
 
 async function installS3Actions() {
@@ -541,6 +550,36 @@ async function installS3Actions() {
   }
 }
 
+async function cleanupLegacyS3Actions() {
+  if (dryRun) {
+    report.skipped.push("dry run: would remove the obsolete Repeat Remove Silence Action when its file matches the packaged legacy source");
+    return;
+  }
+  const sourceRoot = path.join(packageRoot, "vendor", "openreaper-kernel", "reaper", "actions");
+  for (const action of LEGACY_S3_ACTIONS) {
+    const targetPath = path.join(reaperResourceRoot, "Scripts", ...action.relativeScript.split("/"));
+    const targetStatus = await safeLstat(targetPath);
+    if (!targetStatus) continue;
+    if (targetStatus.isSymbolicLink() || !targetStatus.isFile()) {
+      report.warnings.push(`obsolete S3 Action was preserved because it is not a regular non-symlink file: ${targetPath}`);
+      continue;
+    }
+    const sourcePath = path.join(sourceRoot, action.relativeScript);
+    const sourceStatus = await safeLstat(sourcePath);
+    if (!sourceStatus || sourceStatus.isSymbolicLink() || !sourceStatus.isFile()) {
+      report.warnings.push(`obsolete S3 Action was preserved because its legacy source is unavailable: ${targetPath}`);
+      continue;
+    }
+    const [source, target] = await Promise.all([readFile(sourcePath), readFile(targetPath)]);
+    if (!source.equals(target)) {
+      report.warnings.push(`obsolete S3 Action was preserved because its contents differ from the OpenReaper legacy file: ${targetPath}`);
+      continue;
+    }
+    await rm(targetPath, { force: true });
+    report.changed.push(`removed obsolete ${action.title} from ${targetPath}`);
+  }
+}
+
 async function upsertBridgeActionInReaperKb(actionLines) {
   const kbPath = path.join(reaperResourceRoot, "reaper-kb.ini");
   const existingStatus = await safeLstat(kbPath);
@@ -601,11 +640,31 @@ async function installConditionalStartupHook() {
 }
 
 function conditionalStartupHookSource() {
+  const luaString = (value) => JSON.stringify(String(value).replaceAll("\\", "/"));
+  const defaultGenerationPath = path.join(sessionRoot, "bridge-generation-v1.json");
   return `${STARTUP_BEGIN}
--- Inert for ordinary REAPER launches; active only for an OpenReaper-managed session.
+-- OpenReaper bootstrap: environment values win for agent-started sessions;
+-- installed defaults allow ordinary REAPER launches to be discovered later.
 do
-  local bridge_script = os.getenv("OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH")
-  local transport_dir = os.getenv("OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR")
+  local function non_empty(value)
+    if type(value) ~= "string" then return nil end
+    local trimmed = value:match("^%s*(.-)%s*$")
+    return trimmed ~= "" and trimmed or nil
+  end
+  local function read_generation()
+    local file = io.open(${luaString(defaultGenerationPath)}, "r")
+    if not file then return "1" end
+    local text = file:read("*a") or ""
+    file:close()
+    return text:match('"generation"%s*:%s*([1-9][0-9]*)') or "1"
+  end
+  local bridge_script = non_empty(os.getenv("OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH")) or ${luaString(bridgeScript)}
+  local transport_dir = non_empty(os.getenv("OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR")) or ${luaString(transportDir)}
+  _G.__OPENREAPER_DEFAULT_TRANSPORT_DIR = transport_dir
+  _G.__OPENREAPER_DEFAULT_ARTIFACT_ROOT = non_empty(os.getenv("OPENREAPER_ARTIFACT_ROOT")) or ${luaString(artifactRoot)}
+  _G.__OPENREAPER_DEFAULT_RENDER_ROOT = non_empty(os.getenv("OPENREAPER_LIVE_SMOKE_RENDER_ROOT")) or ${luaString(renderRoot)}
+  _G.__OPENREAPER_DEFAULT_OWNER = non_empty(os.getenv("OPENREAPER_LIVE_BRIDGE_OWNER")) or "openreaper-alpha"
+  _G.__OPENREAPER_DEFAULT_GENERATION = non_empty(os.getenv("OPENREAPER_LIVE_BRIDGE_GENERATION")) or read_generation()
   local function write_startup_status(stage)
     if not transport_dir or transport_dir == "" then
       return
@@ -620,25 +679,44 @@ do
     os.rename(temp_path, status_path)
   end
   write_startup_status("hook_seen")
-  if not bridge_script or bridge_script == "" or not transport_dir or transport_dir == "" then
-    write_startup_status("environment_missing")
+  local ok = pcall(dofile, bridge_script)
+  if ok then
+    write_startup_status("bridge_dofile_succeeded")
   else
-    local ok = pcall(dofile, bridge_script)
-    if ok then
-      write_startup_status("bridge_dofile_succeeded")
-    else
-      write_startup_status("bridge_dofile_failed")
-    end
+    write_startup_status("bridge_dofile_failed")
   end
 end
 ${STARTUP_END}`;
 }
 
 function upsertMarkedBlock(existing, begin, end, block) {
-  const withoutExistingBlock = removeMarkedBlock(existing, begin, end);
-  // Keep user-owned bytes unchanged; the single separator is consumed by
-  // removeMarkedBlock so repeated installs stay byte-stable.
-  return `${block}\n${withoutExistingBlock}`;
+  let withoutExistingBlock = removeOwnedStartupSeparator(existing, begin);
+  withoutExistingBlock = removeMarkedBlock(withoutExistingBlock, begin, end);
+  // Keep all user-owned startup bytes in their original order. OpenReaper's
+  // block is appended so installing/upgrading cannot change which user hook
+  // runs first. The separator is only added when the existing file does not
+  // already end in a line ending.
+  if (withoutExistingBlock === "") return `${block}\n`;
+  const hasLineEnding = /(?:\r\n|\n|\r)$/u.test(withoutExistingBlock);
+  const separator = hasLineEnding ? "" : `\n${STARTUP_OWNED_SEPARATOR}\n`;
+  return `${withoutExistingBlock}${separator}${block}\n`;
+}
+
+function removeOwnedStartupSeparator(existing, begin) {
+  const blockStart = existing.indexOf(begin);
+  if (blockStart === -1) return existing;
+  const markerEnd = existing.lastIndexOf(STARTUP_OWNED_SEPARATOR, blockStart);
+  if (markerEnd === -1 || markerEnd >= blockStart) return existing;
+  const afterMarker = markerEnd + STARTUP_OWNED_SEPARATOR.length;
+  if (!/^(?:\r\n|\n|\r)/u.test(existing.slice(afterMarker))) return existing;
+  const beforeMarker = existing.slice(0, markerEnd);
+  if (!/(?:\r\n|\n|\r)$/u.test(beforeMarker)) return existing;
+  const separatorStart = beforeMarker.endsWith("\r\n") ? markerEnd - 2 : markerEnd - 1;
+  let separatorEnd = afterMarker;
+  if (existing.startsWith("\r\n", separatorEnd)) separatorEnd += 2;
+  else separatorEnd += 1;
+  if (separatorEnd !== blockStart) return existing;
+  return `${existing.slice(0, separatorStart)}${existing.slice(separatorEnd)}`;
 }
 
 async function cleanupLegacyStartupHooks() {
@@ -926,8 +1004,15 @@ function removeMarkedBlock(existing, begin, end) {
   let next = existing;
   while (true) {
     const start = next.indexOf(begin);
+    if (start === -1) return next;
     const finish = next.indexOf(end, start + begin.length);
-    if (start === -1 || finish === -1 || finish <= start) return next;
+    if (finish === -1 || finish <= start) {
+      throw new Error(`OpenReaper startup marker is incomplete (${begin}); refusing to rewrite ${conditionalStartupHookPath}`);
+    }
+    const nestedBegin = next.indexOf(begin, start + begin.length);
+    if (nestedBegin !== -1 && nestedBegin < finish) {
+      throw new Error(`OpenReaper startup marker is nested (${begin}); refusing to rewrite ${conditionalStartupHookPath}`);
+    }
     let after = finish + end.length;
     if (next.startsWith("\r\n", after)) after += 2;
     else if (next[after] === "\n" || next[after] === "\r") after += 1;
@@ -1639,6 +1724,8 @@ Options:
   --skip-client-config        Do not update supported MCP client configs
   --skip-startup-hook         Skip manual Action install and legacy hook cleanup;
                               trusted package-local startup remains enabled
+  --register-actions          Explicitly register OpenReaper Actions in
+                              reaper-kb.ini (disabled by default)
   --help                      Show this help without installing
 `);
 }

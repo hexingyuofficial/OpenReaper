@@ -315,9 +315,9 @@ Usage:
   openreaper-start --render-root /absolute/path/to/renders [--project-path /path/to/project.RPP]
   openreaper-start --recover-existing [--session-root /path/to/session]
 
-REAPER must be started through this helper for OpenReaper MCP to connect.
-The helper starts REAPER with the OpenReaper bridge environment and returns only
-after a matching Bridge heartbeat and real bounded public read probe succeed.
+The helper can start a new REAPER or attach to one already running from the
+normal REAPER icon. In either case it returns only after a matching Bridge
+heartbeat and real bounded public read probe succeed.
 On macOS it uses LaunchServices by default so REAPER is not a child of the
 agent command session. Use --direct-binary for a headless/direct binary launch;
 the same startup hook, heartbeat, and public read probe gates still apply.
@@ -344,11 +344,12 @@ The helper passes its fixed trusted package-local launcher to REAPER after the
 project and every extra argument. The REAPER action named "OpenReaper: Start MCP
 bridge" remains a manual recovery fallback if autonomous startup is blocked.
 
-If the selected session already has a verified live REAPER, a normal start
-refuses to launch a duplicate instance. Use --recover-existing to reuse that
-same REAPER PID and verify an already-running Bridge; it cannot restart a
-stopped Bridge. This mode cannot select a new project or pass arbitrary REAPER
-arguments.
+If one REAPER is already running, the helper attaches to that PID and never
+starts a duplicate instance. --recover-existing remains accepted as an
+explicit spelling of the same attach path. Existing sessions must not be
+combined with a new project path or arbitrary REAPER arguments. If the running
+instance has no OpenReaper Bridge, the helper reports a recovery instruction
+for that same instance instead of changing user configuration.
 
 OpenReaper never clicks or closes REAPER windows. It observes startup windows
 read-only. When a visible window blocks startup, the helper reports
@@ -872,8 +873,8 @@ export OPENREAPER_LIVE_BRIDGE_OWNER="${BRIDGE_OWNER}"
 export OPENREAPER_LIVE_BRIDGE_GENERATION="${BRIDGE_GENERATION}"
 export OPENREAPER_PROJECT_INDEX_STATE_ROOT="${PROJECT_INDEX_STATE_ROOT}"
 
-echo "[OpenReaper] Starting REAPER through OpenReaper."
-echo "[OpenReaper] MCP can connect only to REAPER sessions started this way."
+echo "[OpenReaper] Starting or attaching to REAPER through OpenReaper."
+echo "[OpenReaper] MCP requires a matching OpenReaper Bridge heartbeat; an existing normal-icon session is eligible when its installed startup hook is active."
 echo "[OpenReaper] transport=${TRANSPORT_DIR}"
 echo "[OpenReaper] render-root=${RENDER_ROOT}"
 echo "[OpenReaper] project-index-state-root=${PROJECT_INDEX_STATE_ROOT}"
@@ -1094,6 +1095,20 @@ reaper_pids() {
   escaped_reaper_bin="$(print -rn -- "${REAPER_BIN}" | command sed 's/[][(){}.^$*+?|\\]/\\&/g')"
   startup_run_bounded_external "${STARTUP_PROCESS_QUERY_TIMEOUT_MS}" \
     /usr/bin/pgrep -f "(^|[[:space:]])${escaped_reaper_bin}([[:space:]]|$)" 2>/dev/null | sort -n || true
+}
+
+discover_single_running_reaper_pid() {
+  local -a candidates
+  candidates=("${(@f)$(reaper_pids)}")
+  if (( ${#candidates[@]} == 1 )) && [[ "${candidates[1]}" =~ ^[1-9][0-9]*$ ]]; then
+    print -r -- "${candidates[1]}"
+    return 0
+  fi
+  if (( ${#candidates[@]} > 1 )); then
+    echo "[OpenReaper] multiple REAPER processes are running; refusing to guess which project to attach." >&2
+    return 2
+  fi
+  return 1
 }
 
 startup_launcher_argument_pids() {
@@ -1822,7 +1837,7 @@ prepare_startup_status_for_new_launch() {
 wait_for_startup_hook() {
   local reaper_pid="$1"
   local max_ticks=$(( START_WAIT_SECONDS * 4 ))
-  local tick dialog_result pending_dialog_blocker=""
+  local tick dialog_result pending_dialog_blocker="" last_dialog_result=""
   for (( tick = 1; tick <= max_ticks; tick++ )); do
     if ! startup_budget_require_window "startup_hook" $(( STARTUP_CLEANUP_RESERVE_MS + 250 )); then
       if [[ -n "${pending_dialog_blocker}" ]]; then
@@ -1846,7 +1861,10 @@ wait_for_startup_hook() {
     # Reuse the exact safe classifier while LaunchServices still carries the
     # session environment; unknown and decision-bearing dialogs stay blocked.
     dialog_result="$(run_startup_dialog_observer)"
-    record_dialog_result "${dialog_result}"
+    if [[ "${dialog_result}" != "${last_dialog_result}" ]]; then
+      record_dialog_result "${dialog_result}"
+      last_dialog_result="${dialog_result}"
+    fi
     # A published hook stage does not override a visible decision window. The
     # read-only observer runs first so startup cannot report ready while a user
     # choice is still blocking REAPER.
@@ -2199,6 +2217,22 @@ on isExactReaScriptRunStatusWindow(theWindow, hasRunningReaScriptMainWindow)
   return false
 end isExactReaScriptRunStatusWindow
 
+on isNamedReaScriptStatusWindow(theWindow, windowTitle)
+  -- Some REAPER builds expose the running-script status surface as a named
+  -- `Scripts on` window instead of the tiny title `Window`. Keep this exact
+  -- title allowlisted, but require a normal REAPER accessibility role so a
+  -- user-created modal with a similar title remains fail-closed.
+  if windowTitle is not "Scripts on" and windowTitle is not "Scripts On" then return false
+  tell application "System Events"
+    try
+      set windowRole to role of theWindow as text
+      set windowSubrole to subrole of theWindow as text
+      return (windowRole is "AXWindow" or windowRole is "AXDialog") and (windowSubrole is "AXWindow" or windowSubrole is "AXStandardWindow" or windowSubrole is "AXDialog" or windowSubrole is "AXSheet")
+    end try
+  end tell
+  return false
+end isNamedReaScriptStatusWindow
+
 on run argv
 set launchedPid to item 1 of argv as integer
 tell application "System Events"
@@ -2239,6 +2273,7 @@ tell application "System Events"
       end try
       set isPotentialDialog to windowSubrole is "AXDialog" or windowSubrole is "AXSheet" or windowTitle is "Project Load Warning"
       set isReaScriptRunStatusWindow to isPotentialDialog and my isExactReaScriptRunStatusWindow(reaperWindow, hasRunningReaScriptMainWindow)
+      if not isReaScriptRunStatusWindow then set isReaScriptRunStatusWindow to my isNamedReaScriptStatusWindow(reaperWindow, windowTitle)
       if isReaScriptRunStatusWindow then
         -- REAPER exposes its running ReaScript as a tiny AXDialog. It is a
         -- status surface, not a user decision, and remains open and untouched.
@@ -2327,7 +2362,7 @@ report_startup_user_action_required() {
 
 wait_for_startup_readiness() {
   local max_ticks=$(( START_WAIT_SECONDS * 4 ))
-  local tick dialog_result pending_dialog_blocker=""
+  local tick dialog_result pending_dialog_blocker="" last_dialog_result=""
   if (( max_ticks < 1 )); then
     echo "[OpenReaper] OPENREAPER_START_WAIT_SECONDS must be at least 1 for verified startup." >&2
     return 1
@@ -2349,7 +2384,10 @@ wait_for_startup_readiness() {
       return 1
     fi
     dialog_result="$(run_startup_dialog_observer)"
-    record_dialog_result "${dialog_result}"
+    if [[ "${dialog_result}" != "${last_dialog_result}" ]]; then
+      record_dialog_result "${dialog_result}"
+      last_dialog_result="${dialog_result}"
+    fi
     # A live Bridge cannot override a decision dialog.  Inspect first on every
     # tick, then accept the heartbeat only after this process has no blocker.
     if ! startup_dialog_result_is_safe "${dialog_result}"; then
@@ -2390,8 +2428,33 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+existing_session_mode=""
 if existing_reaper_pid="$(verified_existing_reaper_pid)"; then
-  echo "[OpenReaper] existing-session=reaper_pid=${existing_reaper_pid};identity=verified"
+  existing_session_mode="managed"
+  echo "[OpenReaper] existing-session=reaper_pid=${existing_reaper_pid};identity=verified;source=session-record"
+else
+  existing_reaper_status=$?
+  if (( existing_reaper_status == 2 )); then
+    echo "[OpenReaper] existing session could not be safely verified; refusing to launch another REAPER." >&2
+    exit 1
+  fi
+  if existing_reaper_pid="$(discover_single_running_reaper_pid)"; then
+    existing_session_mode="discovered"
+    printf '%s\n' "${existing_reaper_pid}" > "${PID_FILE}"
+    echo "[OpenReaper] existing-session=reaper_pid=${existing_reaper_pid};identity=process-discovered"
+  else
+    discovered_status=$?
+    if (( discovered_status == 2 )); then
+      exit 1
+    fi
+  fi
+fi
+
+if [[ -n "${existing_session_mode}" ]]; then
+  if [[ -n "${PROJECT_PATH}" || ${#ARGS[@]} -gt 0 ]]; then
+    echo "[OpenReaper] an existing REAPER is already running; do not combine attach with a new project or REAPER arguments." >&2
+    exit 2
+  fi
   if [[ "${BRIDGE_GENERATION_EXPLICIT}" == "true" ]]; then
     if ! resolve_bridge_generation current "${BRIDGE_GENERATION_REQUESTED}"; then
       echo "[OpenReaper] existing session generation could not be safely matched; refusing recovery." >&2
@@ -2401,21 +2464,15 @@ if existing_reaper_pid="$(verified_existing_reaper_pid)"; then
     echo "[OpenReaper] existing session generation could not be recovered; refusing recovery." >&2
     exit 1
   fi
-  if [[ "${RECOVER_EXISTING}" != "true" ]]; then
-    echo "[OpenReaper] startup-status=existing_session"
-    echo "[OpenReaper] recovery=If its Bridge is already running, use ${0} --recover-existing with the same session root to verify it. If the Bridge stopped, run the registered Bridge Action in that REAPER; no duplicate REAPER will be started." >&2
-    exit 3
+  if [[ "${RECOVER_EXISTING}" == "true" ]]; then
+    echo "[OpenReaper] startup-mode=attach_existing_explicit"
+  else
+    echo "[OpenReaper] startup-mode=attach_existing"
   fi
-  echo "[OpenReaper] startup-mode=recover_existing"
   # Preserve the launch-time metadata used to bind this record to the exact
   # REAPER process. Rewriting the same PID would make an old process look like
   # it was just launched and invalidate the next identity check.
 else
-  existing_reaper_status=$?
-  if (( existing_reaper_status == 2 )); then
-    echo "[OpenReaper] existing session could not be safely verified; refusing to launch another REAPER." >&2
-    exit 1
-  fi
   if [[ "${BRIDGE_GENERATION_EXPLICIT}" == "true" ]]; then
     if ! resolve_bridge_generation adopt "${BRIDGE_GENERATION_REQUESTED}"; then
       echo "[OpenReaper] explicit generation could not be persisted safely; refusing launch." >&2

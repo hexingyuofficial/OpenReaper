@@ -38,6 +38,28 @@ const BRIDGE_SOURCE_MODULES = Object.freeze([
 ]);
 const ROOT = new URL("../..", import.meta.url);
 
+function runBridgeUnicodeLua(body) {
+  const state = lauxlib.luaL_newstate();
+  lualib.luaL_openlibs(state);
+  const source = [
+    readFileSync(new URL("../../reaper/bridge/src/00-bridge-kernel.lua", import.meta.url), "utf8"),
+    readFileSync(new URL("../../reaper/bridge/src/10-file-transport.lua", import.meta.url), "utf8"),
+    readFileSync(new URL("../../reaper/bridge/src/20-bridge-envelope-kernel.lua", import.meta.url), "utf8"),
+    body,
+    "return true",
+  ].join("\n");
+  const loadStatus = lauxlib.luaL_loadstring(state, to_luastring(source));
+  if (loadStatus !== lua.LUA_OK) {
+    throw new Error(`Lua load failed: ${to_jsstring(lua.lua_tostring(state, -1))}`);
+  }
+  const callStatus = lua.lua_pcall(state, 0, 1, 0);
+  if (callStatus !== lua.LUA_OK) {
+    throw new Error(`Lua execution failed: ${to_jsstring(lua.lua_tostring(state, -1))}`);
+  }
+  assert.equal(lua.lua_toboolean(state, -1), true);
+  lua.lua_close(state);
+}
+
 describe("Layer 4D.2 REAPER-side live bridge script", () => {
   it("bundles the manual bridge from stable source modules without changing the output", () => {
     execFileSync(process.execPath, ["scripts/build-live-bridge.mjs", "--check"], {
@@ -690,6 +712,65 @@ assert(string.find(writes["/results/bad-cont.json"], '"outcome":"unknown"', 1, t
     assert.equal(validateFoundationBridgeResult(fixture), true);
   });
 
+  it("round-trips native UTF-8 and escaped supplementary Unicode without locale-sensitive byte rewriting", () => {
+    const kernelSource = readFileSync(new URL("../../reaper/bridge/src/00-bridge-kernel.lua", import.meta.url), "utf8");
+    assert.doesNotMatch(kernelSource, /value:gsub\('\[%c/);
+    runBridgeUnicodeLua(String.raw`
+local values = {
+  "休闲音乐候选",
+  "/Users/测试 用户/【音频】 白×滑动音阶/(NFC) é.RPP",
+  "/Users/测试 用户/(NFD) é.RPP",
+  "emoji 🚀",
+}
+for _, value in ipairs(values) do
+  local wire = json.encode({ value = value })
+  assert(json.decode(wire).value == value, wire)
+end
+local escaped = json.decode('{"value":"\\uD83D\\uDE80"}')
+assert(escaped.value == "🚀")
+for _, malformed in ipairs({
+  '{"value":"\\uD83D"}',
+  '{"value":"\\uDE80"}',
+  '{"value":"\\uD83D\\u0041"}',
+  '{"value":"raw' .. string.char(10) .. 'line"}',
+}) do
+  local ok = pcall(json.decode, malformed)
+  assert(ok == false, malformed)
+end
+`);
+  });
+
+  it("reads exact explicit UTF-8 Track names from stock P_NAME before display-name fallback", () => {
+    const handlers = [
+      "tracks/resolve_track_ref.lua",
+      "tracks/create_track.lua",
+      "tracks/rename_track.lua",
+      "tracks/d9_tracks_mixer_route.lua",
+      "tracks/d16_tracks_org_route.lua",
+      "tracks/select_track.lua",
+      "tracks/set_mute.lua",
+      "tracks/set_solo.lua",
+      "tracks/set_color.lua",
+      "items/d13_items_core_route.lua",
+      "midi/create_midi_item.lua",
+      "project/read_track_item_overview.lua",
+    ].map((file) => readFileSync(new URL(`../../reaper/bridge/src/handlers/${file}`, import.meta.url), "utf8"));
+    for (const source of handlers) assert.match(source, /read_track_name\(track,/);
+    runBridgeUnicodeLua(String.raw`
+local mojibake = "�休闲�"
+reaper = {
+  GetSetMediaTrackInfo_String = function(track, key, value, write)
+    assert(key == "P_NAME" and value == "" and write == false)
+    return true, "休闲音乐候选"
+  end,
+  GetTrackName = function() return true, mojibake end,
+}
+assert(read_track_name({}, 160) == "休闲音乐候选")
+reaper.GetSetMediaTrackInfo_String = function() return true, "" end
+assert(read_track_name({}, 160) == mojibake)
+`);
+  });
+
   it("keeps configured empty transport as a clear blocker without starting REAPER", async () => {
     const emptyTransport = await mkdtemp(join(tmpdir(), "openreaper-layer4d2-empty-"));
     const configured = createLiveBridgeExecutorFromEnv({
@@ -1167,6 +1248,22 @@ function bounded_string(value, max_length)
   if #text <= limit then return text end
   return text:sub(1, limit)
 end
+function has_control_byte(value)
+  if type(value) ~= "string" then return false end
+  for index = 1, #value do
+    local byte = string.byte(value, index)
+    if byte < 0x20 or byte == 0x7F then return true end
+  end
+  return false
+end
+function read_track_name(track, max_length)
+  local ok_name, success, explicit_name = call_reaper("GetSetMediaTrackInfo_String", track, "P_NAME", "", false)
+  if ok_name and success ~= false and type(explicit_name) == "string" and explicit_name ~= "" then
+    return bounded_string(explicit_name, max_length or 160)
+  end
+  local ok_display, _, display_name = call_reaper("GetTrackName", track, "")
+  return bounded_string(ok_display and first_string(display_name) or "", max_length or 160)
+end
 function is_object(value) return type(value) == "table" end
 function is_string(value) return type(value) == "string" and value:match("%S") ~= nil end
 function is_json_array(value) return type(value) == "table" end
@@ -1525,6 +1622,14 @@ local failure = bridge_error_envelope(request, "COMMAND_FAILED", "读取失败",
 local failure_bytes = tonumber(string.match(failure, '"response_bytes":(%d+)'))
 assert(failure_bytes == #failure, failure)
 assert(#failure <= request.budget.max_response_bytes, failure)
+
+local locking_failure = bridge_error_envelope(request, "PROJECT_LOCKING_ENABLED", "Locking enabled", {
+  recoverable = true,
+  details = { zero_write = true, native_action_count = 0 },
+})
+assert(string.find(locking_failure, '"code":"COMMAND_FAILED"', 1, true) ~= nil, locking_failure)
+assert(string.find(locking_failure, '"bridge_code":"PROJECT_LOCKING_ENABLED"', 1, true) ~= nil, locking_failure)
+assert(string.find(locking_failure, '"zero_write":true', 1, true) ~= nil, locking_failure)
 `);
   });
 

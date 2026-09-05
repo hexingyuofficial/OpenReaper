@@ -151,6 +151,13 @@ export const WAVE2A_FX_TEMPLATES = deepFreeze([
     inputProperties: {
       limit: { type: "integer" },
       offset: { type: "integer" },
+      mode: { const: "inspect_set" },
+      expected_set_fingerprint: { type: "string" },
+      expected_plugin_identity: { type: "object" },
+      expected_layout_fingerprint: { type: "string" },
+      expected_representative_fx_ref: { type: "string" },
+      expected_members: { type: "array" },
+      controls: { type: "array" },
     },
     requiredInput: [],
     outputProperties: {
@@ -179,7 +186,7 @@ export const WAVE2A_FX_TEMPLATES = deepFreeze([
   readDescriptor({
     id: "template.fx.read_fx_parameter",
     title: "Read FX parameter",
-    summary: "Read one FX parameter by index or approved ident, or format one hypothetical normalized value without mutation.",
+    summary: "Read one FX parameter by index or approved ident, or compile one hypothetical normalized/display value without mutation.",
     entity_kind: "fx_param",
     tags: ["fx", "parameter", "read", "wave2a"],
     operation_name: "fx.read_parameter",
@@ -187,6 +194,7 @@ export const WAVE2A_FX_TEMPLATES = deepFreeze([
     inputProperties: {
       ...parameterSelectorProperties(),
       probe_normalized_value: { type: "number", minimum: 0, maximum: 1 },
+      probe_display_value: { type: "string", minLength: 1, maxLength: 80 },
     },
     requiredInput: ["param_index"],
     outputProperties: parameterValueOutput(),
@@ -315,11 +323,18 @@ export const WAVE2A_FX_TEMPLATES = deepFreeze([
     inputProperties: {
       plugin_name: { type: "string" },
       insert_at_index: { type: "integer" },
+      duplicate_policy: { const: "reuse_exact" },
+      include_parameter_layout: { type: "boolean" },
+      target_binding: { type: "object" },
+      dry_run: { type: "boolean" },
     },
     requiredInput: ["plugin_name"],
     outputProperties: fxSummaryOutput(),
     refs: refs({
-      input: [ref("take_ref", "take", true, "Take ref that receives the new FX.")],
+      input: [
+        ref("take_ref", "take", false, "Exact Take ref for the original single-Take path."),
+        ref("track_ref", "track", false, "Exact Track ref for bounded all-Items active-Take fanout."),
+      ],
       output: [ref("fx_ref", "fx", true, "New take FX ref produced by this template.")],
     }),
     expectedAction: "create",
@@ -376,23 +391,26 @@ export const WAVE2A_FX_TEMPLATES = deepFreeze([
   }),
   writeDescriptor({
     id: "template.fx.set_fx_parameter_normalized",
-    title: "Set FX parameter normalized",
-    summary: "Set one FX parameter with continuous tolerance or REAPER-native discrete quantization readback.",
+    title: "Set FX parameter value",
+    summary: "Set one FX parameter by explicit normalized coordinate or REAPER-native display text, with native readback.",
     entity_kind: "fx_param",
     tags: ["fx", "parameter", "write", "wave2a"],
     capability: "fx.set_parameter_normalized",
     inputProperties: {
       ...parameterSelectorProperties(),
       normalized_value: { type: "number" },
+      display_value: { type: "string", minLength: 1, maxLength: 80 },
       tolerance: { type: "number" },
     },
-    requiredInput: ["param_index", "normalized_value"],
+    requiredInput: ["param_index"],
     outputProperties: {
       ...parameterValueOutput(),
-      requested_normalized_value: { type: "number" },
+      requested_normalized_value: { oneOf: [{ type: "number" }, { type: "null" }] },
+      requested_display_value: { oneOf: [{ type: "string" }, { type: "null" }] },
+      requested_value: { oneOf: [{ type: "number" }, { type: "null" }] },
       requested_formatted_value: { oneOf: [{ type: "string" }, { type: "null" }] },
       tolerance: { type: "number" },
-      verification_mode: { enum: ["numeric_tolerance", "native_discrete_format"] },
+      verification_mode: { enum: ["numeric_tolerance", "native_discrete_format", "native_display_value"] },
       updated: { type: "boolean" },
     },
     refs: refs({
@@ -400,11 +418,11 @@ export const WAVE2A_FX_TEMPLATES = deepFreeze([
       output: [ref("fx_ref", "fx", true, "Same FX ref after parameter update.")],
     }),
     expectedAction: "update",
-    expectedSummary: "Updates one normalized FX parameter without writing automation or learn mappings.",
+    expectedSummary: "Updates one FX parameter by explicit normalized coordinate or plugin-native display text without writing automation or learn mappings.",
     expectedEntitySummary: "One FX parameter value is updated.",
     checks: [
       check("fx_ref_resolves", "state_delta", "The FX ref still resolves after the parameter update."),
-      check("parameter_value_matches", "state_delta", "The live readback matches continuous tolerance or the exact REAPER-native discrete formatted value."),
+      check("parameter_value_matches", "state_delta", "The live readback matches normalized tolerance, native discrete format, or the requested native display value."),
     ],
     examples: [
       {
@@ -424,6 +442,14 @@ export const WAVE2A_FX_TEMPLATES = deepFreeze([
     inputProperties: {
       dry_run: { type: "boolean" },
       batch: { type: "array" },
+      mode: { const: "shared_plan" },
+      set_fingerprint: { type: "string" },
+      plan_hash: { type: "string" },
+      expected_plugin_identity: { type: "object" },
+      expected_layout_fingerprint: { type: "string" },
+      expected_representative_fx_ref: { type: "string" },
+      expected_members: { type: "array" },
+      controls: { type: "array" },
     },
     requiredInput: ["batch", "dry_run"],
     outputProperties: {
@@ -765,7 +791,7 @@ function parameterValueOutput() {
     fx_ref: { type: "string" },
     param_index: { type: "integer" },
     param_ident: { type: "string" },
-    normalized_value: { type: "number" },
+    normalized_value: { oneOf: [{ type: "number" }, { type: "null" }] },
     formatted_value: { type: "string" },
     step_sizes_available: { type: "boolean" },
     step_size: { oneOf: [{ type: "number" }, { type: "null" }] },

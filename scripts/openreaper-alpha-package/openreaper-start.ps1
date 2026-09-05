@@ -75,6 +75,16 @@ function Read-Generation {
     }
 }
 
+function Read-HeartbeatGeneration {
+    if (-not (Test-Path -LiteralPath $heartbeatPath -PathType Leaf)) { return 0 }
+    try {
+        $heartbeat = Get-Content -LiteralPath $heartbeatPath -Raw | ConvertFrom-Json
+        if ($heartbeat.contract -ne "openreaper.bridge_liveness.v1" -or
+            $heartbeat.active_owner -ne $BridgeOwner -or [int64]$heartbeat.active_generation -lt 1) { return 0 }
+        return [int64]$heartbeat.active_generation
+    } catch { return 0 }
+}
+
 function Write-Generation([int64] $Generation) {
     $payload = @{ contract = "openreaper.bridge_generation.v1"; generation = $Generation } | ConvertTo-Json -Compress
     $temporary = "$generationRecord.tmp.$PID"
@@ -184,6 +194,7 @@ $binary = Resolve-ReaperBinary
 $runningReaperProcesses = @(Get-RunningReaperProcesses)
 $existingPid = $null
 $existingProcess = $null
+$attachingExisting = $false
 if (Test-Path -LiteralPath $pidPath -PathType Leaf) {
     $existingPid = [int]((Get-Content -LiteralPath $pidPath -Raw).Trim())
 }
@@ -191,27 +202,39 @@ if ($existingPid) {
     $existingProcess = $runningReaperProcesses | Where-Object { $_.id -eq $existingPid } | Select-Object -First 1
 }
 if ($existingProcess) {
-    if (-not $RecoverExisting) { Fail "A managed REAPER session is already running (pid=$existingPid); refusing duplicate startup." }
+    if ($ProjectPath) { Fail "A REAPER session is already running; do not combine attach with -ProjectPath." }
+    $attachingExisting = $true
     $BridgeGeneration = [string](Read-Generation)
 } else {
-    if ($runningReaperProcesses.Count -gt 0) {
+    if ($runningReaperProcesses.Count -gt 1) {
         $details = ($runningReaperProcesses | ForEach-Object {
             $path = if ($_.path) { $_.path } else { "path-unavailable" }
             "pid=$($_.id),path=$path"
         }) -join "; "
-        Fail "An unmanaged REAPER process is already running ($details); close it and retry. Refusing duplicate startup to protect REAPER configuration and Bridge identity."
+        Fail "Multiple REAPER processes are already running ($details); refusing to guess which project to attach."
     }
-    $previousGeneration = Read-Generation
-    if ($BridgeGeneration) {
-        if ($BridgeGeneration -notmatch '^[1-9][0-9]*$') { Fail "-BridgeGeneration must be a positive integer." }
-        $nextGeneration = [int64]$BridgeGeneration
-        if ($nextGeneration -lt $previousGeneration) { Fail "-BridgeGeneration would move the managed generation backwards." }
+    if ($runningReaperProcesses.Count -eq 1) {
+        if ($ProjectPath) { Fail "A REAPER session is already running; do not combine attach with -ProjectPath." }
+        $existingProcess = $runningReaperProcesses[0]
+        $existingPid = $existingProcess.id
+        $attachingExisting = $true
+        Set-Content -LiteralPath $pidPath -Value $existingPid -Encoding ASCII
+        $BridgeGeneration = [string](Read-Generation)
+        if ([int64]$BridgeGeneration -lt 1) { $BridgeGeneration = [string](Read-HeartbeatGeneration) }
+        if ([int64]$BridgeGeneration -lt 1) { Fail "A REAPER process is running but no OpenReaper Bridge generation is available; run the recovery Action in that same REAPER." }
     } else {
-        $nextGeneration = [Math]::Max(1, $previousGeneration + 1)
+        $previousGeneration = Read-Generation
+        if ($BridgeGeneration) {
+            if ($BridgeGeneration -notmatch '^[1-9][0-9]*$') { Fail "-BridgeGeneration must be a positive integer." }
+            $nextGeneration = [int64]$BridgeGeneration
+            if ($nextGeneration -lt $previousGeneration) { Fail "-BridgeGeneration would move the managed generation backwards." }
+        } else {
+            $nextGeneration = [Math]::Max(1, $previousGeneration + 1)
+        }
+        $BridgeGeneration = [string]$nextGeneration
+        New-Item -ItemType Directory -Force -Path $SessionRoot | Out-Null
+        Write-Generation $nextGeneration
     }
-    $BridgeGeneration = [string]$nextGeneration
-    New-Item -ItemType Directory -Force -Path $SessionRoot | Out-Null
-    Write-Generation $nextGeneration
 }
 
 New-Item -ItemType Directory -Force -Path $ReaperResourceRoot | Out-Null
@@ -281,11 +304,12 @@ function Test-HeartbeatReady {
         $heartbeat = Get-Content -LiteralPath $heartbeatPath -Raw | ConvertFrom-Json
         $mtime = (Get-Item -LiteralPath $heartbeatPath).LastWriteTimeUtc
         $ageMs = ([DateTime]::UtcNow - $mtime).TotalMilliseconds
+        $freshForLaunch = $attachingExisting -or [int64]$heartbeat.refreshed_at_unix_s * 1000 -ge ($launchStarted - 2000)
         return ($heartbeat.contract -eq "openreaper.bridge_liveness.v1" -and
             $heartbeat.active_owner -eq $BridgeOwner -and
             [int64]$heartbeat.active_generation -eq [int64]$BridgeGeneration -and
             [int64]$heartbeat.sequence -ge 1 -and
-            [int64]$heartbeat.refreshed_at_unix_s * 1000 -ge ($launchStarted - 2000) -and
+            $freshForLaunch -and
             $ageMs -ge -1000 -and $ageMs -le 35000)
     } catch { return $false }
 }

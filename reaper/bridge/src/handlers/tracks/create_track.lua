@@ -58,8 +58,7 @@ local function native_color_from_hex(value)
 end
 
 local function track_name(track)
-  local ok, _, name = call_reaper("GetTrackName", track, "")
-  return bounded_string(ok and first_string(name) or "", 160)
+  return read_track_name(track, 160)
 end
 
 local function track_guid(track)
@@ -263,7 +262,20 @@ local function safe_write_create_track(request)
       index = index,
     })
   end
-  call_reaper("GetSetMediaTrackInfo_String", track, "P_NAME", tostring(request.params.name or "OR_SAFE_WRITE_A_TARGET"), true)
+  local expected_name = tostring(request.params.name or "OR_SAFE_WRITE_A_TARGET")
+  local ok_name, success = call_reaper("GetSetMediaTrackInfo_String", track, "P_NAME", expected_name, true)
+  if not ok_name or success == false then
+    return handler_error("COMMAND_FAILED", "Could not name the inserted Safe-Write-A track.", {
+      index = index,
+    }, false)
+  end
+  if read_track_name(track, 160) ~= bounded_string(expected_name, 160) then
+    return handler_error("READBACK_MISMATCH", "Inserted Safe-Write-A track name did not read back exactly.", {
+      index = index,
+      expected_name = bounded_string(expected_name, 160),
+      actual_name = read_track_name(track, 160),
+    }, false)
+  end
   call_reaper("TrackList_AdjustWindows", false)
   local summary = track_summary(track)
   summary.created = true

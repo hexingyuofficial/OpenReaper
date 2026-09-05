@@ -134,7 +134,7 @@ function install_fake(config)
   track_fx_exists = config.track_fx_missing ~= true
   take_fx_exists = config.take_fx_missing ~= true
   cursor_context = config.cursor_context or 1
-  selected_envelope = config.selected_envelope_nil and nil or track_env
+  if config.selected_envelope_nil then selected_envelope = nil else selected_envelope = track_env end
   track_selected = true
   item_selected = true
   time_start, time_end = 4, 6
@@ -473,6 +473,23 @@ assert(before ~= nil, "before ref did not resolve: " .. tostring(old_ref))
 track_envelopes[1], track_envelopes[2] = track_envelopes[2], track_envelopes[1]
 local after = e5_automation_envelope_from_ref_string(old_ref)
 assert(after == nil, "stale ref still resolved: " .. tostring(old_ref))
+`);
+  });
+
+  it("resolves the currently selected Envelope to canonical native identity and fails closed when none is selected", () => {
+    runLua(`
+install_fake()
+local request = make_request("automation.resolve_envelope_ref", { parent_kind = "selected" })
+request.pack.risk = "read"
+local summary, failure, _, _, refs = resolve_envelope_ref(request)
+assert(failure == nil, failure and failure.code or "unexpected selected-envelope failure")
+assert(summary.envelope_ref == "envelope:guid:{ENV-TRACK}", tostring(summary.envelope_ref))
+assert(summary.parent_kind == "track" and summary.name == "Track Volume", tostring(summary.parent_kind) .. ":" .. tostring(summary.name))
+assert(#refs == 1 and refs[1].kind == "envelope" and refs[1].ref == summary.envelope_ref, "selected envelope refs were not canonical")
+
+install_fake({ selected_envelope_nil = true })
+summary, failure = resolve_envelope_ref(request)
+assert(summary == nil and failure and failure.code == "ENVELOPE_NOT_FOUND", "empty selected Envelope did not fail closed: " .. tostring(summary) .. ":" .. tostring(failure and failure.code))
 `);
   });
 

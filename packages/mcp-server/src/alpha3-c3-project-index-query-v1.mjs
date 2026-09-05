@@ -222,10 +222,14 @@ const TAKE_ROW_FIELDS = deepFreeze([
   "selected",
   "source_kind",
   "source_ref",
+  "source_path",
+  "source_basename",
+  "source_identity_status",
   "pitch_semitones",
   "playrate",
   "preserve_pitch",
   "reverse",
+  "take_fx_count",
   "has_take_fx",
   "freshness_status",
   "coverage_status",
@@ -237,6 +241,8 @@ const TAKE_ROW_FIELDS = deepFreeze([
 const FX_ROW_FIELDS = deepFreeze([
   "ref",
   "owner_ref",
+  "owner_kind",
+  "fx_guid",
   "plugin_name",
   "plugin_id",
   "slot_index",
@@ -337,6 +343,7 @@ const SELECTED_CONTEXT_ROW_FIELDS = deepFreeze([
   "owner_ref",
   "observed_at",
   "payload_ref",
+  "time_selection",
   "summary",
 ]);
 
@@ -1797,10 +1804,30 @@ function normalizeTakeRow(row) {
       : typeof summary.source_ref === "string"
         ? summary.source_ref
         : null,
+    source_path: typeof source.source_path === "string"
+      ? source.source_path
+      : typeof summary.source_path === "string"
+        ? summary.source_path
+        : null,
+    source_basename: typeof source.source_basename === "string"
+      ? source.source_basename
+      : typeof summary.source_basename === "string"
+        ? summary.source_basename
+        : null,
+    source_identity_status: typeof source.source_identity_status === "string"
+      ? source.source_identity_status
+      : typeof summary.source_identity_status === "string"
+        ? summary.source_identity_status
+        : null,
     pitch_semitones: finiteNumber(source.pitch_semitones ?? source.pitch ?? summary.pitch_semitones ?? summary.pitch),
     playrate: finiteNumber(source.playrate ?? source.play_rate ?? summary.playrate ?? summary.play_rate),
     preserve_pitch: nullableBoolean(source.preserve_pitch, summary.preserve_pitch),
     reverse: nullableBoolean(source.reverse, source.reversed, summary.reverse, summary.reversed),
+    take_fx_count: Number.isInteger(source.take_fx_count ?? source.fx_count)
+      ? source.take_fx_count ?? source.fx_count
+      : Number.isInteger(summary.take_fx_count ?? summary.fx_count)
+        ? summary.take_fx_count ?? summary.fx_count
+        : null,
     has_take_fx: nullableBoolean(
       source.has_take_fx,
       summary.has_take_fx,
@@ -1819,9 +1846,19 @@ function normalizeFxRow(row) {
   const source = isPlainObject(row) ? row : {};
   const ref = typeof source.ref === "string" && source.ref ? source.ref : null;
   if (ref === null) return null;
+  const summary = isPlainObject(source.summary) ? cloneJson(source.summary) : {};
+  const ownerRef = typeof source.owner_ref === "string" ? source.owner_ref : null;
   return {
     ref,
-    owner_ref: typeof source.owner_ref === "string" ? source.owner_ref : null,
+    owner_ref: ownerRef,
+    owner_kind: source.owner_kind === "track" || source.owner_kind === "take"
+      ? source.owner_kind
+      : summary.owner_kind === "track" || summary.owner_kind === "take"
+        ? summary.owner_kind
+        : ownerRef?.startsWith("take:") ? "take" : ownerRef?.startsWith("track:") ? "track" : null,
+    fx_guid: typeof source.fx_guid === "string"
+      ? source.fx_guid
+      : typeof summary.fx_guid === "string" ? summary.fx_guid : null,
     plugin_name: typeof source.plugin_name === "string" ? source.plugin_name : "",
     plugin_id: typeof source.plugin_id === "string" ? source.plugin_id : null,
     slot_index: Number.isInteger(source.slot_index)
@@ -1834,7 +1871,7 @@ function normalizeFxRow(row) {
     coverage_status: COVERAGE_STATUSES.includes(source.coverage_status) ? source.coverage_status : "unknown",
     observed_at: typeof source.observed_at === "string" ? source.observed_at : null,
     payload_ref: typeof source.payload_ref === "string" ? source.payload_ref : null,
-    summary: isPlainObject(source.summary) ? cloneJson(source.summary) : {},
+    summary,
   };
 }
 
@@ -2126,6 +2163,8 @@ function normalizeSelectionRow(row) {
   const source = isPlainObject(row) ? row : {};
   const ref = typeof source.ref === "string" && source.ref ? source.ref : null;
   if (ref === null) return null;
+  const summary = isPlainObject(source.summary) ? cloneJson(source.summary) : {};
+  const timeSelection = normalizeSelectedContextTimeSelection(source.time_selection ?? summary.time_selection);
   return {
     ref,
     ref_kind: typeof source.ref_kind === "string" && source.ref_kind
@@ -2137,7 +2176,31 @@ function normalizeSelectionRow(row) {
     owner_ref: typeof source.owner_ref === "string" ? source.owner_ref : null,
     observed_at: typeof source.observed_at === "string" ? source.observed_at : null,
     payload_ref: typeof source.payload_ref === "string" ? source.payload_ref : null,
-    summary: isPlainObject(source.summary) ? cloneJson(source.summary) : {},
+    ...(timeSelection === null ? {} : { time_selection: timeSelection }),
+    summary,
+  };
+}
+
+function normalizeSelectedContextTimeSelection(value) {
+  if (!isPlainObject(value)) return null;
+  if (value.read_status === "unavailable") {
+    return {
+      read_status: "unavailable",
+      active: false,
+      start_seconds: null,
+      end_seconds: null,
+      length_seconds: null,
+    };
+  }
+  const startSeconds = finiteNumber(value.start_seconds);
+  const endSeconds = finiteNumber(value.end_seconds);
+  if (startSeconds === null || endSeconds === null) return null;
+  return {
+    read_status: "available",
+    active: value.active === true && endSeconds > startSeconds,
+    start_seconds: startSeconds,
+    end_seconds: endSeconds,
+    length_seconds: Math.round(Math.max(0, endSeconds - startSeconds) * 1e12) / 1e12,
   };
 }
 
@@ -2456,6 +2519,9 @@ function takeRowMatches(row, query) {
   if (filters.has_take_fx !== undefined && Boolean(filters.has_take_fx) !== row.has_take_fx) return false;
   if (typeof filters.source_kind === "string" && !String(row.source_kind ?? "").toLocaleLowerCase().includes(filters.source_kind.toLocaleLowerCase())) return false;
   if (typeof filters.source_ref === "string" && !String(row.source_ref ?? "").toLocaleLowerCase().includes(filters.source_ref.toLocaleLowerCase())) return false;
+  if (typeof filters.source_path === "string" && !String(row.source_path ?? "").toLocaleLowerCase().includes(filters.source_path.toLocaleLowerCase())) return false;
+  if (typeof filters.source_basename === "string" && !String(row.source_basename ?? "").toLocaleLowerCase().includes(filters.source_basename.toLocaleLowerCase())) return false;
+  if (typeof filters.source_identity_status === "string" && row.source_identity_status !== filters.source_identity_status) return false;
   if (Number.isFinite(filters.min_pitch_semitones) && (row.pitch_semitones ?? -Infinity) < filters.min_pitch_semitones) return false;
   if (Number.isFinite(filters.max_pitch_semitones) && (row.pitch_semitones ?? Infinity) > filters.max_pitch_semitones) return false;
   if (Number.isFinite(filters.min_playrate) && (row.playrate ?? -Infinity) < filters.min_playrate) return false;
@@ -2765,10 +2831,15 @@ function projectTakeRow(row, fields) {
     "name",
     "active",
     "source_kind",
+    "source_ref",
+    "source_path",
+    "source_basename",
+    "source_identity_status",
     "playrate",
     "pitch_semitones",
     "preserve_pitch",
     "reverse",
+    "take_fx_count",
     "has_take_fx",
     "freshness_status",
     "coverage_status",
@@ -2784,6 +2855,8 @@ function projectFxRow(row, fields) {
   const selectedFields = fields.length > 0 ? unique(["ref", ...fields]) : [
     "ref",
     "owner_ref",
+    "owner_kind",
+    "fx_guid",
     "plugin_name",
     "plugin_id",
     "slot_index",
@@ -2891,10 +2964,11 @@ function projectSelectedContextRow(row, fields) {
     "owner_ref",
     "observed_at",
     "payload_ref",
+    ...(row.scope_kind === "project_head" && row.time_selection ? ["time_selection"] : []),
   ];
   const projected = {};
   for (const field of selectedFields) {
-    if (SELECTED_CONTEXT_ROW_FIELDS.includes(field)) projected[field] = row[field];
+    if (SELECTED_CONTEXT_ROW_FIELDS.includes(field) && Object.hasOwn(row, field)) projected[field] = row[field];
   }
   return projected;
 }
@@ -4242,7 +4316,7 @@ const GENERIC_QUERY_TOP_LEVEL_KEYS = new Set([
 ]);
 const GENERIC_QUERY_SELECTOR_KEYS = new Set([
   "refs", "ref", "selected", "name", "track_ref", "track_refs", "item_ref", "item_refs",
-  "owner_ref", "owner_refs", "source_ref", "source_path", "path_fingerprint", "time_range", "since",
+  "owner_ref", "owner_refs", "source_ref", "source_path", "source_basename", "source_identity_status", "path_fingerprint", "time_range", "since",
 ]);
 const GENERIC_QUERY_MAX_OBJECT_KEYS = 32;
 const GENERIC_QUERY_MAX_ARRAY_VALUES = 100;
@@ -4263,7 +4337,8 @@ const GENERIC_QUERY_FILTER_KEYS = deepFreeze({
   ]),
   takes: new Set([
     "item_ref", "item_refs", "track_ref", "track_refs", "active", "selected", "reverse", "has_take_fx",
-    "source_kind", "source_ref", "min_pitch_semitones", "max_pitch_semitones", "min_playrate", "max_playrate",
+    "source_kind", "source_ref", "source_path", "source_basename", "source_identity_status",
+    "min_pitch_semitones", "max_pitch_semitones", "min_playrate", "max_playrate",
   ]),
   fx: new Set([
     "owner_ref", "owner_refs", "plugin_name", "plugin_id", "stock_plugin", "bypassed", "offline",
@@ -4338,6 +4413,7 @@ export function createAlpha3_2DGenericProjectQueryDiscoveryItems(options = {}) {
         filters: { type: "object", description: "Bounded structured filters; raw SQL is rejected." },
         fields: { type: "array", items: { type: "string" }, maxItems: GENERIC_QUERY_MAX_OBJECT_KEYS },
         selectors: { type: "object", description: "Bounded safe selectors only." },
+        target_binding: { type: "object", description: "Resolve live items/tracks, including owner and time-range intersections, without SQLite authority." },
         refresh_policy: { type: "string", enum: [...GENERIC_QUERY_REFRESH_POLICIES] },
         hydrate_refs: { type: "boolean" },
         cursor: { type: "string" },
@@ -4748,7 +4824,7 @@ function genericLegacyRequest(query, internalCursor) {
   const filters = {
     ...cloneJson(query.filters),
   };
-  for (const key of ["selected", "name", "track_ref", "item_ref", "owner_ref", "source_ref", "source_path", "path_fingerprint"]) {
+  for (const key of ["selected", "name", "track_ref", "item_ref", "owner_ref", "source_ref", "source_path", "source_basename", "source_identity_status", "path_fingerprint"]) {
     if (selectors[key] !== undefined && filters[key] === undefined) filters[key] = cloneJson(selectors[key]);
   }
   const scope = selectors.selected === true ? "selection" : genericLegacyScope(query.entity);

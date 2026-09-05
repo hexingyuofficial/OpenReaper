@@ -219,6 +219,35 @@ local function alpha33_move_item_to_track(request)
     })
   end
 
+  if source_guid == target_ref.value then
+    local source_ref = "track:guid:" .. source_guid
+    return {
+      kind = "item_moved_to_track",
+      capability = request.pack.capability,
+      pack = request.pack.id,
+      risk = request.pack.risk,
+      item_ref = item_ref.ref,
+      source_track_ref = source_ref,
+      target_track_ref = target_ref.ref,
+      position_seconds = position_before,
+      length_seconds = length_before,
+      take_count = takes_before.count,
+      take_refs = takes_before.refs,
+      active_take_ref = takes_before.active_ref,
+      track_count_unchanged = true,
+      changed = false,
+      already_on_target = true,
+      native_move_dispatched = false,
+      readback_status = "passed",
+      undo_evidence = "required",
+      artifacts_allowed = false,
+      truncated = false,
+    }, nil, json_array({}), json_array({}), json_array({
+      item_ref.object_ref,
+      alpha33_move_item_track_ref_object(target_ref.ref, target_ref.value),
+    })
+  end
+
   local command_ok, moved = call_reaper("MoveMediaItemToTrack", item, target_track)
   if not command_ok or moved == false then
     return alpha33_move_item_error("COMMAND_FAILED", "REAPER rejected exact Item move to the existing target Track.", {
@@ -280,6 +309,9 @@ local function alpha33_move_item_to_track(request)
     take_refs = takes_after.refs,
     active_take_ref = takes_after.active_ref,
     track_count_unchanged = true,
+    changed = true,
+    already_on_target = false,
+    native_move_dispatched = true,
     readback_status = "passed",
     undo_evidence = "required",
     artifacts_allowed = false,

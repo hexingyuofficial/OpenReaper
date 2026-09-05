@@ -49,6 +49,7 @@ import {
 import {
   executableRevisionDiscoveryProjection,
   hashExecutableRecipeContent,
+  normalizeExecutableRecipeTargetSet,
 } from "../../core/src/executable-recipe-contract-v1.mjs";
 import { createExecutableRecipeProductCatalog } from "./executable-recipe-product-catalog-v1.mjs";
 import {
@@ -205,7 +206,7 @@ async function main() {
           sqlite_is_truth: false,
           blockers: [{ code: "PROJECT_INDEX_NOT_CONFIGURED", message: "Use the managed package wrapper to configure the Project Index state root." }],
         },
-        user_reminder: "REAPER must be started through OpenReaper for live MCP execution to connect. See docs/AGENT_START_HERE.md and MCP initialization instructions.",
+        user_reminder: "OpenReaper can attach to one REAPER already opened from the normal icon when its installed startup hook has started the Bridge, or start one itself. See docs/AGENT_START_HERE.md and MCP initialization instructions.",
         agent_startup_guidance: createOpenReaperAgentStartupGuidance({
           package_root: process.env.OPENREAPER_MCP_PACKAGE_ROOT,
         }),
@@ -476,7 +477,6 @@ const PUBLIC_TEMPLATE_PRODUCT_SURFACE_KEYS = Object.freeze([
   "surface",
   "detail_level",
   "expanded_via",
-  "agent_startup_guidance",
   "agent_context_macro_guide",
   "macro_first_routing",
   "item_schema",
@@ -844,11 +844,17 @@ export function createStdioCallRecipeRuntime({ env, callTemplateRuntime, artifac
       callContext,
     });
     const undoController = createStdioRecipeUndoController({ liveBridge, callContext });
+    const targetSetHydrators = createStdioRecipeTargetSetHydrators({
+      callTemplateRuntime,
+      callContext,
+    });
     const runtime = createCallRecipeRuntime({
       store,
       catalog,
       dispatchers,
       undoController,
+      runHydrator: targetSetHydrators.runHydrator,
+      stageInputHydrator: targetSetHydrators.stageInputHydrator,
       runtimeFactsProvider: createAuthoritativeRuntimeFactsProvider({
         catalog,
         projectInventoryProvider: () => readFreshOpenProjectInventory({
@@ -869,6 +875,129 @@ export function createStdioCallRecipeRuntime({ env, callTemplateRuntime, artifac
   } catch {
     return null;
   }
+}
+
+export function createStdioRecipeTargetSetHydrators({ callTemplateRuntime, callContext } = {}) {
+  const runHydrator = async (context) => {
+    const declarations = context?.revision?.draft?.target_sets;
+    if (!Array.isArray(declarations) || declarations.length === 0) {
+      return { ok: true, inputs: context?.inputs ?? {}, context: null };
+    }
+    if (context.operation === "resume" && validRetainedRecipeTargetSets(context.retained, declarations)) {
+      return { ok: true, inputs: context.inputs ?? {}, context: context.retained };
+    }
+    if (typeof callTemplateRuntime?.call_template !== "function" || typeof callContext?.allocate !== "function") {
+      return recipeTargetSetFailure("RECIPE_TARGET_SET_RUNTIME_UNAVAILABLE", "Recipe target sets require the live OpenReaper query runtime.");
+    }
+    const resolvedSets = [];
+    for (const declaration of declarations) {
+      const normalized = normalizeExecutableRecipeTargetSet(declaration);
+      if (!normalized.ok) {
+        return recipeTargetSetFailure("RECIPE_TARGET_SET_INVALID", normalized.errors.join(" "), { target_set_id: declaration?.id ?? null });
+      }
+      if (normalized.binding.domain === "time_range") {
+        return recipeTargetSetFailure(
+          "RECIPE_TARGET_SET_DOMAIN_CONSTRAINT_ONLY",
+          "time_range is a constraint source, not a Recipe object target set; bind it through an item, Take, or Automation target constraint.",
+          { target_set_id: normalized.id, domain: normalized.binding.domain },
+        );
+      }
+      const queryEntity = ["envelopes", "automation_items", "points"].includes(normalized.binding.domain)
+        ? "automation"
+        : normalized.binding.domain;
+      const query = await callTemplateRuntime.call_template({
+        id: "macro.project.query",
+        input: {
+          entity: queryEntity,
+          target_binding: normalized.binding,
+          limit: 100,
+        },
+        context: callContext.allocate(),
+        budget: CALL_RECIPE_STAGE_BUDGET,
+      });
+      const targetSet = query?.result?.data?.target_set;
+      const memberRefs = query?.result?.canonical_refs;
+      if (query?.ok !== true || !isRecipeResolvedTargetSet(targetSet, memberRefs, normalized.binding.domain)) {
+        return recipeTargetSetFailure(
+          query?.error?.code ?? "RECIPE_TARGET_SET_RESOLVE_FAILED",
+          query?.error?.message ?? `Recipe target set ${normalized.id} could not be resolved completely before Undo.`,
+          { target_set_id: normalized.id, zero_write: true },
+        );
+      }
+      resolvedSets.push({
+        id: normalized.id,
+        domain: normalized.binding.domain,
+        count: memberRefs.length,
+        member_refs: memberRefs,
+        fingerprint: targetSet.fingerprint,
+        explicit_binding: {
+          bind_at: "execution",
+          domain: normalized.binding.domain,
+          selector: "explicit_refs",
+          refs: memberRefs,
+          aggregation: normalized.binding.aggregation,
+          cardinality: { minimum: memberRefs.length, maximum: memberRefs.length },
+        },
+      });
+    }
+    return {
+      ok: true,
+      inputs: context.inputs ?? {},
+      context: {
+        contract: "call_recipe.target_sets.v1",
+        resolved_at: "run_start",
+        target_sets: resolvedSets,
+      },
+    };
+  };
+
+  const stageInputHydrator = async (context) => {
+    const targetSetId = context?.stage?.target_set_id;
+    if (typeof targetSetId !== "string") {
+      return { ok: true, inputs: context?.inputs ?? {}, refs: context?.refs ?? null };
+    }
+    const targetSet = context?.run_hydration?.target_sets?.find((row) => row?.id === targetSetId);
+    if (!targetSet || !isRecipeResolvedTargetSet(targetSet, targetSet.member_refs, targetSet.domain)) {
+      return recipeTargetSetFailure("RECIPE_TARGET_SET_RETAINED_INVALID", `Recipe stage ${context.stage.id} has no valid frozen target set ${targetSetId}.`, { stage_id: context.stage.id, target_set_id: targetSetId });
+    }
+    if (Object.hasOwn(context.inputs ?? {}, "target_binding")) {
+      return recipeTargetSetFailure("RECIPE_TARGET_SET_INPUT_CONFLICT", `Recipe stage ${context.stage.id} cannot bind both target_set_id and an input target_binding.`, { stage_id: context.stage.id, target_set_id: targetSetId });
+    }
+    return {
+      ok: true,
+      inputs: { ...(context.inputs ?? {}), target_binding: targetSet.explicit_binding },
+      refs: context.refs ?? null,
+    };
+  };
+
+  return Object.freeze({ runHydrator, stageInputHydrator });
+}
+
+function validRetainedRecipeTargetSets(retained, declarations) {
+  if (retained?.contract !== "call_recipe.target_sets.v1" || !Array.isArray(retained.target_sets)) return false;
+  if (retained.target_sets.length !== declarations.length) return false;
+  const ids = new Set(declarations.map((row) => row.id));
+  return retained.target_sets.every((row) => ids.has(row.id) && isRecipeResolvedTargetSet(row, row.member_refs, row.domain));
+}
+
+function isRecipeResolvedTargetSet(targetSet, memberRefs, domain) {
+  if (!targetSet || typeof targetSet.fingerprint !== "string" || !targetSet.fingerprint.startsWith("target-set:")) return false;
+  if (!Array.isArray(memberRefs) || memberRefs.length < 1 || memberRefs.length > 100 || new Set(memberRefs).size !== memberRefs.length) return false;
+  if (domain === "items") return memberRefs.every((ref) => typeof ref === "string" && ref.startsWith("item:"));
+  if (domain === "tracks") return memberRefs.every((ref) => typeof ref === "string" && ref.startsWith("track:"));
+  if (domain === "takes") return memberRefs.every((ref) => typeof ref === "string" && ref.startsWith("take:"));
+  if (domain === "envelopes") return memberRefs.every((ref) => typeof ref === "string" && ref.startsWith("envelope:"));
+  if (domain === "automation_items") return memberRefs.every((ref) => typeof ref === "string" && ref.startsWith("automation-item:"));
+  if (domain === "points") return memberRefs.every((ref) => typeof ref === "string" && ref.startsWith("automation-point:"));
+  return false;
+}
+
+function recipeTargetSetFailure(code, message, details = {}) {
+  return {
+    ok: false,
+    message,
+    details: { code, zero_write: true, ...details },
+  };
 }
 
 function createStdioRecipeDispatchers({ callTemplateRuntime, artifactRuntime, callContext }) {

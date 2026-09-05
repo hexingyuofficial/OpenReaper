@@ -1,6 +1,6 @@
 # OpenReaper 用户指南
 
-状态：OpenReaper 0.1.0 发布文档。所有支持声明仍以证据为准。
+状态：OpenReaper 0.1.0 发布用户指南。所有支持声明仍以证据为准。
 
 OpenReaper 让你通过和代理对话来操作 live REAPER 工程。你不需要理解
 Macro、Template、SQLite、对象 ref、artifact 或桥接内部。只需描述想要的结果；
@@ -29,6 +29,57 @@ Macro、Template、SQLite、对象 ref、artifact 或桥接内部。只需描述
 代理不能把计划、预览或 dispatch 成功当成工作完成。写操作只有经过 live
 REAPER 读回后，才能报告成功。
 
+## 一次选择多个对象
+
+你可以直接描述范围，不必逐个说出对象名称。例如：
+
+```text
+把这两条轨道上的所有 Item 都 Reverse。
+把所选轨道在时间选择内的 Item Glue 起来。
+冻结当前选择的轨道。
+把这个 Recipe 应用到所选轨道上所有 Item 的 Active Take。
+```
+
+一次性操作由 Agent 把 live `target_binding` 直接交给负责该操作的 Macro；可复用
+工作流则由 Recipe 声明 `resolve_at: run_start` 的 `target_set`，各阶段通过
+`target_set_id` 使用同一集合。集合在运行开始时冻结，resume 时保持不变，所以
+Agent 不需要逐个列举 GUID，也不会在阶段之间悄悄重读用户选择。
+
+当前可以组合 `selected`、显式 refs、所属 Track 和时间范围等约束。例如“所选
+Track 上且与当前 Time Selection 重叠的全部 Item”。对于 Take，`selected` 的精确
+含义是“每个 selected Item 的 Active Take”；REAPER 没有独立的 selected-Take
+状态。非 Active Take 必须使用显式 canonical Take ref，或先通过 Item 操作把它设为
+Active Take。
+
+只有当你问“这些条件下有哪些对象”，或后续参数确实依赖分析时，Agent 才先用
+`macro.project.query` 和同一 binding 查询。普通写操作应直接调用拥有该能力的
+Macro/Template，而不是先读 `selected_context`，也不是逐对象循环 mutation。
+
+Reverse 返回 `PROJECT_LOCKING_ENABLED` 时，OpenReaper 已保留当前 selection，且
+没有写入。请关闭 REAPER Locking 后原样重试；OpenReaper 不会自动修改这个全局选项。
+
+### Live Target Binding 完成情况
+
+- `[DONE]` selected 或显式约束 Item 集合上的 Reverse 和 Glue。
+- `[DONE]` selected Track 集合上的 Freeze 和 Unfreeze。
+- `[DONE]` selected/explicit Track 与时间范围上的 Render 和项目 Stem。
+- `[DONE]` 使用稳定 live fingerprint 查询完整的受约束 Item 集合。
+- `[DONE]` Recipe 对 Item、Track、Take、selected/explicit Envelope、Automation
+  Item 和有范围 Automation Point 使用 run-start target set。
+- `[DONE]` selected Take 只解析 selected Item 的 Active Take，不会误选这些
+  Item 的全部 Take。
+- `[DONE]` 同质 Active-Take FX 集合使用一次代表实例检查和一次 shared-plan
+  广播；支持 1-64 个 FX，65 个会在 mutation 前失败。
+- `[DONE]` Agent 上下文要求一次 set-bearing owning call，禁止逐对象循环和不必要
+  的 selection 预查询。
+- `[BLOCKED]` selected Automation Point：原生选择真相尚未证明，返回
+  `AUTOMATION_POINT_SELECTION_UNPROVEN` 且 zero-write。
+- `[TODO]` analysis-to-mutation `target_snapshot_ref` 是后续设计项，不是当前公开
+  能力。
+
+`[BLOCKED]` 和 `[TODO]` 是明确的安全边界。Agent 必须报告 typed blocker 或缺失
+能力，不能猜 ref、偷偷改变选择或谎报写入成功。
+
 ## Macro 产品面
 
 OpenReaper 有 15 个平级、可见、可执行的 Macro，不再有 Primary/Secondary
@@ -50,10 +101,54 @@ OpenReaper 有 15 个平级、可见、可执行的 Macro，不再有 Primary/Se
 | `macro.fx.set_controls` | 设置现有受支持 FX 的已接受控制，并逐项验证。 |
 | `macro.controls.set` | 设置已接受的工程、轨道、transport 和 send 控制，包括工程 BPM。 |
 | `macro.automation.apply` | 应用已支持的 Envelope 点、lane/Track mode、FX 参数点和 Automation Item 操作。 |
-| `macro.render.targets` | 把已支持的工程、选择、region、Item 或 Track 目标渲染到受管目录中的 WAV/OGG。 |
+| `macro.render.targets` | 把已支持的工程、选择、region、Item 或 Track 目标渲染到受管目录中的 WAV/OGG/MP3/MP4/MOV。 |
 
 每个 Macro 都有有界 schema。“可执行”不代表任何想象出来的 mode 都已接受。
 精确 Macro 手册才是支持字段、限制、风险、确认、读回和 held mode 的权威。
+
+## 导出视频
+
+在 macOS 上，`macro.render.targets` 可以通过 REAPER 已审核的 AVFoundation
+路径导出 `.mp4` 或 `.mov`。你可以用普通语言指定整个工程、时间选择、Region、
+Item 或 Track，例如：
+
+```text
+把时间选择导出成 1920x1080、30 fps、8000 kbps 的 MP4。
+把这个 Region 渲染成 1280x720、24 fps、音频 192 kbps 的 MOV。
+```
+
+可以调整的视频字段如下：
+
+- `video_width`：16 到 7680 的偶数，默认 1920。
+- `video_height`：16 到 4320 的偶数，默认 1080。
+- `video_frame_rate`：24、25、30、50 或 60，默认 30。
+- `video_bitrate_kbps`：256 到 100000 的整数，默认 8000。
+- `audio_bitrate_kbps`：64、96、128、192、256 或 320，默认 192。
+
+编码固定为 H.264 视频和 AAC 音频。视频只能写入 managed render root，并在
+`video_outputs` 返回结果；不能指定任意输出路径，也不能使用
+`destination=new_project_track`。`output_basename` 不要带扩展名。OpenReaper
+只有在验证 MP4/MOV 容器、视频和音频轨、分辨率、帧率、编码以及 REAPER
+渲染设置和选择状态已恢复后，才会报告完成。
+
+## 第三方 FX 参数
+
+只要插件把控制暴露成 REAPER 宿主参数，就可以直接说插件界面里的值：
+
+```text
+把这个 EQ 的频率设为 3000 Hz，增益设为 -3 dB。
+把模式设为 Bell。
+```
+
+代理第一次完整读取参数清单，记住稳定的参数身份，之后传入 `display_value`。
+OpenReaper 使用 REAPER 原生格式器把显示值编译成插件的 0-1 坐标；所有目标都
+预检通过后才写入，并用原生显示值读回验证。OpenReaper 不维护厚重的插件配置
+数据库，也不为某个插件写猜测公式。`normalized_value` 仍保留作兼容和调试用途。
+
+Agent Skill 可以记住 `plugin_id`、layout fingerprint 和稳定 `param_ident` 的含义。
+插件或参数布局变化后必须重新读取；每次执行时 OpenReaper 仍会校验当前 live
+实例。这个机制适用于 Track FX、Take FX、跨 FX 精确批次和同质 FX 集合。仅存在
+于插件自定义 UI、没有暴露成宿主 automation parameter 的功能不在保证范围内。
 
 ## 发现机制
 
@@ -157,9 +252,9 @@ OpenReaper 应该先总结，再只展开任务需要的细节。你不需要自
 
 ## 移除静音与响度标准化
 
-对于选中的音频 Item，OpenReaper 提供两个软件包内 REAPER Action：
-`Remove Silence...` 和 `Repeat Remove Silence with Last Settings`。前者收集
-设置，后者复用最近一次已接受设置。代理可通过 `macro.items.apply` 的
+对于选中的音频 Item，OpenReaper 提供一个软件包内 REAPER Action：
+`Remove Silence...`。它收集设置并保存最近一次已接受的值，下一次调用会继续
+使用这些值。代理可通过 `macro.items.apply` 的
 `mode=remove_silence` 使用同一个共享批处理核心。支持 `all`、`leading`、
 `trailing`、`edges`、`internal` 五种 scope，以及 threshold、minimum
 silence、前后 padding、minimum kept audio 和 fade 设置。
@@ -274,8 +369,9 @@ global alias execution 或所有插件都受支持。
   字段；明确的 Active Take pan 应使用已接受的 Take 控制路径。
 - Automation 支持精确手册中发布的 mode；不暴露实时 touch/write/latch、任意曲线、
   raw Action 或 chunk mutation。
-- Render 使用 managed render root 和已接受的 WAV/OGG target mode，不承诺任意输出
-  路径、overwrite、外部 encoder 或所有格式。
+- Render 使用 managed render root 和已接受的 WAV/OGG/MP3 target mode，以及上文
+  说明的 macOS AVFoundation MP4/MOV 路径；不承诺任意输出路径、外部 encoder
+  参数、未审核 codec 或所有格式。
 - 工程文件支持 save/save-as、列出已打开工程、用绝对 `.RPP` 路径和
   `overwrite=true` 显式创建已保存的工程页签、在页签中打开已有绝对 `.RPP`
   路径，以及激活一个精确的已保存工程引用。任意文件系统访问和隐式切换工程

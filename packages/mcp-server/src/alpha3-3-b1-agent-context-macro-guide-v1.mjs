@@ -38,6 +38,178 @@ export const ALPHA3_3_B1_AGENT_CONTEXT_MACRO_GUIDE_CONTRACT = "alpha3.3.agent_co
 export const ALPHA3_3_B1_AGENT_CONTEXT_MACRO_GUIDE_VERSION = "1.0.0";
 export const ALPHA3_3_B1_REQUESTED_EXPANSIONS_CONTRACT = "alpha3.3.agent_context_macro_guide.requested_expansions.v1";
 
+const LIVE_TARGET_BINDING_GUIDANCE = deepFreeze({
+  contract: "openreaper.live_target_binding.agent_guidance.v1",
+  status: "supported_with_native_limits",
+  agent_rules: [
+    "If the exact Macro manual publishes a selected target or target_binding, call it directly; do not first call macro.project.query entity=selected_context.",
+    "Do not enumerate a selected/constrained set into refs or loop one public mutation call per object; use one accepted set-bearing Macro or report unsupported.",
+    "Use already-known canonical refs; never invent refs or replace unsupported live binding with stale Index candidates.",
+    "Returned set refs/fingerprints are server-owned and generation-bound; re-resolve after project, Bridge, selection, or constraint changes.",
+    "Use macro.project.query with the same target_binding only when the user asks which objects match, or when operation parameters depend on inspection; Query is not a mutation preflight.",
+    "For a reusable multi-stage operation, declare Recipe target_sets once with resolve_at=run_start and reference target_set_id from stages; do not re-read visible selection between stages or on resume.",
+    "For domain=takes, selector=selected means the active Take of each currently selected Item; REAPER does not expose an independent selected-Take truth.",
+  ],
+  omission_policy: "Omit targets only when the exact manual documents a live-selection default; otherwise pass its selected kind/binding explicitly.",
+  safe_omitted_target_defaults: [
+    {
+      operation_id: "macro.items.apply",
+      when: { mode: ["reverse", "glue"], target_fields_absent: true },
+      default_target_binding: { bind_at: "execution", domain: "items", selector: "selected", aggregation: "batch", cardinality: { minimum: 1, maximum: 64 } },
+    },
+    {
+      operation_id: "template.tracks.freeze_track",
+      when: { target_fields_absent: true },
+      default_target_binding: { bind_at: "execution", domain: "tracks", selector: "selected", aggregation: "batch", cardinality: { minimum: 1, maximum: 64 } },
+    },
+    {
+      operation_id: "template.tracks.unfreeze_track",
+      when: { target_fields_absent: true },
+      default_target_binding: { bind_at: "execution", domain: "tracks", selector: "selected", aggregation: "batch", cardinality: { minimum: 1, maximum: 64 } },
+    },
+    {
+      operation_id: "macro.render.targets",
+      when: { destination: "new_project_track", target_fields_absent: true },
+      default_target_binding: { bind_at: "execution", domain: "tracks", selector: "selected", aggregation: "batch", cardinality: { minimum: 1, maximum: 16 } },
+    },
+  ],
+  binding_lifetime: {
+    direct_execution: "Resolve live selection and constraints inside the one owning operation.",
+    read_or_analysis: "Return compact rows, exact membership and an operation-independent target fingerprint.",
+    recipe_run: "Resolve Items, Tracks, Takes, or selected/explicit Envelopes once at run start, inject frozen explicit membership into every stage, and retain it for resume. Automation Items and ranged Points may also be frozen when their native owner/range query is supported.",
+  },
+  supported_examples: [
+    {
+      name: "list Items on selected Tracks overlapping the time selection",
+      status: "supported",
+      call: { tool: "call_template", arguments: { id: "macro.project.query", input: { entity: "items", target_binding: { domain: "items", selector: "all", constraints: [{ kind: "owner_in", source: { domain: "tracks", selector: "selected" } }, { kind: "time_relation", relation: "overlaps", source: { domain: "time_range", selector: "time_selection" } }] }, limit: 25 } } },
+      agent_note: "Use only when the user asks which targets match; a known mutation consumes the binding directly without this preliminary query.",
+    },
+    {
+      name: "reverse the currently selected Items",
+      status: "supported",
+      call: { tool: "call_template", arguments: { id: "macro.items.apply", input: { mode: "reverse", target_binding: { domain: "items", selector: "selected" }, dry_run: false } } },
+    },
+    {
+      name: "glue Items on selected Tracks overlapping the time selection",
+      status: "supported",
+      call: { tool: "call_template", arguments: { id: "macro.items.apply", input: { mode: "glue", target_binding: { domain: "items", selector: "all", constraints: [{ kind: "owner_in", source: { domain: "tracks", selector: "selected" } }, { kind: "time_relation", relation: "overlaps", source: { domain: "time_range", selector: "time_selection" } }] }, dry_run: false } } },
+    },
+    {
+      name: "freeze the currently selected Tracks",
+      status: "supported",
+      call: { tool: "call_template", arguments: { id: "template.tracks.freeze_track", input: { mode: "stereo" } } },
+      counterpart: "Use template.tracks.unfreeze_track with empty input to unfreeze the selected Tracks; pass the shared binding explicitly when composing constraints.",
+    },
+    {
+      name: "render the currently selected Tracks",
+      status: "supported",
+      call: {
+        tool: "call_template",
+        arguments: {
+          id: "macro.render.targets",
+          input: {
+            target_kind: "selected_tracks",
+            format: "wav",
+            collision_policy: "fail_if_exists",
+            dry_run: true,
+          },
+        },
+      },
+      agent_note: "No refs; preview, then repeat unchanged with dry_run=false.",
+    },
+    {
+      name: "mix the currently selected Tracks into one verified project Stem",
+      status: "supported",
+      call: {
+        tool: "call_template",
+        arguments: {
+          id: "macro.render.targets",
+          input: {
+            destination: "new_project_track",
+            stem_mode: "mixdown",
+            source_post_action: "mute_after_verified_insert",
+            output_track_name: "Dialog Stem",
+            dry_run: false,
+          },
+        },
+      },
+      agent_note: "The omitted target uses only this mode's declared selected-Track default; sources are muted only after non-silent render import/readback succeeds.",
+    },
+    {
+      name: "list selected Automation Items on the selected Envelope in the time selection",
+      status: "supported",
+      call: { tool: "call_template", arguments: { id: "macro.project.query", input: { entity: "automation", target_binding: { domain: "automation_items", selector: "selected", constraints: [{ kind: "owner_in", source: { domain: "envelopes", selector: "selected" } }, { kind: "time_relation", relation: "overlaps", source: { domain: "time_range", selector: "time_selection" } }] }, limit: 25 } } },
+      agent_note: "Selection truth is native D_UISEL. Selected Automation points are not claimed; query all points under one selected/exact Envelope plus a range instead.",
+    },
+  ],
+  capability_matrix: [
+    {
+      scenario: "selected_item_reverse",
+      status: "supported",
+      accepted_surface: "macro.items.apply reverse + selected binding",
+      unsupported_surface: null,
+    },
+    {
+      scenario: "selected_item_glue",
+      status: "supported",
+      accepted_surface: "macro.items.apply glue + selected/constrained binding",
+      unsupported_surface: null,
+    },
+    {
+      scenario: "selected_track_freeze_or_unfreeze",
+      status: "supported",
+      accepted_surface: "freeze_track/unfreeze_track selected batch binding",
+      unsupported_surface: null,
+    },
+    {
+      scenario: "selected_track_external_render",
+      status: "supported",
+      accepted_surface: "macro.render.targets target_kind=selected_tracks; no refs",
+      unsupported_surface: null,
+    },
+    {
+      scenario: "selected_track_project_stem",
+      status: "supported",
+      accepted_surface: "macro.render.targets new_project_track + selected-Track default + verified insert before source mute",
+      unsupported_surface: null,
+    },
+    {
+      scenario: "items_on_tracks_intersecting_time_selection_query_or_mutation",
+      status: "supported",
+      accepted_surface: "project.query/items.apply owner_in + time_relation; same fingerprint",
+      unsupported_surface: null,
+    },
+    {
+      scenario: "selected_envelope_automation_item_or_point_binding",
+      status: "supported_with_native_limits",
+      accepted_surface: "project.query: selected Envelope, native D_UISEL Automation Items, and selected/exact Envelope point-range reads; automation.apply remains exact-ref mutation",
+      unsupported_surface: "selected Automation points (AUTOMATION_POINT_SELECTION_UNPROVEN)",
+    },
+    {
+      scenario: "recipe_target_sets",
+      status: "supported",
+      accepted_surface: "call_recipe target_sets resolve once at run start for Items, Tracks, active Takes of selected Items or explicit Takes, selected/explicit Envelopes, Automation Items, or ranged Points and retain membership for every stage/resume",
+      unsupported_surface: "time_range is constraint-only; selected Automation points remain unsupported",
+    },
+  ],
+  unsupported_behavior: "Fail closed with the exact gap. Do not emulate with selected_context enumeration plus per-object mutation loops.",
+});
+
+const LIVE_TARGET_BINDING_COMPACT_GUIDANCE = deepFreeze({
+  contract: LIVE_TARGET_BINDING_GUIDANCE.contract,
+  status: LIVE_TARGET_BINDING_GUIDANCE.status,
+  agent_rules: [
+    "Use binding directly; no selected_context pre-query.",
+    "Never enumerate/loop; use one set Macro or report unsupported.",
+    "Never invent refs; re-resolve after context changes.",
+    "Selected Takes means active Takes of selected Items.",
+  ],
+  safe_omitted_target_defaults: LIVE_TARGET_BINDING_GUIDANCE.safe_omitted_target_defaults,
+  supported: ["selected_item_reverse", "selected_item_glue", "selected_track_freeze_unfreeze", "selected_track_external_render", "selected_track_project_stem", "track_time_items_query_or_mutation", "selected_envelope_automation_item_query", "recipe_item_track_target_sets", "recipe_take_target_sets", "recipe_envelope_target_sets", "recipe_automation_item_or_point_target_sets"],
+  unsupported: ["selected_automation_points", "recipe_time_range_target_sets"],
+});
+
 const MENU_ROWS = deepFreeze(ALPHA3_3_B1_VISIBLE_EXECUTABLE_IDS.map((id) => compactMenuRow(id)));
 const INTENT_ROUTES = deepFreeze([
   intent("macro.project.inspect", [
@@ -189,6 +361,9 @@ export function createAlpha3_3B1AgentContextMacroGuide({
       items: expansions,
       missing_ids: unresolvedIds,
     },
+    live_target_binding: requestedIds.length > 0
+      ? LIVE_TARGET_BINDING_GUIDANCE
+      : LIVE_TARGET_BINDING_COMPACT_GUIDANCE,
     compatibility: {
       visible_in_menu: false,
       aliases: ALPHA3_3_B1_DEPRECATED_ALIASES,
@@ -274,6 +449,20 @@ export function createAlpha3_3B1ExactMacroExpansion(id) {
     const expansion = createAlpha3_3B1cItemsApplyExactManual();
     return deepFreeze({
       ...expansion,
+      action_manual: {
+        ...expansion.action_manual,
+        common_blockers: [
+          ...(expansion.action_manual.common_blockers ?? []),
+          {
+            code: "PROJECT_LOCKING_ENABLED",
+            summary: "REAPER project Locking blocks the fixed native Reverse action; OpenReaper preserves selection and performs zero writes.",
+          },
+        ],
+        recovery_steps: [
+          ...(expansion.action_manual.recovery_steps ?? []),
+          "For PROJECT_LOCKING_ENABLED, preserve the current selection, disable REAPER Locking, then retry the same Reverse call once.",
+        ],
+      },
       contract: ALPHA3_3_B1_REQUESTED_EXPANSIONS_CONTRACT,
       guide_contract: ALPHA3_3_B1_AGENT_CONTEXT_MACRO_GUIDE_CONTRACT,
       guide_version: ALPHA3_3_B1_AGENT_CONTEXT_MACRO_GUIDE_VERSION,
@@ -524,6 +713,7 @@ export function createAlpha3_3B1ExactMacroExpansion(id) {
   if (id === "macro.fx.apply_chain") {
     canonical.action_manual.when_to_use = [
       "Use one fixed call to search REAPER's installed inventory and apply a bounded ordered Track or Take FX chain with final complete-chain readback.",
+      "Use the Track-owned active-Take target_binding to add or reuse one homogeneous FX on every Item's active audio Take on one exact Track and receive one server-owned fx_set_ref.",
     ];
     canonical.action_manual.when_not_to_use = [
       "Do not use it to install plugins, delete FX, load external preset files, control hardware, or configure unsupported third-party semantic controls.",
@@ -531,6 +721,7 @@ export function createAlpha3_3B1ExactMacroExpansion(id) {
     canonical.action_manual.required_readiness = [
       "The live route must be ready and the target must be one exact Take ref, one exact Track ref, or one unambiguous fresh Track selector.",
       "Installed-inventory search and both initial and final FX-chain reads must be complete; incomplete coverage fails closed.",
+      "Track fanout requires one exact track_ref, 1-64 Items, and one unique active audio Take per Item; MIDI, a missing Take, duplicate plug-in instances, or mixed layouts fail before mutation.",
     ];
     canonical.action_manual.input_shape = {
       owner_kind: "track | take; inferred from take_ref when omitted, otherwise track.",
@@ -538,6 +729,7 @@ export function createAlpha3_3B1ExactMacroExpansion(id) {
       chain_node: "Optional duplicate_policy=allow|reuse_exact|skip_exact|fail_if_present, insert_at_index, preset_name or preset_index, enabled, target_index, and reviewed ReaComp controls.",
       selector: "Optional singular fresh Project Index Track selector; not accepted for Take owners.",
       refs: "Supply exact track_ref or take_ref when already known.",
+      target_binding: "For one Track-owned active-Take FX set use exactly {bind_at:'execution',domain:'takes',selector:'active_take_of_items',owner:{domain:'tracks',selector:'explicit_refs',items:'all'},aggregation:'batch',cardinality:{minimum:1,maximum:64}} with one exact track_ref, one chain node, duplicate_policy=reuse_exact, and dry_run=false.",
       dry_run: "Defaults true for chain[]; set false to mutate. The legacy one-node ReaComp input remains compatible.",
     };
     canonical.action_manual.preflight_steps = [
@@ -601,24 +793,48 @@ export function createAlpha3_3B1ExactMacroExpansion(id) {
           chain: [{ plugin_name: "VST: ReaEQ (Cockos)", duplicate_policy: "fail_if_present" }],
         },
       },
+      {
+        name: "create one homogeneous active-Take FX set from an exact Track",
+        refs: { track_ref: "track:guid:{TRACK-GUID}" },
+        input: {
+          owner_kind: "take",
+          chain: [{ plugin_name: "VST: ReaEQ (Cockos)", duplicate_policy: "reuse_exact" }],
+          target_binding: {
+            bind_at: "execution",
+            domain: "takes",
+            selector: "active_take_of_items",
+            owner: { domain: "tracks", selector: "explicit_refs", items: "all" },
+            aggregation: "batch",
+            cardinality: { minimum: 1, maximum: 64 },
+          },
+          dry_run: false,
+        },
+        returns: "Copy fx_set_ref from this result into both following calls; never enumerate member refs.",
+      },
     ];
   }
   if (id === "macro.fx.set_controls") {
     canonical.action_manual.when_to_use = [
-      "Prefer this Macro for FX parameter work: mode=semantic (default) for proven stock controls; mode=reaeq_bands for 1-4 strict ReaEQ band rows; mode=exact_parameters for 1-8 parameters on one FX; mode=exact_assignments for 1-64 parameters across exact fx_ref targets.",
-      "exact_parameters and exact_assignments are the general highways for ReaPlugs, third-party, and large parameter inventories; direct parameter Templates remain compatibility/debug fallback.",
+      "Prefer this Macro for FX parameter work: mode=semantic (default) for proven stock controls; mode=reaeq_bands for 1-4 strict ReaEQ band rows; mode=exact_parameters for 1-8 parameters on one FX; mode=exact_assignments for 1-64 parameters across exact fx_ref targets; inspect_set/shared_plan for one server-owned homogeneous FX set.",
+      "exact_parameters and exact_assignments are the general highways for ReaPlugs, third-party, and large parameter inventories. Prefer display_value in the plugin's native text (for example 3000 Hz, -3 dB, Bell, or 0.71); OpenReaper compiles it through REAPER and verifies native readback. normalized_value remains compatibility/debug fallback.",
+      "After one complete parameter inventory, a Skill may retain plugin_id, layout fingerprint, and stable param_ident semantics. On every use, OpenReaper still resolves the exact live FX, validates identity/layout, compiles display_value, and fails closed before mutation; re-read when plugin identity or layout changes.",
+      "Only host-exposed automation parameters that REAPER can identify, format uniquely, write, and read back are covered; plugin UI functions outside host parameter automation are not implied.",
+      "After Track-owned apply_chain, call inspect_set once to inspect one representative and validate all members, then call shared_plan with the same fx_set_ref and returned parameter_plan_ref for one native broadcast and one Undo.",
     ];
     canonical.action_manual.when_not_to_use = [
       "Do not invent semantic unit conversions without native proof; unproven semantic fields fail closed with STOCK_SEMANTIC_UNIT_UNPROVEN and an exact_parameters recovery call.",
       "Do not guess fuzzy parameter names; exact modes require param_index or one unique exact returned name/ident after complete inventory paging.",
       "Do not mix selectors or legacy plugin/controls fields into exact_assignments; obtain exact fx_ref values first.",
+      "Do not query, construct, or loop over each Item, Take, or FX in homogeneous-set mode, and never reuse an fx_set_ref or parameter_plan_ref after project or Bridge generation changes.",
     ];
     canonical.action_manual.input_shape = {
-      mode: "semantic | reaeq_bands | exact_parameters | exact_assignments; defaults to semantic for compatibility.",
+      mode: "semantic | reaeq_bands | exact_parameters | exact_assignments | inspect_set | shared_plan; defaults to semantic for compatibility.",
       semantic: "plugin/controls/starter_action as before; executable only when each control has native low/mid/high proof.",
       reaeq_bands: "bands[] 1-4 unique rows with band 1-4 and optional type/enabled/frequency_hz/gain_db/bandwidth_oct; type changes use bounded ReaEQ named topology, then exact values compile against aggregate live readback; exact ReaEQ fx_ref or one unambiguous selector required.",
-      exact_parameters: "changes[] 1-8 rows with id, normalized_value in [0,1], and param_index (optional param_ident) or one unique exact param_name/param_ident; selector or exact fx_ref required.",
-      exact_assignments: "assignments[] 1-64 rows of {id,fx_ref,param_index|param_ident|param_name,normalized_value,requested_formatted_value?}. dry_run defaults true; set dry_run:false to mutate.",
+      exact_parameters: "changes[] 1-8 rows with id, exactly one display_value or normalized_value, and param_index (optional param_ident) or one unique exact param_name/param_ident; selector or exact fx_ref required.",
+      exact_assignments: "assignments[] 1-64 rows of {id,fx_ref,param_index|param_ident|param_name,display_value|normalized_value,requested_formatted_value?}. Exactly one value field is required. dry_run defaults true; set dry_run:false to mutate.",
+      inspect_set: "Read-only: fx_set_ref plus optional controls[] of 1-8 {id,param_index|param_ident|param_name,display_value,tolerance?}; legacy natural_value remains accepted. Returns one complete representative inventory and, when controls are supplied, parameter_plan_ref.",
+      shared_plan: "fx_set_ref plus exactly one parameter_plan_ref or controls[]; dry_run defaults true. Revalidates all 1-64 members, then dry_run=false performs one native batch, one Undo, and aggregate readback.",
       dry_run: "Boolean; preflight and inventory without mutation when true. exact_assignments defaults true when omitted.",
     };
     canonical.action_manual.examples = [
@@ -628,7 +844,7 @@ export function createAlpha3_3B1ExactMacroExpansion(id) {
           mode: "exact_parameters",
           selector: { plugin_id: "reacomp" },
           dry_run: true,
-          changes: [{ id: "p0", param_index: 0, normalized_value: 0.5 }],
+          changes: [{ id: "frequency", param_ident: "frequency", display_value: "3000 Hz" }],
         },
       },
       {
@@ -637,8 +853,8 @@ export function createAlpha3_3B1ExactMacroExpansion(id) {
           mode: "exact_assignments",
           dry_run: false,
           assignments: [
-            { id: "a1", fx_ref: "fx:track:guid:{TRACK-A}:0", param_index: 0, normalized_value: 0.4 },
-            { id: "a2", fx_ref: "fx:track:guid:{TRACK-B}:0", param_index: 1, normalized_value: 0.6 },
+            { id: "a1", fx_ref: "fx:track:guid:{TRACK-A}:0", param_ident: "gain", display_value: "-3 dB" },
+            { id: "a2", fx_ref: "fx:track:guid:{TRACK-B}:0", param_ident: "mode", display_value: "Bell" },
           ],
         },
       },
@@ -685,6 +901,55 @@ export function createAlpha3_3B1ExactMacroExpansion(id) {
           controls: { attack_ms: 250 },
           selector: { name: "Synth" },
           dry_run: true,
+        },
+      },
+      {
+        name: "inspect and broadcast one Track-owned homogeneous Take FX set",
+        prerequisite: {
+          public_sequence: [
+            {
+              tool: "call_template",
+              arguments: {
+                id: "macro.fx.apply_chain",
+                refs: { track_ref: "track:guid:{TRACK-GUID}" },
+                input: {
+                  owner_kind: "take",
+                  chain: [{ plugin_name: "VST: ReaEQ (Cockos)", duplicate_policy: "reuse_exact" }],
+                  target_binding: {
+                    bind_at: "execution",
+                    domain: "takes",
+                    selector: "active_take_of_items",
+                    owner: { domain: "tracks", selector: "explicit_refs", items: "all" },
+                    aggregation: "batch",
+                    cardinality: { minimum: 1, maximum: 64 },
+                  },
+                  dry_run: false,
+                },
+              },
+              returns: "Copy fx_set_ref; do not enumerate or cache member fx_ref values.",
+            },
+            {
+              tool: "call_template",
+              arguments: {
+                id: "macro.fx.set_controls",
+                input: {
+                  mode: "inspect_set",
+                  fx_set_ref: "{FX_SET_REF_FROM_CALL_1}",
+                  controls: [
+                    { id: "frequency", param_name: "Frequency", natural_value: "3000 Hz" },
+                    { id: "gain", param_name: "Gain", natural_value: "-3 dB" },
+                  ],
+                },
+              },
+              returns: "Copy parameter_plan_ref after one representative inventory and all-member identity/layout validation.",
+            },
+          ],
+        },
+        input: {
+          mode: "shared_plan",
+          fx_set_ref: "{FX_SET_REF_FROM_CALL_1}",
+          parameter_plan_ref: "{PARAMETER_PLAN_REF_FROM_CALL_2}",
+          dry_run: false,
         },
       },
     ];

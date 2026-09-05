@@ -1524,10 +1524,24 @@ function normalizeTakeRow(row, defaults) {
       : typeof summary.source_ref === "string"
         ? summary.source_ref
         : null,
+    source_path: typeof source.source_path === "string"
+      ? source.source_path
+      : typeof summary.source_path === "string" ? summary.source_path : null,
+    source_basename: typeof source.source_basename === "string"
+      ? source.source_basename
+      : typeof summary.source_basename === "string" ? summary.source_basename : null,
+    source_identity_status: typeof source.source_identity_status === "string"
+      ? source.source_identity_status
+      : typeof summary.source_identity_status === "string" ? summary.source_identity_status : null,
     pitch_semitones: finiteNumber(source.pitch_semitones ?? source.pitch ?? summary.pitch_semitones ?? summary.pitch),
     playrate: finiteNumber(source.playrate ?? source.play_rate ?? summary.playrate ?? summary.play_rate),
     preserve_pitch: nullableBoolean(source.preserve_pitch, summary.preserve_pitch),
     reverse: nullableBoolean(source.reverse, source.reversed, summary.reverse, summary.reversed),
+    take_fx_count: Number.isInteger(source.take_fx_count ?? source.fx_count)
+      ? source.take_fx_count ?? source.fx_count
+      : Number.isInteger(summary.take_fx_count ?? summary.fx_count)
+        ? summary.take_fx_count ?? summary.fx_count
+        : null,
     has_take_fx: nullableBoolean(
       source.has_take_fx,
       summary.has_take_fx,
@@ -1546,10 +1560,20 @@ function normalizeFxRow(row, defaults) {
   const source = isPlainObject(row) ? row : {};
   const ref = typeof source.ref === "string" && source.ref ? source.ref : null;
   if (ref === null) return null;
+  const summary = isPlainObject(source.summary) ? cloneJson(source.summary) : {};
+  const ownerRef = typeof source.owner_ref === "string" ? source.owner_ref : null;
   return {
     snapshot_id: typeof source.snapshot_id === "string" ? source.snapshot_id : defaults.snapshot_id,
     ref,
-    owner_ref: typeof source.owner_ref === "string" ? source.owner_ref : null,
+    owner_ref: ownerRef,
+    owner_kind: source.owner_kind === "track" || source.owner_kind === "take"
+      ? source.owner_kind
+      : summary.owner_kind === "track" || summary.owner_kind === "take"
+        ? summary.owner_kind
+        : ownerRef?.startsWith("take:") ? "take" : ownerRef?.startsWith("track:") ? "track" : null,
+    fx_guid: typeof source.fx_guid === "string"
+      ? source.fx_guid
+      : typeof summary.fx_guid === "string" ? summary.fx_guid : null,
     plugin_name: typeof source.plugin_name === "string" ? source.plugin_name : "",
     plugin_id: typeof source.plugin_id === "string" ? source.plugin_id : null,
     slot_index: Number.isInteger(source.slot_index)
@@ -1562,7 +1586,7 @@ function normalizeFxRow(row, defaults) {
     coverage_status: normalizeCoverageStatus(source.coverage_status, defaults.coverage_status ?? "paged"),
     observed_at: typeof source.observed_at === "string" ? source.observed_at : defaults.observed_at,
     payload_ref: typeof source.payload_ref === "string" ? source.payload_ref : defaults.payload_ref ?? null,
-    summary: isPlainObject(source.summary) ? cloneJson(source.summary) : {},
+    summary,
   };
 }
 

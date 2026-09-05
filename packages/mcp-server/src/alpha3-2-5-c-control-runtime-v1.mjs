@@ -37,8 +37,10 @@ import {
 } from "./alpha3-4-c-fx-semantic-truth-v1.mjs";
 import {
   executeExactAssignmentsBatch,
+  formattedReadbackMatches,
   isExactAssignmentsMode,
 } from "./alpha3-4-d2-fx-batch-v1.mjs";
+import { fxSetAuthorityFromRequest } from "./fx-set-store-v1.mjs";
 
 export const ALPHA3_2_5_C_CONTROL_RUNTIME_CONTRACT =
   "alpha3.2.5.c.control_runtime.v1";
@@ -69,6 +71,12 @@ const STOCK_INPUT_FIELDS = new Set([
   "plugin", "plugin_id", "plugin_name", "controls", "starter_action",
   "action_parameters", "control_overrides", "parameter_metadata", "selector", "dry_run",
   "mode", "changes", "bands",
+]);
+const FX_SET_MODES = new Set(["inspect_set", "shared_plan"]);
+const FX_SET_INSPECT_FIELDS = new Set(["mode", "fx_set_ref", "controls"]);
+const FX_SET_SHARED_FIELDS = new Set(["mode", "fx_set_ref", "parameter_plan_ref", "controls", "dry_run"]);
+const FX_SET_CONTROL_FIELDS = new Set([
+  "id", "param_index", "param_ident", "param_name", "natural_value", "display_value", "tolerance",
 ]);
 const CONTROL_TARGET_KINDS = ALPHA3_2_5_C_CONTROL_TARGET_KINDS;
 const SQLITE_IDENTITY_FIELDS = Object.freeze([
@@ -602,6 +610,7 @@ async function executeStockPluginControls({
   executeAtomic,
   nativeBatchExecutor,
   projectIndexRuntime,
+  fxSetStore,
   catalog,
   semanticProofChecker = assertAlpha34CSemanticUnitsProven,
   now = () => new Date(),
@@ -614,6 +623,20 @@ async function executeStockPluginControls({
   const stages = [];
   const state = executionState();
   rememberInputObjectRefs(state, request.refs);
+  if (FX_SET_MODES.has(input.mode)) {
+    return executeHomogeneousFxSetControls({
+      request,
+      executeAtomic,
+      nativeBatchExecutor,
+      projectIndexRuntime,
+      fxSetStore,
+      now,
+      entry,
+      startedAt,
+      stages,
+      state,
+    });
+  }
   if (isExactAssignmentsMode(input)) {
     return executeExactAssignmentsBatch({
       request,
@@ -979,6 +1002,303 @@ async function executeStockPluginControls({
   }
 }
 
+async function executeHomogeneousFxSetControls({
+  request,
+  executeAtomic,
+  nativeBatchExecutor,
+  projectIndexRuntime,
+  fxSetStore,
+  now,
+  entry,
+  startedAt,
+  stages,
+  state,
+}) {
+  const input = request.input;
+  const normalized = normalizeHomogeneousFxSetInput(input, request.refs);
+  if (!normalized.ok) {
+    return failureEnvelope({
+      entry, request, startedAt, now, stages, state,
+      code: normalized.code,
+      message: normalized.message,
+      blockers: normalized.blockers,
+    });
+  }
+  if (!fxSetStore || typeof fxSetStore.getSet !== "function") {
+    return failureEnvelope({
+      entry, request, startedAt, now, stages, state,
+      code: "FX_SET_STORE_UNAVAILABLE",
+      message: "The server-owned FX set store is unavailable.",
+    });
+  }
+  const authority = fxSetAuthorityFromRequest(request, projectIndexRuntime);
+  const authorityFailure = validateHomogeneousFxSetAuthority(authority);
+  if (authorityFailure) {
+    return failureEnvelope({
+      entry, request, startedAt, now, stages, state,
+      code: authorityFailure.code,
+      message: authorityFailure.message,
+      blockers: [authorityFailure],
+    });
+  }
+  const setResult = fxSetStore.getSet(normalized.fx_set_ref, authority);
+  if (!setResult.ok) {
+    return failureEnvelope({
+      entry, request, startedAt, now, stages, state,
+      code: setResult.code,
+      message: setResult.message,
+      blockers: setResult.blockers,
+    });
+  }
+  const set = setResult.record;
+  const fxObjects = set.members.map(fxSetMemberObjectRef);
+  const expectedMembers = set.members.map(fxSetExpectedMember);
+  if (fxObjects.some((value) => value === null)) {
+    return failureEnvelope({
+      entry, request, startedAt, now, stages, state,
+      code: "FX_SET_MEMBER_REF_INVALID",
+      message: "The retained FX set contains a non-owner-scoped FX ref.",
+    });
+  }
+  for (const member of set.members) state.canonicalRefs.push(member.fx_ref);
+
+  let inspected = null;
+  let plan = null;
+  if (normalized.mode === "inspect_set" || normalized.inline_controls) {
+    if (typeof executeAtomic !== "function") {
+      return failureEnvelope({
+        entry, request, startedAt, now, stages, state,
+        code: "FX_SET_INSPECT_EXECUTOR_REQUIRED",
+        message: "FX-set inspection needs the managed OpenReaper atomic route.",
+      });
+    }
+    let inspectionExecution;
+    try {
+      inspectionExecution = await executeAtomic({
+        id: LIST_FX_PARAMETERS_ID,
+        input: {
+          mode: "inspect_set",
+          expected_set_fingerprint: set.set_fingerprint,
+          expected_plugin_identity: clone(set.plugin_identity),
+          expected_layout_fingerprint: set.layout_fingerprint,
+          expected_representative_fx_ref: set.representative_fx_ref,
+          expected_members: clone(expectedMembers),
+          ...(normalized.controls ? { controls: clone(normalized.controls) } : {}),
+        },
+        refs: fxObjects,
+        context: request.context,
+        budget: ALPHA3_E1_STOCK_PLUGIN_PARAMETER_LIST_BUDGET,
+        observeProjectIndex: false,
+      });
+      collectExecution(state, inspectionExecution);
+    } catch (error) {
+      return failureEnvelope({
+        entry, request, startedAt, now, stages, state,
+        code: error?.code ?? "FX_SET_INSPECTION_FAILED",
+        message: error?.message ?? "Native FX-set inspection failed.",
+        blockers: error?.blockers,
+      });
+    }
+    if (inspectionExecution?.ok !== true) {
+      return failureEnvelope({
+        entry, request, startedAt, now, stages, state,
+        code: inspectionExecution?.error?.code ?? "FX_SET_INSPECTION_FAILED",
+        message: inspectionExecution?.error?.message ?? "Native FX-set inspection failed.",
+        blockers: inspectionExecution?.blockers,
+      });
+    }
+    inspected = validateHomogeneousFxInspection({
+      readback: executionReadback(inspectionExecution),
+      set,
+      requestedControls: normalized.controls,
+    });
+    if (!inspected.ok) {
+      return failureEnvelope({
+        entry, request, startedAt, now, stages, state,
+        code: inspected.code,
+        message: inspected.message,
+        blockers: inspected.blockers,
+      });
+    }
+    pushStage(stages, "stock-plugin-select-target", "runtime_execute", "completed", `Resolved retained FX set ${set.ref}.`);
+    pushStage(stages, "stock-plugin-live-resolve", "live_ref_resolve", "completed", `Revalidated ${set.members.length} homogeneous Take FX and inspected one representative layout.`, state.evidenceRefs);
+    if (inspected.compiled_controls.length > 0) {
+      const storedPlan = fxSetStore.putPlan({
+        authority,
+        fx_set_ref: set.ref,
+        controls: inspected.compiled_controls,
+      });
+      if (!storedPlan.ok) {
+        return failureEnvelope({
+          entry, request, startedAt, now, stages, state,
+          code: storedPlan.code,
+          message: storedPlan.message,
+          blockers: storedPlan.blockers,
+        });
+      }
+      plan = storedPlan.record;
+    }
+    if (normalized.mode === "inspect_set") {
+      pushStage(stages, "stock-plugin-execute", "runtime_execute", "skipped", "inspect_set is read-only.");
+      pushStage(stages, "stock-plugin-verify", "verify", "completed", "Representative inventory and every member identity/layout passed native readback.", state.evidenceRefs);
+      pushStage(stages, "stock-plugin-index-update", "index_update", "skipped", "Read-only inspection did not stale the Project Index.");
+      pushStage(stages, "stock-plugin-result", "result_project", "completed", "Projected representative parameter truth and optional shared plan.");
+      return successEnvelope({
+        entry, request, startedAt, now, stages, state,
+        summary: plan
+          ? `Inspected ${set.members.length} homogeneous FX and compiled ${plan.controls.length} shared control(s).`
+          : `Inspected ${set.members.length} homogeneous FX and returned one complete representative inventory.`,
+        data: {
+          mode: "inspect_set",
+          fx_set_ref: set.ref,
+          set_fingerprint: set.set_fingerprint,
+          member_count: set.members.length,
+          representative_fx_ref: set.representative_fx_ref,
+          plugin_identity: set.plugin_identity,
+          layout_fingerprint: set.layout_fingerprint,
+          parameter_count: inspected.parameter_count,
+          parameters: inspected.parameters,
+          parameter_inventory_artifact_ref: inspected.parameter_inventory_artifact_ref,
+          parameter_plan_ref: plan?.ref ?? null,
+          plan_hash: plan?.plan_hash ?? null,
+          expires_at_ms: plan?.expires_at_ms ?? set.expires_at_ms,
+        },
+      });
+    }
+  }
+
+  if (!plan) {
+    const planResult = fxSetStore.getPlan(normalized.parameter_plan_ref, {
+      authority,
+      fx_set_ref: set.ref,
+    });
+    if (!planResult.ok) {
+      return failureEnvelope({
+        entry, request, startedAt, now, stages, state,
+        code: planResult.code,
+        message: planResult.message,
+        blockers: planResult.blockers,
+      });
+    }
+    plan = planResult.record;
+  }
+  const nativeExecutor = typeof nativeBatchExecutor === "function" ? nativeBatchExecutor : executeAtomic;
+  if (typeof nativeExecutor !== "function") {
+    return failureEnvelope({
+      entry, request, startedAt, now, stages, state,
+      code: "FX_SHARED_PLAN_EXECUTOR_REQUIRED",
+      message: "shared_plan needs the managed native batch route.",
+    });
+  }
+  let execution;
+  try {
+    execution = await nativeExecutor({
+      id: "template.fx.set_parameter_assignments_batch",
+      input: {
+        mode: "shared_plan",
+        dry_run: normalized.dry_run,
+        batch: [],
+        set_fingerprint: set.set_fingerprint,
+        plan_hash: plan.plan_hash,
+        expected_plugin_identity: clone(set.plugin_identity),
+        expected_layout_fingerprint: set.layout_fingerprint,
+        expected_representative_fx_ref: set.representative_fx_ref,
+        expected_members: clone(expectedMembers),
+        controls: clone(plan.controls),
+      },
+      refs: fxObjects,
+      context: request.context,
+      budget: ALPHA3_E1_STOCK_PLUGIN_PARAMETER_LIST_BUDGET,
+      observeProjectIndex: false,
+    });
+    collectExecution(state, execution);
+  } catch (error) {
+    execution = {
+      ok: false,
+      error: {
+        code: error?.code ?? "FX_SHARED_PLAN_NATIVE_BATCH_FAILED",
+        message: error?.message ?? "Native shared-plan dispatch failed.",
+        details: { mutation_outcome: normalized.dry_run ? "not_attempted" : "unknown" },
+      },
+      blockers: error?.blockers,
+    };
+  }
+  const readback = executionReadback(execution);
+  const mutationAttempted = normalized.dry_run !== true
+    && (readback?.mutation_attempted === true || execution?.error?.details?.zero_write !== true);
+  const verified = execution?.ok === true
+    ? validateHomogeneousFxBroadcast({ readback, set, plan, dryRun: normalized.dry_run })
+    : {
+        ok: false,
+        code: execution?.error?.code ?? "FX_SHARED_PLAN_NATIVE_BATCH_FAILED",
+        message: execution?.error?.message ?? "Native shared-plan dispatch failed.",
+        blockers: execution?.blockers,
+      };
+  state.changes.push({
+    id: "fx-shared-plan",
+    template_id: "template.fx.set_parameter_assignments_batch",
+    target_count: set.members.length,
+    control_count: plan.controls.length,
+    status: verified.ok ? normalized.dry_run ? "planned" : "applied" : mutationAttempted ? "unknown_or_partial" : "failed",
+    mutation: { status: normalized.dry_run ? "not_run" : verified.ok ? "completed" : mutationAttempted ? "unknown_or_partial" : "not_run" },
+    live_readback: { status: verified.ok ? "passed" : "failed", source: "native_aggregate_shared_plan_readback" },
+    index_maintenance: { status: normalized.dry_run ? "skipped" : "pending", scopes: [] },
+  });
+  pushStage(stages, "stock-plugin-select-target", "runtime_execute", "completed", `Resolved retained FX set ${set.ref}.`);
+  pushStage(stages, "stock-plugin-live-resolve", "live_ref_resolve", verified.ok ? "completed" : "failed", verified.ok ? `Revalidated ${set.members.length} FX target(s) before mutation.` : "FX-set live revalidation or aggregate readback failed.", state.evidenceRefs);
+  pushStage(stages, "stock-plugin-execute", "runtime_execute", verified.ok ? normalized.dry_run ? "skipped" : "completed" : mutationAttempted ? "failed" : "skipped", verified.ok ? normalized.dry_run ? "Validated the complete shared plan with zero mutation." : "Broadcast the shared plan in one native Undo batch." : "The shared plan did not produce complete trusted mutation truth.", state.evidenceRefs);
+  pushStage(stages, "stock-plugin-verify", "verify", verified.ok ? "completed" : "failed", verified.ok ? `Verified ${set.members.length} FX target(s) against ${plan.controls.length} shared control(s).` : verified.message, state.evidenceRefs);
+
+  let invalidation = null;
+  if (!normalized.dry_run && mutationAttempted) {
+    invalidation = invalidateKnownScopes(projectIndexRuntime, ["fx"], now);
+    state.indexUpdate = invalidation;
+    applyIndexMaintenanceToChanges(state.changes, invalidation?.ok === false ? "failed" : invalidation ? "completed" : "skipped", invalidation);
+    if (invalidation) state.sqlite = sqliteEvidence(projectIndexRuntime, { used: true, freshness: "stale" });
+  }
+  pushStage(stages, "stock-plugin-index-update", "index_update", invalidation?.ok === false ? "failed" : invalidation ? "completed" : "skipped", invalidation?.ok === false ? "Shared-plan readback completed, but FX index invalidation failed." : invalidation ? "Marked the FX index scope stale after broadcast." : "No mutation required index maintenance.");
+  if (!verified.ok) {
+    return failureEnvelope({
+      entry, request, startedAt, now, stages, state,
+      status: mutationAttempted ? "partial_failure" : "blocked",
+      code: verified.code,
+      message: verified.message,
+      blockers: verified.blockers,
+      data: { mode: "shared_plan", fx_set_ref: set.ref, parameter_plan_ref: plan.ref, plan_hash: plan.plan_hash },
+    });
+  }
+  if (invalidation?.ok === false) {
+    return failureEnvelope({
+      entry, request, startedAt, now, stages, state,
+      status: "partial_failure",
+      code: invalidation.blockers?.[0]?.code ?? "FX_SHARED_PLAN_INDEX_MAINTENANCE_FAILED",
+      message: "Shared-plan mutation/readback passed, but Project Index maintenance failed.",
+      blockers: invalidation.blockers,
+    });
+  }
+  pushStage(stages, "stock-plugin-result", "result_project", "completed", "Projected aggregate homogeneous FX broadcast truth.");
+  return successEnvelope({
+    entry, request, startedAt, now, stages, state,
+    status: normalized.dry_run ? "dry_run_completed" : "completed",
+    summary: normalized.dry_run
+      ? `Validated ${plan.controls.length} shared control(s) across ${set.members.length} FX with zero mutation.`
+      : `Applied and verified ${plan.controls.length} shared control(s) across ${set.members.length} homogeneous FX.`,
+    data: {
+      mode: "shared_plan",
+      fx_set_ref: set.ref,
+      set_fingerprint: set.set_fingerprint,
+      parameter_plan_ref: plan.ref,
+      plan_hash: plan.plan_hash,
+      target_count: set.members.length,
+      control_count: plan.controls.length,
+      mutation_count: readback?.mutation_count ?? (normalized.dry_run ? 0 : set.members.length * plan.controls.length),
+      undo_block_count: readback?.undo_block_count ?? (normalized.dry_run ? 0 : 1),
+      zero_write: normalized.dry_run === true,
+      index_update: compactObject(invalidation),
+    },
+  });
+}
+
 async function executeReaEqBands({
   request,
   executeAtomic,
@@ -1231,7 +1551,9 @@ async function executeExactFxParameters({
           input: {
             param_index: change.param_index,
             ...(change.param_ident ? { param_ident: change.param_ident } : {}),
-            probe_normalized_value: change.normalized_value,
+            ...(change.display_value
+              ? { probe_display_value: change.display_value }
+              : { probe_normalized_value: change.normalized_value }),
           },
           refs: { fx_ref: selected.fxRef },
           budget: ALPHA3_E1_STOCK_PLUGIN_PARAMETER_READBACK_BUDGET,
@@ -1242,11 +1564,13 @@ async function executeExactFxParameters({
       const probeIndexMatches = probe?.param_index === change.param_index;
       const probeIdentMatches = !change.param_ident || probe?.param_ident === change.param_ident;
       const probeNormalized = Number(probe?.normalized_value);
+      const probeValue = Number(probe?.value);
       const probeFormatted = probe?.formatted_value;
+      const displayMode = change.display_value != null;
       if (!probeIndexMatches
           || !probeIdentMatches
-          || !Number.isFinite(probeNormalized)
-          || Math.abs(probeNormalized - change.normalized_value) > 0.000001
+          || (displayMode ? !Number.isFinite(probeValue) : !Number.isFinite(probeNormalized))
+          || (!displayMode && Math.abs(probeNormalized - change.normalized_value) > 0.000001)
           || typeof probeFormatted !== "string"
           || probeFormatted.length === 0) {
         return failureEnvelope({
@@ -1281,6 +1605,7 @@ async function executeExactFxParameters({
       }
       preparedChanges.push({
         ...change,
+        ...(displayMode ? { value: probeValue } : { normalized_value: probeNormalized }),
         native_target_formatted_value: probeFormatted,
         step_sizes_available: probe?.step_sizes_available ?? false,
         step_size: probe?.step_size ?? null,
@@ -1324,6 +1649,8 @@ async function executeExactFxParameters({
           template_id: SET_FX_PARAMETER_ID,
           param_index: change.param_index,
           normalized_value: change.normalized_value,
+          value: change.value,
+          display_value: change.display_value,
           status: "not_run",
           mutation: { status: "not_run" },
           live_readback: { status: "not_run" },
@@ -1335,7 +1662,9 @@ async function executeExactFxParameters({
         id: SET_FX_PARAMETER_ID,
         input: {
           param_index: change.param_index,
-          normalized_value: change.normalized_value,
+          ...(change.display_value != null
+            ? { display_value: change.display_value }
+            : { normalized_value: change.normalized_value }),
           ...(change.param_ident ? { param_ident: change.param_ident } : {}),
         },
         refs: { fx_ref: selected.fxRef },
@@ -1359,6 +1688,8 @@ async function executeExactFxParameters({
           template_id: SET_FX_PARAMETER_ID,
           param_index: change.param_index,
           normalized_value: change.normalized_value,
+          value: change.value,
+          display_value: change.display_value,
           status: "failed",
           mutation: {
             status: "unknown",
@@ -1379,6 +1710,8 @@ async function executeExactFxParameters({
         param_ident: change.param_ident ?? null,
         name: change.name ?? null,
         normalized_value: change.normalized_value,
+        value: change.value,
+        display_value: change.display_value,
         status: "mutation_completed",
         mutation: {
           status: "completed",
@@ -1416,8 +1749,9 @@ async function executeExactFxParameters({
         continue;
       }
       const observed = executionReadback(readExecution);
-      const actual = Number(observed?.normalized_value);
-      const expected = change.normalized_value;
+      const displayMode = change.display_value != null;
+      const actual = Number(displayMode ? observed?.value : observed?.normalized_value);
+      const expected = displayMode ? change.value : change.normalized_value;
       const nativeTolerance = Number(writeReadback?.tolerance);
       const tolerance = Number.isFinite(nativeTolerance) && nativeTolerance >= 0 ? nativeTolerance : 0.001;
       const identityOk = observed?.param_index === change.param_index
@@ -1429,10 +1763,12 @@ async function executeExactFxParameters({
         || change.is_discrete === true
         || writeReadback?.is_discrete === true
         || writeReadback?.verification_mode === "native_discrete_format";
-      const formattedOk = discrete
-        && change.native_target_formatted_value === (observed?.formatted_value ?? null);
+      const formattedOk = formattedReadbackMatches(
+        observed?.formatted_value,
+        change.native_target_formatted_value,
+      );
       const continuousOk = Number.isFinite(actual) && Number.isFinite(expected) && Math.abs(actual - expected) <= tolerance;
-      const valueOk = discrete ? formattedOk : continuousOk;
+      const valueOk = displayMode ? formattedOk && continuousOk : discrete ? formattedOk : continuousOk;
       if (!identityOk || !valueOk) {
         failedAt = index;
         rowFailure = coded(
@@ -1443,8 +1779,11 @@ async function executeExactFxParameters({
         changeRow.live_readback = {
           status: "failed",
           source: "live_parameter_readback",
-          requested_normalized_value: expected,
-          observed_normalized_value: Number.isFinite(actual) ? actual : null,
+          requested_normalized_value: displayMode ? null : expected,
+          observed_normalized_value: displayMode ? null : Number.isFinite(actual) ? actual : null,
+          requested_display_value: displayMode ? change.display_value : null,
+          requested_value: displayMode ? expected : null,
+          observed_value: displayMode && Number.isFinite(actual) ? actual : null,
           native_target_formatted_value: change.native_target_formatted_value,
           observed_formatted_value: observed?.formatted_value ?? null,
           identity_matched: identityOk,
@@ -1456,11 +1795,14 @@ async function executeExactFxParameters({
       changeRow.live_readback = {
         status: "passed",
         source: "live_parameter_readback",
-        requested_normalized_value: expected,
-        observed_normalized_value: actual,
+        requested_normalized_value: displayMode ? null : expected,
+        observed_normalized_value: displayMode ? null : actual,
+        requested_display_value: displayMode ? change.display_value : null,
+        requested_value: displayMode ? expected : null,
+        observed_value: displayMode ? actual : null,
         native_target_formatted_value: change.native_target_formatted_value,
         observed_formatted_value: observed?.formatted_value ?? null,
-        verification: formattedOk ? "native_formatted" : "normalized_tolerance",
+        verification: displayMode ? "native_display_value" : formattedOk ? "native_formatted" : "normalized_tolerance",
         tolerance,
       };
     }
@@ -1474,6 +1816,8 @@ async function executeExactFxParameters({
           template_id: SET_FX_PARAMETER_ID,
           param_index: change.param_index,
           normalized_value: change.normalized_value,
+          value: change.value,
+          display_value: change.display_value,
           status: "not_run",
           mutation: { status: "not_run" },
           live_readback: { status: "not_run" },
@@ -1525,8 +1869,11 @@ async function executeExactFxParameters({
       .map((change) => ({
         id: change.id,
         param_index: change.param_index,
-        requested_normalized_value: change.normalized_value,
+        requested_normalized_value: change.display_value == null ? change.normalized_value : null,
+        requested_display_value: change.display_value ?? null,
+        requested_value: change.display_value == null ? null : change.value,
         observed_normalized_value: change.live_readback.observed_normalized_value,
+        observed_value: change.live_readback.observed_value ?? null,
         observed_formatted_value: change.live_readback.observed_formatted_value ?? null,
       }));
     pushStage(stages, "stock-plugin-result", "result_project", "completed", "Projected exact parameter highway result.");
@@ -1582,6 +1929,269 @@ async function executeExactFxParameters({
       },
     });
   }
+}
+
+function normalizeHomogeneousFxSetInput(input, requestRefs) {
+  const allowed = input.mode === "inspect_set" ? FX_SET_INSPECT_FIELDS : FX_SET_SHARED_FIELDS;
+  const unknown = Object.keys(input).find((field) => !allowed.has(field));
+  if (unknown) return failedFxSetInput("FX_SET_MODE_FIELDS_INVALID", `${input.mode} does not accept field ${unknown}.`);
+  if (hasAnyRefs(requestRefs)) return failedFxSetInput("FX_SET_TOP_LEVEL_REFS_CONFLICT", `${input.mode} uses only its server-owned fx_set_ref; omit caller-supplied refs.`);
+  if (typeof input.fx_set_ref !== "string" || !input.fx_set_ref.startsWith("fx-set:v1:")) {
+    return failedFxSetInput("FX_SET_REF_INVALID", `${input.mode} requires one server-owned fx_set_ref.`);
+  }
+  const controls = input.controls === undefined ? null : normalizeNaturalUnitControls(input.controls);
+  if (controls && !controls.ok) return controls;
+  if (input.mode === "inspect_set") {
+    return {
+      ok: true,
+      mode: input.mode,
+      fx_set_ref: input.fx_set_ref,
+      controls: controls?.rows ?? null,
+      inline_controls: false,
+      dry_run: true,
+    };
+  }
+  if (input.dry_run !== undefined && typeof input.dry_run !== "boolean") {
+    return failedFxSetInput("FX_SHARED_PLAN_DRY_RUN_INVALID", "shared_plan dry_run must be boolean when supplied.");
+  }
+  const hasPlan = typeof input.parameter_plan_ref === "string" && input.parameter_plan_ref.startsWith("fx-parameter-plan:v1:");
+  const hasControls = Boolean(controls?.rows?.length);
+  if (hasPlan === hasControls) {
+    return failedFxSetInput("FX_SHARED_PLAN_SOURCE_INVALID", "shared_plan requires exactly one parameter_plan_ref or controls array.");
+  }
+  if (input.parameter_plan_ref !== undefined && !hasPlan) {
+    return failedFxSetInput("FX_PARAMETER_PLAN_REF_INVALID", "parameter_plan_ref must be one server-owned fx-parameter-plan:v1 ref.");
+  }
+  return {
+    ok: true,
+    mode: input.mode,
+    fx_set_ref: input.fx_set_ref,
+    parameter_plan_ref: hasPlan ? input.parameter_plan_ref : null,
+    controls: controls?.rows ?? null,
+    inline_controls: hasControls,
+    dry_run: input.dry_run !== false,
+  };
+}
+
+function normalizeNaturalUnitControls(value) {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 8) {
+    return failedFxSetInput("FX_SET_CONTROLS_SIZE_INVALID", "controls must contain 1-8 shared natural-unit targets.");
+  }
+  const ids = new Set();
+  const targets = new Set();
+  const rows = [];
+  for (const [index, row] of value.entries()) {
+    if (!object(row)) return failedFxSetInput("FX_SET_CONTROL_INVALID", `controls[${index}] must be an object.`);
+    const unknown = Object.keys(row).find((field) => !FX_SET_CONTROL_FIELDS.has(field));
+    if (unknown) return failedFxSetInput("FX_SET_CONTROL_INVALID", `controls[${index}] does not accept field ${unknown}.`);
+    if (typeof row.id !== "string" || !/^[A-Za-z0-9_-]{1,24}$/u.test(row.id) || ids.has(row.id)) {
+      return failedFxSetInput("FX_SET_CONTROL_ID_INVALID", `controls[${index}].id must be unique and match ^[A-Za-z0-9_-]{1,24}$.`);
+    }
+    ids.add(row.id);
+    const hasIndex = Number.isInteger(row.param_index) && row.param_index >= 0;
+    const hasIdent = typeof row.param_ident === "string" && row.param_ident.trim().length > 0;
+    const hasName = typeof row.param_name === "string" && row.param_name.trim().length > 0;
+    if ((!hasIndex && !hasIdent && !hasName) || (hasName && (hasIndex || hasIdent))) {
+      return failedFxSetInput("FX_SET_CONTROL_TARGET_INVALID", `controls[${index}] requires param_index/optional param_ident, or one exact param_name.`);
+    }
+    const hasNaturalValue = Object.hasOwn(row, "natural_value");
+    const hasDisplayValue = Object.hasOwn(row, "display_value");
+    if (hasNaturalValue === hasDisplayValue) {
+      return failedFxSetInput("FX_SET_CONTROL_DISPLAY_VALUE_INVALID", `controls[${index}] requires exactly one display_value or legacy natural_value.`);
+    }
+    const displayValue = hasDisplayValue ? row.display_value : row.natural_value;
+    if (typeof displayValue !== "string" || displayValue.trim().length < 1 || displayValue.length > 80) {
+      return failedFxSetInput("FX_SET_CONTROL_DISPLAY_VALUE_INVALID", `controls[${index}] display target must be one bounded native-formatted string.`);
+    }
+    if (row.tolerance !== undefined && (typeof row.tolerance !== "number" || !Number.isFinite(row.tolerance) || row.tolerance < 0)) {
+      return failedFxSetInput("FX_SET_CONTROL_TOLERANCE_INVALID", `controls[${index}].tolerance must be a non-negative finite number.`);
+    }
+    const target = hasName
+      ? `name:${row.param_name.trim().toLocaleLowerCase()}`
+      : hasIndex
+        ? `index:${row.param_index}`
+        : `ident:${row.param_ident.trim().toLocaleLowerCase()}`;
+    if (targets.has(target)) return failedFxSetInput("FX_SET_CONTROL_TARGET_DUPLICATE", `controls repeats exact parameter target ${target}.`);
+    targets.add(target);
+    rows.push({
+      id: row.id,
+      ...(hasIndex ? { param_index: row.param_index } : {}),
+      ...(hasIdent ? { param_ident: row.param_ident.trim() } : {}),
+      ...(hasName ? { param_name: row.param_name.trim() } : {}),
+      natural_value: displayValue.trim(),
+      ...(row.tolerance !== undefined ? { tolerance: row.tolerance } : {}),
+    });
+  }
+  return { ok: true, rows };
+}
+
+function validateHomogeneousFxSetAuthority(authority) {
+  if (typeof authority?.bridge_owner !== "string" || authority.bridge_owner.length === 0) {
+    return { code: "FX_SET_BRIDGE_OWNER_REQUIRED", message: "FX-set use requires the current authoritative Bridge owner.", recoverable: true };
+  }
+  if (!Number.isSafeInteger(authority.bridge_generation) || authority.bridge_generation < 0) {
+    return { code: "FX_SET_BRIDGE_GENERATION_REQUIRED", message: "FX-set use requires the current authoritative Bridge generation.", recoverable: true };
+  }
+  if (typeof authority.project_ref !== "string" || authority.project_ref.length === 0) {
+    return { code: "FX_SET_PROJECT_REF_REQUIRED", message: "FX-set use requires the current Project Index project_ref.", recoverable: true };
+  }
+  return null;
+}
+
+function validateHomogeneousFxInspection({ readback, set, requestedControls }) {
+  const value = object(readback?.fx_set_inspection) ? readback.fx_set_inspection : readback;
+  const memberChecks = Array.isArray(value?.member_checks) ? value.member_checks : [];
+  const expectedRefs = new Set(set.members.map((member) => member.fx_ref));
+  const expectedMembers = new Map(set.members.map((member) => [member.fx_ref, member]));
+  const observedRefs = new Set(memberChecks.map((row) => row?.fx_ref));
+  const identityOk = value?.set_fingerprint === set.set_fingerprint
+    && value?.layout_fingerprint === set.layout_fingerprint
+    && value?.plugin_identity?.plugin_id === set.plugin_identity?.plugin_id
+    && value?.plugin_identity?.name === set.plugin_identity?.name;
+  const membersOk = memberChecks.length === set.members.length
+    && memberChecks.every((row) => {
+      const expected = expectedMembers.get(row?.fx_ref);
+      return object(row)
+        && expected
+        && row.status === "passed"
+        && row.take_ref === expected.take_ref
+        && row.fx_guid === expected.fx_guid
+        && row.plugin_id === expected.plugin_id
+        && Number(row.parameter_count) === expected.parameter_count
+        && row.layout_fingerprint === expected.layout_fingerprint;
+    })
+    && observedRefs.size === expectedRefs.size;
+  const parameters = Array.isArray(value?.parameters) ? value.parameters : [];
+  const parameterCount = Number(value?.parameter_count);
+  const parametersOk = value?.truncated !== true
+    && Number.isInteger(parameterCount)
+    && parameterCount >= 0
+    && parameters.length === parameterCount
+    && parameters.every((row, index) => object(row)
+      && row.param_index === index
+      && typeof row.name === "string"
+      && typeof row.formatted_value === "string"
+      && Number.isFinite(Number(row.normalized_value)));
+  if (!identityOk || !membersOk || !parametersOk || value?.representative_fx_ref !== set.representative_fx_ref) {
+    return failedFxSetInput("FX_SET_INSPECTION_READBACK_MISMATCH", "Native FX-set inspection did not prove complete homogeneous member and representative parameter truth.");
+  }
+  const compiled = Array.isArray(value?.compiled_controls) ? value.compiled_controls : [];
+  if (requestedControls && !validateCompiledNaturalControls(requestedControls, compiled)) {
+    return failedFxSetInput("FX_SET_PARAMETER_PLAN_COMPILE_FAILED", "Native formatting did not compile every requested natural-unit control exactly once.");
+  }
+  if (!requestedControls && compiled.length > 0) {
+    return failedFxSetInput("FX_SET_PARAMETER_PLAN_UNREQUESTED", "Native inspection returned an unrequested parameter plan.");
+  }
+  return {
+    ok: true,
+    parameter_count: parameterCount,
+    parameters: clone(parameters),
+    compiled_controls: clone(compiled),
+    parameter_inventory_artifact_ref: typeof value?.parameter_inventory_artifact_ref === "string"
+      ? value.parameter_inventory_artifact_ref
+      : null,
+  };
+}
+
+function validateCompiledNaturalControls(requested, compiled) {
+  if (compiled.length !== requested.length) return false;
+  const expected = new Map(requested.map((row) => [row.id, row]));
+  const seenTargets = new Set();
+  for (const row of compiled) {
+    const source = expected.get(row?.id);
+    if (!source
+        || row.natural_value !== source.natural_value
+        || !Number.isInteger(row.param_index)
+        || row.param_index < 0
+        || typeof row.param_ident !== "string"
+        || typeof row.requested_formatted_value !== "string"
+        || row.requested_formatted_value.length === 0
+        || typeof row.value !== "number"
+        || !Number.isFinite(row.value)
+        || typeof row.tolerance !== "number"
+        || !Number.isFinite(row.tolerance)
+        || row.tolerance < 0
+        || seenTargets.has(`${row.param_index}:${row.param_ident}`)) return false;
+    seenTargets.add(`${row.param_index}:${row.param_ident}`);
+  }
+  return true;
+}
+
+function validateHomogeneousFxBroadcast({ readback, set, plan, dryRun }) {
+  const value = object(readback?.shared_plan) ? readback.shared_plan : readback;
+  const results = Array.isArray(value?.member_results) ? value.member_results : [];
+  const expectedRefs = new Set(set.members.map((member) => member.fx_ref));
+  const expectedMembers = new Map(set.members.map((member) => [member.fx_ref, member]));
+  const observedRefs = new Set(results.map((row) => row?.fx_ref));
+  const expectedStatus = dryRun ? "planned" : "passed";
+  const expectedMutationCount = dryRun ? 0 : set.members.length * plan.controls.length;
+  const ok = value?.set_fingerprint === set.set_fingerprint
+    && value?.plan_hash === plan.plan_hash
+    && value?.layout_fingerprint === set.layout_fingerprint
+    && Number(value?.target_count) === set.members.length
+    && Number(value?.control_count) === plan.controls.length
+    && Number(value?.mutation_count) === expectedMutationCount
+    && Number(value?.undo_block_count) === (dryRun ? 0 : 1)
+    && (dryRun ? value?.zero_write === true && value?.mutation_attempted !== true : value?.mutation_attempted === true)
+    && results.length === set.members.length
+    && observedRefs.size === expectedRefs.size
+    && results.every((row) => {
+      const expected = expectedMembers.get(row?.fx_ref);
+      return expectedRefs.has(row?.fx_ref)
+        && expected
+        && row.status === expectedStatus
+        && row.take_ref === expected.take_ref
+        && row.fx_guid === expected.fx_guid
+        && row.plugin_id === expected.plugin_id
+        && Number(row.parameter_count) === expected.parameter_count
+        && row.layout_fingerprint === expected.layout_fingerprint
+        && Number(row.control_count) === plan.controls.length;
+    });
+  return ok
+    ? { ok: true }
+    : failedFxSetInput("FX_SHARED_PLAN_READBACK_MISMATCH", "Native shared-plan broadcast did not prove exact set/plan identity, one Undo, and complete aggregate readback.");
+}
+
+function fxSetMemberObjectRef(member) {
+  const parsed = parseOwnerScopedFxRef(member?.fx_ref);
+  if (!parsed || parsed.ownerKind !== "take" || parsed.ownerRef !== member?.take_ref) return null;
+  return {
+    kind: "fx",
+    ref: member.fx_ref,
+    identity: { scheme: "take_fx", value: `${parsed.ownerRef}:${parsed.slotIndex}` },
+    display: { owner_ref: parsed.ownerRef, slot_index: parsed.slotIndex },
+  };
+}
+
+function fxSetExpectedMember(member) {
+  return {
+    fx_ref: member.fx_ref,
+    take_ref: member.take_ref,
+    fx_guid: member.fx_guid,
+    plugin_id: member.plugin_id,
+    parameter_count: member.parameter_count,
+    layout_fingerprint: member.layout_fingerprint,
+  };
+}
+
+function parseOwnerScopedFxRef(ref) {
+  if (typeof ref !== "string" || !ref.startsWith("fx:")) return null;
+  const lastColon = ref.lastIndexOf(":");
+  if (lastColon <= 3) return null;
+  const slotIndex = Number(ref.slice(lastColon + 1));
+  const ownerRef = ref.slice(3, lastColon);
+  const ownerKind = ownerRef.startsWith("track:") ? "track" : ownerRef.startsWith("take:") ? "take" : null;
+  return ownerKind && Number.isInteger(slotIndex) && slotIndex >= 0
+    ? { ownerKind, ownerRef, slotIndex }
+    : null;
+}
+
+function hasAnyRefs(value) {
+  return Array.isArray(value) ? value.length > 0 : object(value) && Object.keys(value).length > 0;
+}
+
+function failedFxSetInput(code, message) {
+  return { ok: false, code, message, blockers: [{ code, message, recoverable: true }] };
 }
 
 async function resolveControlTarget(options) {

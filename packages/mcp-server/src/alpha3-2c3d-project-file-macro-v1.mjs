@@ -1,6 +1,6 @@
 export const ALPHA3_2C3D_PROJECT_FILE_MACRO_CONTRACT = "alpha3.2c3d.project_file_macro.v1";
 export const ALPHA3_2C3D_PROJECT_FILE_MACRO_ID = "macro.project.file";
-export const ALPHA3_2C3D_PROJECT_FILE_MACRO_VERSION = "1.2.1";
+export const ALPHA3_2C3D_PROJECT_FILE_MACRO_VERSION = "1.2.2";
 
 import {
   MACRO_CONTRACT_CEILINGS,
@@ -18,6 +18,7 @@ import {
 
 const READ_PATH_ID = "template.project.read_current_project_path";
 const READ_DIRTY_ID = "template.project.read_dirty_state";
+const READ_SUMMARY_ID = "template.project.read_summary";
 const SAVE_CURRENT_ID = "template.project.save_current_project";
 const SAVE_AS_ID = "template.project.save_project_as";
 const LIST_OPEN_ID = "template.project.list_open_projects";
@@ -71,6 +72,7 @@ const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/u;
 const FILE_TEMPLATE_IDS = Object.freeze([
   READ_PATH_ID,
   READ_DIRTY_ID,
+  READ_SUMMARY_ID,
   SAVE_CURRENT_ID,
   SAVE_AS_ID,
   LIST_OPEN_ID,
@@ -89,6 +91,7 @@ const FILE_STAGE_IDS = new Set([
   "file-live-activate-tab",
   "file-read-after-path",
   "file-read-after-dirty",
+  "file-project-readiness",
   "file-index-maintenance",
   "file-result-project",
 ]);
@@ -115,6 +118,7 @@ export const ALPHA3_2_5_C_FILE_MACRO_REGISTRY = createMacroProgramRegistry([{
     { id: "file-live-activate-tab", kind: "template_execute", dependency_ref: ACTIVATE_TAB_ID, risk: "safe", stop_on_error: true },
     { id: "file-read-after-path", kind: "template_execute", dependency_ref: READ_PATH_ID, risk: "read", stop_on_error: true },
     { id: "file-read-after-dirty", kind: "template_execute", dependency_ref: READ_DIRTY_ID, risk: "read", stop_on_error: true },
+    { id: "file-project-readiness", kind: "template_execute", dependency_ref: READ_SUMMARY_ID, risk: "read", stop_on_error: true },
     { id: "file-index-maintenance", kind: "runtime_execute", dependency_ref: "project_index.runtime.v1", risk: "read", stop_on_error: true },
     { id: "file-result-project", kind: "result_project", risk: "read", stop_on_error: true },
   ],
@@ -636,6 +640,7 @@ async function executeProjectSwitchOperation({ entry, request, input, executeAto
   let nativeResult = null;
   let pathAfter = null;
   let dirtyAfter = null;
+  let openedReadiness = null;
 
   const publicBudgetBytes = resolvePublicBudgetBytes(request);
   const childBudget = internalAtomicChildBudget(request);
@@ -838,10 +843,40 @@ async function executeProjectSwitchOperation({ entry, request, input, executeAto
       if (invalidation?.ok !== true) {
         stages.at(-1).status = "failed";
         verifiedChange.index_maintenance = indexMaintenance("failed", invalidation);
-        throw macroError(invalidation?.blockers?.[0]?.code ?? "PROJECT_FILE_INDEX_MAINTENANCE_FAILED", invalidation?.blockers?.[0]?.message ?? "Open succeeded but Project Index rebind failed.");
+        throw macroError("PROJECT_FILE_OPENED_INDEX_NOT_READY", "Project opened, but Project Index identity rebind failed.", {
+          partial_state: "opened_but_index_not_ready",
+          project_ref: opened.project_ref,
+          recovery: "Do not reopen; activate returned project_ref, then inspect or force read-only refresh.",
+          reason: invalidation?.blockers?.[0]?.code ?? "project_index_rebind_failed",
+        });
       }
       stages.at(-1).status = "completed";
       verifiedChange.index_maintenance = indexMaintenance("completed", invalidation);
+      try {
+        openedReadiness = await verifyOpenedProjectReadiness({
+          run,
+          projectIndexRuntime,
+          targetPath: input.target_path,
+          projectRef: opened.project_ref,
+          now,
+        });
+        invalidation = {
+          ...invalidation,
+          ...openedReadiness.index,
+          status: "project_head_ready",
+          freshness: "refreshed",
+          refreshed: true,
+        };
+        verifiedChange.index_maintenance = indexMaintenance("completed", invalidation);
+      } catch (error) {
+        verifiedChange.index_maintenance = indexMaintenance("failed", invalidation);
+        throw macroError("PROJECT_FILE_OPENED_INDEX_NOT_READY", "Project opened, but its live project head and Project Index identity were not ready.", {
+          partial_state: "opened_but_index_not_ready",
+          project_ref: opened.project_ref,
+          recovery: "Do not reopen; activate returned project_ref, then inspect or force read-only refresh.",
+          reason: error?.code ?? "project_readiness_failed",
+        });
+      }
     } else {
       const projectRef = input.project_ref;
       if (typeof projectRef !== "string" || !projectRef.startsWith("project:path:")) {
@@ -951,6 +986,15 @@ async function executeProjectSwitchOperation({ entry, request, input, executeAto
         operation,
         project_ref: verifiedChange.project_ref,
         path_after: verifiedChange.path ?? exactPath(pathAfter),
+        ...(openedReadiness ? {
+          project_identity_verified: true,
+          index_project_identity_verified: true,
+          index_readiness: "project_head_fresh",
+          requested_project_path: openedReadiness.requested_project_path,
+          active_project_path: openedReadiness.active_project_path,
+          dirty: openedReadiness.dirty,
+          live_summary: openedReadiness.live_summary,
+        } : {}),
         inventory: { total_count: inventory?.total_count ?? null, coverage_status: inventory?.coverage_status ?? null },
         outcome: {
           mutation: { status: mutationStatus },
@@ -1045,9 +1089,12 @@ function switchEnvelope({
   const sqlite = compactSqliteTruth(indexUsed, invalidation);
   const primaryBlocker = blockers?.[0] ?? null;
   const unknownOutcome = primaryBlocker?.details?.outcome === "unknown";
-  const recoveryAction = unknownOutcome && primaryBlocker?.recoverable === false
-    ? "Inspect live project state; do not replay this unknown mutation automatically."
-    : "Repair blocker and retry.";
+  const openedButIndexNotReady = primaryBlocker?.details?.partial_state === "opened_but_index_not_ready";
+  const recoveryAction = openedButIndexNotReady
+    ? "Do not replay open; activate returned project_ref, then inspect or force read-only refresh."
+    : unknownOutcome && primaryBlocker?.recoverable === false
+      ? "Inspect live project state; do not replay this unknown mutation automatically."
+      : "Repair blocker and retry.";
   const envelope = {
     contract: MACRO_EXECUTION_CONTRACT,
     ok: !failed,
@@ -1511,7 +1558,7 @@ function compactMutationTruthEnvelope(envelope, { failed }) {
   envelope.result.changes = [{
     kind: change.kind ?? "project_file",
     action: change.action ?? data.operation ?? null,
-    ...(typeof path === "string" ? { path } : {}),
+    ...(typeof path === "string" && data.project_identity_verified !== true ? { path } : {}),
     ...(typeof projectRef === "string" ? { project_ref: projectRef } : {}),
     status: change.status ?? "applied",
     mutation: { status: mutationStatus },
@@ -1523,18 +1570,34 @@ function compactMutationTruthEnvelope(envelope, { failed }) {
     // Failed compact envelopes retain the complete identity once in changes[].
     // Repeating path + project_ref here can make ordinary absolute paths look
     // unrepresentable even though the truthful public result fits under 2 KiB.
-    ...(!failed && typeof projectRef === "string" ? { project_ref: projectRef } : {}),
-    ...(!failed ? { path_after: path } : {}),
-    outcome: {
+    ...(!failed && data.project_identity_verified === true ? {
+      project_identity_verified: true,
+      index_project_identity_verified: data.index_project_identity_verified === true,
+      index_readiness: data.index_readiness === "project_head_fresh" ? "project_head_fresh" : null,
+      requested_project_path: data.requested_project_path ?? null,
+      active_project_path: data.active_project_path ?? null,
+      dirty: data.dirty === true,
+      live_summary: data.live_summary ?? null,
+    } : {}),
+    ...(!failed && data.project_identity_verified !== true && typeof projectRef === "string" ? { project_ref: projectRef } : {}),
+    ...(!failed && data.project_identity_verified !== true ? { path_after: path } : {}),
+    ...(failed ? { outcome: {
       mutation: { status: mutationStatus },
       live_readback: { status: readbackStatus },
       index_maintenance: { status: indexStatus, blocker_code: blockerCode },
-    },
+    } } : {}),
     ...(data.partial_state ? { partial_state: data.partial_state } : {}),
     ...(data.zero_write === true ? { zero_write: true } : {}),
   };
   envelope.sqlite = envelope.sqlite?.used === true
-    ? { used: true, source: "warm_index", freshness: "stale", snapshot_ref: envelope.sqlite.snapshot_ref ?? null, revision: envelope.sqlite.revision ?? null, refreshed: false }
+    ? {
+        used: true,
+        source: envelope.sqlite.refreshed === true ? "refreshed_index" : "warm_index",
+        freshness: envelope.sqlite.freshness === "refreshed" ? "refreshed" : "stale",
+        snapshot_ref: envelope.sqlite.snapshot_ref ?? null,
+        revision: envelope.sqlite.revision ?? null,
+        refreshed: envelope.sqlite.refreshed === true,
+      }
     : { used: false, source: "not_used", freshness: "not_applicable", snapshot_ref: null, revision: null, refreshed: false };
   if (failed && envelope.blockers?.[0]) {
     const first = envelope.blockers[0];
@@ -1556,7 +1619,11 @@ function compactMutationTruthEnvelope(envelope, { failed }) {
       details: envelope.blockers[0].details,
     };
     envelope.recovery = {
-      action: details.outcome === "unknown" ? "Inspect live project state before retry." : "Repair blocker and retry.",
+      action: details.partial_state === "opened_but_index_not_ready"
+        ? "Do not replay open; activate returned project_ref, then inspect or force read-only refresh."
+        : details.outcome === "unknown"
+          ? "Inspect live project state before retry."
+          : "Repair blocker and retry.",
       sqlite_rows_authorize_writes: false,
     };
   }
@@ -1569,11 +1636,68 @@ function compactSqliteTruth(indexUsed, invalidation) {
   const revision = invalidation?.revision ?? null;
   return {
     used: true,
-    source: "warm_index",
-    freshness: "stale",
+    source: invalidation?.refreshed === true ? "refreshed_index" : "warm_index",
+    freshness: invalidation?.freshness === "refreshed" ? "refreshed" : "stale",
     snapshot_ref: invalidation?.snapshot_id ?? null,
     revision: revision === null || revision === undefined ? null : String(revision),
-    refreshed: false,
+    refreshed: invalidation?.refreshed === true,
+  };
+}
+
+async function verifyOpenedProjectReadiness({ run, projectIndexRuntime, targetPath, projectRef, now }) {
+  const dirty = readback(await run("file-read-after-dirty", READ_DIRTY_ID));
+  if (
+    typeof dirty?.dirty !== "boolean"
+    || !Number.isInteger(dirty?.raw_dirty_state)
+    || dirty.raw_dirty_state < 0
+  ) {
+    throw macroError("PROJECT_FILE_OPEN_DIRTY_READBACK_INVALID", "Opened project dirty-state readback was invalid.");
+  }
+
+  const summary = readback(await run("file-project-readiness", READ_SUMMARY_ID, { include_counts: true }));
+  for (const field of ["change_count", "track_count", "item_count"]) {
+    if (!Number.isInteger(summary?.[field]) || summary[field] < 0) {
+      throw macroError("PROJECT_FILE_OPEN_SUMMARY_INVALID", `Opened project summary has no usable ${field}.`);
+    }
+  }
+
+  if (
+    typeof projectIndexRuntime?.status !== "function"
+    || typeof projectIndexRuntime?.reconcileProjectRevision !== "function"
+  ) {
+    throw macroError("PROJECT_FILE_OPEN_INDEX_READINESS_UNAVAILABLE", "Project Index runtime cannot reconcile the opened project revision.");
+  }
+  const before = projectIndexRuntime.status() ?? {};
+  if (before.project_ref !== projectRef || before.project_path !== targetPath) {
+    throw macroError("PROJECT_FILE_OPEN_INDEX_IDENTITY_MISMATCH", "Project Index identity does not match the opened project.");
+  }
+  const reconciled = await projectIndexRuntime.reconcileProjectRevision({
+    change_count: summary.change_count,
+    project_ref: projectRef,
+    observed_at: safeNowIso(now),
+  });
+  if (reconciled?.ok !== true) {
+    throw macroError(reconciled?.blockers?.[0]?.code ?? "PROJECT_FILE_OPEN_REVISION_RECONCILE_FAILED", reconciled?.blockers?.[0]?.message ?? "Opened project revision reconciliation failed.");
+  }
+  const after = projectIndexRuntime.status() ?? {};
+  if (after.project_ref !== projectRef || after.project_path !== targetPath) {
+    throw macroError("PROJECT_FILE_OPEN_INDEX_IDENTITY_MISMATCH", "Project Index identity changed during opened-project readiness verification.");
+  }
+
+  return {
+    requested_project_path: targetPath,
+    active_project_path: targetPath,
+    dirty: dirty.dirty,
+    live_summary: {
+      track_count: summary.track_count,
+      item_count: summary.item_count,
+      change_count: summary.change_count,
+    },
+    index: {
+      scopes: ["project_head"],
+      snapshot_id: reconciled.snapshot_id ?? after.snapshot_id ?? null,
+      revision: String(reconciled.revision ?? after.revision ?? `reaper-change-count:${summary.change_count}`),
+    },
   };
 }
 

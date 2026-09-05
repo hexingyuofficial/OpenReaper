@@ -13,7 +13,7 @@ Untested combinations are not implied by a nearby supported row.
 | Templates | supported for accepted catalog | 242 accepted official Templates with 91 registered Bridge handler modules; exact modes and schemas remain authoritative. |
 | Recipes | supported | Two official Recipes plus validated user and forked Recipes through the same generic serial runner. Catalog-stale user revisions are preserved but isolated from discovery recommendations and execution. |
 | Recipe execution | supported | One `call_recipe`, complete preflight and plan, aggregate readback/evidence, resume/reconnect, and one Whole-Recipe Undo. |
-| REAPER Actions | supported | `Remove Silence...`, `Repeat Remove Silence with Last Settings`, and `OpenReaper: Start MCP bridge` recovery Action. |
+| REAPER Actions | supported | `Remove Silence...` and `OpenReaper: Start MCP bridge` recovery Action. Older installs' Repeat Remove Silence Action is removed when its file matches the packaged legacy copy. |
 | Evidence | supported | Fresh bounded evidence roots, live REAPER readback, typed mutation truth, and exact package provenance. |
 
 ## Tested Platforms

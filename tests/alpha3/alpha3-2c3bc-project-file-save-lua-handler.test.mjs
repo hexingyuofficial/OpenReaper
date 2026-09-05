@@ -19,6 +19,13 @@ function bounded_string(value, max_bytes)
   if #text <= max_bytes then return text end
   return text:sub(1, max_bytes)
 end
+function has_control_byte(value)
+  for index = 1, #value do
+    local byte = string.byte(value, index)
+    if byte < 0x20 or byte == 0x7F then return true end
+  end
+  return false
+end
 function safe_budget(request)
   return request.budget or { max_response_bytes = 65536, max_items = 50, max_inline_value_bytes = 2048 }
 end
@@ -228,6 +235,32 @@ assert(calls.save_current == 1)
     runLua(saveAsBody({
       assertions: 'assert(failure == nil); assert(summary.path_matches_target == true); assert(summary.overwrite == true); assert(calls.save_as == 1); assert(calls.save_as_target == target); assert(calls.save_as_options == 8)',
     }));
+  });
+
+  it("passes a Unicode and spaced absolute target unchanged to the stock save API", () => {
+    runLua(`
+local target = "/Users/测试 用户/工程/【音频】 白×滑动音阶/探索 🚀.RPP"
+install_fake({ states = { { path = "/source/Current.RPP", dirty = 1 }, { path = target, dirty = 0 } }, save_as_behavior = "nil" })
+${resolveSaveAsLua('make_request("project.save_project_as", { target_path = target, overwrite = true })')}
+assert(failure == nil)
+assert(summary.path_matches_target == true)
+assert(calls.save_as == 1)
+assert(calls.save_as_target == target)
+`);
+  });
+
+  it("rejects locale-independent raw control bytes before stock save mutation", () => {
+    runLua(`
+for _, byte in ipairs({ 0, 9, 10, 31, 127 }) do
+  local target = "/target/Bad" .. string.char(byte) .. ".RPP"
+  install_fake({ states = { { path = "/source/Current.RPP", dirty = 1 } } })
+  local summary, failure = save_project_as(make_request("project.save_project_as", { target_path = target, overwrite = true }))
+  assert(summary == nil)
+  assert(failure.code == "PARAMS_INVALID")
+  assert(failure.details.blocker == "target_structure_invalid")
+  assert(calls.save_as == 0)
+end
+`);
   });
 
   it("proves the complete success-envelope budget before save and defaults pass maximum supported paths", () => {

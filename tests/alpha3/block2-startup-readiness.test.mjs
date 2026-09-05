@@ -140,7 +140,7 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
     const source = readFileSync(START_HELPER, "utf8");
     assert.match(source, /--recover-existing/u);
     assert.match(source, /verified_existing_reaper_pid\(\)/u);
-    assert.match(source, /startup-mode=recover_existing/u);
+    assert.match(source, /startup-mode=attach_existing(?:_explicit)?/u);
     assert.match(source, /SAME_INSTANCE_BRIDGE_ACTION_REQUIRED/u);
     assert.match(source, /cannot restart (?:its|a) stopped Bridge/u);
     assert.match(source, /existing session could not be safely verified; refusing to launch another REAPER/u);
@@ -157,8 +157,10 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
     assert.ok(windowClassificationIndex >= 0 && deepTreeScanIndex > windowClassificationIndex, "window subrole must be classified before deep accessibility scans");
     assert.match(source, /set isPotentialDialog to windowSubrole is "AXDialog" or windowSubrole is "AXSheet" or windowTitle is "Project Load Warning"/u);
     assert.match(source, /on isExactReaScriptRunStatusWindow\(theWindow, hasRunningReaScriptMainWindow\)[\s\S]+windowTitle is "Window" and windowRole is "AXWindow" and windowSubrole is "AXDialog" and windowWidth > 0 and windowWidth is less than or equal to 96 and windowHeight > 0 and windowHeight is less than or equal to 48 and windowButtonCount is 1[\s\S]+end isExactReaScriptRunStatusWindow/u);
+    assert.match(source, /on isNamedReaScriptStatusWindow\(theWindow, windowTitle\)[\s\S]+windowTitle is not "Scripts on" and windowTitle is not "Scripts On"[\s\S]+end isNamedReaScriptStatusWindow/u);
     assert.match(source, /if \(subrole of candidateWindow as text\) is "AXStandardWindow" and \(name of candidateWindow as text\) contains "\[ReaScript: Run\]" then[\s\S]+set hasRunningReaScriptMainWindow to true/u);
     assert.match(source, /set isReaScriptRunStatusWindow to isPotentialDialog and my isExactReaScriptRunStatusWindow\(reaperWindow, hasRunningReaScriptMainWindow\)[\s\S]+set sawReaScriptRunStatusWindow to true[\s\S]+set isPotentialDialog to false/u);
+    assert.match(source, /if not isReaScriptRunStatusWindow then set isReaScriptRunStatusWindow to my isNamedReaScriptStatusWindow\(reaperWindow, windowTitle\)/u);
     assert.match(source, /if not isPotentialDialog and not isReaScriptRunStatusWindow then/u);
     assert.match(source, /if sawReaScriptRunStatusWindow then return "ignored_reascript_run_status_window"/u);
     assert.match(source, /if isPotentialDialog then/u);
@@ -429,8 +431,9 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
       expandedProductSurface.agent_startup_guidance_snapshot.commands.installed_start_project_for_mcp,
       OPENREAPER_INSTALLED_PROJECT_START_COMMAND,
     );
-    assert.equal(expandedProductSurface.agent_startup_guidance_snapshot.requirements.normal_reaper_launch_supported, false);
-    assert.equal(expandedProductSurface.agent_startup_guidance_snapshot.requirements.only_openreaper_startup_supported, true);
+    assert.equal(expandedProductSurface.agent_startup_guidance_snapshot.requirements.normal_reaper_launch_supported, true);
+    assert.equal(expandedProductSurface.agent_startup_guidance_snapshot.requirements.only_openreaper_startup_supported, false);
+    assert.equal(expandedProductSurface.agent_startup_guidance_snapshot.requirements.attach_existing_reaper_supported, true);
     assert.equal(expandedProductSurface.agent_startup_guidance_snapshot.requirements.bridge_action_required_after_start, false);
     assert.equal(expandedProductSurface.agent_startup_guidance_snapshot.requirements.live_probe_required_before_success_claim, true);
     assert.equal(
@@ -481,7 +484,9 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
       "/tmp/OpenReaper-alpha/bin/openreaper-start --project-path /path/to/project.RPP",
     );
     assert.equal(guidance.requirements.mcp_client_server_name, "openreaper");
-    assert.equal(guidance.requirements.normal_reaper_launch_supported, false);
+    assert.equal(guidance.requirements.normal_reaper_launch_supported, true);
+    assert.equal(guidance.requirements.only_openreaper_startup_supported, false);
+    assert.equal(guidance.requirements.attach_existing_reaper_supported, true);
     assert.equal(guidance.requirements.reconnect_after_startup, true);
     assert.equal(guidance.requirements.bridge_action_required_after_start, false);
     assert.equal(guidance.requirements.live_probe_required_before_success_claim, true);
@@ -510,6 +515,8 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
     assert.match(guidance.agent_flow.map((step) => step.agent_action).join("\n"), /public read probe/);
     assert.match(guidance.agent_flow.map((step) => step.agent_action).join("\n"), /never clicks or closes REAPER windows/u);
     assert.match(guidance.agent_flow.map((step) => step.agent_action).join("\n"), /reconnect/);
+    assert.deepEqual(guidance.startup_dialog_assist.non_blocking_windows, ["REAPER main window", "Scripts on", "ReaScript run status window"]);
+    assert.match(guidance.agent_flow.map((step) => step.agent_action).join("\n"), /Scripts on.*non-blocking/u);
     assert.equal(guidance.safety.added_tools, 0);
     assert.equal(guidance.safety.hidden_executor, false);
     assert.equal(guidance.safety.public_call_recipe, false);

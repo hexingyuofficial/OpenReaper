@@ -491,12 +491,12 @@ export const WAVE1A_PROJECT_TEMPLATES = deepFreeze([
     contract: TEMPLATE_DESCRIPTOR_CONTRACT,
     id: WAVE1A_PROJECT_TEMPLATE_IDS.createRegion,
     title: "Create region",
-    summary: "Create one explicit-bounds ordinary project region with an index-number reference.",
+    summary: "Create one ordinary project region from explicit bounds or the execution-time current Time Selection.",
     pack: "project",
     lifecycle: "experimental",
     risk: "write",
     entity_kind: "region",
-    tags: ["project", "region", "create"],
+    tags: ["project", "region", "create", "target_binding", "time_selection"],
     bridge: bridge({
       operation_family: "run_command",
       operation_name: "template.execute",
@@ -508,9 +508,15 @@ export const WAVE1A_PROJECT_TEMPLATES = deepFreeze([
       start_seconds: { type: "number" },
       end_seconds: { type: "number" },
       color: { type: "string" },
-    }, ["name", "start_seconds", "end_seconds"]),
+      target_binding: timeSelectionTargetBindingSchema(),
+    }, ["name"]),
     outputSchema: objectSchema({
       region_ref: { type: "string" },
+      start_seconds: { type: "number" },
+      end_seconds: { type: "number" },
+      length_seconds: { type: "number" },
+      target_mode: { enum: ["explicit", "time_selection"] },
+      target_fingerprint: { type: "string" },
     }, ["region_ref"]),
     refs: refs({
       output: [ref("region_ref", "region", true, "Created region index-number ref.")],
@@ -518,7 +524,7 @@ export const WAVE1A_PROJECT_TEMPLATES = deepFreeze([
     artifacts: artifacts(),
     expectedDelta: expectedDelta({
       kind: "mutation",
-      summary: "Creates one explicit-bounds project region.",
+      summary: "Creates one project region from explicit or execution-time live bounds.",
       entities: [
         {
           entity_kind: "region",
@@ -542,6 +548,14 @@ export const WAVE1A_PROJECT_TEMPLATES = deepFreeze([
         name: "create_chorus_region",
         summary: "Create a region named chorus over explicit bounds.",
         input: { name: "chorus", start_seconds: 12, end_seconds: 28 },
+      },
+      {
+        name: "create_region_from_time_selection",
+        summary: "Create a region from the Time Selection resolved when execution begins.",
+        input: {
+          name: "selection",
+          target_binding: timeSelectionTargetBindingExample(),
+        },
       },
     ],
   },
@@ -1019,6 +1033,7 @@ export const WAVE1A_PROJECT_TEMPLATES = deepFreeze([
       include_selected_items: { type: "boolean" },
       include_track_items: { type: "boolean" },
       include_takes: { type: "boolean" },
+      include_take_fx: { type: "boolean" },
       selector_filter: { type: "object" },
     }, []),
     outputSchema: objectSchema({
@@ -1026,6 +1041,7 @@ export const WAVE1A_PROJECT_TEMPLATES = deepFreeze([
       tracks: { type: "array" },
       items: { type: "array" },
       takes: { type: "array" },
+      take_fx: { type: "array" },
       selected_items: { type: "array" },
       track_count: { type: "integer" },
       item_count: { type: "integer" },
@@ -1036,6 +1052,7 @@ export const WAVE1A_PROJECT_TEMPLATES = deepFreeze([
       returned_track_count: { type: "integer" },
       returned_item_count: { type: "integer" },
       returned_take_count: { type: "integer" },
+      returned_take_fx_count: { type: "integer" },
       next_track_cursor: { type: "string" },
       next_item_cursor: { type: "string" },
       next_take_cursor: { type: "string" },
@@ -1048,6 +1065,8 @@ export const WAVE1A_PROJECT_TEMPLATES = deepFreeze([
       takes_truncated: { type: "boolean" },
       take_coverage_status: { type: "string" },
       take_coverage: { type: "object" },
+      take_fx_coverage_status: { type: "string" },
+      take_fx_coverage: { type: "object" },
       truncated: { type: "boolean" },
     }, ["project_ref", "tracks", "selected_items", "track_count", "item_count", "truncated"]),
     refs: refs({
@@ -1056,6 +1075,7 @@ export const WAVE1A_PROJECT_TEMPLATES = deepFreeze([
         ref("track_ref", "track", false, "Canonical track refs included in the compact snapshot."),
         ref("item_ref", "item", false, "Canonical item refs included in the compact snapshot."),
         ref("take_ref", "take", false, "Canonical take refs included when Take inventory is requested."),
+        ref("fx_ref", "fx", false, "Canonical Take FX refs included when Take FX inventory is requested."),
       ],
     }),
     artifacts: artifacts(),
@@ -1515,6 +1535,29 @@ function objectSchema(properties = {}, required = Object.keys(properties)) {
     properties,
     required,
     additionalProperties: false,
+  };
+}
+
+function timeSelectionTargetBindingSchema() {
+  return objectSchema({
+    bind_at: { const: "execution" },
+    domain: { const: "time_range" },
+    selector: { const: "time_selection" },
+    aggregation: { const: "single" },
+    cardinality: objectSchema({
+      minimum: { const: 1 },
+      maximum: { const: 1 },
+    }),
+  });
+}
+
+function timeSelectionTargetBindingExample() {
+  return {
+    bind_at: "execution",
+    domain: "time_range",
+    selector: "time_selection",
+    aggregation: "single",
+    cardinality: { minimum: 1, maximum: 1 },
   };
 }
 

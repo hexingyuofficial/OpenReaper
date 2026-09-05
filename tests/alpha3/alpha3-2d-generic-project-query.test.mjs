@@ -27,7 +27,18 @@ function freshIndex({ snapshotId = "snapshot:a", empty = false } = {}) {
   const rows = empty ? {} : {
     tracks: [{ ref: "track:guid:{T1}", name: "Drums", index: 0, freshness_status: "fresh", coverage_status: "complete" }],
     items: [{ ref: "item:guid:{I1}", track_ref: "track:guid:{T1}", start_seconds: 1, end_seconds: 2, freshness_status: "fresh", coverage_status: "complete" }],
-    takes: [{ ref: "take:guid:{K1}", item_ref: "item:guid:{I1}", track_ref: "track:guid:{T1}", active: true, freshness_status: "fresh", coverage_status: "complete" }],
+    takes: [{
+      ref: "take:guid:{K1}",
+      item_ref: "item:guid:{I1}",
+      track_ref: "track:guid:{T1}",
+      active: true,
+      source_ref: "file:path:/Users/Zhuanz/工程/对白 素材/vo_角色_male1.ogg",
+      source_path: "/Users/Zhuanz/工程/对白 素材/vo_角色_male1.ogg",
+      source_basename: "vo_角色_male1.ogg",
+      source_identity_status: "available",
+      freshness_status: "fresh",
+      coverage_status: "complete",
+    }],
     fx: [{ ref: "fx:track:guid:{T1}:0", owner_ref: "track:guid:{T1}", plugin_name: "ReaEQ", slot_index: 0, freshness_status: "fresh", coverage_status: "complete" }],
     sends: [{ ref: "send:track:guid:{T1}:0", source_track_ref: "track:guid:{T1}", destination_track_ref: "track:guid:{T2}", send_index: 0, freshness_status: "fresh", coverage_status: "complete" }],
     envelopes: [{ ref: "envelope:track:guid:{T1}:volume", owner_ref: "track:guid:{T1}", name: "Volume", freshness_status: "fresh", coverage_status: "complete" }],
@@ -92,6 +103,27 @@ describe("Alpha3.2-D generic macro.project.query", () => {
         assert.equal(empty.coverage.row_count, 0, entity);
       }
     }
+  });
+
+  it("returns exact Take source identity through generic filename selectors", () => {
+    const result = planAlpha3_2DGenericProjectQuery({
+      entity: "takes",
+      selectors: { source_basename: "MALE1" },
+      filters: { source_identity_status: "available" },
+      fields: ["item_ref", "source_ref", "source_path", "source_basename", "source_identity_status"],
+      refresh_policy: "never",
+      limit: 10,
+    }, { projectIndex: freshIndex() });
+
+    assert.equal(result.ok, true, JSON.stringify(result.blockers));
+    assert.deepEqual(result.rows, [{
+      ref: "take:guid:{K1}",
+      item_ref: "item:guid:{I1}",
+      source_ref: "file:path:/Users/Zhuanz/工程/对白 素材/vo_角色_male1.ogg",
+      source_path: "/Users/Zhuanz/工程/对白 素材/vo_角色_male1.ogg",
+      source_basename: "vo_角色_male1.ogg",
+      source_identity_status: "available",
+    }]);
   });
 
   it("makes refresh policy real without executing child requests", () => {

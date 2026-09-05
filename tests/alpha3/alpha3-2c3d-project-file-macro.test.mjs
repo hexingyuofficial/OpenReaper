@@ -82,6 +82,8 @@ describe("Alpha3.2-C3D macro.project.file plan-only runtime", () => {
   it("preserves native Unicode/space paths and rejects shell or URI transport forms before planning writes", () => {
     const nativePaths = [
       "/projects/对白 中文/demo project.RPP",
+      "/projects/【音频】 白×滑动音阶 🎛️/工程 demo.RPP",
+      "/projects/e\u0301 与 é/(mix): take.RPP",
       "C:\\OpenReaperLab\\工程 中文\\demo project.RPP",
       "\\\\server\\share\\工程 中文\\demo project.RPP",
     ];

@@ -54,8 +54,7 @@ local function d16_tracks_index(track)
 end
 
 local function d16_tracks_name(track)
-  local ok, _, name = call_reaper("GetTrackName", track, "")
-  return bounded_string(ok and first_string(name) or "", 160)
+  return read_track_name(track, 160)
 end
 
 local function d16_tracks_ref_string(track)

@@ -146,6 +146,11 @@ describe("Wave 2A fx template descriptors", () => {
       minimum: 0,
       maximum: 1,
     });
+    assert.deepEqual(read.inputSchema.properties.probe_display_value, {
+      type: "string",
+      minLength: 1,
+      maxLength: 80,
+    });
 
     for (const descriptor of [read, set]) {
       assert.deepEqual(descriptor.inputSchema.properties.param_ident, { type: "string" });
@@ -163,7 +168,12 @@ describe("Wave 2A fx template descriptors", () => {
       });
     }
     assert.deepEqual(set.outputSchema.properties.verification_mode, {
-      enum: ["numeric_tolerance", "native_discrete_format"],
+      enum: ["numeric_tolerance", "native_discrete_format", "native_display_value"],
+    });
+    assert.deepEqual(set.inputSchema.properties.display_value, {
+      type: "string",
+      minLength: 1,
+      maxLength: 80,
     });
 
     const fx = fxRef("track", 0);
@@ -190,6 +200,96 @@ describe("Wave 2A fx template descriptors", () => {
       param_ident: "band1_shape",
       probe_normalized_value: 0.125,
     });
+  });
+
+  it("keeps the original FX atom inputs strict while admitting bounded homogeneous-set dispatch", () => {
+    const byId = new Map(createWave2AFxTemplates().map((descriptor) => [descriptor.id, descriptor]));
+    const list = byId.get("template.fx.list_fx_parameters");
+    const addTake = byId.get("template.fx.add_take_fx");
+    const batch = byId.get("template.fx.set_parameter_assignments_batch");
+    const fx = fxRef("take", 0);
+    const setFields = {
+      expected_plugin_identity: { name: "VST: ReaEQ (Cockos)", plugin_id: "reaeq" },
+      expected_layout_fingerprint: "layout:reaeq",
+      expected_representative_fx_ref: fx.ref,
+      expected_members: [{ fx_ref: fx.ref }],
+      controls: [{ id: "frequency", param_ident: "frequency", natural_value: "3000 Hz" }],
+    };
+
+    assert.equal(ALLOWLIST.length, 17);
+    assert.deepEqual(addTake.inputSchema.required, ["plugin_name"]);
+    assert.deepEqual(batch.inputSchema.required, ["batch", "dry_run"]);
+    assert.deepEqual(addTake.refs.input.map(({ name, kind, required }) => ({ name, kind, required })), [
+      { name: "take_ref", kind: "take", required: false },
+      { name: "track_ref", kind: "track", required: false },
+    ]);
+
+    const inspectRequest = buildTemplateBridgeRequest({
+      descriptor: list,
+      input: {
+        mode: "inspect_set",
+        expected_set_fingerprint: "a".repeat(64),
+        ...setFields,
+      },
+      refs: [fx],
+      context: context({ request_sequence: 62 }),
+    });
+    assert.equal(inspectRequest.params.mode, "inspect_set");
+    assert.equal(inspectRequest.refs.length, 1);
+
+    const directTakeRequest = buildTemplateBridgeRequest({
+      descriptor: addTake,
+      input: { plugin_name: "ReaEQ (Cockos)" },
+      refs: { take_ref: takeRef("{TAKE-FX}") },
+      context: context({ request_sequence: 63 }),
+    });
+    assert.equal(directTakeRequest.params.plugin_name, "ReaEQ (Cockos)");
+
+    const fanoutRequest = buildTemplateBridgeRequest({
+      descriptor: addTake,
+      input: {
+        plugin_name: "ReaEQ (Cockos)",
+        duplicate_policy: "reuse_exact",
+        include_parameter_layout: true,
+        target_binding: { bind_at: "execution" },
+        dry_run: false,
+      },
+      refs: { track_ref: trackRef("{TRACK-FX-SET}") },
+      context: context({ request_sequence: 64 }),
+    });
+    assert.equal(fanoutRequest.params.target_binding.bind_at, "execution");
+
+    const directBatchRequest = buildTemplateBridgeRequest({
+      descriptor: batch,
+      input: { dry_run: false, batch: [{ id: "gain" }] },
+      refs: { fx_refs: fx },
+      context: context({ request_sequence: 65 }),
+    });
+    assert.equal(directBatchRequest.params.batch.length, 1);
+
+    const sharedRequest = buildTemplateBridgeRequest({
+      descriptor: batch,
+      input: {
+        mode: "shared_plan",
+        dry_run: false,
+        batch: [],
+        set_fingerprint: "a".repeat(64),
+        plan_hash: "b".repeat(64),
+        ...setFields,
+      },
+      refs: [fx],
+      context: context({ request_sequence: 66 }),
+    });
+    assert.equal(sharedRequest.params.mode, "shared_plan");
+    assert.deepEqual(sharedRequest.params.batch, []);
+
+    assert.throws(() => buildTemplateBridgeRequest({
+      descriptor: batch,
+      input: { mode: "shared_plan", dry_run: false, ...setFields },
+      refs: [fx],
+      context: context({ request_sequence: 67 }),
+    }), (error) => error?.code === "TEMPLATE_INPUT_INVALID"
+      && error?.details?.errors?.includes("input.batch is required."));
   });
 
   it("loads in a pack-local catalog, rejects duplicates, and keeps discovery compact", () => {

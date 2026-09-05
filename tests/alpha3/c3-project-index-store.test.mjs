@@ -204,6 +204,10 @@ describe("Alpha3 C3 Project SQLite Index store helpers", () => {
             name: "对白 Take 你好",
             active: true,
             source_kind: "audio",
+            source_ref: "file:path:/Users/Zhuanz/工程/对白 素材/vo_角色_male1.ogg",
+            source_path: "/Users/Zhuanz/工程/对白 素材/vo_角色_male1.ogg",
+            source_basename: "vo_角色_male1.ogg",
+            source_identity_status: "available",
           },
         ],
       });
@@ -310,6 +314,9 @@ describe("Alpha3 C3 Project SQLite Index store helpers", () => {
       assert.equal(snapshot.rows.envelopes.length, 1);
       assert.equal(snapshot.rows.tracks[0].name, "对白 主轨 中文");
       assert.equal(snapshot.rows.takes[0].name, "对白 Take 你好");
+      assert.equal(snapshot.rows.takes[0].source_path, "/Users/Zhuanz/工程/对白 素材/vo_角色_male1.ogg");
+      assert.equal(snapshot.rows.takes[0].source_basename, "vo_角色_male1.ogg");
+      assert.equal(snapshot.rows.takes[0].source_identity_status, "available");
       assert.equal(snapshot.rows.envelopes[0].payload_ref, "artifact:sqlite:automation");
       assert.equal(snapshot.rows.tracks[0].payload_ref, "artifact:sqlite:tracks");
       assert.deepEqual(snapshot.rows.tracks[0].summary, { role: "drums" });
@@ -333,7 +340,7 @@ describe("Alpha3 C3 Project SQLite Index store helpers", () => {
       }, { projectIndex: second.adapter });
       const reopenedTakesPlan = planAlpha3C3ProjectIndexQueryMacro("macro.query_takes", {
         filters: { track_ref: "track:guid:{SQLITE-A}" },
-        fields: ["name", "item_ref", "track_ref", "source_kind", "payload_ref"],
+        fields: ["name", "item_ref", "track_ref", "source_kind", "source_ref", "source_path", "source_basename", "source_identity_status", "payload_ref"],
         limit: 10,
       }, { projectIndex: second.adapter });
       const reopenedAutomationPlan = planAlpha3C3ProjectIndexQueryMacro("macro.query_automation", {
@@ -367,6 +374,10 @@ describe("Alpha3 C3 Project SQLite Index store helpers", () => {
         item_ref: "item:guid:{SQLITE-ITEM}",
         track_ref: "track:guid:{SQLITE-A}",
         source_kind: "audio",
+        source_ref: "file:path:/Users/Zhuanz/工程/对白 素材/vo_角色_male1.ogg",
+        source_path: "/Users/Zhuanz/工程/对白 素材/vo_角色_male1.ogg",
+        source_basename: "vo_角色_male1.ogg",
+        source_identity_status: "available",
         payload_ref: "artifact:sqlite:takes",
       });
       assert.equal(reopenedAutomationPlan.ok, true);

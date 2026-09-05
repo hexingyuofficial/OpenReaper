@@ -190,7 +190,7 @@ try {
   result.hashes.macro_scope = result.scopes.all?.plan_hash ?? null;
   result.hashes.macro_normalize = result.normalization.lufs_i?.plan_hash ?? null;
   result.hashes.action_contract = {
-    action_names: ["OpenReaper: Remove Silence...", "OpenReaper: Repeat Remove Silence with Last Settings"],
+    action_names: ["OpenReaper: Remove Silence..."],
     shared_capability: "template.items.split_item_by_silence",
     plan_hash_field: "plan_hash",
     source: "reaper/actions/OpenReaper/remove-silence-shared.lua",

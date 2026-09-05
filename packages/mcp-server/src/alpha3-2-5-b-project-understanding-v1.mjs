@@ -17,6 +17,7 @@ import {
   ALPHA3_2E_PROJECT_INSPECT_MACRO_ID,
   planAlpha3_2EProjectInspectMacro,
 } from "./alpha3-2e-small-macro-spine-v1.mjs";
+import { resolveTargetSet } from "../../core/src/target-binding-v1.mjs";
 
 export const ALPHA3_2_5_B_PROJECT_UNDERSTANDING_CONTRACT =
   "alpha3.2.5.b.project_understanding.v1";
@@ -28,11 +29,19 @@ const READ_DIRTY_ID = "template.project.read_dirty_state";
 const READ_RENDER_SETTINGS_ID = "template.render.read_settings";
 const OBSERVATION_BUNDLE_ID = "template.project.create_observation_bundle";
 const ITEM_OVERVIEW_ID = "template.project.read_track_item_overview";
+const TRANSPORT_STATE_ID = "template.transport.read_state";
 const ROUTING_GRAPH_ID = "template.routing.read_project_routing_graph";
 const AUTOMATION_INVENTORY_ID = "template.automation.list_project_envelopes";
+const RESOLVE_ENVELOPE_ID = "template.automation.resolve_envelope_ref";
+const READ_AUTOMATION_ITEMS_ID = "template.automation.read_automation_items";
+const READ_ENVELOPE_POINTS_ID = "template.automation.read_envelope_points";
+const LIVE_TARGET_INVENTORY_PAGE_SIZE = 64;
+const LIVE_TARGET_INVENTORY_MAX_OBJECTS = 512;
+const LIVE_TARGET_INVENTORY_MAX_PAGES = 16;
 const MAX_HYDRATION_CALLS = 16;
 const MAX_EXACT_SELECTOR_REFS = 100;
 const MAX_COMPLETE_FX_TRACKS = 64;
+const MAX_COMPLETE_PROJECT_FX_ROWS = 4096;
 const MAX_RESULT_DATA_BYTES = 18_000;
 const MINIMUM_PUBLIC_QUERY_BUDGET = 2_048;
 const PROJECT_INDEX_HYDRATION_TRACK_LIMIT = 32;
@@ -77,6 +86,10 @@ const PROJECT_UNDERSTANDING_TEMPLATE_IDS = Object.freeze([
     READ_SUMMARY_ID,
     READ_DIRTY_ID,
     READ_RENDER_SETTINGS_ID,
+    TRANSPORT_STATE_ID,
+    RESOLVE_ENVELOPE_ID,
+    READ_AUTOMATION_ITEMS_ID,
+    READ_ENVELOPE_POINTS_ID,
   ]),
 ]);
 
@@ -268,6 +281,19 @@ async function executeProjectQuery({
   }
 
   const publicInput = publicQueryInput(request);
+  if (isObject(publicInput.target_binding)) {
+    return executeLiveTargetQuery({
+      entry,
+      request,
+      publicInput,
+      executeAtomic,
+      projectIndexRuntime,
+      startedAt,
+      now,
+      stages,
+      initialCold,
+    });
+  }
   let plan = planAlpha3_2DGenericProjectQuery(publicInput, {
     projectIndex: projectIndexRuntime?.adapter,
     catalog,
@@ -491,6 +517,704 @@ async function executeProjectQuery({
     candidateLimit = Math.floor((minimumCandidateLimit + maximumCandidateLimit) / 2);
   }
   return bestEnvelope ?? budgetFailure;
+}
+
+async function executeLiveTargetQuery({
+  entry,
+  request,
+  publicInput,
+  executeAtomic,
+  projectIndexRuntime,
+  startedAt,
+  now,
+  stages,
+  initialCold,
+}) {
+  if (typeof executeAtomic !== "function") {
+    return blockedEnvelope({
+      entry, request, startedAt, now, stages, status: runtimeStatus(projectIndexRuntime),
+      code: "LIVE_TARGET_EXECUTOR_UNAVAILABLE",
+      message: "A live target-bound query requires the configured OpenReaper executor.",
+    });
+  }
+  if (publicInput.entity === "automation") {
+    return executeLiveAutomationTargetQuery({
+      entry, request, publicInput, executeAtomic, projectIndexRuntime,
+      startedAt, now, stages, initialCold,
+    });
+  }
+  if (!["items", "tracks", "takes"].includes(publicInput.entity)) {
+    return blockedEnvelope({
+      entry, request, startedAt, now, stages, status: runtimeStatus(projectIndexRuntime),
+      code: "TARGET_BINDING_ENTITY_UNSUPPORTED",
+      message: "This live query slice accepts target_binding only for items, tracks, or takes.",
+    });
+  }
+  if (publicInput.target_binding.domain !== publicInput.entity) {
+    return blockedEnvelope({
+      entry, request, startedAt, now, stages, status: runtimeStatus(projectIndexRuntime),
+      code: "TARGET_BINDING_DOMAIN_MISMATCH",
+      message: "target_binding.domain must match macro.project.query entity.",
+    });
+  }
+
+  const inventory = await readCompleteLiveTargetInventory({ request, executeAtomic });
+  stages.push(stageResult(
+    "query-project-revision",
+    "template_execute",
+    inventory.ok ? "completed" : "failed",
+    inventory.ok
+      ? `Read complete live Track/Item target truth in ${inventory.executions.length} bounded page(s).`
+      : "Failed while reading complete live Track/Item target truth.",
+    inventory.evidenceRefs,
+  ));
+  if (!inventory.ok) {
+    if (inventory.execution) {
+      const failed = readFailure(ITEM_OVERVIEW_ID, inventory.execution);
+      return executionFailure({ entry, request, startedAt, now, stages, projectIndexRuntime, error: failed.error, blockers: failed.blockers });
+    }
+    return blockedEnvelope({
+      entry, request, startedAt, now, stages, status: runtimeStatus(projectIndexRuntime),
+      code: inventory.code,
+      message: inventory.message,
+      blockers: [{ code: inventory.code, message: inventory.message, recoverable: true }],
+    });
+  }
+
+  let takeInventory = { ok: true, takes: [], executions: [], artifactRefs: [], evidenceRefs: [] };
+  if (publicInput.entity === "takes") {
+    takeInventory = await readCompleteLiveTakeInventory({ request, executeAtomic });
+    stages.push(stageResult(
+      "query-index-hydrate",
+      "template_execute",
+      takeInventory.ok ? "completed" : "failed",
+      takeInventory.ok
+        ? `Read complete live Take target truth in ${takeInventory.executions.length} bounded page(s).`
+        : "Failed while reading complete live Take target truth.",
+      takeInventory.evidenceRefs,
+    ));
+    if (!takeInventory.ok) {
+      if (takeInventory.execution) {
+        const failed = readFailure(ITEM_OVERVIEW_ID, takeInventory.execution);
+        return executionFailure({ entry, request, startedAt, now, stages, projectIndexRuntime, error: failed.error, blockers: failed.blockers });
+      }
+      return blockedEnvelope({
+        entry, request, startedAt, now, stages, status: runtimeStatus(projectIndexRuntime),
+        code: takeInventory.code,
+        message: takeInventory.message,
+        blockers: [{ code: takeInventory.code, message: takeInventory.message, recoverable: true }],
+      });
+    }
+  }
+
+  const transportExecution = await executeAtomic({
+    id: TRANSPORT_STATE_ID,
+    input: {},
+    refs: [],
+    context: request.context,
+    budget: internalReadBudget(request),
+    observeProjectIndex: false,
+  });
+  stages.push(stageResult("query-index-hydrate", "template_execute", transportExecution?.ok === true ? "completed" : "failed", "Read current live time-selection truth.", executionEvidenceRefs(transportExecution)));
+  if (transportExecution?.ok !== true) {
+    const failed = readFailure(TRANSPORT_STATE_ID, transportExecution);
+    return executionFailure({ entry, request, startedAt, now, stages, projectIndexRuntime, error: failed.error, blockers: failed.blockers });
+  }
+  const transport = executionReadback(transportExecution);
+  const tracks = inventory.tracks.map((row) => ({ ...row, ref: row.ref ?? row.track_ref }));
+  const items = inventory.items.map((row) => ({ ...row, ref: row.ref ?? row.item_ref, owner_ref: row.owner_ref ?? row.track_ref }));
+  const takes = takeInventory.takes.map((row) => ({ ...row, ref: row.ref ?? row.take_ref, owner_ref: row.owner_ref ?? row.item_ref }));
+  const selectedItems = items.filter((row) => row.selected === true);
+  const selectedItemRefs = new Set(selectedItems.map((row) => row.ref));
+  const selectedTakes = takes.filter((row) => row.active === true && selectedItemRefs.has(row.item_ref ?? row.owner_ref));
+  const resolved = resolveTargetSet({
+    binding: publicInput.target_binding,
+    inventory: { tracks, items, takes },
+    selection: { tracks: tracks.filter((row) => row.selected === true), items: selectedItems, takes: selectedTakes },
+    timeSelection: liveTimeSelection(transport),
+    operation: "query",
+  });
+  if (!resolved.ok) {
+    return blockedEnvelope({
+      entry, request, startedAt, now, stages, status: runtimeStatus(projectIndexRuntime),
+      code: resolved.code,
+      message: resolved.message,
+      blockers: resolved.blockers,
+      data: { zero_write: true, target_binding: publicInput.target_binding },
+    });
+  }
+  const fields = Array.isArray(publicInput.fields) ? publicInput.fields : [];
+  const limit = Number.isInteger(publicInput.limit) ? publicInput.limit : 25;
+  const rows = resolved.target_set.members.slice(0, limit).map((row) => fields.length === 0
+    ? row
+    : Object.fromEntries(fields.filter((field) => Object.hasOwn(row, field)).map((field) => [field, row[field]])));
+  stages.push(stageResult("query-index-read", "live_ref_resolve", "completed", `Resolved ${resolved.target_set.count} live ${resolved.target_set.domain} target(s).`));
+  stages.push(stageResult("query-result-project", "result_project", "completed", "Projected the live target set without SQLite or Agent-side intersection."));
+  return successEnvelope({
+    entry, request, startedAt, now, stages, projectIndexRuntime, initialCold,
+    refreshed: false,
+    sqliteUsed: false,
+    summary: `Live target query resolved ${resolved.target_set.count} ${resolved.target_set.domain}.`,
+    canonicalRefs: resolved.target_set.member_refs,
+    artifactRefs: [...inventory.artifactRefs, ...takeInventory.artifactRefs, ...executionArtifactRefs(transportExecution)],
+    data: {
+      entity: publicInput.entity,
+      rows,
+      returned_row_count: rows.length,
+      available_row_count: resolved.target_set.count,
+      target_set: { ...resolved.target_set, members: undefined },
+      coverage: { status: "complete", complete: true, source: "live_reaper" },
+      ...(publicInput.target_binding.domain === "takes" && publicInput.target_binding.selector === "selected"
+        ? { selection_truth: "active_takes_of_selected_items" }
+        : {}),
+      page: { limit, has_more: resolved.target_set.count > rows.length, next_cursor: null },
+      refs_truth: { posture: "live_resolved_refs", sqlite_authorizes_writes: false, write_requires_live_re_resolution: true },
+    },
+  });
+}
+
+async function readCompleteLiveTargetInventory({ request, executeAtomic }) {
+  const tracks = [];
+  const items = [];
+  const executions = [];
+  const artifactRefs = [];
+  const evidenceRefs = [];
+  let trackCursor = 0;
+  let itemCursor = 0;
+  let tracksComplete = false;
+  let itemsComplete = false;
+
+  for (let pageIndex = 0; pageIndex < LIVE_TARGET_INVENTORY_MAX_PAGES; pageIndex += 1) {
+    const execution = await executeAtomic({
+      id: ITEM_OVERVIEW_ID,
+      input: {
+        max_tracks: tracksComplete ? 1 : LIVE_TARGET_INVENTORY_PAGE_SIZE,
+        max_items: itemsComplete ? 1 : LIVE_TARGET_INVENTORY_PAGE_SIZE,
+        max_items_per_track: 0,
+        max_selected_items: 1,
+        track_cursor: trackCursor,
+        item_cursor: itemCursor,
+        include_track_items: false,
+        include_selected_items: false,
+      },
+      refs: [],
+      context: request.context,
+      budget: internalReadBudget(request),
+      observeProjectIndex: false,
+    });
+    executions.push(execution);
+    evidenceRefs.push(...executionEvidenceRefs(execution));
+    artifactRefs.push(...executionArtifactRefs(execution));
+    if (execution?.ok !== true) {
+      return { ok: false, execution, executions, evidenceRefs: unique(evidenceRefs), artifactRefs: unique(artifactRefs) };
+    }
+
+    const readback = executionReadback(execution);
+    const declaredTrackCount = readback.track_count;
+    const declaredItemCount = readback.item_count;
+    if (!Number.isInteger(declaredTrackCount) || !Number.isInteger(declaredItemCount)
+      || declaredTrackCount < 0 || declaredItemCount < 0) {
+      return liveTargetInventoryFailure("TARGET_BINDING_INVENTORY_INCOMPLETE", "The live target inventory omitted valid Track or Item totals.", executions, evidenceRefs, artifactRefs);
+    }
+    if (declaredTrackCount > LIVE_TARGET_INVENTORY_MAX_OBJECTS || declaredItemCount > LIVE_TARGET_INVENTORY_MAX_OBJECTS) {
+      return liveTargetInventoryFailure(
+        "TARGET_BINDING_INVENTORY_LIMIT_EXCEEDED",
+        `The live target inventory exceeds the ${LIVE_TARGET_INVENTORY_MAX_OBJECTS}-Track/Item resolver ceiling; no partial target set was returned.`,
+        executions,
+        evidenceRefs,
+        artifactRefs,
+      );
+    }
+
+    if (!tracksComplete) {
+      if (!Array.isArray(readback.tracks)) {
+        return liveTargetInventoryFailure("TARGET_BINDING_INVENTORY_INCOMPLETE", "A live Track page omitted its row array.", executions, evidenceRefs, artifactRefs);
+      }
+      tracks.push(...readback.tracks);
+      if (readback.truncated === true) {
+        const next = advancingCursor(readback.next_track_cursor, trackCursor, declaredTrackCount);
+        if (next === null) return liveTargetInventoryFailure("TARGET_BINDING_INVENTORY_CURSOR_INVALID", "A live Track page did not provide a strictly advancing cursor.", executions, evidenceRefs, artifactRefs);
+        trackCursor = next;
+      } else {
+        tracksComplete = true;
+        trackCursor = declaredTrackCount;
+      }
+    }
+
+    if (!itemsComplete) {
+      if (!Array.isArray(readback.items) || readback.item_coverage?.internally_complete === false || readback.item_coverage_status === "incomplete") {
+        return liveTargetInventoryFailure("TARGET_BINDING_INVENTORY_INCOMPLETE", "A live Item page did not prove internally complete native coverage.", executions, evidenceRefs, artifactRefs);
+      }
+      items.push(...readback.items);
+      if (readback.items_truncated === true || readback.item_coverage_status === "paged") {
+        const next = advancingCursor(readback.next_item_cursor, itemCursor, declaredItemCount);
+        if (next === null) return liveTargetInventoryFailure("TARGET_BINDING_INVENTORY_CURSOR_INVALID", "A live Item page did not provide a strictly advancing cursor.", executions, evidenceRefs, artifactRefs);
+        itemCursor = next;
+      } else if (readback.item_coverage_status === "complete") {
+        itemsComplete = true;
+        itemCursor = declaredItemCount;
+      } else {
+        return liveTargetInventoryFailure("TARGET_BINDING_INVENTORY_INCOMPLETE", "A live Item page omitted complete coverage truth.", executions, evidenceRefs, artifactRefs);
+      }
+    }
+
+    if (tracksComplete && itemsComplete) {
+      const uniqueTracks = uniqueLiveTargetRowsByRef(tracks, "track_ref");
+      const uniqueItems = uniqueLiveTargetRowsByRef(items, "item_ref");
+      if (uniqueTracks.length !== declaredTrackCount || uniqueItems.length !== declaredItemCount) {
+        return liveTargetInventoryFailure("TARGET_BINDING_INVENTORY_INCOMPLETE", "Paged live target rows did not match the declared complete totals.", executions, evidenceRefs, artifactRefs);
+      }
+      return {
+        ok: true,
+        tracks: uniqueTracks,
+        items: uniqueItems,
+        executions,
+        evidenceRefs: unique(evidenceRefs),
+        artifactRefs: unique(artifactRefs),
+      };
+    }
+  }
+  return liveTargetInventoryFailure("TARGET_BINDING_INVENTORY_PAGE_LIMIT_EXCEEDED", "The live target inventory did not complete within its bounded page limit.", executions, evidenceRefs, artifactRefs);
+}
+
+function liveTargetInventoryFailure(code, message, executions, evidenceRefs, artifactRefs) {
+  return { ok: false, code, message, executions, evidenceRefs: unique(evidenceRefs), artifactRefs: unique(artifactRefs) };
+}
+
+async function readCompleteLiveTakeInventory({ request, executeAtomic }) {
+  const takes = [];
+  const executions = [];
+  const artifactRefs = [];
+  const evidenceRefs = [];
+  let takeCursor = 0;
+  let declaredTakeCount = null;
+  for (let pageIndex = 0; pageIndex < LIVE_TARGET_INVENTORY_MAX_PAGES; pageIndex += 1) {
+    const execution = await executeAtomic({
+      id: ITEM_OVERVIEW_ID,
+      input: {
+        max_tracks: 1,
+        max_items: 1,
+        max_items_per_track: 0,
+        max_takes: LIVE_TARGET_INVENTORY_PAGE_SIZE,
+        max_selected_items: 1,
+        track_cursor: 0,
+        item_cursor: 0,
+        take_cursor: takeCursor,
+        include_track_items: false,
+        include_selected_items: false,
+        include_takes: true,
+        include_take_fx: false,
+      },
+      refs: [],
+      context: request.context,
+      budget: internalReadBudget(request),
+      observeProjectIndex: false,
+    });
+    executions.push(execution);
+    evidenceRefs.push(...executionEvidenceRefs(execution));
+    artifactRefs.push(...executionArtifactRefs(execution));
+    if (execution?.ok !== true) {
+      return { ok: false, execution, executions, evidenceRefs: unique(evidenceRefs), artifactRefs: unique(artifactRefs) };
+    }
+    const readback = executionReadback(execution);
+    if (!Number.isInteger(readback.take_count) || readback.take_count < 0
+      || !Array.isArray(readback.takes)
+      || readback.take_coverage?.internally_complete !== true
+      || !["complete", "paged"].includes(readback.take_coverage_status)) {
+      return liveTargetInventoryFailure(
+        "TARGET_BINDING_TAKE_INVENTORY_INCOMPLETE",
+        "A live Take page did not prove complete native Take coverage.",
+        executions,
+        evidenceRefs,
+        artifactRefs,
+      );
+    }
+    if (declaredTakeCount === null) declaredTakeCount = readback.take_count;
+    if (declaredTakeCount !== readback.take_count || declaredTakeCount > LIVE_TARGET_INVENTORY_MAX_OBJECTS) {
+      return liveTargetInventoryFailure(
+        "TARGET_BINDING_TAKE_INVENTORY_LIMIT_EXCEEDED",
+        `The live Take inventory exceeds the ${LIVE_TARGET_INVENTORY_MAX_OBJECTS}-Take resolver ceiling or changed during enumeration.`,
+        executions,
+        evidenceRefs,
+        artifactRefs,
+      );
+    }
+    takes.push(...readback.takes.map((row) => ({
+      ...row,
+      ref: row.ref ?? row.take_ref,
+      owner_ref: row.owner_ref ?? row.item_ref,
+    })));
+    if (readback.takes_truncated === true || readback.take_coverage_status === "paged") {
+      const next = advancingCursor(readback.next_take_cursor, takeCursor, declaredTakeCount);
+      if (next === null) {
+        return liveTargetInventoryFailure("TARGET_BINDING_TAKE_CURSOR_INVALID", "A live Take page did not provide a strictly advancing cursor.", executions, evidenceRefs, artifactRefs);
+      }
+      takeCursor = next;
+      continue;
+    }
+    const uniqueTakes = uniqueLiveTargetRowsByRef(takes, "take_ref");
+    if (uniqueTakes.length !== declaredTakeCount) {
+      return liveTargetInventoryFailure("TARGET_BINDING_TAKE_INVENTORY_INCOMPLETE", "Paged live Take rows did not match the declared complete total.", executions, evidenceRefs, artifactRefs);
+    }
+    return {
+      ok: true,
+      takes: uniqueTakes,
+      executions,
+      evidenceRefs: unique(evidenceRefs),
+      artifactRefs: unique(artifactRefs),
+    };
+  }
+  return liveTargetInventoryFailure("TARGET_BINDING_TAKE_PAGE_LIMIT_EXCEEDED", "The live Take inventory did not complete within its bounded page limit.", executions, evidenceRefs, artifactRefs);
+}
+
+function advancingCursor(value, current, total) {
+  const parsed = typeof value === "string" && /^(?:0|[1-9][0-9]*)$/u.test(value) ? Number(value) : value;
+  return Number.isInteger(parsed) && parsed > current && parsed <= total ? parsed : null;
+}
+
+function uniqueLiveTargetRowsByRef(rows, field) {
+  const seen = new Set();
+  return rows.filter((row) => {
+    const ref = row?.[field];
+    if (typeof ref !== "string" || seen.has(ref)) return false;
+    seen.add(ref);
+    return true;
+  });
+}
+
+async function executeLiveAutomationTargetQuery({
+  entry,
+  request,
+  publicInput,
+  executeAtomic,
+  projectIndexRuntime,
+  startedAt,
+  now,
+  stages,
+  initialCold,
+}) {
+  const binding = publicInput.target_binding;
+  if (binding?.domain === "envelopes") {
+    return executeLiveEnvelopeTargetQuery({
+      entry, request, publicInput, executeAtomic, projectIndexRuntime,
+      startedAt, now, stages, initialCold,
+    });
+  }
+  if (!["automation_items", "points"].includes(binding?.domain)) {
+    return blockedEnvelope({
+      entry, request, startedAt, now, stages, status: runtimeStatus(projectIndexRuntime),
+      code: "AUTOMATION_TARGET_DOMAIN_UNSUPPORTED",
+      message: "Automation live queries require target_binding.domain=automation_items or points.",
+      data: { zero_write: true },
+    });
+  }
+  if (binding.domain === "points" && (binding.selector ?? "selected") === "selected") {
+    return blockedEnvelope({
+      entry, request, startedAt, now, stages, status: runtimeStatus(projectIndexRuntime),
+      code: "AUTOMATION_POINT_SELECTION_UNPROVEN",
+      message: "REAPER does not expose a proven selected-point read contract; use selector=all with an Envelope/range constraint or exact point refs.",
+      data: { zero_write: true },
+    });
+  }
+  const ownerConstraint = Array.isArray(binding.constraints)
+    ? binding.constraints.find((constraint) => constraint?.kind === "owner_in" && constraint?.source?.domain === "envelopes")
+    : null;
+  if (!ownerConstraint || !["selected", "explicit_refs"].includes(ownerConstraint.source.selector ?? "selected")) {
+    return blockedEnvelope({
+      entry, request, startedAt, now, stages, status: runtimeStatus(projectIndexRuntime),
+      code: "AUTOMATION_ENVELOPE_OWNER_REQUIRED",
+      message: "Automation target binding requires one owner_in Envelope source using selected or one explicit ref.",
+      data: { zero_write: true },
+    });
+  }
+
+  let envelopeRef;
+  const artifactRefs = [];
+  if ((ownerConstraint.source.selector ?? "selected") === "explicit_refs") {
+    if (!Array.isArray(ownerConstraint.source.refs) || ownerConstraint.source.refs.length !== 1) {
+      return blockedEnvelope({
+        entry, request, startedAt, now, stages, status: runtimeStatus(projectIndexRuntime),
+        code: "AUTOMATION_ENVELOPE_CARDINALITY_INVALID",
+        message: "This Automation read canary requires exactly one explicit Envelope ref.",
+        data: { zero_write: true },
+      });
+    }
+    [envelopeRef] = ownerConstraint.source.refs;
+    stages.push(stageResult("query-project-revision", "live_ref_resolve", "completed", "Used the one explicit Envelope identity without reading UI selection."));
+  } else {
+    const resolvedEnvelope = await executeAtomic({
+      id: RESOLVE_ENVELOPE_ID,
+      input: { parent_kind: "selected" },
+      refs: [],
+      context: request.context,
+      budget: internalReadBudget(request),
+      observeProjectIndex: false,
+    });
+    stages.push(stageResult("query-project-revision", "template_execute", resolvedEnvelope?.ok === true ? "completed" : "failed", "Resolved the Envelope selected when execution began.", executionEvidenceRefs(resolvedEnvelope)));
+    if (resolvedEnvelope?.ok !== true) {
+      const failed = readFailure(RESOLVE_ENVELOPE_ID, resolvedEnvelope);
+      return executionFailure({ entry, request, startedAt, now, stages, projectIndexRuntime, error: failed.error, blockers: failed.blockers });
+    }
+    const envelope = executionReadback(resolvedEnvelope);
+    envelopeRef = envelope.envelope_ref;
+    artifactRefs.push(...executionArtifactRefs(resolvedEnvelope));
+  }
+  if (typeof envelopeRef !== "string" || !envelopeRef.startsWith("envelope:")) {
+    return blockedEnvelope({
+      entry, request, startedAt, now, stages, status: runtimeStatus(projectIndexRuntime),
+      code: "AUTOMATION_ENVELOPE_IDENTITY_UNPROVEN",
+      message: "The owning Envelope did not resolve to canonical native identity.",
+      data: { zero_write: true },
+    });
+  }
+
+  const timeConstraint = Array.isArray(binding.constraints)
+    ? binding.constraints.find((constraint) => constraint?.kind === "time_relation")
+    : null;
+  let timeSelection = null;
+  if (timeConstraint?.source?.selector === "time_selection") {
+    const transportExecution = await executeAtomic({
+      id: TRANSPORT_STATE_ID,
+      input: {},
+      refs: [],
+      context: request.context,
+      budget: internalReadBudget(request),
+      observeProjectIndex: false,
+    });
+    stages.push(stageResult("query-index-hydrate", "template_execute", transportExecution?.ok === true ? "completed" : "failed", "Read current live time-selection truth.", executionEvidenceRefs(transportExecution)));
+    if (transportExecution?.ok !== true) {
+      const failed = readFailure(TRANSPORT_STATE_ID, transportExecution);
+      return executionFailure({ entry, request, startedAt, now, stages, projectIndexRuntime, error: failed.error, blockers: failed.blockers });
+    }
+    timeSelection = liveTimeSelection(executionReadback(transportExecution));
+    artifactRefs.push(...executionArtifactRefs(transportExecution));
+  } else {
+    stages.push(stageResult("query-index-hydrate", "template_execute", "skipped", "No current time-selection read was required."));
+  }
+
+  const templateId = binding.domain === "automation_items" ? READ_AUTOMATION_ITEMS_ID : READ_ENVELOPE_POINTS_ID;
+  const rows = [];
+  let cursor = null;
+  for (let pageIndex = 0; pageIndex < 128; pageIndex += 1) {
+    const input = { limit: 64, ...(cursor === null ? {} : { cursor }) };
+    if (binding.domain === "points") input.autoitem_index = -1;
+    const execution = await executeAtomic({
+      id: templateId,
+      input,
+      refs: [envelopeObjectRef(envelopeRef)],
+      context: request.context,
+      budget: internalReadBudget(request),
+      observeProjectIndex: false,
+    });
+    if (execution?.ok !== true) {
+      stages.push(stageResult("query-index-read", "template_execute", "failed", `Failed while reading complete ${binding.domain} truth.`, executionEvidenceRefs(execution)));
+      const failed = readFailure(templateId, execution);
+      return executionFailure({ entry, request, startedAt, now, stages, projectIndexRuntime, error: failed.error, blockers: failed.blockers });
+    }
+    artifactRefs.push(...executionArtifactRefs(execution));
+    const readback = executionReadback(execution);
+    const pageRows = binding.domain === "automation_items" ? readback.items : readback.points;
+    if (!Array.isArray(pageRows)) {
+      return blockedEnvelope({
+        entry, request, startedAt, now, stages, status: runtimeStatus(projectIndexRuntime),
+        code: "AUTOMATION_TARGET_COVERAGE_INCOMPLETE",
+        message: `${templateId} omitted its native row array; no partial target set was returned.`,
+        data: { zero_write: true },
+      });
+    }
+    for (const row of pageRows) {
+      if (binding.domain === "automation_items") {
+        const index = Number(row.automation_item_index);
+        rows.push({
+          ...row,
+          envelope_ref: envelopeRef,
+          automation_item_ref: `automation-item:${envelopeRef}:index:${index}`,
+          ref: `automation-item:${envelopeRef}:index:${index}`,
+        });
+      } else {
+        const index = Number(row.point_index);
+        rows.push({
+          ...row,
+          envelope_ref: envelopeRef,
+          point_ref: `automation-point:${envelopeRef}:lane:-1:index:${index}`,
+          ref: `automation-point:${envelopeRef}:lane:-1:index:${index}`,
+        });
+      }
+    }
+    const next = typeof readback.next_cursor === "string" ? readback.next_cursor : null;
+    if (readback.truncated !== true) {
+      cursor = null;
+      break;
+    }
+    if (next === null || next === cursor) {
+      return blockedEnvelope({
+        entry, request, startedAt, now, stages, status: runtimeStatus(projectIndexRuntime),
+        code: "AUTOMATION_TARGET_COVERAGE_INCOMPLETE",
+        message: `${templateId} returned inconsistent pagination truth; no partial target set was returned.`,
+        data: { zero_write: true },
+      });
+    }
+    cursor = next;
+  }
+  if (cursor !== null || rows.length > 512) {
+    return blockedEnvelope({
+      entry, request, startedAt, now, stages, status: runtimeStatus(projectIndexRuntime),
+      code: "AUTOMATION_TARGET_LIMIT_EXCEEDED",
+      message: "Automation live target inventory exceeds the bounded 512-row resolver ceiling.",
+      data: { zero_write: true },
+    });
+  }
+
+  const envelopeRow = { ref: envelopeRef, envelope_ref: envelopeRef, selected: ownerConstraint.source.selector !== "explicit_refs" };
+  const inventory = { envelopes: [envelopeRow], [binding.domain]: rows };
+  const selection = {
+    envelopes: envelopeRow.selected ? [envelopeRow] : [],
+    automation_items: binding.domain === "automation_items" ? rows.filter((row) => row.selected === true) : [],
+    points: [],
+  };
+  const resolved = resolveTargetSet({ binding, inventory, selection, timeSelection, operation: "query" });
+  if (!resolved.ok) {
+    return blockedEnvelope({
+      entry, request, startedAt, now, stages, status: runtimeStatus(projectIndexRuntime),
+      code: resolved.code,
+      message: resolved.message,
+      blockers: resolved.blockers,
+      data: { zero_write: true, target_binding: binding },
+    });
+  }
+  const fields = Array.isArray(publicInput.fields) ? publicInput.fields : [];
+  const limit = Number.isInteger(publicInput.limit) ? publicInput.limit : 25;
+  const projectedRows = resolved.target_set.members.slice(0, limit).map((row) => fields.length === 0
+    ? row
+    : Object.fromEntries(fields.filter((field) => Object.hasOwn(row, field)).map((field) => [field, row[field]])));
+  stages.push(stageResult("query-index-read", "live_ref_resolve", "completed", `Read complete native ${binding.domain} coverage and resolved ${resolved.target_set.count} target(s).`));
+  stages.push(stageResult("query-result-project", "result_project", "completed", "Projected the Automation target set without mutation or SQLite authority."));
+  return successEnvelope({
+    entry, request, startedAt, now, stages, projectIndexRuntime, initialCold,
+    refreshed: false,
+    sqliteUsed: false,
+    summary: `Live Automation target query resolved ${resolved.target_set.count} ${binding.domain}.`,
+    canonicalRefs: resolved.target_set.member_refs,
+    artifactRefs,
+    data: {
+      entity: "automation",
+      target_domain: binding.domain,
+      envelope_ref: envelopeRef,
+      rows: projectedRows,
+      returned_row_count: projectedRows.length,
+      available_row_count: resolved.target_set.count,
+      target_set: { ...resolved.target_set, members: undefined },
+      coverage: { status: "complete", complete: true, source: "live_reaper", native_rows_read: rows.length },
+      page: { limit, has_more: resolved.target_set.count > projectedRows.length, next_cursor: null },
+      selection_truth: binding.domain === "automation_items" ? "native_d_uisel" : "selected_points_unsupported",
+      refs_truth: { posture: "live_resolved_refs", sqlite_authorizes_writes: false, write_requires_live_re_resolution: true },
+      zero_write: true,
+    },
+  });
+}
+
+async function executeLiveEnvelopeTargetQuery({
+  entry,
+  request,
+  publicInput,
+  executeAtomic,
+  projectIndexRuntime,
+  startedAt,
+  now,
+  stages,
+  initialCold,
+}) {
+  const binding = publicInput.target_binding;
+  let rows = [];
+  const artifactRefs = [];
+  if (binding.selector === "selected") {
+    const execution = await executeAtomic({
+      id: RESOLVE_ENVELOPE_ID,
+      input: { parent_kind: "selected" },
+      refs: [],
+      context: request.context,
+      budget: internalReadBudget(request),
+      observeProjectIndex: false,
+    });
+    stages.push(stageResult("query-project-revision", "template_execute", execution?.ok === true ? "completed" : "failed", "Resolved the Envelope selected when execution began.", executionEvidenceRefs(execution)));
+    if (execution?.ok !== true) {
+      const failed = readFailure(RESOLVE_ENVELOPE_ID, execution);
+      return executionFailure({ entry, request, startedAt, now, stages, projectIndexRuntime, error: failed.error, blockers: failed.blockers });
+    }
+    const readback = executionReadback(execution);
+    if (typeof readback.envelope_ref !== "string") {
+      return blockedEnvelope({ entry, request, startedAt, now, stages, status: runtimeStatus(projectIndexRuntime), code: "AUTOMATION_ENVELOPE_IDENTITY_UNPROVEN", message: "The selected Envelope did not resolve to canonical native identity.", data: { zero_write: true } });
+    }
+    rows = [{ ...readback, ref: readback.envelope_ref, envelope_ref: readback.envelope_ref, selected: true }];
+    artifactRefs.push(...executionArtifactRefs(execution));
+  } else if (binding.selector === "explicit_refs" && binding.refs.length === 1) {
+    const execution = await executeAtomic({
+      id: AUTOMATION_INVENTORY_ID,
+      input: { parent_kinds: ["track", "take", "send", "fx"], limit: 128 },
+      refs: [],
+      context: request.context,
+      budget: internalReadBudget(request),
+      observeProjectIndex: false,
+    });
+    stages.push(stageResult("query-project-revision", "template_execute", execution?.ok === true ? "completed" : "failed", "Read the complete native Envelope inventory for one explicit identity.", executionEvidenceRefs(execution)));
+    if (execution?.ok !== true) {
+      const failed = readFailure(AUTOMATION_INVENTORY_ID, execution);
+      return executionFailure({ entry, request, startedAt, now, stages, projectIndexRuntime, error: failed.error, blockers: failed.blockers });
+    }
+    const readback = executionReadback(execution);
+    const inventoryRows = Array.isArray(readback.envelopes) ? readback.envelopes : [];
+    rows = inventoryRows
+      .filter((row) => row?.envelope_ref === binding.refs[0])
+      .map((row) => ({ ...row, ref: row.envelope_ref }));
+    artifactRefs.push(...executionArtifactRefs(execution));
+  } else {
+    return blockedEnvelope({ entry, request, startedAt, now, stages, status: runtimeStatus(projectIndexRuntime), code: "AUTOMATION_ENVELOPE_CARDINALITY_INVALID", message: "Live Envelope binding requires selected or exactly one explicit ref.", data: { zero_write: true } });
+  }
+  const selected = rows.filter((row) => row.selected === true);
+  const resolved = resolveTargetSet({ binding, inventory: { envelopes: rows }, selection: { envelopes: selected }, operation: "query" });
+  if (!resolved.ok) {
+    return blockedEnvelope({ entry, request, startedAt, now, stages, status: runtimeStatus(projectIndexRuntime), code: resolved.code, message: resolved.message, blockers: resolved.blockers, data: { zero_write: true, target_binding: binding } });
+  }
+  const fields = Array.isArray(publicInput.fields) ? publicInput.fields : [];
+  const limit = Number.isInteger(publicInput.limit) ? publicInput.limit : 25;
+  const projectedRows = resolved.target_set.members.slice(0, limit).map((row) => fields.length === 0 ? row : Object.fromEntries(fields.filter((field) => Object.hasOwn(row, field)).map((field) => [field, row[field]])));
+  stages.push(stageResult("query-index-read", "live_ref_resolve", "completed", `Resolved ${resolved.target_set.count} live envelopes.`));
+  stages.push(stageResult("query-result-project", "result_project", "completed", "Projected the Envelope target set without mutation or SQLite authority."));
+  return successEnvelope({
+    entry, request, startedAt, now, stages, projectIndexRuntime, initialCold,
+    refreshed: false,
+    sqliteUsed: false,
+    summary: `Live Envelope target query resolved ${resolved.target_set.count} envelopes.`,
+    canonicalRefs: resolved.target_set.member_refs,
+    artifactRefs,
+    data: {
+      entity: "automation",
+      target_domain: "envelopes",
+      rows: projectedRows,
+      returned_row_count: projectedRows.length,
+      available_row_count: resolved.target_set.count,
+      target_set: { ...resolved.target_set, members: undefined },
+      coverage: { status: "complete", complete: true, source: "live_reaper" },
+      page: { limit, has_more: resolved.target_set.count > projectedRows.length, next_cursor: null },
+      refs_truth: { posture: "live_resolved_refs", sqlite_authorizes_writes: false, write_requires_live_re_resolution: true },
+      zero_write: true,
+    },
+  });
+}
+
+function envelopeObjectRef(ref) {
+  const guid = ref.startsWith("envelope:guid:") ? ref.slice("envelope:guid:".length) : ref;
+  return { kind: "envelope", ref, identity: { scheme: ref.startsWith("envelope:guid:") ? "guid" : "synthetic", value: guid } };
+}
+
+function liveTimeSelection(readback) {
+  const range = readback?.time_selection ?? readback?.transport?.time_selection;
+  if (!isObject(range) || range.active === false) return null;
+  const start = Number(range.start_seconds);
+  const end = Number(range.end_seconds);
+  return Number.isFinite(start) && Number.isFinite(end) && end > start
+    ? { start_seconds: start, end_seconds: end }
+    : null;
 }
 
 async function executeProjectInspect({
@@ -917,13 +1641,39 @@ async function hydrateForQuery({
   }
 
   if (completeProjectFxRefresh) {
-    const completeFx = await runCompleteTrackFxRefresh({
+    const completeTakes = await runCompleteTakeRefresh({
       request,
       projectIndexRuntime,
       executeAtomic,
       expectedRevision: logicalRefresh?.observed_revision ?? expectedRevision,
+      now,
+    });
+    if (!completeTakes.ok) return mergeHydrationResults({
+      ok: true,
+      executions,
+      artifactRefs,
+      evidenceRefs,
+      blockers: [],
+      error: null,
+      logicalRefresh,
+      revisionProbeCount,
+      fxOwnerRefresh,
+      summary: "Completed authoritative Track enumeration before Take/FX hydration.",
+    }, completeTakes);
+    executions.push(...completeTakes.executions);
+    artifactRefs.push(...completeTakes.artifactRefs);
+    evidenceRefs.push(...completeTakes.evidenceRefs);
+    revisionProbeCount += completeTakes.revisionProbeCount ?? 0;
+
+    const completeFx = await runCompleteProjectFxRefresh({
+      request,
+      projectIndexRuntime,
+      executeAtomic,
+      expectedRevision: completeTakes.logicalRefresh?.observed_revision ?? logicalRefresh?.observed_revision ?? expectedRevision,
       expectedTrackCount: logicalRefresh?.declared_track_count,
+      expectedTakeCount: completeTakes.logicalRefresh?.declared_take_count,
       liveTrackRows,
+      liveTakeFxRows: completeTakes.collectedRows,
       now,
     });
     if (!completeFx.ok) return mergeHydrationResults({
@@ -1332,13 +2082,15 @@ async function runCompleteTrackRefresh({
   );
 }
 
-async function runCompleteTrackFxRefresh({
+async function runCompleteProjectFxRefresh({
   request,
   projectIndexRuntime,
   executeAtomic,
   expectedRevision,
   expectedTrackCount,
+  expectedTakeCount,
   liveTrackRows,
+  liveTakeFxRows,
   now = () => new Date(),
 }) {
   const tracks = uniqueRowsByRef(liveTrackRows);
@@ -1365,9 +2117,38 @@ async function runCompleteTrackFxRefresh({
   }
 
   const owners = tracks.map((track) => track.ref);
+  const takeFxRows = normalizeFxRows(liveTakeFxRows);
+  const invalidTakeFx = takeFxRows.find((row) =>
+    typeof row?.fx_ref !== "string"
+    || !row.fx_ref.startsWith("fx:take:")
+    || typeof row.owner_ref !== "string"
+    || !row.owner_ref.startsWith("take:guid:")
+    || row.owner_kind !== "take"
+    || typeof row.fx_guid !== "string"
+    || row.fx_guid.length === 0
+    || !Number.isInteger(row.slot_index)
+    || row.slot_index < 0,
+  );
+  if (!Number.isInteger(expectedTakeCount) || expectedTakeCount < 0 || invalidTakeFx) {
+    return hydrationFailure(
+      "PROJECT_INDEX_TAKE_FX_OWNER_COUNT_UNAVAILABLE",
+      "Project-wide FX hydration requires a complete canonical Take/Take-FX inventory.",
+      [{
+        code: "PROJECT_INDEX_TAKE_FX_OWNER_COUNT_UNAVAILABLE",
+        message: "The Take overview did not provide complete owner/GUID-bound Take FX truth; no definitive FX result was produced.",
+        recoverable: true,
+        details: {
+          declared_take_count: Number.isInteger(expectedTakeCount) ? expectedTakeCount : null,
+          returned_take_fx_count: takeFxRows.length,
+          invalid_fx_ref: invalidTakeFx?.fx_ref ?? null,
+        },
+      }],
+    );
+  }
   const facts = {
     requested_track_count: tracks.length,
     visited_track_count: tracks.length,
+    visited_take_count: expectedTakeCount,
     hydrated_owner_count: 0,
     omitted_owner_count: 0,
     coverage_status: "pending",
@@ -1399,6 +2180,7 @@ async function runCompleteTrackFxRefresh({
     projectIndexRuntime,
     executeAtomic,
     validateExecution: ({ execution, child }) => validateFxChainExecution(execution, hydrationOwnerRef(child?.refs)),
+    observeProjectIndex: false,
   });
   if (!refreshed.ok) {
     markFxScopeStale(projectIndexRuntime, now);
@@ -1438,12 +2220,48 @@ async function runCompleteTrackFxRefresh({
   }
 
   const snapshot = projectIndexRuntime.adapter?.snapshot?.();
-  const ownerSet = new Set(owners);
-  const rows = arrayOf(snapshot?.rows?.fx).filter((row) => ownerSet.has(row?.owner_ref));
+  const trackFxRows = normalizeFxRows(
+    refreshed.executions.flatMap((execution) => arrayOf(executionReadback(execution)?.fx)),
+  );
+  const invalidTrackFx = trackFxRows.find((row) =>
+    typeof row?.fx_ref !== "string"
+    || !row.fx_ref.startsWith("fx:track:")
+    || typeof row.owner_ref !== "string"
+    || !row.owner_ref.startsWith("track:")
+    || row.owner_kind !== "track"
+    || typeof row.fx_guid !== "string"
+    || row.fx_guid.length === 0
+    || !Number.isInteger(row.slot_index)
+    || row.slot_index < 0,
+  );
+  if (invalidTrackFx) {
+    markFxScopeStale(projectIndexRuntime, now);
+    return hydrationFailure(
+      "PROJECT_INDEX_TRACK_FX_IDENTITY_INVALID",
+      "A Track FX live read omitted exact owner/GUID identity; the aggregate was discarded.",
+      [{ code: "PROJECT_INDEX_TRACK_FX_IDENTITY_INVALID", message: "Track FX rows require owner_kind, owner_ref, fx_ref, fx_guid and slot_index.", recoverable: true }],
+      refreshed,
+    );
+  }
+  const rows = uniqueFxRows([...trackFxRows, ...takeFxRows]);
+  if (rows.length !== trackFxRows.length + takeFxRows.length || rows.length > MAX_COMPLETE_PROJECT_FX_ROWS) {
+    markFxScopeStale(projectIndexRuntime, now);
+    return hydrationFailure(
+      "PROJECT_INDEX_FX_AGGREGATE_PRESSURE_EXCEEDED",
+      "The complete Track/Take FX aggregate contained duplicate refs or exceeded the bounded row limit.",
+      [{
+        code: "PROJECT_INDEX_FX_AGGREGATE_PRESSURE_EXCEEDED",
+        message: "No partial FX aggregate was committed.",
+        recoverable: true,
+        details: { track_fx_rows: trackFxRows.length, take_fx_rows: takeFxRows.length, max_rows: MAX_COMPLETE_PROJECT_FX_ROWS },
+      }],
+      refreshed,
+    );
+  }
   const replace = projectIndexRuntime.adapter?.replaceFx?.({
     snapshot_id: snapshot?.snapshot_id,
     observed_at: safeNowIso(now),
-    source_template_id: "template.fx.list_track_fx_chain",
+    source_template_id: "macro.project.query:complete_track_take_fx_refresh",
     projectRef: projectIndexRuntime.identity?.project_ref,
     bridgeOwner: projectIndexRuntime.identity?.bridge_owner,
     bridgeGeneration: projectIndexRuntime.identity?.bridge_generation,
@@ -1474,11 +2292,13 @@ async function runCompleteTrackFxRefresh({
     fxOwnerRefresh: {
       ...facts,
       positive_owner_count: positiveOwnerCount,
-      hydrated_owner_count: owners.length,
+      hydrated_owner_count: owners.length + expectedTakeCount,
       returned_fx_row_count: rows.length,
+      returned_track_fx_row_count: trackFxRows.length,
+      returned_take_fx_row_count: takeFxRows.length,
       coverage_status: "complete",
     },
-    summary: `Read ${owners.length} live Track FX owner chain(s) after covering ${tracks.length} live Tracks.`,
+    summary: `Read complete Track and Take FX truth after covering ${tracks.length} live Tracks and ${expectedTakeCount} live Takes.`,
   };
 }
 
@@ -1511,6 +2331,7 @@ async function runCompleteTakeRefresh(options) {
     pageFacts: takePageFacts,
     pageLabel: "Take inventory",
     countField: "declared_take_count",
+    collectPageRows: (readback) => Array.isArray(readback?.take_fx) ? readback.take_fx : null,
   });
 }
 
@@ -1542,6 +2363,7 @@ async function runCompleteDirectLogicalRefresh({
   pageFacts,
   pageLabel,
   countField,
+  collectPageRows = null,
 }) {
   if (
     typeof projectIndexRuntime?.beginLogicalRefresh !== "function"
@@ -1586,6 +2408,7 @@ async function runCompleteDirectLogicalRefresh({
     let cursor = 0;
     let declaredCount = null;
     let completed = false;
+    const collectedRows = [];
 
     for (let pageIndex = 0; pageIndex < maxPages; pageIndex += 1) {
       const child = requestForCursor(cursor);
@@ -1628,6 +2451,19 @@ async function runCompleteDirectLogicalRefresh({
         return hydrationFailure(facts.code, facts.message, [facts.blocker], { executions, artifactRefs, evidenceRefs });
       }
       declaredCount = facts.total_count;
+      if (typeof collectPageRows === "function") {
+        const pageRows = collectPageRows(executionReadback(execution));
+        if (!Array.isArray(pageRows)) {
+          projectIndexRuntime.abortLogicalRefresh({ transaction_id: transactionId, reason: `${scope}_collected_rows_invalid`, observed_at: safeNowIso(now) });
+          return hydrationFailure(
+            `PROJECT_INDEX_${scope.toUpperCase()}_COLLECTED_ROWS_INVALID`,
+            `${pageLabel} did not return the required aggregate rows.`,
+            [],
+            { executions, artifactRefs, evidenceRefs },
+          );
+        }
+        collectedRows.push(...pageRows);
+      }
       if (!facts.truncated) {
         completed = true;
         break;
@@ -1706,6 +2542,7 @@ async function runCompleteDirectLogicalRefresh({
         row_counts: committed.row_counts ?? {},
         coverage: committed.coverage ?? { [scope]: "complete" },
       },
+      collectedRows: uniqueFxRows(collectedRows),
       summary: `Merged ${executions.length - attemptExecutionStart} hidden ${pageLabel} page(s) and committed one complete logical scope.`,
     };
   }
@@ -1976,6 +2813,7 @@ async function runHydrationRequests({
   seen = new Set(),
   objectRefs = new Map(),
   validateExecution = null,
+  observeProjectIndex = true,
 }) {
   const executions = [];
   const artifactRefs = [];
@@ -2003,7 +2841,7 @@ async function runHydrationRequests({
       refs: materializeHydrationRefs(internalChild.refs, objectRefs),
       context: request.context,
       budget: PROJECT_INDEX_HYDRATION_BUDGET,
-      observeProjectIndex: true,
+      observeProjectIndex,
     });
     executions.push(execution);
     evidenceRefs.push(...executionEvidenceRefs(execution));
@@ -2028,7 +2866,7 @@ async function runHydrationRequests({
     }
     rememberHydrationObjectRefs(objectRefs, execution);
     const observation = execution?.result?.project_index_observation;
-    if (observation?.ok !== true) {
+    if (observeProjectIndex && observation?.ok !== true) {
       return hydrationFailure(
         observation?.blockers?.[0]?.code ?? "PROJECT_INDEX_OBSERVATION_FAILED",
         `Read-only refresh ${child.id} completed but was not accepted into the Project Index.`,
@@ -2296,6 +3134,7 @@ function successEnvelope({
   canonicalRefs,
   artifactRefs,
   data,
+  sqliteUsed = true,
 }) {
   const status = runtimeStatus(projectIndexRuntime);
   const activeBudget = responseBudget(request, entry);
@@ -2316,12 +3155,12 @@ function successEnvelope({
       stages,
     },
     sqlite: {
-      used: true,
-      source,
-      freshness,
-      snapshot_ref: status.snapshot_id ?? null,
-      revision: status.revision ?? status.project_revision ?? null,
-      refreshed: refreshed && !initialCold,
+      used: sqliteUsed,
+      source: sqliteUsed ? source : "not_used",
+      freshness: sqliteUsed ? freshness : "not_applicable",
+      snapshot_ref: sqliteUsed ? status.snapshot_id ?? null : null,
+      revision: sqliteUsed ? status.revision ?? status.project_revision ?? null : null,
+      refreshed: sqliteUsed && refreshed && !initialCold,
     },
     result: {
       summary,
@@ -2736,7 +3575,7 @@ function takeInventoryRequest(takeCursor = 0) {
       max_tracks: 1,
       max_items_per_track: 0,
       max_items: 1,
-      max_takes: 64,
+      max_takes: 8,
       max_selected_items: 1,
       track_cursor: 0,
       item_cursor: 0,
@@ -2744,6 +3583,7 @@ function takeInventoryRequest(takeCursor = 0) {
       include_selected_items: false,
       include_track_items: false,
       include_takes: true,
+      include_take_fx: true,
     },
     refs: [],
     read_only: true,
@@ -2863,7 +3703,7 @@ function itemPageFacts(readback, expectedCursor, priorItemCount) {
 }
 
 function takePageFacts(readback, expectedCursor, priorTakeCount) {
-  return pagedInventoryFacts({
+  const facts = pagedInventoryFacts({
     readback,
     expectedCursor,
     priorCount: priorTakeCount,
@@ -2878,6 +3718,71 @@ function takePageFacts(readback, expectedCursor, priorTakeCount) {
     noun: "Take",
     codePrefix: "PROJECT_INDEX_TAKE",
   });
+  if (!facts.ok) return facts;
+  const takes = arrayOf(readback?.takes);
+  const takeFx = Array.isArray(readback?.take_fx) ? readback.take_fx : null;
+  const returnedTakeFxCount = readback?.returned_take_fx_count;
+  const expectedCoverage = facts.truncated ? "paged" : "complete";
+  const fxCoverageComplete = takeFx !== null
+    && Number.isInteger(returnedTakeFxCount)
+    && returnedTakeFxCount === takeFx.length
+    && readback?.take_fx_coverage?.internally_complete === true
+    && readback?.take_fx_coverage_status === expectedCoverage;
+  if (!fxCoverageComplete) {
+    return {
+      ok: false,
+      code: "PROJECT_INDEX_TAKE_FX_COVERAGE_UNKNOWN",
+      message: "A hidden Take page did not prove complete Take FX enumeration.",
+      blocker: {
+        code: "PROJECT_INDEX_TAKE_FX_COVERAGE_UNKNOWN",
+        message: "Take FX rows, counts, and coverage must be explicit before replacing indexed FX truth.",
+        recoverable: true,
+        details: {
+          fx_array_present: takeFx !== null,
+          returned_take_fx_count: Number.isInteger(returnedTakeFxCount) ? returnedTakeFxCount : null,
+          observed_fx_row_count: takeFx?.length ?? null,
+          coverage_status: readback?.take_fx_coverage_status ?? null,
+          internally_complete: readback?.take_fx_coverage?.internally_complete === true,
+        },
+      },
+    };
+  }
+  const pageTakeRefs = new Set(takes.map((take) => take?.take_ref).filter((ref) => typeof ref === "string"));
+  const declaredFxCount = takes.reduce((sum, take) => (
+    Number.isInteger(take?.take_fx_count) && take.take_fx_count >= 0 ? sum + take.take_fx_count : Number.NaN
+  ), 0);
+  const takeTruthValid = Number.isInteger(declaredFxCount)
+    && declaredFxCount === takeFx.length
+    && takes.every((take) => typeof take?.has_take_fx === "boolean" && take.has_take_fx === (take.take_fx_count > 0));
+  const fxIdentityValid = takeFx.every((row) =>
+    isObject(row)
+    && row.owner_kind === "take"
+    && pageTakeRefs.has(row.owner_ref)
+    && typeof row.fx_ref === "string"
+    && typeof row.fx_guid === "string"
+    && row.fx_guid.length > 0
+    && Number.isInteger(row.slot_index)
+    && row.slot_index >= 0,
+  );
+  const uniqueFxCount = new Set(takeFx.map((row) => row?.fx_ref)).size;
+  if (!takeTruthValid || !fxIdentityValid || uniqueFxCount !== takeFx.length) {
+    return {
+      ok: false,
+      code: "PROJECT_INDEX_TAKE_FX_TRUTH_INVALID",
+      message: "A hidden Take page returned contradictory or non-canonical Take FX truth.",
+      blocker: {
+        code: "PROJECT_INDEX_TAKE_FX_TRUTH_INVALID",
+        message: "Take FX owner/GUID rows must exactly match each Take's native FX count.",
+        recoverable: true,
+        details: {
+          declared_fx_count: Number.isInteger(declaredFxCount) ? declaredFxCount : null,
+          observed_fx_row_count: takeFx.length,
+          unique_fx_row_count: uniqueFxCount,
+        },
+      },
+    };
+  }
+  return facts;
 }
 
 function routingPageFacts(readback, expectedCursor, priorSendCount) {
@@ -3329,6 +4234,34 @@ function uniqueRowsByRef(rows) {
   return [...new Map(arrayOf(rows)
     .filter((row) => isObject(row) && typeof row.ref === "string")
     .map((row) => [row.ref, row])).values()];
+}
+
+function uniqueFxRows(rows) {
+  return [...new Map(normalizeFxRows(rows).map((row) => [row.ref, row])).values()];
+}
+
+function normalizeFxRows(rows) {
+  return arrayOf(rows).flatMap((row) => {
+    if (!isObject(row)) return [];
+    const ref = typeof row.ref === "string" ? row.ref : typeof row.fx_ref === "string" ? row.fx_ref : null;
+    if (!ref) return [];
+    const ownerRef = typeof row.owner_ref === "string" ? row.owner_ref : null;
+    const ownerKind = row.owner_kind === "track" || row.owner_kind === "take"
+      ? row.owner_kind
+      : ownerRef?.startsWith("track:") ? "track" : ownerRef?.startsWith("take:") ? "take" : null;
+    return [{
+      ...row,
+      ref,
+      owner_ref: ownerRef,
+      owner_kind: ownerKind,
+      plugin_name: typeof row.plugin_name === "string"
+        ? row.plugin_name
+        : typeof row.name === "string" ? row.name : "",
+      plugin_id: typeof row.plugin_id === "string" ? row.plugin_id : null,
+      bypassed: row.bypassed === true || row.enabled === false,
+      summary: isObject(row.summary) ? clone(row.summary) : compactObject(row),
+    }];
+  });
 }
 
 function clone(value) {

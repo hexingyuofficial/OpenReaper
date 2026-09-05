@@ -36,6 +36,20 @@ describe("Alpha3.3-B1 agent context Macro guide", () => {
     assert.equal(guide.macro_menu.final_target_count, 15);
     assert.deepEqual(guide.recommended_macro_ids, ["macro.midi.apply", "macro.fx.apply_chain", "macro.items.apply"]);
 
+    assert.equal(guide.live_target_binding.contract, "openreaper.live_target_binding.agent_guidance.v1");
+    assert.match(guide.live_target_binding.agent_rules.join(" "), /selected_context pre-query/iu);
+    assert.match(guide.live_target_binding.agent_rules.join(" "), /enumerate\/loop/iu);
+    assert.match(guide.live_target_binding.agent_rules.join(" "), /never invent refs/iu);
+    assert.equal(guide.live_target_binding.supported.includes("selected_item_reverse"), true);
+    assert.equal(guide.live_target_binding.supported.includes("selected_track_freeze_unfreeze"), true);
+    assert.equal(guide.live_target_binding.supported.includes("selected_track_external_render"), true);
+    assert.equal(guide.live_target_binding.supported.includes("track_time_items_query_or_mutation"), true);
+    assert.deepEqual(
+      guide.live_target_binding.safe_omitted_target_defaults.map((entry) => entry.operation_id),
+      ["macro.items.apply", "template.tracks.freeze_track", "template.tracks.unfreeze_track", "macro.render.targets"],
+    );
+    assert.equal(guide.live_target_binding.safe_omitted_target_defaults[0].default_target_binding.selector, "selected");
+
     const keys = collectKeys(guide);
     for (const forbidden of ["primary_spine", "secondary_menu", "guide_tier", "primary_macro_ids"]) {
       assert.equal(keys.includes(forbidden), false, forbidden);
@@ -107,6 +121,61 @@ describe("Alpha3.3-B1 agent context Macro guide", () => {
       guide.requested_expansions.items[6].action_manual.examples[2].input.changes.length,
       2,
     );
+    const applyFx = guide.requested_expansions.items[1].action_manual;
+    const setFx = guide.requested_expansions.items[2].action_manual;
+    const selectedReverse = guide.live_target_binding.supported_examples.find((entry) => entry.name.includes("selected Items"));
+    assert.equal(selectedReverse.call.arguments.input.mode, "reverse");
+    assert.equal(selectedReverse.call.arguments.input.target_binding.selector, "selected");
+    const itemDefaults = guide.requested_expansions.items[4].action_manual.default_target_bindings;
+    assert.deepEqual(itemDefaults[0].when.mode, ["reverse", "glue"]);
+    assert.equal(itemDefaults[0].target_binding.domain, "items");
+    assert.equal(itemDefaults[0].zero_write_when_empty_or_over_limit, true);
+    const itemManual = guide.requested_expansions.items[4].action_manual;
+    assert.equal(itemManual.common_blockers.some((entry) => entry.code === "PROJECT_LOCKING_ENABLED"), true);
+    assert.match(itemManual.recovery_steps.join(" "), /disable REAPER Locking.*retry the same Reverse call/iu);
+    const constrainedGlue = guide.live_target_binding.supported_examples.find((entry) => entry.name.startsWith("glue Items"));
+    assert.equal(constrainedGlue.call.arguments.input.mode, "glue");
+    assert.deepEqual(constrainedGlue.call.arguments.input.target_binding.constraints.map((entry) => entry.kind), ["owner_in", "time_relation"]);
+    const selectedFreeze = guide.live_target_binding.supported_examples.find((entry) => entry.name.includes("freeze the currently"));
+    assert.equal(selectedFreeze.call.arguments.id, "template.tracks.freeze_track");
+    assert.deepEqual(selectedFreeze.call.arguments.input, { mode: "stereo" });
+    assert.match(selectedFreeze.counterpart, /empty input/u);
+    const constrainedQuery = guide.live_target_binding.supported_examples.find((entry) => entry.name.startsWith("list Items"));
+    assert.equal(constrainedQuery.call.arguments.id, "macro.project.query");
+    assert.equal(constrainedQuery.call.arguments.input.entity, "items");
+    assert.match(constrainedQuery.agent_note, /without this preliminary query/u);
+    const selectedRender = guide.live_target_binding.supported_examples.find((entry) => entry.name.includes("render the currently"));
+    assert.equal(selectedRender.call.arguments.id, "macro.render.targets");
+    assert.equal(selectedRender.call.arguments.input.target_kind, "selected_tracks");
+    assert.equal(Object.hasOwn(selectedRender.call.arguments, "refs"), false);
+    const statuses = Object.fromEntries(guide.live_target_binding.capability_matrix.map((entry) => [entry.scenario, entry.status]));
+    assert.equal(statuses.selected_item_reverse, "supported");
+    assert.equal(statuses.selected_item_glue, "supported");
+    assert.equal(statuses.selected_track_freeze_or_unfreeze, "supported");
+    assert.equal(statuses.selected_track_external_render, "supported");
+    assert.equal(statuses.selected_track_project_stem, "supported");
+    assert.equal(statuses.items_on_tracks_intersecting_time_selection_query_or_mutation, "supported");
+    assert.equal(statuses.selected_envelope_automation_item_or_point_binding, "supported_with_native_limits");
+    assert.equal(statuses.recipe_target_sets, "supported");
+    const stem = guide.live_target_binding.supported_examples.find((entry) => entry.name.includes("project Stem"));
+    assert.equal(stem.call.arguments.id, "macro.render.targets");
+    assert.equal(stem.call.arguments.input.destination, "new_project_track");
+    assert.equal(Object.hasOwn(stem.call.arguments.input, "target_binding"), false);
+    const automation = guide.live_target_binding.supported_examples.find((entry) => entry.name.includes("Automation Items"));
+    assert.equal(automation.call.arguments.input.target_binding.domain, "automation_items");
+    assert.match(automation.agent_note, /D_UISEL/u);
+    assert.match(guide.live_target_binding.binding_lifetime.recipe_run, /run start/u);
+    assert.deepEqual(guide.live_target_binding.unsupported_behavior.includes("Do not emulate"), true);
+    assert.match(guide.live_target_binding.unsupported_behavior, /Do not emulate/u);
+    const fanout = applyFx.examples.find((entry) => entry.name.includes("homogeneous active-Take FX set"));
+    assert.equal(fanout.input.target_binding.selector, "active_take_of_items");
+    assert.equal(fanout.input.target_binding.cardinality.maximum, 64);
+    assert.match(fanout.returns, /fx_set_ref/u);
+    const shared = setFx.examples.find((entry) => entry.name.includes("homogeneous Take FX set"));
+    assert.equal(shared.prerequisite.public_sequence.length, 2);
+    assert.equal(shared.prerequisite.public_sequence[1].arguments.input.mode, "inspect_set");
+    assert.equal(shared.input.mode, "shared_plan");
+    assert.match(setFx.when_not_to_use.join(" "), /never reuse an fx_set_ref or parameter_plan_ref/u);
     assert.equal(collectKeys(guide.requested_expansions).includes("guide_tier"), false);
   });
 

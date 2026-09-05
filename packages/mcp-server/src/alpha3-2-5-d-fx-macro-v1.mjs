@@ -20,12 +20,14 @@ import {
 } from "./alpha3-2-5-c-control-runtime-v1.mjs";
 import {
   ALPHA3_E1_STOCK_PLUGIN_MACRO_ID,
+  ALPHA3_E1_STOCK_PLUGIN_PARAMETER_LIST_BUDGET,
   planAlpha3E1StockPluginMacro,
 } from "./alpha3-e1-stock-plugin-fluency-v1.mjs";
 import {
   assertAlpha34CSemanticUnitsProven,
   STOCK_SEMANTIC_UNIT_UNPROVEN,
 } from "./alpha3-4-c-fx-semantic-truth-v1.mjs";
+import { fxSetAuthorityFromRequest } from "./fx-set-store-v1.mjs";
 
 export const ALPHA3_2_5_D_NATIVE_FX_MACRO_ID = "macro.fx.apply_native_chain";
 export const ALPHA3_2_5_D_NATIVE_FX_RUNTIME_CONTRACT =
@@ -84,12 +86,45 @@ const INPUT_FIELDS = new Set([
   "action_parameters",
   "control_overrides",
   "selector",
+  "target_binding",
   "insert_at_index",
   "dry_run",
 ]);
 const DEFAULT_STARTER_ACTION = "gentle_vocal_compression";
 const REACOMP_ADD_NAME = "ReaComp (Cockos)";
 const CHAIN_MAX_NODES = 8;
+const FX_SET_REASON_CODE_ALLOWLIST = new Set([
+  "FX_SET_ACTIVE_TAKE_MISSING",
+  "FX_SET_CARDINALITY_INVALID",
+  "FX_SET_CHAIN_COVERAGE_INVALID",
+  "FX_SET_CONTROLS_SIZE_INVALID",
+  "FX_SET_CONTROL_INVALID",
+  "FX_SET_CONTROL_TARGET_DUPLICATE",
+  "FX_SET_DUPLICATE_AMBIGUOUS",
+  "FX_SET_EXPECTED_MEMBER_INVALID",
+  "FX_SET_EXPECTED_MEMBER_MISMATCH",
+  "FX_SET_FINGERPRINT_INVALID",
+  "FX_SET_FX_GUID_UNAVAILABLE",
+  "FX_SET_ITEM_IDENTITY_INVALID",
+  "FX_SET_LAYOUT_FINGERPRINT_INVALID",
+  "FX_SET_LAYOUT_MISMATCH",
+  "FX_SET_MEMBER_IDENTITY_STALE",
+  "FX_SET_MEMBER_REF_INVALID",
+  "FX_SET_MEMBER_STALE",
+  "FX_SET_MIDI_UNSUPPORTED",
+  "FX_SET_MODE_INVALID",
+  "FX_SET_NATURAL_VALUE_UNREACHABLE",
+  "FX_SET_PARAMETER_INVENTORY_INCOMPLETE",
+  "FX_SET_PARAMETER_SELECTOR_AMBIGUOUS",
+  "FX_SET_PLUGIN_IDENTITY_INVALID",
+  "FX_SET_PLUGIN_IDENTITY_MISMATCH",
+  "FX_SET_PLUGIN_IDENTITY_UNAVAILABLE",
+  "FX_SET_PROJECT_STALE",
+  "FX_SET_REF_COVERAGE_INVALID",
+  "FX_SET_REPRESENTATIVE_STALE",
+  "FX_SET_REQUEST_INVALID",
+  "FX_SET_TAKE_IDENTITY_INVALID",
+]);
 const CHAIN_NODE_FIELDS = new Set([
   "plugin_name",
   "plugin_query",
@@ -199,6 +234,7 @@ export function createAlpha3_2_5DNativeFxMacroDiscoveryItems(options = {}) {
         action_parameters: { type: "object", additionalProperties: true },
         control_overrides: { type: "object", additionalProperties: true },
         selector: { type: "object", additionalProperties: true },
+        target_binding: { type: "object", additionalProperties: true },
         insert_at_index: { type: "integer", minimum: 0, maximum: 127 },
         dry_run: { type: "boolean" },
       },
@@ -255,6 +291,7 @@ export async function executeAlpha3_2_5DNativeFxMacro({
   request = {},
   executeAtomic,
   projectIndexRuntime,
+  fxSetStore,
   catalog,
   semanticProofChecker = assertAlpha34CSemanticUnitsProven,
   now = () => new Date(),
@@ -287,6 +324,21 @@ export async function executeAlpha3_2_5DNativeFxMacro({
       entry, request, startedAt, now, stages, state,
       code: "NATIVE_FX_EXECUTOR_UNAVAILABLE",
       message: "macro.fx.apply_native_chain needs the managed OpenReaper atomic route.",
+    });
+  }
+  if (object(input.target_binding)) {
+    return executeTrackOwnedActiveTakeFxSet({
+      entry,
+      request,
+      input,
+      executeAtomic,
+      projectIndexRuntime,
+      fxSetStore,
+      catalog,
+      now,
+      startedAt,
+      state,
+      stages,
     });
   }
   if (Array.isArray(input.chain)) {
@@ -520,6 +572,224 @@ export async function executeAlpha3_2_5DNativeFxMacro({
       message: error.message ?? "The registered native FX program failed.",
       blockers: error.blockers,
       data: { index_update: compactData(invalidation), outcome: fxOutcome(state) },
+    });
+  }
+}
+
+async function executeTrackOwnedActiveTakeFxSet({
+  entry,
+  request,
+  input,
+  executeAtomic,
+  projectIndexRuntime,
+  fxSetStore,
+  catalog,
+  now,
+  startedAt,
+  state,
+  stages,
+}) {
+  const dryRun = input.dry_run !== false;
+  const bindingBlocker = validateTrackOwnedActiveTakeBinding(input, request);
+  if (bindingBlocker) {
+    return failure({
+      entry, request, startedAt, now, stages, state,
+      code: bindingBlocker.code,
+      message: bindingBlocker.message,
+      blockers: [bindingBlocker],
+    });
+  }
+  if (!fxSetStore || typeof fxSetStore.putSet !== "function") {
+    return failure({
+      entry, request, startedAt, now, stages, state,
+      code: "FX_SET_STORE_UNAVAILABLE",
+      message: "The server-owned FX set store is unavailable; no Take FX mutation was attempted.",
+    });
+  }
+
+  const authority = fxSetAuthorityFromRequest(request, projectIndexRuntime);
+  const authorityBlocker = validateFxSetAuthority(authority);
+  if (authorityBlocker) {
+    return failure({
+      entry, request, startedAt, now, stages, state,
+      code: authorityBlocker.code,
+      message: authorityBlocker.message,
+      blockers: [authorityBlocker],
+    });
+  }
+
+  const selected = await selectTrack({
+    request,
+    input,
+    executeAtomic,
+    projectIndexRuntime,
+    catalog,
+    now,
+    state,
+    stages,
+  });
+  if (!selected.ok) {
+    return failure({
+      entry, request, startedAt, now, stages, state,
+      code: selected.blockers[0].code,
+      message: selected.blockers[0].message,
+      blockers: selected.blockers,
+    });
+  }
+
+  try {
+    const node = input.chain[0];
+    const installed = await resolveInstalledFx({ node, request, executeAtomic, state });
+    const execution = await executeFxAtomic({
+      id: ADD_TAKE_FX_ID,
+      input: {
+        plugin_name: installed.name,
+        duplicate_policy: "reuse_exact",
+        target_binding: clone(input.target_binding),
+        include_parameter_layout: true,
+        dry_run: dryRun,
+      },
+      refs: { track_ref: selected.trackObject },
+      request,
+      executeAtomic,
+      state,
+      write: !dryRun,
+      budget: ALPHA3_E1_STOCK_PLUGIN_PARAMETER_LIST_BUDGET,
+    });
+    const readback = executionReadback(execution);
+    const normalized = normalizeTrackTakeFxSetReadback({
+      readback,
+      expectedTrackRef: selected.trackRef,
+      expectedPluginName: installed.name,
+      dryRun,
+    });
+    if (!normalized.ok) throw coded(normalized.code, normalized.message, normalized.blockers);
+
+    const change = {
+      operation_id: "fx-set-active-takes",
+      template_id: ADD_TAKE_FX_ID,
+      target_ref: selected.trackRef,
+      related_ref: normalized.representative_fx_ref,
+      plugin_name: installed.name,
+      duplicate_policy: "reuse_exact",
+      status: dryRun ? "planned" : "applied",
+      mutation: {
+        status: dryRun ? "not_run" : "completed",
+        created_count: normalized.created_count,
+        reused_count: normalized.reused_count,
+      },
+      live_readback: {
+        status: "passed",
+        source: dryRun ? "native_full_batch_preflight" : "native_aggregate_take_fx_readback",
+        member_count: normalized.members.length,
+      },
+      index_maintenance: { status: dryRun ? "skipped" : "pending", scopes: [] },
+    };
+    state.changes.push(change);
+    state.canonicalRefs.push(selected.trackRef);
+    if (normalized.representative_fx_ref) state.canonicalRefs.push(normalized.representative_fx_ref);
+    pushStage(
+      stages,
+      "native-fx-add",
+      "template_execute",
+      dryRun ? "skipped" : "completed",
+      dryRun
+        ? `Preflighted ${normalized.members.length} active audio Take target(s) with zero mutation.`
+        : `Added or reused one homogeneous Take FX across ${normalized.members.length} active audio Take target(s) in one native batch.`,
+      evidenceRefs(execution),
+    );
+    pushStage(stages, "native-fx-configure", "runtime_execute", "skipped", "The FX-set creation call does not write shared controls; use inspect_set then shared_plan.");
+    pushStage(stages, "native-fx-verify", "verify", "completed", `Verified ${normalized.members.length} homogeneous Take FX member(s) through aggregate native readback.`, evidenceRefs(execution));
+
+    if (dryRun) {
+      pushStage(stages, "native-fx-index-update", "index_update", "skipped", "Dry run did not stale the Project Index.");
+      pushStage(stages, "native-fx-result", "result_project", "completed", "Projected the Track-owned active-Take FX set plan.");
+      return success({
+        entry, request, startedAt, now, stages, state,
+        status: "dry_run_completed",
+        summary: `Validated ${normalized.members.length} active audio Take FX target(s) without mutation.`,
+        data: {
+          mode: "track_owned_active_take_fx_set",
+          track_ref: selected.trackRef,
+          member_count: normalized.members.length,
+          plugin_identity: normalized.plugin_identity,
+          layout_fingerprint: normalized.layout_fingerprint,
+          zero_write: true,
+        },
+      });
+    }
+
+    const stored = fxSetStore.putSet({
+      authority,
+      track_ref: selected.trackRef,
+      plugin_identity: normalized.plugin_identity,
+      layout_fingerprint: normalized.layout_fingerprint,
+      representative_fx_ref: normalized.representative_fx_ref,
+      members: normalized.members,
+    });
+    if (!stored.ok) {
+      throw coded(stored.code ?? "FX_SET_STORE_FAILED", stored.message ?? "The verified FX set could not be retained.", stored.blockers);
+    }
+    const invalidation = invalidateFxScope(projectIndexRuntime, now);
+    applyFxIndexMaintenance(
+      state.changes,
+      invalidation?.ok === false ? "failed" : invalidation ? "completed" : "skipped",
+      invalidation,
+    );
+    if (invalidation) state.sqlite = sqliteEvidence(projectIndexRuntime, { used: true, freshness: "stale" });
+    pushStage(
+      stages,
+      "native-fx-index-update",
+      "index_update",
+      invalidation?.ok === false ? "failed" : invalidation ? "completed" : "skipped",
+      invalidation?.ok === false
+        ? "Take FX readback passed, but Project Index FX invalidation failed."
+        : invalidation
+          ? "Marked the Project Index FX scope stale after verified Take FX batch mutation."
+          : "No configured Project Index runtime required FX invalidation.",
+    );
+    pushStage(stages, "native-fx-result", "result_project", "completed", "Retained one project- and generation-bound homogeneous FX set.");
+    const data = {
+      mode: "track_owned_active_take_fx_set",
+      track_ref: selected.trackRef,
+      fx_set_ref: stored.record.ref,
+      set_fingerprint: stored.record.set_fingerprint,
+      member_count: stored.record.members.length,
+      representative_fx_ref: stored.record.representative_fx_ref,
+      plugin_identity: stored.record.plugin_identity,
+      layout_fingerprint: stored.record.layout_fingerprint,
+      created_count: normalized.created_count,
+      reused_count: normalized.reused_count,
+      project_instance_id: normalized.project_instance_id,
+      expires_at_ms: stored.record.expires_at_ms,
+      outcome: fxOutcome(state),
+      index_update: compactData(invalidation),
+    };
+    if (invalidation?.ok === false) {
+      return failure({
+        entry, request, startedAt, now, stages, state,
+        status: "partial_failure",
+        code: invalidation.blockers?.[0]?.code ?? "FX_SET_INDEX_MAINTENANCE_FAILED",
+        message: "Take FX batch mutation and readback passed, but Project Index maintenance failed.",
+        blockers: invalidation.blockers,
+        data,
+      });
+    }
+    return success({
+      entry, request, startedAt, now, stages, state,
+      summary: `Applied and verified one homogeneous Take FX across ${stored.record.members.length} active Take target(s).`,
+      data,
+    });
+  } catch (error) {
+    const mutationAttempted = state.changes.some((change) => change.mutation?.status === "completed");
+    return failure({
+      entry, request, startedAt, now, stages, state,
+      status: mutationAttempted ? "partial_failure" : "blocked",
+      code: error.code ?? "FX_SET_CREATION_FAILED",
+      message: error.message ?? "The Track-owned active-Take FX set could not be created.",
+      blockers: error.blockers,
+      details: error.details,
+      data: { mode: "track_owned_active_take_fx_set", track_ref: selected.trackRef },
     });
   }
 }
@@ -1175,13 +1445,13 @@ async function resolveExactFxObject({ fxRef, owner, preferredSlot, request, exec
   return resolvedObject;
 }
 
-async function executeFxAtomic({ id, input, refs, request, executeAtomic, state, write = false }) {
+async function executeFxAtomic({ id, input, refs, request, executeAtomic, state, write = false, budget }) {
   const execution = await executeAtomic({
     id,
     input,
     refs,
     context: request.context,
-    budget: request.budget,
+    budget: budget ?? request.budget,
     observeProjectIndex: false,
   });
   collectAtomic(state, execution);
@@ -1323,6 +1593,169 @@ async function selectTrack({ request, input, executeAtomic, projectIndexRuntime,
   } catch (error) {
     return blocked(error.code ?? "NATIVE_FX_TRACK_RESOLUTION_FAILED", error.message ?? "The selected track could not be live-resolved.", error.blockers);
   }
+}
+
+function validateTrackOwnedActiveTakeBinding(input, request) {
+  if (input.dry_run !== false) {
+    return codedBlocker("FX_SET_MUTATION_CONFIRMATION_REQUIRED", "FX-set creation requires explicit dry_run=false; use the owning read paths for analysis-only work.");
+  }
+  if (input.owner_kind !== "take") {
+    return codedBlocker("FX_SET_OWNER_KIND_INVALID", "Track-owned active-Take fanout requires owner_kind=take.");
+  }
+  if (!Array.isArray(input.chain) || input.chain.length !== 1) {
+    return codedBlocker("FX_SET_CHAIN_SIZE_INVALID", "Track-owned active-Take fanout requires exactly one chain node.");
+  }
+  const node = input.chain[0];
+  if (!object(node) || node.duplicate_policy !== "reuse_exact") {
+    return codedBlocker("FX_SET_DUPLICATE_POLICY_INVALID", "The homogeneous Take-FX set requires duplicate_policy=reuse_exact.");
+  }
+  const unsupportedNodeField = [
+    "insert_at_index",
+    "preset_name",
+    "preset_index",
+    "enabled",
+    "target_index",
+    "controls",
+    "starter_action",
+    "action_parameters",
+    "control_overrides",
+  ].find((field) => Object.hasOwn(node, field));
+  if (unsupportedNodeField) {
+    return codedBlocker(
+      "FX_SET_CHAIN_NODE_FIELD_UNSUPPORTED",
+      `Track-owned active-Take fanout does not accept chain[0].${unsupportedNodeField}; create the set first, then use inspect_set and shared_plan.`,
+    );
+  }
+  const binding = input.target_binding;
+  const allowed = new Set(["bind_at", "domain", "selector", "owner", "aggregation", "cardinality"]);
+  const unknown = Object.keys(binding).find((field) => !allowed.has(field));
+  if (unknown) return codedBlocker("FX_SET_TARGET_BINDING_INVALID", `Unsupported target_binding field: ${unknown}.`);
+  if (binding.bind_at !== "execution"
+      || binding.domain !== "takes"
+      || binding.selector !== "active_take_of_items"
+      || binding.aggregation !== "batch") {
+    return codedBlocker(
+      "FX_SET_TARGET_BINDING_INVALID",
+      "The first FX-set slice accepts bind_at=execution, domain=takes, selector=active_take_of_items, aggregation=batch.",
+    );
+  }
+  if (!object(binding.owner)
+      || binding.owner.domain !== "tracks"
+      || binding.owner.selector !== "explicit_refs"
+      || binding.owner.items !== "all"
+      || Object.keys(binding.owner).some((field) => !["domain", "selector", "items"].includes(field))) {
+    return codedBlocker(
+      "FX_SET_TARGET_OWNER_INVALID",
+      "target_binding.owner must be exactly {domain:\"tracks\", selector:\"explicit_refs\", items:\"all\"}.",
+    );
+  }
+  if (!object(binding.cardinality)
+      || binding.cardinality.minimum !== 1
+      || binding.cardinality.maximum !== 64
+      || Object.keys(binding.cardinality).some((field) => !["minimum", "maximum"].includes(field))) {
+    return codedBlocker("FX_SET_CARDINALITY_INVALID", "target_binding.cardinality must be exactly minimum=1 and maximum=64.");
+  }
+  const refs = normalizeNamedRefs(request.refs);
+  if (refs.take_ref) {
+    return codedBlocker("FX_SET_TAKE_REF_CONFLICT", "Track-owned active-Take fanout accepts one Track target, not an exact Take ref.");
+  }
+  return null;
+}
+
+function validateFxSetAuthority(authority) {
+  if (typeof authority?.bridge_owner !== "string" || authority.bridge_owner.length === 0) {
+    return codedBlocker("FX_SET_BRIDGE_OWNER_REQUIRED", "FX-set creation requires the current authoritative Bridge owner before mutation.");
+  }
+  if (!Number.isSafeInteger(authority.bridge_generation) || authority.bridge_generation < 0) {
+    return codedBlocker("FX_SET_BRIDGE_GENERATION_REQUIRED", "FX-set creation requires the current authoritative Bridge generation before mutation.");
+  }
+  if (typeof authority.project_ref !== "string" || authority.project_ref.length === 0) {
+    return codedBlocker("FX_SET_PROJECT_REF_REQUIRED", "FX-set creation requires the current Project Index project_ref before mutation.");
+  }
+  return null;
+}
+
+function normalizeTrackTakeFxSetReadback({ readback, expectedTrackRef, expectedPluginName, dryRun }) {
+  const value = object(readback?.fx_set) ? readback.fx_set : readback;
+  const members = Array.isArray(value?.members) ? value.members : [];
+  const memberCount = Number(value?.member_count);
+  if (value?.track_ref !== expectedTrackRef) {
+    return failedFxSetReadback("FX_SET_TRACK_READBACK_MISMATCH", "Native FX-set readback did not preserve the exact target Track identity.");
+  }
+  if (!Number.isInteger(memberCount) || memberCount < 1 || memberCount > 64 || memberCount !== members.length) {
+    return failedFxSetReadback("FX_SET_MEMBER_COVERAGE_INVALID", "Native FX-set readback must contain every one of 1-64 active Take members.");
+  }
+  if (dryRun && value?.zero_write !== true) {
+    return failedFxSetReadback("FX_SET_DRY_RUN_ZERO_WRITE_UNPROVEN", "FX-set dry_run did not return typed zero-write truth.");
+  }
+  const pluginIdentity = object(value?.plugin_identity) ? clone(value.plugin_identity) : null;
+  const layoutFingerprint = value?.layout_fingerprint;
+  if (!pluginIdentity
+      || typeof pluginIdentity.plugin_id !== "string"
+      || pluginIdentity.plugin_id.length === 0
+      || typeof pluginIdentity.name !== "string"
+      || !fxNamesEqual(pluginIdentity.name, expectedPluginName)
+      || typeof layoutFingerprint !== "string"
+      || layoutFingerprint.length === 0) {
+    return failedFxSetReadback("FX_SET_HOMOGENEITY_UNPROVEN", "Native FX-set readback did not prove one exact plug-in identity and parameter-layout fingerprint.");
+  }
+
+  const normalizedMembers = [];
+  const takeRefs = new Set();
+  const fxRefs = new Set();
+  let createdCount = 0;
+  let reusedCount = 0;
+  for (const [index, member] of members.entries()) {
+    const valid = object(member)
+      && typeof member.item_ref === "string" && member.item_ref.startsWith("item:guid:")
+      && typeof member.take_ref === "string" && member.take_ref.startsWith("take:guid:")
+      && typeof member.fx_ref === "string" && member.fx_ref.startsWith("fx:take:guid:")
+      && typeof member.fx_guid === "string" && member.fx_guid.length > 0
+      && member.track_ref === expectedTrackRef
+      && member.plugin_id === pluginIdentity.plugin_id
+      && member.layout_fingerprint === layoutFingerprint
+      && Number.isInteger(member.parameter_count) && member.parameter_count >= 0
+      && ["created", "reused", "planned_create", "planned_reuse"].includes(member.status);
+    if (!valid || takeRefs.has(member?.take_ref) || fxRefs.has(member?.fx_ref)) {
+      return failedFxSetReadback("FX_SET_MEMBER_IDENTITY_INVALID", `Native FX-set member ${index} lacks unique exact owner/FX/layout truth.`);
+    }
+    takeRefs.add(member.take_ref);
+    fxRefs.add(member.fx_ref);
+    if (member.status === "created") createdCount += 1;
+    if (member.status === "reused") reusedCount += 1;
+    normalizedMembers.push({
+      track_ref: member.track_ref,
+      item_ref: member.item_ref,
+      take_ref: member.take_ref,
+      fx_ref: member.fx_ref,
+      fx_guid: member.fx_guid,
+      plugin_id: member.plugin_id,
+      parameter_count: member.parameter_count,
+      layout_fingerprint: member.layout_fingerprint,
+      status: member.status,
+    });
+  }
+  if (!dryRun && createdCount + reusedCount !== normalizedMembers.length) {
+    return failedFxSetReadback("FX_SET_MUTATION_TRUTH_INCOMPLETE", "Native FX-set mutation readback did not classify every member as created or reused.");
+  }
+  const representativeFxRef = value?.representative_fx_ref ?? normalizedMembers[0]?.fx_ref ?? null;
+  if (!fxRefs.has(representativeFxRef)) {
+    return failedFxSetReadback("FX_SET_REPRESENTATIVE_INVALID", "The representative FX ref is not a member of the verified FX set.");
+  }
+  return {
+    ok: true,
+    members: normalizedMembers,
+    plugin_identity: pluginIdentity,
+    layout_fingerprint: layoutFingerprint,
+    representative_fx_ref: representativeFxRef,
+    project_instance_id: typeof value?.project_instance_id === "string" ? value.project_instance_id : null,
+    created_count: createdCount,
+    reused_count: reusedCount,
+  };
+}
+
+function failedFxSetReadback(code, message) {
+  return { ok: false, code, message, blockers: [codedBlocker(code, message)] };
 }
 
 function validateInput(input, request) {
@@ -1488,6 +1921,7 @@ function failure({
   code,
   message,
   blockers = [],
+  details,
   data = {},
   recoveryAction,
   recoveryNextCall,
@@ -1511,7 +1945,12 @@ function failure({
       data: compactData(data),
     },
     blockers: normalized,
-    error: { code: code ?? normalized[0]?.code ?? "NATIVE_FX_EXECUTION_FAILED", message, recoverable: normalized.every((item) => item.recoverable !== false) },
+    error: {
+      code: code ?? normalized[0]?.code ?? "NATIVE_FX_EXECUTION_FAILED",
+      message,
+      recoverable: normalized.every((item) => item.recoverable !== false),
+      ...(object(details) ? { details: clone(details) } : {}),
+    },
     recovery: {
       partial_changes_possible: status === "partial_failure",
       undo_policy: entry.undo_policy,
@@ -1716,14 +2155,36 @@ function blocked(code, message, blockers) {
 }
 
 function childError(id, execution) {
-  return coded(execution?.error?.code ?? "NATIVE_FX_ATOMIC_FAILED", execution?.error?.message ?? `${id} failed through the managed atomic route.`, execution?.error?.details?.blockers);
+  const bridgeCode = execution?.error?.code ?? "NATIVE_FX_ATOMIC_FAILED";
+  const bridgeDetails = execution?.error?.details;
+  const reasonCode = bridgeCode === "PARAMS_INVALID" && typeof bridgeDetails?.reason_code === "string"
+    ? bridgeDetails.reason_code
+    : null;
+  const code = FX_SET_REASON_CODE_ALLOWLIST.has(reasonCode) ? reasonCode : bridgeCode;
+  return coded(
+    code,
+    execution?.error?.message ?? `${id} failed through the managed atomic route.`,
+    bridgeDetails?.blockers,
+    FX_SET_REASON_CODE_ALLOWLIST.has(reasonCode) ? boundedFxSetFailureDetails(bridgeDetails) : undefined,
+  );
 }
 
-function coded(code, message, blockers) {
+function coded(code, message, blockers, details) {
   const error = new Error(message);
   error.code = code;
   error.blockers = blockers;
+  if (object(details)) error.details = details;
   return error;
+}
+
+function boundedFxSetFailureDetails(value) {
+  if (!object(value)) return null;
+  const result = {};
+  for (const field of ["reason_code", "zero_write", "target_count", "minimum", "maximum"]) {
+    const entry = value[field];
+    if (typeof entry === "string" || typeof entry === "boolean" || Number.isInteger(entry)) result[field] = entry;
+  }
+  return result;
 }
 
 function codedBlocker(code, message, recoverable = true, details) {

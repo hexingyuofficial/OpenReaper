@@ -212,6 +212,82 @@ assert(summary.has_take_fx == JSON_NULL)
 `);
   });
 
+  it("round-trips exact Unicode and cross-platform Active-Take source identity", () => {
+    runLua(String.raw`
+local item = {}
+local take = {}
+local track = {}
+local source = {}
+local source_path = [[/Users/Zhuanz/工程/对白 素材/vo_角色_male1.ogg]]
+call_reaper = function(name, ...)
+  local args = { ... }
+  if name == "GetSelectedMediaItem" then return true, item end
+  if name == "GetMediaItemTrack" then return true, track end
+  if name == "GetTrackGUID" then return true, "{TRACK-SOURCE}" end
+  if name == "GetSetMediaItemInfo_String" then return true, true, "{ITEM-SOURCE}" end
+  if name == "GetMediaItemInfo_Value" then
+    local values = { D_POSITION = 0, D_LENGTH = 1, D_SNAPOFFSET = 0, D_FADEINLEN = 0, D_FADEOUTLEN = 0, D_VOL = 1 }
+    return true, values[args[2]]
+  end
+  if name == "CountTakes" then return true, 1 end
+  if name == "GetActiveTake" then return true, take end
+  if name == "GetSetMediaItemTakeInfo_String" then return true, true, "{TAKE-SOURCE}" end
+  if name == "GetTakeName" then return true, "对白 Take" end
+  if name == "TakeIsMIDI" then return true, false end
+  if name == "GetMediaItemTake_Source" then return true, source end
+  if name == "GetMediaSourceType" then return true, "WAVE" end
+  if name == "GetMediaSourceFileName" then return true, source_path end
+  if name == "GetMediaItemTakeInfo_Value" then
+    local values = { D_VOL = 1, D_PAN = 0, D_PITCH = 0, D_PLAYRATE = 1, B_PPITCH = 1 }
+    return true, values[args[2]]
+  end
+  return false
+end
+local function read_source(path, expected_basename)
+  source_path = path
+  local summary, failure = read_item_summary({
+    refs = json_array({ { kind = "item", ref = "item:selected:0", identity = { scheme = "selected", value = "0" } } }),
+    params = { include_take_summary = true },
+  })
+  assert(failure == nil)
+  assert(summary.active_take_source_kind == "wave", "kind=" .. tostring(summary.active_take_source_kind))
+  assert(summary.active_take_source_ref == "file:path:" .. path, "ref=" .. tostring(summary.active_take_source_ref))
+  assert(summary.active_take_source_path == path, "path=" .. tostring(summary.active_take_source_path))
+  assert(summary.active_take_source_basename == expected_basename, "basename=" .. tostring(summary.active_take_source_basename) .. " expected=" .. expected_basename)
+  assert(summary.active_take_source_identity_status == "available", "status=" .. tostring(summary.active_take_source_identity_status))
+end
+read_source([[/Users/Zhuanz/工程/对白 素材/vo_角色_male1.ogg]], [[vo_角色_male1.ogg]])
+read_source([[C:\用户 名称\对白素材\vomale2.ogg]], [[vomale2.ogg]])
+read_source([[\\server\共享 素材\vo角色_male3.ogg]], [[vo角色_male3.ogg]])
+read_source([[/tmp/对白/vo\literal_male1.ogg]], [[vo\literal_male1.ogg]])
+
+call_reaper = function(name, ...)
+  if name == "GetSelectedMediaItem" then return true, item end
+  if name == "GetMediaItemTrack" then return true, track end
+  if name == "GetTrackGUID" then return true, "{TRACK-SOURCE}" end
+  if name == "GetSetMediaItemInfo_String" then return true, true, "{ITEM-SOURCE}" end
+  if name == "GetMediaItemInfo_Value" then return true, 0 end
+  if name == "CountTakes" then return true, 1 end
+  if name == "GetActiveTake" then return true, take end
+  if name == "GetSetMediaItemTakeInfo_String" then return true, true, "{TAKE-SOURCE}" end
+  if name == "GetTakeName" then return true, "MIDI" end
+  if name == "TakeIsMIDI" then return true, true end
+  if name == "GetMediaItemTakeInfo_Value" then return true, 0 end
+  return false
+end
+local midi, midi_failure = read_item_summary({
+  refs = json_array({ { kind = "item", ref = "item:selected:0", identity = { scheme = "selected", value = "0" } } }),
+  params = { include_take_summary = true },
+})
+assert(midi_failure == nil)
+assert(midi.active_take_source_kind == "midi")
+assert(midi.active_take_source_ref == JSON_NULL)
+assert(midi.active_take_source_path == JSON_NULL)
+assert(midi.active_take_source_basename == JSON_NULL)
+assert(midi.active_take_source_identity_status == "not_file_backed")
+`);
+  });
+
   it("returns active_take_ref null and omits Take controls when no Active Take exists", () => {
     runLua(`
 local item = {}

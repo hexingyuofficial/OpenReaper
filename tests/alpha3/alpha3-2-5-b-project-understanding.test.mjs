@@ -7,6 +7,7 @@ import { describe, it } from "node:test";
 import { FakeFoundationBridge } from "../../packages/core/src/foundation-bridge-v1.mjs";
 import {
   ALPHA3_2_5_B_PROJECT_UNDERSTANDING_REGISTRY,
+  executeAlpha3_2_5BProjectUnderstandingMacro,
   projectAlpha3_2_5BProjectQueryDoctorTask,
 } from "../../packages/mcp-server/src/alpha3-2-5-b-project-understanding-v1.mjs";
 import {
@@ -466,7 +467,7 @@ describe("Alpha3.2.5-B executable project understanding", () => {
       assert.equal(indexRuntime.adapter.snapshot().rows.takes.length, 8);
       const takeReads = state.atomicRequests.filter((entry) => entry.operation.name === "project.read_track_item_overview" && entry.params.include_takes === true);
       assert.equal(takeReads.length, 1);
-      assert.equal(takeReads[0].params.max_takes, 64);
+      assert.equal(takeReads[0].params.max_takes, 8);
       assert.equal(state.atomicRequests.some((entry) => entry.operation.name === "project.read_summary" && entry.params.include_media_counts === true), true);
 
       const legitimateZero = await runtime.call_template({
@@ -1344,16 +1345,204 @@ describe("Alpha3.2.5-B executable project understanding", () => {
       assert.deepEqual(result.result.data.refresh.fx_owner_refresh, {
         requested_track_count: 21,
         visited_track_count: 21,
+        visited_take_count: 0,
         hydrated_owner_count: 21,
         omitted_owner_count: 0,
         coverage_status: "complete",
         positive_owner_count: 1,
         returned_fx_row_count: 1,
+        returned_track_fx_row_count: 1,
+        returned_take_fx_row_count: 0,
       });
       assert.equal(state.fxOwnerRefs.length, 21);
       assert.equal(state.fxOwnerRefs.some((ref) => ref.ref === ownerRef), true);
       assert.equal(indexRuntime.adapter.snapshot().rows.tracks.length, 21);
       assert.equal(indexRuntime.adapter.snapshot().freshness_scopes.fx.coverage_status, "complete");
+    } finally {
+      indexRuntime?.close();
+      await fixture.cleanup();
+    }
+  });
+
+  it("returns one Track FX and one Take FX with distinct native owner and GUID identity", async () => {
+    const fixture = await makeFixture();
+    const trackRef = "track:guid:{TRACK-1}";
+    const takeRef = "take:guid:{TAKE-FX-1}";
+    const state = {
+      revision: 22,
+      trackName: "对白 主轨",
+      calls: [],
+      atomicRequests: [],
+      fxOwnerRefs: [],
+      projectTakes: [{
+        take_ref: takeRef,
+        item_ref: "item:guid:{ITEM-1}",
+        track_ref: trackRef,
+        active: true,
+        name: "对白 Take 中文",
+        source_kind: "audio",
+      }],
+      projectTakeFx: [{
+        fx_ref: `fx:${takeRef}:0`,
+        owner_kind: "take",
+        owner_ref: takeRef,
+        fx_guid: "{FX-TAKE-1}",
+        slot_index: 0,
+        name: "VST: ReaEQ (Cockos)",
+        plugin_id: "VST: ReaEQ",
+        enabled: true,
+      }],
+      liveTrackFxChains: new Map([[trackRef, [{
+        fx_guid: "{FX-TRACK-1}",
+        name: "VST: ReaComp (Cockos)",
+        plugin_id: "VST: ReaComp",
+      }]]]),
+    };
+    let indexRuntime;
+    try {
+      indexRuntime = await openIndex(fixture);
+      const runtime = createRuntime({ fixture, indexRuntime, state });
+      const result = await runtime.call_template({
+        id: "macro.project.query",
+        input: {
+          entity: "fx",
+          fields: ["ref", "owner_ref", "owner_kind", "fx_guid", "plugin_name", "plugin_id", "slot_index"],
+          refresh_policy: "force_read_only_refresh",
+          limit: 10,
+        },
+        context: callContext(1, "track-take-fx-client"),
+      });
+
+      assert.equal(result.ok, true, JSON.stringify(result));
+      assert.equal(result.result.data.rows.length, 2);
+      const byOwner = new Map(result.result.data.rows.map((row) => [row.owner_ref, row]));
+      assert.deepEqual(byOwner.get(trackRef), {
+        ref: `fx:${trackRef}:0`,
+        owner_ref: trackRef,
+        owner_kind: "track",
+        fx_guid: "{FX-TRACK-1}",
+        plugin_name: "VST: ReaComp (Cockos)",
+        plugin_id: "VST: ReaComp",
+        slot_index: 0,
+      });
+      assert.deepEqual(byOwner.get(takeRef), {
+        ref: `fx:${takeRef}:0`,
+        owner_ref: takeRef,
+        owner_kind: "take",
+        fx_guid: "{FX-TAKE-1}",
+        plugin_name: "VST: ReaEQ (Cockos)",
+        plugin_id: "VST: ReaEQ",
+        slot_index: 0,
+      });
+      assert.equal(indexRuntime.adapter.snapshot().rows.takes[0].take_fx_count, 1);
+      assert.equal(indexRuntime.adapter.snapshot().rows.takes[0].has_take_fx, true);
+      assert.equal(result.result.data.refresh.fx_owner_refresh.returned_track_fx_row_count, 1);
+      assert.equal(result.result.data.refresh.fx_owner_refresh.returned_take_fx_row_count, 1);
+    } finally {
+      indexRuntime?.close();
+      await fixture.cleanup();
+    }
+  });
+
+  it("re-reads one exact Take FX chain across 0 to 1 to 0 and synchronizes Take truth", async () => {
+    const fixture = await makeFixture();
+    const takeRef = "take:guid:{TAKE-LIVE-FX}";
+    const state = {
+      revision: 23,
+      trackName: "对白 主轨",
+      calls: [],
+      atomicRequests: [],
+      fxOwnerRefs: [],
+      projectTakes: [{
+        take_ref: takeRef,
+        item_ref: "item:guid:{ITEM-1}",
+        track_ref: "track:guid:{TRACK-1}",
+        active: true,
+        name: "对白 Take 实时",
+        source_kind: "audio",
+      }],
+      liveTakeFxChains: new Map([[takeRef, []]]),
+    };
+    let indexRuntime;
+    try {
+      indexRuntime = await openIndex(fixture);
+      const runtime = createRuntime({ fixture, indexRuntime, state });
+      const takeSeed = await runtime.call_template({
+        id: "macro.project.query",
+        input: { entity: "takes", refresh_policy: "force_read_only_refresh", limit: 4 },
+        context: callContext(1, "take-live-fx-seed"),
+      });
+      assert.equal(takeSeed.ok, true, JSON.stringify(takeSeed));
+
+      const input = {
+        entity: "fx",
+        fields: ["ref", "owner_ref", "owner_kind", "fx_guid", "plugin_name"],
+        filters: { owner_ref: takeRef },
+        refresh_policy: "force_read_only_refresh",
+        limit: 4,
+      };
+      const query = (sequence) => runtime.call_template({
+        id: "macro.project.query",
+        input,
+        context: callContext(sequence, "take-live-fx-client"),
+      });
+
+      const empty = await query(1);
+      assert.equal(empty.ok, true, JSON.stringify(empty));
+      assert.deepEqual(empty.result.data.rows, []);
+      assert.equal(indexRuntime.adapter.snapshot().rows.takes[0].has_take_fx, false);
+
+      state.liveTakeFxChains.set(takeRef, [{ fx_guid: "{FX-LIVE-TAKE-1}", name: "VST: ReaEQ (Cockos)" }]);
+      const added = await query(2);
+      assert.equal(added.ok, true, JSON.stringify(added));
+      assert.equal(added.result.data.rows[0].owner_kind, "take");
+      assert.equal(added.result.data.rows[0].owner_ref, takeRef);
+      assert.equal(added.result.data.rows[0].fx_guid, "{FX-LIVE-TAKE-1}");
+      assert.equal(indexRuntime.adapter.snapshot().rows.takes[0].take_fx_count, 1);
+      assert.equal(indexRuntime.adapter.snapshot().rows.takes[0].has_take_fx, true);
+
+      state.liveTakeFxChains.set(takeRef, []);
+      const removed = await query(3);
+      assert.equal(removed.ok, true, JSON.stringify(removed));
+      assert.deepEqual(removed.result.data.rows, []);
+      assert.equal(indexRuntime.adapter.snapshot().rows.takes[0].take_fx_count, 0);
+      assert.equal(indexRuntime.adapter.snapshot().rows.takes[0].has_take_fx, false);
+      assert.equal(state.fxOwnerRefs.filter((ref) => ref.kind === "take" && ref.ref === takeRef).length, 3);
+    } finally {
+      indexRuntime?.close();
+      await fixture.cleanup();
+    }
+  });
+
+  it("fails closed when a complete Take page omits Take FX coverage truth", async () => {
+    const fixture = await makeFixture();
+    const state = {
+      revision: 24,
+      trackName: "Dialogue",
+      calls: [],
+      atomicRequests: [],
+      omitTakeFxTruth: true,
+      projectTakes: [{
+        take_ref: "take:guid:{TAKE-MISSING-FX-TRUTH}",
+        item_ref: "item:guid:{ITEM-1}",
+        track_ref: "track:guid:{TRACK-1}",
+        active: true,
+        name: "Take",
+        source_kind: "audio",
+      }],
+    };
+    let indexRuntime;
+    try {
+      indexRuntime = await openIndex(fixture);
+      const runtime = createRuntime({ fixture, indexRuntime, state });
+      const result = await runtime.call_template({
+        id: "macro.project.query",
+        input: { entity: "fx", refresh_policy: "force_read_only_refresh", limit: 4 },
+        context: callContext(1, "take-fx-missing-truth-client"),
+      });
+      assert.equal(result.ok, false, JSON.stringify(result));
+      assert.equal(result.error.code, "PROJECT_INDEX_TAKE_FX_COVERAGE_UNKNOWN");
+      assert.equal(indexRuntime.adapter.snapshot().rows.fx.length, 0);
     } finally {
       indexRuntime?.close();
       await fixture.cleanup();
@@ -1679,7 +1868,360 @@ describe("Alpha3.2.5-B executable project understanding", () => {
     assert.equal(blocked.status, "blocked");
     assert.equal(blocked.failure_layer, "bridge_heartbeat");
   });
+
+  it("resolves a live selected-Track and time-selection Item intersection without SQLite", async () => {
+    const calls = [];
+    const executeAtomic = async ({ id }) => {
+      calls.push(id);
+      if (id === "template.project.read_track_item_overview") {
+        return liveRead(id, {
+          tracks: [
+            { track_ref: "track:guid:{T1}", selected: true },
+            { track_ref: "track:guid:{T2}", selected: true },
+            { track_ref: "track:guid:{T3}", selected: false },
+          ],
+          items: [
+            { item_ref: "item:guid:{I1}", track_ref: "track:guid:{T1}", position_seconds: 1, length_seconds: 2 },
+            { item_ref: "item:guid:{I2}", track_ref: "track:guid:{T2}", position_seconds: 6, length_seconds: 1 },
+            { item_ref: "item:guid:{I3}", track_ref: "track:guid:{T3}", position_seconds: 2, length_seconds: 1 },
+          ],
+          selected_items: [],
+          track_count: 3,
+          item_count: 3,
+          returned_track_count: 3,
+          returned_item_count: 3,
+          truncated: false,
+          items_truncated: false,
+          selected_items_truncated: false,
+          item_coverage_status: "complete",
+          item_coverage: { internally_complete: true },
+        });
+      }
+      if (id === "template.transport.read_state") {
+        return liveRead(id, { time_selection: { active: true, start_seconds: 1.5, end_seconds: 3.5 } });
+      }
+      throw new Error(`Unexpected live target query child: ${id}`);
+    };
+    const result = await executeAlpha3_2_5BProjectUnderstandingMacro({
+      request: {
+        id: "macro.project.query",
+        input: {
+          entity: "items",
+          target_binding: {
+            domain: "items",
+            selector: "all",
+            constraints: [
+              { kind: "owner_in", source: { domain: "tracks", selector: "selected" } },
+              { kind: "time_relation", source: { domain: "time_range", selector: "time_selection" }, relation: "overlaps" },
+            ],
+          },
+          fields: ["ref", "track_ref", "position_seconds"],
+          limit: 25,
+        },
+        context: callContext(1),
+      },
+      executeAtomic,
+      projectIndexRuntime: null,
+      now: () => new Date(NOW),
+    });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.deepEqual(calls, ["template.project.read_track_item_overview", "template.transport.read_state"]);
+    assert.equal(result.sqlite.used, false);
+    assert.deepEqual(result.result.canonical_refs, ["item:guid:{I1}"]);
+    assert.match(result.result.data.target_set.fingerprint, /^target-set:/u);
+    assert.equal(result.result.data.coverage.complete, true);
+  });
+
+  it("defines selected Takes as active Takes of selected Items", async () => {
+    const calls = [];
+    const executeAtomic = async ({ id, input }) => {
+      calls.push({ id, input });
+      if (id === "template.project.read_track_item_overview" && input.include_takes !== true) {
+        return liveRead(id, {
+          tracks: [{ track_ref: "track:guid:{T1}", selected: true }],
+          items: [
+            { item_ref: "item:guid:{I1}", track_ref: "track:guid:{T1}", selected: true, position_seconds: 1, length_seconds: 1 },
+            { item_ref: "item:guid:{I2}", track_ref: "track:guid:{T1}", selected: false, position_seconds: 2, length_seconds: 1 },
+          ],
+          selected_items: [],
+          track_count: 1,
+          item_count: 2,
+          returned_track_count: 1,
+          returned_item_count: 2,
+          truncated: false,
+          items_truncated: false,
+          selected_items_truncated: false,
+          item_coverage_status: "complete",
+          item_coverage: { internally_complete: true },
+        });
+      }
+      if (id === "template.project.read_track_item_overview" && input.include_takes === true) {
+        return liveRead(id, {
+          tracks: [],
+          items: [],
+          selected_items: [],
+          track_count: 1,
+          item_count: 2,
+          returned_track_count: 0,
+          returned_item_count: 0,
+          truncated: false,
+          items_truncated: false,
+          item_coverage_status: "complete",
+          item_coverage: { internally_complete: true },
+          takes: [
+            { take_ref: "take:guid:{ACTIVE-SELECTED}", item_ref: "item:guid:{I1}", track_ref: "track:guid:{T1}", active: true },
+            { take_ref: "take:guid:{INACTIVE-SELECTED}", item_ref: "item:guid:{I1}", track_ref: "track:guid:{T1}", active: false },
+            { take_ref: "take:guid:{ACTIVE-UNSELECTED}", item_ref: "item:guid:{I2}", track_ref: "track:guid:{T1}", active: true },
+          ],
+          take_count: 3,
+          returned_take_count: 3,
+          takes_truncated: false,
+          take_coverage_status: "complete",
+          take_coverage: { internally_complete: true },
+        });
+      }
+      if (id === "template.transport.read_state") {
+        return liveRead(id, { time_selection: { active: false, start_seconds: 0, end_seconds: 0 } });
+      }
+      throw new Error(`Unexpected selected Take query child: ${id}`);
+    };
+    const result = await executeAlpha3_2_5BProjectUnderstandingMacro({
+      request: {
+        id: "macro.project.query",
+        input: {
+          entity: "takes",
+          target_binding: { domain: "takes", selector: "selected" },
+          fields: ["ref", "item_ref", "active"],
+          limit: 25,
+        },
+        context: callContext(1),
+      },
+      executeAtomic,
+      projectIndexRuntime: null,
+      now: () => new Date(NOW),
+    });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.deepEqual(calls.map((call) => call.id), [
+      "template.project.read_track_item_overview",
+      "template.project.read_track_item_overview",
+      "template.transport.read_state",
+    ]);
+    assert.deepEqual(result.result.canonical_refs, ["take:guid:{ACTIVE-SELECTED}"]);
+    assert.equal(result.result.data.rows[0].active, true);
+    assert.equal(result.result.data.selection_truth, "active_takes_of_selected_items");
+  });
+
+  it("pages a large live Item inventory before resolving a selected-Track and range intersection", async () => {
+    const tracks = [
+      { track_ref: "track:guid:{T1}", selected: false },
+      { track_ref: "track:guid:{T2}", selected: true },
+      { track_ref: "track:guid:{T3}", selected: false },
+    ];
+    const items = Array.from({ length: 205 }, (_, index) => ({
+      item_ref: `item:guid:{PAGE-${index}}`,
+      track_ref: index === 200 ? "track:guid:{T2}" : "track:guid:{T3}",
+      position_seconds: index === 200 ? 2 : 100 + index,
+      length_seconds: 1,
+      selected: false,
+    }));
+    const calls = [];
+    const executeAtomic = async ({ id, input, budget }) => {
+      calls.push({ id, input, budget });
+      if (id === "template.project.read_track_item_overview") {
+        assert.equal(input.max_items, 64);
+        assert.ok(budget.max_response_bytes <= 65_536);
+        const trackCursor = input.track_cursor ?? 0;
+        const itemCursor = input.item_cursor ?? 0;
+        const trackRows = tracks.slice(trackCursor, trackCursor + input.max_tracks);
+        const itemRows = items.slice(itemCursor, itemCursor + input.max_items);
+        const nextTrack = trackCursor + trackRows.length;
+        const nextItem = itemCursor + itemRows.length;
+        return liveRead(id, {
+          tracks: trackRows,
+          items: itemRows,
+          selected_items: [],
+          track_count: tracks.length,
+          item_count: items.length,
+          returned_track_count: trackRows.length,
+          returned_item_count: itemRows.length,
+          truncated: nextTrack < tracks.length,
+          ...(nextTrack < tracks.length ? { next_track_cursor: String(nextTrack) } : {}),
+          items_truncated: nextItem < items.length,
+          ...(nextItem < items.length ? { next_item_cursor: String(nextItem) } : {}),
+          selected_items_truncated: false,
+          item_coverage_status: nextItem < items.length ? "paged" : "complete",
+          item_coverage: { internally_complete: true },
+        });
+      }
+      if (id === "template.transport.read_state") {
+        return liveRead(id, { time_selection: { active: true, start_seconds: 1.5, end_seconds: 3.5 } });
+      }
+      throw new Error(`Unexpected live target query child: ${id}`);
+    };
+    const result = await executeAlpha3_2_5BProjectUnderstandingMacro({
+      request: {
+        id: "macro.project.query",
+        input: {
+          entity: "items",
+          target_binding: {
+            domain: "items",
+            selector: "all",
+            constraints: [
+              { kind: "owner_in", source: { domain: "tracks", selector: "selected" } },
+              { kind: "time_relation", source: { domain: "time_range", selector: "time_selection" }, relation: "overlaps" },
+            ],
+          },
+          fields: ["ref", "track_ref", "position_seconds"],
+          limit: 25,
+        },
+        context: callContext(1),
+      },
+      executeAtomic,
+      projectIndexRuntime: null,
+      now: () => new Date(NOW),
+    });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(calls.filter((call) => call.id === "template.project.read_track_item_overview").length, 4);
+    assert.deepEqual(result.result.canonical_refs, ["item:guid:{PAGE-200}"]);
+    assert.equal(result.result.data.coverage.complete, true);
+  });
+
+  it("reads selected Automation Items from the selected Envelope with complete D_UISEL and current-range truth", async () => {
+    const calls = [];
+    const executeAtomic = async ({ id, input, refs }) => {
+      calls.push({ id, input, refs });
+      if (id === "template.automation.resolve_envelope_ref") {
+        return liveRead(id, { envelope_ref: "envelope:guid:{ENV}", parent_kind: "track" });
+      }
+      if (id === "template.transport.read_state") {
+        return liveRead(id, { time_selection: { active: true, start_seconds: 1, end_seconds: 4 } });
+      }
+      if (id === "template.automation.read_automation_items") {
+        assert.equal(refs[0].ref, "envelope:guid:{ENV}");
+        if (input.cursor === undefined) {
+          return liveRead(id, {
+            items: [
+              { automation_item_index: 0, position_seconds: 1, length_seconds: 1, selected: true },
+              { automation_item_index: 1, position_seconds: 2, length_seconds: 1, selected: false },
+            ],
+            truncated: true,
+            next_cursor: "2",
+          });
+        }
+        return liveRead(id, {
+          items: [{ automation_item_index: 2, position_seconds: 5, length_seconds: 1, selected: true }],
+          truncated: false,
+          next_cursor: null,
+        });
+      }
+      throw new Error(`Unexpected Automation target query child: ${id}`);
+    };
+    const result = await executeAlpha3_2_5BProjectUnderstandingMacro({
+      request: {
+        id: "macro.project.query",
+        input: {
+          entity: "automation",
+          target_binding: {
+            domain: "automation_items",
+            selector: "selected",
+            constraints: [
+              { kind: "owner_in", source: { domain: "envelopes", selector: "selected" } },
+              { kind: "time_relation", relation: "overlaps", source: { domain: "time_range", selector: "time_selection" } },
+            ],
+          },
+          limit: 25,
+        },
+        context: callContext(1),
+      },
+      executeAtomic,
+      projectIndexRuntime: null,
+      now: () => new Date(NOW),
+    });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.deepEqual(calls.map((call) => call.id), [
+      "template.automation.resolve_envelope_ref",
+      "template.transport.read_state",
+      "template.automation.read_automation_items",
+      "template.automation.read_automation_items",
+    ]);
+    assert.deepEqual(result.result.canonical_refs, ["automation-item:envelope:guid:{ENV}:index:0"]);
+    assert.equal(result.result.data.coverage.native_rows_read, 3);
+    assert.equal(result.result.data.selection_truth, "native_d_uisel");
+    assert.equal(result.result.data.zero_write, true);
+  });
+
+  it("reads explicit-Envelope points in an explicit range without touching UI range state", async () => {
+    const calls = [];
+    const executeAtomic = async ({ id }) => {
+      calls.push(id);
+      assert.equal(id, "template.automation.read_envelope_points");
+      return liveRead(id, {
+        points: [
+          { point_index: 0, time_seconds: 1, value: 0.1 },
+          { point_index: 1, time_seconds: 2.5, value: 0.2 },
+          { point_index: 2, time_seconds: 3, value: 0.3 },
+        ],
+        truncated: false,
+        next_cursor: null,
+      });
+    };
+    const binding = {
+      domain: "points",
+      selector: "all",
+      constraints: [
+        { kind: "owner_in", source: { domain: "envelopes", selector: "explicit_refs", refs: ["envelope:guid:{ENV}"] } },
+        { kind: "time_relation", relation: "overlaps", source: { domain: "time_range", selector: "explicit_range", range: { start_seconds: 1, end_seconds: 3 } } },
+      ],
+    };
+    const result = await executeAlpha3_2_5BProjectUnderstandingMacro({
+      request: { id: "macro.project.query", input: { entity: "automation", target_binding: binding, limit: 25 }, context: callContext(1) },
+      executeAtomic,
+      projectIndexRuntime: null,
+      now: () => new Date(NOW),
+    });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.deepEqual(calls, ["template.automation.read_envelope_points"]);
+    assert.deepEqual(result.result.canonical_refs, [
+      "automation-point:envelope:guid:{ENV}:lane:-1:index:0",
+      "automation-point:envelope:guid:{ENV}:lane:-1:index:1",
+    ]);
+    assert.equal(result.result.data.selection_truth, "selected_points_unsupported");
+  });
+
+  it("rejects selected Automation points before any native read", async () => {
+    let calls = 0;
+    const result = await executeAlpha3_2_5BProjectUnderstandingMacro({
+      request: {
+        id: "macro.project.query",
+        input: {
+          entity: "automation",
+          target_binding: {
+            domain: "points",
+            selector: "selected",
+            constraints: [{ kind: "owner_in", source: { domain: "envelopes", selector: "selected" } }],
+          },
+        },
+        context: callContext(1),
+      },
+      executeAtomic: async () => { calls += 1; },
+      projectIndexRuntime: null,
+      now: () => new Date(NOW),
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.error.code, "AUTOMATION_POINT_SELECTION_UNPROVEN");
+    assert.equal(result.result.data.zero_write, true);
+    assert.equal(calls, 0);
+  });
 });
+
+function liveRead(id, readback) {
+  return {
+    ok: true,
+    request: { id },
+    completed_at: NOW,
+    result: { readback, refs: [], artifacts: [] },
+  };
+}
 
 function createRuntime({ fixture, indexRuntime, state }) {
   const fake = new FakeFoundationBridge({
@@ -1714,6 +2256,18 @@ function createRuntime({ fixture, indexRuntime, state }) {
         const end = Math.min(rows.length, cursor + limit);
         const truncated = end < rows.length;
         const internallyComplete = state.itemCoverageInternallyComplete !== false;
+        const pageTakeFx = takeInventory && request.params.include_take_fx === true
+          ? (state.projectTakeFx ?? []).filter((row) => {
+              const ownerIndex = rows.findIndex((take) => take.take_ref === row.owner_ref);
+              return ownerIndex >= cursor && ownerIndex < end;
+            })
+          : [];
+        const pageTakeRows = takeInventory && request.params.include_take_fx === true
+          ? rows.slice(cursor, end).map((take) => {
+              const takeFxCount = pageTakeFx.filter((fx) => fx.owner_ref === take.take_ref).length;
+              return { ...structuredClone(take), take_fx_count: takeFxCount, has_take_fx: takeFxCount > 0 };
+            })
+          : structuredClone(rows.slice(cursor, end));
         response.result.summary = {
           project_ref: projectRef,
           tracks: [],
@@ -1732,7 +2286,7 @@ function createRuntime({ fixture, indexRuntime, state }) {
           item_coverage: { internally_complete: internallyComplete },
           ...(takeInventory ? {
             item_count: state.projectItems?.length ?? rows.length,
-            takes: structuredClone(rows.slice(cursor, end)),
+            takes: pageTakeRows,
             take_count: rows.length,
             take_cursor: cursor,
             returned_take_count: end - cursor,
@@ -1740,6 +2294,12 @@ function createRuntime({ fixture, indexRuntime, state }) {
             takes_truncated: truncated,
             take_coverage_status: internallyComplete ? (truncated ? "paged" : "complete") : "incomplete",
             take_coverage: { internally_complete: internallyComplete },
+            ...(request.params.include_take_fx === true && state.omitTakeFxTruth !== true ? {
+              take_fx: structuredClone(pageTakeFx),
+              returned_take_fx_count: pageTakeFx.length,
+              take_fx_coverage_status: internallyComplete ? (truncated ? "paged" : "complete") : "incomplete",
+              take_fx_coverage: { internally_complete: internallyComplete },
+            } : {}),
           } : {}),
         };
         response.result.readback = response.result.summary;
@@ -1864,8 +2424,11 @@ function createRuntime({ fixture, indexRuntime, state }) {
           ...(!override.omit_fx ? { fx: chain.map((fx, slotIndex) => ({
             fx_ref: `fx:${ownerRef}:${slotIndex}`,
             owner_ref: ownerRef,
+            owner_kind: trackOwner ? "track" : "take",
+            fx_guid: fx.fx_guid ?? `{FX-${trackOwner ? "TRACK" : "TAKE"}-${slotIndex + 1}}`,
             slot_index: slotIndex,
             name: fx.name,
+            plugin_id: fx.plugin_id ?? fx.name,
             enabled: fx.enabled !== false,
           })) } : {}),
         };
@@ -1873,7 +2436,7 @@ function createRuntime({ fixture, indexRuntime, state }) {
         response.result.refs = chain.map((_, slotIndex) => ({
           kind: "fx",
           ref: `fx:${ownerRef}:${slotIndex}`,
-          identity: { scheme: "track_fx", value: `${ownerRef}:${slotIndex}` },
+          identity: { scheme: trackOwner ? "track_fx" : "take_fx", value: `${ownerRef}:${slotIndex}` },
         }));
       } else if (request.operation.name === "items.read_item_summary") {
         const itemRef = request.refs[0]?.ref;

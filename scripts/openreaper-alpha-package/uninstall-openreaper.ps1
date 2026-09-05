@@ -4,7 +4,8 @@ param(
     [string] $ReaperResourceRoot,
     [string] $EvidenceRoot,
     [switch] $SkipClientConfig,
-    [switch] $SkipStartupHook
+    [switch] $SkipStartupHook,
+    [switch] $RemoveActionRegistrations
 )
 
 $ErrorActionPreference = "Stop"
@@ -85,6 +86,7 @@ Get-PathManifest $before
 $arguments = @("$nodeScript", "--install-root", $InstallRoot, "--reaper-resource-root", $ReaperResourceRoot)
 if ($SkipClientConfig) { $arguments += "--skip-client-config" }
 if ($SkipStartupHook) { $arguments += "--skip-startup-hook" }
+if ($RemoveActionRegistrations) { $arguments += "--remove-action-registrations" }
 Assert-OpenReaperUninstallReady
 & $nodePath @arguments 2>&1 | Tee-Object -FilePath (Join-Path $EvidenceRoot "uninstall.log") | Write-Output
 $exitCode = $LASTEXITCODE

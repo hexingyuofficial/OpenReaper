@@ -229,7 +229,7 @@ describe("Wave 1A items template descriptors", () => {
     assert.deepEqual(Object.keys(takeStart.inputSchema.properties), ["start_offset_seconds"]);
     assert.deepEqual(channelMode.inputSchema.properties.channel_mode.enum, ["normal", "mono_left", "mono_right", "reverse_stereo"]);
     assert.deepEqual(Object.keys(invertPhase.inputSchema.properties), ["invert_phase"]);
-    assert.deepEqual(Object.keys(reverse.inputSchema.properties), ["reverse"]);
+    assert.deepEqual(Object.keys(reverse.inputSchema.properties), ["reverse", "batch", "dry_run"]);
     assert.deepEqual(Object.keys(pitchMode.inputSchema.properties), ["mode"]);
     assert.deepEqual(Object.keys(stretchFade.inputSchema.properties), ["fade_size_ms"]);
     assert.deepEqual(sourceFile.refs.input.map((entry) => entry.kind), ["item", "file"]);

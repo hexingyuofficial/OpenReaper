@@ -400,8 +400,7 @@ local function d30_track_guid(track)
 end
 
 local function d30_track_name(track)
-  local ok, _, name = call_reaper("GetTrackName", track, "")
-  return ok and first_string(name) or nil
+  return read_track_name(track, 160)
 end
 
 local function d30_find_track_by_guid(project, guid)
@@ -1375,7 +1374,7 @@ local function d30_project_parse_project_ref(request)
 end
 
 local function d30_project_validate_open_path(path)
-  if not is_string(path) or path == "" or #path > D30_PROJECT_TAB_PATH_MAX_BYTES or path:find("[%c%z]") then
+  if not is_string(path) or path == "" or #path > D30_PROJECT_TAB_PATH_MAX_BYTES or has_control_byte(path) then
     return nil, "path_structure_invalid"
   end
   local posix_absolute = path:sub(1, 1) == "/"

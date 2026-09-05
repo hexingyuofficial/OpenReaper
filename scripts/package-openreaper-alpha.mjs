@@ -50,6 +50,7 @@ if (options.help === true) {
   process.stdout.write(`  --platform macos|windows package platform (default: macos)\n`);
   process.stdout.write(`  --skip-zip               leave the package directory unzipped\n`);
   process.stdout.write(`  --skip-smoke             skip package smoke checks\n`);
+  process.stdout.write(`  --allow-dirty            build a test package from a dirty tree; provenance records the dirty paths\n`);
   process.exit(0);
 }
 if (options.vital_agent_root !== undefined && options.with_vital !== true) {
@@ -88,6 +89,7 @@ const ALPHA3_3_PACKAGE_CATALOG_COUNTS = Object.freeze({
 const skipZip = options.skip_zip === true;
 const skipSmoke = options.skip_smoke === true;
 const projectIndexSmokeOnly = options.project_index_smoke_only === true;
+const allowDirty = options.allow_dirty === true;
 const EXACT_MCP_TOOLS = Object.freeze([
   "call_recipe",
   "call_template",
@@ -216,7 +218,7 @@ async function buildPackage() {
       default_render_root: packagePlatform === "windows" ? "%LOCALAPPDATA%\\OpenReaper\\current\\session\\renders" : "~/.openreaper/current/session/renders",
       render_root_override: "--render-root /absolute/path/to/renders",
       mcp_server_name: "openreaper",
-      startup_requirement: "REAPER must be started through openreaper-start for MCP to connect.",
+      startup_requirement: "OpenReaper MCP can attach to a single normal-icon REAPER launch when its startup hook starts the Bridge; openreaper-start also starts or attaches and verifies the session.",
       platform: packagePlatform,
     },
   }, null, 2));
@@ -238,7 +240,7 @@ async function writePackageProvenanceManifest() {
     .filter((line) => !line.trim().endsWith("AGENTS.md"))
     .map((line) => line.slice(3).trim())
     .filter(Boolean);
-  if (dirtyPaths.length > 0) {
+  if (dirtyPaths.length > 0 && !allowDirty) {
     throw new Error(`Package provenance requires a clean OpenReaper worktree apart from the user-owned AGENTS.md change: ${dirtyPaths.join(", ")}`);
   }
   let handlerRegistry;
@@ -257,8 +259,12 @@ async function writePackageProvenanceManifest() {
     build_id: version,
     openreaper_git_commit: gitCommit,
     build_time_utc: new Date().toISOString(),
+    // `source_tree_clean` describes the package's internal source closure and
+    // remains true for an explicit test build. Git cleanliness is recorded
+    // separately so release consumers can distinguish a test artifact.
     source_tree_clean: true,
-    source_tree_ignored_dirty_paths: gitStatus.includes("AGENTS.md") ? ["AGENTS.md"] : [],
+    source_tree_git_clean: dirtyPaths.length === 0,
+    source_tree_dirty_paths: dirtyPaths,
     runtime_dependency_lock_sha256: runtimeDependencyLock.sha256,
     ...catalogFacts,
     ...(withVital ? {
@@ -321,7 +327,10 @@ async function validatePackageProvenanceManifest(expected) {
     JSON.stringify(observed) !== JSON.stringify(expected) ||
     observed.package_version !== OPENREAPER_PRODUCT_VERSION ||
     packageMetadata.version !== OPENREAPER_PRODUCT_VERSION ||
-    observed.source_tree_clean !== true || observed.platform !== packagePlatform
+    observed.source_tree_clean !== true
+    || observed.source_tree_git_clean !== expected.source_tree_git_clean
+    || JSON.stringify(observed.source_tree_dirty_paths) !== JSON.stringify(expected.source_tree_dirty_paths)
+    || observed.platform !== packagePlatform
   ) {
     throw new Error("Package provenance manifest does not match the package build truth.");
   }
@@ -656,7 +665,10 @@ Chinese user guide:
   docs/USER_GUIDE.zh-CN.md
 
 Important:
-REAPER must be started through OpenReaper for MCP to connect. Normal double-click REAPER launches are not OpenReaper MCP sessions.
+OpenReaper can attach to the single REAPER instance started from the normal
+REAPER icon when its installed startup hook has started the Bridge. When no
+instance is running, openreaper-start starts one itself; it never guesses
+between multiple instances or launches a duplicate.
 
 Install:
 Double-click install.command, or run:
@@ -890,6 +902,8 @@ async function smokePackagedOpenReaperMcp() {
       label: "Packaged MCP ping startup guidance",
       expectedPackageRoot: await realpath(packageRoot),
     });
+    const initializationInstructions = client.getInstructions?.();
+    assertPackagedInitializationInstructions(initializationInstructions);
     const macroResponse = await client.callTool({
       name: "list_templates",
       arguments: {},
@@ -897,9 +911,6 @@ async function smokePackagedOpenReaperMcp() {
     const macros = parseJsonToolResult(macroResponse);
     assertDiscoveredIds(macros, REQUIRED_MACRO_IDS, "Packaged MCP macro smoke");
     assertNotDiscoveredIds(macros, FORMER_PUBLIC_MACRO_IDS, "Packaged MCP former public macro smoke");
-    assertCompactAgentStartupGuidance(macros.product_surface?.agent_startup_guidance, {
-      label: "Packaged MCP compact list_templates startup guidance",
-    });
     if (macros.product_surface?.projection !== "agent_compact_v1") {
       throw new Error("Packaged MCP list_templates did not use the compact public projection");
     }
@@ -1223,6 +1234,7 @@ async function smokePackagedOpenReaperMcp() {
       public_discovery: {
         projection: macros.product_surface.projection,
         macro_count: macros.items.length,
+        initialization_instructions_utf8_bytes: Buffer.byteLength(initializationInstructions, "utf8"),
         exact_manual_id: manualItems[0].id,
         exact_manual_contract: manualItems[0].contract,
         legacy_snapshots_omitted: [
@@ -2780,6 +2792,8 @@ async function smokePackagedOpenReaperStartHelper() {
     "STARTUP_USER_ACTION_REQUIRED",
     "STARTUP_PRESERVE_REAPER",
     "run_startup_dialog_observer",
+    "isNamedReaScriptStatusWindow",
+    "Scripts on",
     "blocked_unknown_dialog",
     "wait_for_startup_readiness()",
     "bridge-read-probe=passed",
@@ -4245,11 +4259,11 @@ function assertAgentStartupGuidance(guidance, { label, expectedPackageRoot }) {
   if (guidance.requirements?.mcp_client_server_name !== "openreaper") {
     throw new Error(`${label} must name MCP server openreaper`);
   }
-  if (guidance.requirements?.normal_reaper_launch_supported !== false) {
-    throw new Error(`${label} must say normal REAPER launch is not an OpenReaper MCP session`);
+  if (guidance.requirements?.normal_reaper_launch_supported !== true) {
+    throw new Error(`${label} must support attaching to a normal REAPER launch`);
   }
-  if (guidance.requirements?.only_openreaper_startup_supported !== true) {
-    throw new Error(`${label} must require OpenReaper startup helper`);
+  if (guidance.requirements?.only_openreaper_startup_supported !== false) {
+    throw new Error(`${label} must allow normal REAPER launch attach`);
   }
   if (guidance.requirements?.bridge_action_required_after_start !== false) {
     throw new Error(`${label} must not require the fallback bridge action after openreaper-start`);
@@ -4286,24 +4300,18 @@ function assertAgentStartupGuidance(guidance, { label, expectedPackageRoot }) {
   }
 }
 
-function assertCompactAgentStartupGuidance(guidance, { label }) {
-  if (!guidance || guidance.contract !== "openreaper.alpha3_1.agent_startup_guidance.v1") {
-    throw new Error(`${label} missing OpenReaper agent startup guidance`);
+function assertPackagedInitializationInstructions(instructions) {
+  if (typeof instructions !== "string" || instructions.length === 0) {
+    throw new Error("Packaged MCP initialization instructions are missing");
   }
-  if (guidance.tool_surface?.mcp_server_name !== "openreaper" || guidance.tool_surface?.added_tools !== 0) {
-    throw new Error(`${label} changed the public MCP tool surface`);
+  const utf8Bytes = Buffer.byteLength(instructions, "utf8");
+  if (utf8Bytes > 16_384) {
+    throw new Error(`Packaged MCP initialization instructions exceed 16 KiB: ${utf8Bytes}`);
   }
-  if (guidance.installed_commands?.start_reaper_for_mcp !== REQUIRED_INSTALLED_START_COMMAND) {
-    throw new Error(`${label} installed start command mismatch`);
-  }
-  if (guidance.installed_commands?.start_project_for_mcp !== REQUIRED_INSTALLED_PROJECT_START_COMMAND) {
-    throw new Error(`${label} installed project start command mismatch`);
-  }
-  if (guidance.caveats?.normal_reaper_launch_supported !== false) {
-    throw new Error(`${label} must say normal REAPER launch is not an OpenReaper MCP session`);
-  }
-  if (guidance.caveats?.only_openreaper_startup_supported !== true) {
-    throw new Error(`${label} must require the OpenReaper startup helper`);
+  for (const marker of ["## Live Target Binding", "## Flat 15 Macro menu", "Selected Takes"]) {
+    if (!instructions.includes(marker)) {
+      throw new Error(`Packaged MCP initialization instructions are missing ${marker}`);
+    }
   }
 }
 

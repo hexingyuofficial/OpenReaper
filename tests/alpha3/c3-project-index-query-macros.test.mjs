@@ -10,6 +10,7 @@ import {
   createAlpha3C3OfficialQueryMacroDiscoveryItems,
   createAlpha3C3ProjectIndexSchemaContract,
   listAlpha3C3ProjectIndexQueryMacros,
+  planAlpha3_2DGenericProjectQuery,
   planAlpha3C3ProjectIndexQueryMacro,
 } from "../../packages/mcp-server/src/alpha3-c3-project-index-query-v1.mjs";
 import {
@@ -657,6 +658,30 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     assert.equal(typoScope.blockers.some((blocker) => blocker.code === "QUERY_SCOPE_UNSUPPORTED"), true);
   });
 
+  it("projects current Time Selection through selected_context for the public generic query", () => {
+    const projectIndex = selectedProjectIndex();
+    const plan = planAlpha3_2DGenericProjectQuery({
+      entity: "selected_context",
+      refresh_policy: "never",
+      fields: ["scope_kind", "time_selection"],
+      limit: 10,
+    }, { projectIndex });
+
+    assert.equal(plan.ok, true, JSON.stringify(plan));
+    const projectHead = plan.rows.find((row) => row.scope_kind === "project_head");
+    assert.deepEqual(projectHead, {
+      ref: "project:active",
+      scope_kind: "project_head",
+      time_selection: {
+        read_status: "available",
+        active: true,
+        start_seconds: 2.6,
+        end_seconds: 4.94,
+        length_seconds: 2.34,
+      },
+    });
+  });
+
   it("queries compact item rows from a fresh resident project index", () => {
     const projectIndex = itemsProjectIndex();
     const firstPage = planAlpha3C3ProjectIndexQueryMacro("macro.query_items", {
@@ -717,7 +742,7 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
         max_pitch_semitones: 2,
       },
       limit: 1,
-      fields: ["item_ref", "track_ref", "active", "source_kind", "playrate", "pitch_semitones", "preserve_pitch", "reverse", "has_take_fx", "payload_ref"],
+      fields: ["item_ref", "track_ref", "active", "source_kind", "source_ref", "source_path", "source_basename", "source_identity_status", "playrate", "pitch_semitones", "preserve_pitch", "reverse", "has_take_fx", "payload_ref"],
     }, { projectIndex });
     const secondPage = planAlpha3C3ProjectIndexQueryMacro("macro.query_takes", {
       scope: "tracks",
@@ -737,6 +762,12 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
       limit: 10,
       fields: ["item_ref", "track_ref", "reverse", "has_take_fx"],
     }, { projectIndex });
+    const filenameGroup = planAlpha3C3ProjectIndexQueryMacro("macro.query_takes", {
+      scope: "takes",
+      filters: { source_basename: "MALE1", source_identity_status: "available" },
+      limit: 10,
+      fields: ["item_ref", "source_ref", "source_path", "source_basename", "source_identity_status"],
+    }, { projectIndex });
     const unsupportedScope = planAlpha3C3ProjectIndexQueryMacro("macro.query_takes", {
       scope: "fx",
       limit: 10,
@@ -751,6 +782,10 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
       track_ref: "track:guid:{TRACK-1}",
       active: true,
       source_kind: "wav",
+      source_ref: "file:path:/Users/Zhuanz/工程/对白 素材/vo_角色_male1.ogg",
+      source_path: "/Users/Zhuanz/工程/对白 素材/vo_角色_male1.ogg",
+      source_basename: "vo_角色_male1.ogg",
+      source_identity_status: "available",
       playrate: 1,
       pitch_semitones: 0,
       preserve_pitch: true,
@@ -769,6 +804,15 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     assert.equal(secondPage.page.has_more, false);
     assert.equal(takeFx.ok, true);
     assert.deepEqual(takeFx.refs, ["take:guid:{TAKE-2}"]);
+    assert.equal(filenameGroup.ok, true);
+    assert.deepEqual(filenameGroup.rows, [{
+      ref: "take:guid:{TAKE-1}",
+      item_ref: "item:guid:{ITEM-1}",
+      source_ref: "file:path:/Users/Zhuanz/工程/对白 素材/vo_角色_male1.ogg",
+      source_path: "/Users/Zhuanz/工程/对白 素材/vo_角色_male1.ogg",
+      source_basename: "vo_角色_male1.ogg",
+      source_identity_status: "available",
+    }]);
     assert.equal(unsupportedScope.ok, false);
     assert.equal(unsupportedScope.blockers.some((blocker) => blocker.code === "QUERY_SCOPE_UNSUPPORTED"), true);
   });
@@ -1749,6 +1793,20 @@ function selectedProjectIndex() {
         ref: "fx:track:{TRACK-1}:0",
         owner_ref: "track:guid:{TRACK-1}",
       },
+      {
+        ref: "project:active",
+        scope_kind: "project_head",
+        summary: {
+          selected_count: 3,
+          time_selection: {
+            read_status: "available",
+            active: true,
+            start_seconds: 2.6,
+            end_seconds: 4.94,
+            length_seconds: 2.34,
+          },
+        },
+      },
     ],
   });
   return index;
@@ -1812,7 +1870,10 @@ function takesProjectIndex() {
         track_ref: "track:guid:{TRACK-1}",
         active: true,
         source_kind: "wav",
-        source_ref: "media:file:{KICK}",
+        source_ref: "file:path:/Users/Zhuanz/工程/对白 素材/vo_角色_male1.ogg",
+        source_path: "/Users/Zhuanz/工程/对白 素材/vo_角色_male1.ogg",
+        source_basename: "vo_角色_male1.ogg",
+        source_identity_status: "available",
         playrate: 1,
         pitch_semitones: 0,
         preserve_pitch: true,

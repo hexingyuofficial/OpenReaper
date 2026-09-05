@@ -129,6 +129,29 @@ describe("Wave 1A project template descriptors", () => {
       },
     ]);
     assert.equal(Object.hasOwn(createRegion.inputSchema.properties, "item_ref"), false);
+    assert.deepEqual(createRegion.inputSchema.required, ["name"]);
+    assert.deepEqual(createRegion.inputSchema.properties.target_binding, {
+      type: "object",
+      properties: {
+        bind_at: { const: "execution" },
+        domain: { const: "time_range" },
+        selector: { const: "time_selection" },
+        aggregation: { const: "single" },
+        cardinality: {
+          type: "object",
+          properties: {
+            minimum: { const: 1 },
+            maximum: { const: 1 },
+          },
+          required: ["minimum", "maximum"],
+          additionalProperties: false,
+        },
+      },
+      required: ["bind_at", "domain", "selector", "aggregation", "cardinality"],
+      additionalProperties: false,
+    });
+    assert.equal(createRegion.examples.some((example) => example.input.target_binding?.selector === "time_selection"), true);
+    assert.equal(Object.hasOwn(createRegion.outputSchema.properties, "target_fingerprint"), true);
     assert.match(createMarker.summary, /rejects SWS marker-action/);
     for (const descriptor of [deleteMarker, removeMarker, renameMarker]) {
       assert.deepEqual(descriptor.refs.input.map(({ kind }) => kind), ["marker"]);
@@ -146,7 +169,7 @@ describe("Wave 1A project template descriptors", () => {
     assert.equal(deleteRegion.risk, "destructive");
     assert.equal(renameMarker.risk, "write");
     assert.equal(renameRegion.risk, "write");
-    assert.deepEqual(overview.refs.output.map(({ kind }) => kind), ["project", "track", "item", "take"]);
+    assert.deepEqual(overview.refs.output.map(({ kind }) => kind), ["project", "track", "item", "take", "fx"]);
     assert.equal(overview.bridge.operation_name, "project.read_track_item_overview");
   });
 

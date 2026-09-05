@@ -77,6 +77,18 @@ test("Chinese/English broad wording routes fades to items.apply and expands lexi
   assert.equal(fades.product_surface.macro_first_routing.task_text_persisted, false);
 });
 
+test("project.file manual routes project switching through verified identity and bounded Index recovery", () => {
+  const guide = createAlpha34BFirstTryExecutionGuide("macro.project.file");
+  const notes = guide.selector_or_ref_requirements.notes;
+  assert.match(notes, /never with macOS open -a/u);
+  assert.match(notes, /bridge_ready proves transport only/u);
+  assert.match(notes, /project_identity_verified/u);
+  assert.match(notes, /index_project_identity_verified/u);
+  assert.match(notes, /opened_but_index_not_ready/u);
+  assert.match(notes, /do not reopen/u);
+  assert.match(notes, /Unknown dialogs remain user-mediated/u);
+});
+
 test("exact expansion attaches schema-derived first-try guide and query prerequisite for identity-bound Macros", () => {
   const runtime = createCallTemplateRuntime();
   const exact = runtime.list_templates({
@@ -159,6 +171,15 @@ test("all 15 manuals audit and every executable first-try call passes the curren
   const takeControlManual = createAlpha3_3B1ExactMacroExpansion("macro.fx.set_controls");
   assert.match(takeControlManual.action_manual.when_to_use.join(" "), /exact_assignments for 1-64 parameters/u);
   assert.match(takeControlManual.action_manual.input_shape.exact_assignments, /assignments\[\] 1-64 rows/u);
+  assert.match(takeControlManual.action_manual.input_shape.mode, /inspect_set/u);
+  assert.match(takeControlManual.action_manual.input_shape.mode, /shared_plan/u);
+  const setExample = takeControlManual.action_manual.examples.find((entry) => entry.name.includes("homogeneous Take FX set"));
+  assert.equal(setExample.prerequisite.public_sequence.length, 2);
+  assert.equal(setExample.prerequisite.public_sequence[0].arguments.id, "macro.fx.apply_chain");
+  assert.equal(setExample.prerequisite.public_sequence[1].arguments.input.mode, "inspect_set");
+  assert.equal(setExample.input.mode, "shared_plan");
+  assert.match(takeControls.selector_or_ref_requirements.notes, /never loop or cache per-member refs/u);
+  assert.match(takeControls.selector_or_ref_requirements.notes, /Project\/generation changes invalidate both refs/u);
   for (const id of ["macro.project.apply_layout", "macro.render.targets"]) {
     const guide = createAlpha34BFirstTryExecutionGuide(id, discoveryById.get(id));
     const skeleton = guide.next_calls.find((entry) => entry.tool === "call_template" && entry.arguments.id === id);

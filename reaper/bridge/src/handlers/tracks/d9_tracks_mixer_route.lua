@@ -84,8 +84,7 @@ local function d9_tracks_ref_string(track)
 end
 
 local function d9_tracks_name(track)
-  local ok, _, name = call_reaper("GetTrackName", track, "")
-  return bounded_string(ok and first_string(name) or "", 160)
+  return read_track_name(track, 160)
 end
 
 local function d9_tracks_object_ref(track)

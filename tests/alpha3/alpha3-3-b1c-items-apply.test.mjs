@@ -130,6 +130,79 @@ describe("Alpha3.3-B1c executable macro.items.apply", () => {
     assert.equal(result.result.data.transport_call_count, 1);
   });
 
+  it("runs selected-Item Reverse and Glue through one aggregate native mutation each", async () => {
+    for (const mode of ["reverse", "glue"]) {
+      const bridge = new FakeFoundationBridge([
+        item(ITEM_A, 1, 1, { selected: true, active_take_ref: TAKE_A0.ref, take_refs: [TAKE_A0.ref] }),
+        item(ITEM_B, 2, 1, { selected: true, active_take_ref: TAKE_B0.ref, take_refs: [TAKE_B0.ref] }),
+      ]);
+      const result = await executeAlpha3_3B1cItemsApplyMacro({
+        request: request({
+          mode,
+          dry_run: false,
+        }),
+        executeAtomic: bridge.executeAtomic,
+        now: () => new Date(NOW),
+      });
+
+      assert.equal(result.ok, true, `${mode}: ${JSON.stringify(result)}`);
+      assert.equal(bridge.calls[0].id, "template.items.list_selected_items");
+      const mutationCalls = bridge.calls.filter(({ id }) => id === (mode === "reverse" ? "template.items.set_reverse" : "template.items.glue_item"));
+      assert.equal(mutationCalls.length, 1, `${mode} must dispatch one aggregate mutation`);
+      assert.deepEqual(mutationCalls[0].input.batch.map((row) => row.item_ref), [ITEM_A.ref, ITEM_B.ref]);
+      assert.equal(result.result.data.native_batch.native_action_count, 1);
+      assert.equal(result.result.data.native_batch.undo_opened, true);
+      assert.equal(result.result.data.native_batch.undo_closed, true);
+      assert.equal(result.result.data.target_scope, "target_binding:selected");
+      assert.equal(result.result.data.target_set.domain, "items");
+      assert.equal(result.result.data.target_set.count, 2);
+      assert.match(result.result.data.target_set.fingerprint, /^target-set:/u);
+      assert.equal(result.result.changes.length, 2);
+      assert.equal(result.result.changes.every((change) => change.live_readback.status === "passed"), true);
+    }
+  });
+
+  it("rejects 65 omitted-default lifecycle targets before aggregate mutation", async () => {
+    const items = Array.from({ length: 65 }, (_, index) => item(
+      itemRef(`{OMITTED-${String(index + 1).padStart(3, "0")}}`),
+      index,
+      1,
+      { selected: true },
+    ));
+    for (const mode of ["reverse", "glue"]) {
+      const bridge = new FakeFoundationBridge(items);
+      const result = await executeAlpha3_3B1cItemsApplyMacro({
+        request: request({ mode, dry_run: false }),
+        executeAtomic: bridge.executeAtomic,
+        now: () => new Date(NOW),
+      });
+
+      assert.equal(result.ok, false, JSON.stringify(result));
+      assert.equal(result.error.code, "ITEM_APPLY_TARGET_LIMIT_EXCEEDED");
+      assert.equal(result.result.data.mutation.occurred, false);
+      assert.deepEqual(bridge.calls.map((call) => call.id), ["template.items.list_selected_items"]);
+    }
+  });
+
+  it("promotes the frozen Bridge locking detail to one zero-write Agent blocker", async () => {
+    const bridge = new FakeFoundationBridge([
+      item(ITEM_A, 1, 1, { selected: true, active_take_ref: TAKE_A0.ref, take_refs: [TAKE_A0.ref] }),
+    ], { projectLockingEnabled: true });
+    const result = await executeAlpha3_3B1cItemsApplyMacro({
+      request: request({ mode: "reverse", dry_run: false }),
+      executeAtomic: bridge.executeAtomic,
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, false, JSON.stringify(result));
+    assert.equal(result.error.code, "PROJECT_LOCKING_ENABLED");
+    assert.equal(result.error.details.zero_write, true);
+    assert.equal(result.result.data.zero_write, true);
+    assert.equal(result.result.data.native_action_count, 0);
+    assert.equal(result.result.data.selection_restored, true);
+    assert.equal(result.result.data.active_take_restored, true);
+  });
+
   it("registers one fixed allowlisted destructive program and truthfully holds unfinished modes and Take fields", () => {
     assert.deepEqual(ALPHA3_3_B1C_ITEMS_APPLY_REGISTRY.ids, ["macro.items.apply"]);
     const entry = ALPHA3_3_B1C_ITEMS_APPLY_REGISTRY.entries[0];
@@ -159,6 +232,9 @@ describe("Alpha3.3-B1c executable macro.items.apply", () => {
     assert.equal(discovery.supported_modes.includes("stack_on_existing_tracks"), true);
     assert.equal(discovery.held_modes.includes("stack_on_existing_tracks"), false);
     const manual = createAlpha3_3B1cItemsApplyExactManual().action_manual;
+    assert.deepEqual(manual.default_target_bindings[0].when.mode, ["reverse", "glue"]);
+    assert.equal(manual.default_target_bindings[0].target_binding.selector, "selected");
+    assert.equal(manual.default_target_bindings[0].zero_write_when_empty_or_over_limit, true);
     assert.match(manual.when_to_use.join(" "), /explicit item_ref\/take_ref assignment rows/u);
     assert.match(manual.when_not_to_use.join(" "), /no REAPER Item-level pan control is proven/u);
     assert.match(manual.recovery_steps.join(" "), /macro\.controls\.set with target_kind=take/u);
@@ -606,7 +682,73 @@ describe("Alpha3.3-B1c executable macro.items.apply", () => {
       source: "exact_item_track_readback",
       observed_value: "track:guid:{TRACK-B}",
     });
+    assert.deepEqual(result.result.changes[0].mutation, {
+      status: "completed",
+      template_id: "template.items.move_item_to_track",
+      changed: true,
+      native_dispatched: true,
+    });
     assert.deepEqual(invalidations, [["items", "tracks", "takes"]]);
+  });
+
+  it("treats mixed same-Track assignments as idempotent and preflights stale Track refs zero-write", async () => {
+    const itemC = itemRef("{ITEM-C}");
+    const targetA = "track:guid:{TRACK-A}";
+    const targetB = "track:guid:{TRACK-B}";
+    const bridge = new FakeFoundationBridge([
+      item(ITEM_A, 0, 1, { track_ref: targetA }),
+      item(ITEM_B, 1, 1, { track_ref: targetB }),
+      item(itemC, 2, 1, { track_ref: targetA }),
+    ], { knownTrackRefs: [targetA, targetB] });
+    const result = await executeAlpha3_3B1cItemsApplyMacro({
+      request: request({
+        mode: "stack_on_existing_tracks",
+        track_assignments: [
+          { item_ref: ITEM_A.ref, target_track_ref: targetA },
+          { item_ref: ITEM_B.ref, target_track_ref: targetB },
+          { item_ref: itemC.ref, target_track_ref: targetB },
+        ],
+        dry_run: false,
+      }),
+      executeAtomic: bridge.executeAtomic,
+      projectIndexRuntime: projectIndex([]),
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(bridge.nativeMoveCalls, 1);
+    assert.deepEqual(result.result.changes.map((change) => ({
+      changed: change.mutation.changed,
+      native_dispatched: change.mutation.native_dispatched,
+      already_on_target: change.already_on_target === true,
+    })), [
+      { changed: false, native_dispatched: false, already_on_target: true },
+      { changed: false, native_dispatched: false, already_on_target: true },
+      { changed: true, native_dispatched: true, already_on_target: false },
+    ]);
+
+    const stale = new FakeFoundationBridge([
+      item(ITEM_A, 0, 1, { track_ref: targetA }),
+      item(ITEM_B, 1, 1, { track_ref: targetA }),
+    ], { knownTrackRefs: [targetA, targetB] });
+    const blocked = await executeAlpha3_3B1cItemsApplyMacro({
+      request: request({
+        mode: "stack_on_existing_tracks",
+        track_assignments: [
+          { item_ref: ITEM_A.ref, target_track_ref: targetB },
+          { item_ref: ITEM_B.ref, target_track_ref: "track:guid:{STALE}" },
+        ],
+        dry_run: false,
+      }),
+      executeAtomic: stale.executeAtomic,
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(blocked.ok, false);
+    assert.equal(blocked.error.code, "TRACK_NOT_FOUND");
+    assert.equal(stale.nativeMoveCalls, 0);
+    assert.equal(stale.items.get(ITEM_A.ref).track_ref, targetA);
+    assert.equal(stale.items.get(ITEM_B.ref).track_ref, targetA);
   });
 
   it("applies fades, exact trim, Take playback, and snap offset through fixed accepted atoms", async () => {
@@ -1463,11 +1605,30 @@ class FakeFoundationBridge {
     this.readCounts = new Map();
     this.analysisCounts = new Map();
     this.splitSerial = 0;
+    this.nativeMoveCalls = 0;
     this.executeAtomic = this.executeAtomic.bind(this);
   }
 
   async executeAtomic({ id, input = {}, refs = {}, budget, observeProjectIndex }) {
     this.calls.push({ id, input: structuredClone(input), refs: structuredClone(refs), budget, observeProjectIndex });
+    if (id === "template.project.read_track_item_overview") {
+      const rows = [...this.items.values()].map(summary);
+      const selectedRows = [...this.items.values()].filter((entry) => entry.selected).map(summary);
+      return execution(id, {
+        tracks: [],
+        items: rows,
+        selected_items: selectedRows,
+        track_count: 0,
+        item_count: rows.length,
+        returned_track_count: 0,
+        returned_item_count: rows.length,
+        item_coverage_status: "complete",
+        item_coverage: { internally_complete: true },
+        truncated: false,
+        items_truncated: false,
+        selected_items_truncated: false,
+      }, [...this.items.values()].map((entry) => entry.item_ref));
+    }
     if (id === "template.items.list_selected_items") {
       const selected = [...this.items.values()].filter((entry) => entry.selected);
       const rows = selected.slice(0, input.limit);
@@ -1485,6 +1646,9 @@ class FakeFoundationBridge {
     }
     if (id === "template.tracks.resolve_track_ref") {
       const resolved = trackRef(input.track_ref.slice("track:guid:".length));
+      if (Array.isArray(this.options.knownTrackRefs) && !this.options.knownTrackRefs.includes(resolved.ref)) {
+        return failure(id, "TRACK_NOT_FOUND", "Fake Track was not found.");
+      }
       return execution(id, { track_ref: resolved.ref }, [resolved]);
     }
     if (id === "template.items.split_item_by_silence" && input.batch === true) {
@@ -1567,6 +1731,54 @@ class FakeFoundationBridge {
         truncated: false,
         items: rows.map(summary),
       }, [trackReference, ...rows.map((candidate) => candidate.item_ref)]);
+    }
+    if ((id === "template.items.set_reverse" || id === "template.items.glue_item") && Array.isArray(input.batch)) {
+      if (id === "template.items.set_reverse" && this.options.projectLockingEnabled === true) {
+        const response = failure(id, "COMMAND_FAILED", "REAPER project Locking is enabled; disable Locking and retry the same Take reverse request.");
+        response.error.details = {
+          bridge_code: "PROJECT_LOCKING_ENABLED",
+          zero_write: true,
+          native_action_count: 0,
+          selection_restored: true,
+          active_take_restored: true,
+        };
+        return response;
+      }
+      const rows = input.batch.map((row) => {
+        const entry = this.items.get(row.item_ref);
+        if (!entry) throw new Error(`Missing lifecycle fixture Item ${row.item_ref}`);
+        if (id === "template.items.set_reverse") {
+          return {
+            id: row.id,
+            item_ref: row.item_ref,
+            active_take_ref: entry.active_take_ref,
+            reverse: true,
+            changed: true,
+            live_readback: "passed",
+          };
+        }
+        return {
+          id: row.id,
+          source_item_ref: row.item_ref,
+          glued_item_ref: "item:guid:{GLUED-BATCH}",
+          glued_take_ref: "take:guid:{GLUED-BATCH-TAKE}",
+          old_item_guid_absent: true,
+          new_item_unique: true,
+          changed: true,
+          live_readback: "passed",
+        };
+      });
+      const response = execution(id, {
+        rows,
+        row_count: rows.length,
+        native_action_count: 1,
+        readback_status: "passed",
+        selection_restored: true,
+        active_take_restored: true,
+        undo_opened: true,
+      });
+      response.undo = { opened: true, closed: true };
+      return response;
     }
     const itemReference = refs.item_ref;
     const refString = typeof itemReference === "string" ? itemReference : itemReference?.ref;
@@ -1661,6 +1873,8 @@ class FakeFoundationBridge {
       const target = refs.target_track_ref;
       const targetRef = typeof target === "string" ? target : target?.ref;
       const sourceTrackRef = entry.track_ref;
+      const changed = sourceTrackRef !== targetRef;
+      if (changed) this.nativeMoveCalls += 1;
       entry.track_ref = targetRef;
       return execution(id, {
         ...summary(entry),
@@ -1668,6 +1882,9 @@ class FakeFoundationBridge {
         target_track_ref: targetRef,
         take_refs: [...entry.take_refs],
         track_count_unchanged: true,
+        changed,
+        already_on_target: !changed,
+        native_move_dispatched: changed,
         readback_status: "passed",
       }, [entry.item_ref, target]);
     }

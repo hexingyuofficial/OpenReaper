@@ -1,9 +1,9 @@
 # OpenReaper
 
 OpenReaper is an evidence-bound MCP bridge and task runtime for REAPER. It lets
-an MCP-capable agent inspect a project, execute reviewed Macros, Templates, and
-Recipes, verify changes from live REAPER readback, and retain bounded evidence.
-Version `0.1.0` is the evidence-bound macOS and Windows x64 release line.
+an MCP-capable agent inspect a project, run reviewed Macros, Templates, and
+Recipes, verify changes through live REAPER readback, and retain bounded evidence.
+Version `0.1.0` is the supported macOS and Windows x64 release line.
 
 OpenReaper exposes exactly six agent-facing MCP tools:
 
@@ -11,9 +11,9 @@ OpenReaper exposes exactly six agent-facing MCP tools:
 ping  get_state  list_templates  list_recipes  call_template  call_recipe
 ```
 
-The normal flow is simple: describe the result, let the agent discover the
-right Macro or Recipe, execute one bounded call, and read the result verified by
-REAPER. The product does not expose raw Lua, arbitrary REAPER Actions, shell
+The normal flow is simple: describe the result, let the agent find the right
+Macro or Recipe, approve any real safety boundary, and read the result verified
+by REAPER. OpenReaper does not expose raw Lua, arbitrary REAPER Actions, shell
 execution, raw SQL, hardware/device I/O, or an unreviewed executor.
 
 ## Five-Minute Start
@@ -49,10 +49,10 @@ one Recipe for a reusable multi-stage workflow. Direct Templates are a typed
 fallback only when no Macro owns the request. Every write resolves its target
 in live REAPER and requires live readback before it is reported as applied.
 
-The `0.1.0` release line covers the reviewed audio workflows for media placement,
+The `0.1.0` release line covers reviewed audio workflows for media placement,
 waveform/readback truth, source/item/take normalization, and Remove Silence.
-Remove Silence supports the packaged `Remove Silence...` and `Repeat Remove
-Silence with Last Settings` Actions plus the Macro route, with `all`, `leading`,
+Remove Silence is available through the Macro route and the packaged
+`Remove Silence...` Action, with `all`, `leading`,
 `trailing`, `edges`, and `internal` scopes. Normalization uses REAPER's native
 normalization calculation for LUFS-I, RMS-I, peak, true peak, LUFS-M max, and
 LUFS-S max. Normalization is source/item/take pre-FX; it is not a post-FX claim.
@@ -64,7 +64,7 @@ recipe.mix.create_bus_processing
 recipe.midi.create_instrument_part
 ```
 
-Official, user-authored, and forked Recipes use the same generic runner,
+Official, user-authored, and forked Recipes use the same runner,
 aggregate readback, and Whole-Recipe Undo path. Recipe execution remains
 serial, and unsupported or stale targets fail closed with typed recovery.
 

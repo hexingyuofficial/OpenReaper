@@ -1,9 +1,8 @@
 # OpenReaper
 
 OpenReaper 是一个以证据为边界的 REAPER MCP 桥接与任务运行时。支持 MCP
-的代理可以检查工程，执行经过审查的 Macro、Template 和 Recipe，从 REAPER
-实时读回验证结果，并保留有界证据。`0.1.0` 是面向 macOS 和 Windows x64、
-以证据为边界的发布版本线。
+的代理可以检查工程，执行经过审查的 Macro、Template 和 Recipe，通过 REAPER
+实时读回验证结果，并保留有界证据。`0.1.0` 是支持 macOS 和 Windows x64 的发布版本。
 
 OpenReaper 恰好提供六个面向代理的 MCP 工具：
 
@@ -11,8 +10,8 @@ OpenReaper 恰好提供六个面向代理的 MCP 工具：
 ping  get_state  list_templates  list_recipes  call_template  call_recipe
 ```
 
-正常流程是：描述目标，让代理发现合适的 Macro 或 Recipe，执行一次有界调用，
-然后读取 REAPER 验证后的结果。产品不暴露 raw Lua、任意 REAPER Action、
+正常流程是：描述目标，让代理找到合适的 Macro 或 Recipe，必要时确认安全边界，
+执行一次有界调用，然后读取 REAPER 验证后的结果。产品不暴露 raw Lua、任意 REAPER Action、
 shell 执行、raw SQL、硬件/设备 I/O 或未经审查的执行器。
 
 ## 五分钟开始
@@ -46,10 +45,9 @@ Windows 11 x64 build 26200 与对应稳定版 REAPER；其他组合仍需证据�
 Template fallback。每次写入都必须在 live REAPER 中解析目标，并在 REAPER
 读回后才能报告为已应用。
 
-`0.1.0` 发布版本线覆盖经过审查的媒体放置、波形/读回事实、source/item/take
-normalization 和 Remove Silence 流程。Remove Silence 提供软件包内的
-`Remove Silence...`、`Repeat Remove Silence with Last Settings` 两个 Action
-以及 Macro 路径，支持 `all`、`leading`、`trailing`、`edges`、`internal`
+`0.1.0` 发布版本覆盖经过审查的媒体放置、波形/读回事实、source/item/take
+normalization 和 Remove Silence 流程。Remove Silence 提供 Macro 路径和软件包内的
+`Remove Silence...` Action，支持 `all`、`leading`、`trailing`、`edges`、`internal`
 五种 scope。Normalization 使用 REAPER 原生 normalization 计算，支持
 LUFS-I、RMS-I、peak、true peak、LUFS-M max 和 LUFS-S max。它声明的是
 source/item/take pre-FX 范围，不是 post-FX normalization。
@@ -61,7 +59,7 @@ recipe.mix.create_bus_processing
 recipe.midi.create_instrument_part
 ```
 
-官方、用户编写和 fork 的 Recipe 共用 generic runner、聚合读回和
+官方、用户编写和 fork 的 Recipe 共用同一 runner、聚合读回和
 Whole-Recipe Undo。Recipe 串行执行；不支持或过期的目标会 fail closed，
 并返回有类型的恢复方式。
 

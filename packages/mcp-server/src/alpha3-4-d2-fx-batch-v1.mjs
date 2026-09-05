@@ -30,6 +30,7 @@ const ASSIGNMENT_ROW_FIELDS = new Set([
   "param_ident",
   "param_name",
   "normalized_value",
+  "display_value",
   "requested_formatted_value",
 ]);
 const EXACT_ASSIGNMENTS_TOP_LEVEL = new Set(["mode", "assignments", "dry_run"]);
@@ -130,10 +131,24 @@ export function normalizeExactAssignmentsInput(input = {}) {
         `assignments[${index}] must not mix param_name with param_index.`,
       );
     }
-    if (typeof raw.normalized_value !== "number" || !Number.isFinite(raw.normalized_value) || raw.normalized_value < 0 || raw.normalized_value > 1) {
+    const hasNormalizedValue = Object.hasOwn(raw, "normalized_value");
+    const hasDisplayValue = Object.hasOwn(raw, "display_value");
+    if (hasNormalizedValue === hasDisplayValue) {
+      return failed(
+        "FX_ASSIGNMENTS_VALUE_INVALID",
+        `assignments[${index}] requires exactly one normalized_value or display_value.`,
+      );
+    }
+    if (hasNormalizedValue && (typeof raw.normalized_value !== "number" || !Number.isFinite(raw.normalized_value) || raw.normalized_value < 0 || raw.normalized_value > 1)) {
       return failed(
         "FX_ASSIGNMENTS_VALUE_INVALID",
         `assignments[${index}].normalized_value must be a finite number in [0,1].`,
+      );
+    }
+    if (hasDisplayValue && (typeof raw.display_value !== "string" || raw.display_value.trim().length < 1 || raw.display_value.length > 80)) {
+      return failed(
+        "FX_ASSIGNMENTS_DISPLAY_VALUE_INVALID",
+        `assignments[${index}].display_value must be one bounded native-formatted target string.`,
       );
     }
     if (Object.hasOwn(raw, "requested_formatted_value") && (typeof raw.requested_formatted_value !== "string" || raw.requested_formatted_value.length === 0)) {
@@ -160,7 +175,8 @@ export function normalizeExactAssignmentsInput(input = {}) {
       param_index: hasIndex ? raw.param_index : null,
       param_ident: hasIdent ? raw.param_ident.trim() : null,
       param_name: hasName ? raw.param_name.trim() : null,
-      normalized_value: raw.normalized_value,
+      ...(hasNormalizedValue ? { normalized_value: raw.normalized_value } : {}),
+      ...(hasDisplayValue ? { display_value: raw.display_value.trim() } : {}),
       ...(typeof raw.requested_formatted_value === "string"
         ? { requested_formatted_value: raw.requested_formatted_value }
         : {}),
@@ -336,7 +352,9 @@ export async function executeExactAssignmentsBatch({
         input: {
           param_index: change.param_index,
           ...(change.param_ident ? { param_ident: change.param_ident } : {}),
-          probe_normalized_value: change.normalized_value,
+          ...(change.display_value
+            ? { probe_display_value: change.display_value }
+            : { probe_normalized_value: change.normalized_value }),
         },
         refs: { fx_ref: row.resolved_fx_ref },
         budget: readBudget,
@@ -364,11 +382,13 @@ export async function executeExactAssignmentsBatch({
     const probeIndexMatches = probe?.param_index === change.param_index;
     const probeIdentMatches = !change.param_ident || probe?.param_ident === change.param_ident;
     const probeNormalized = Number(probe?.normalized_value);
+    const probeValue = Number(probe?.value);
     const probeFormatted = probe?.formatted_value;
+    const displayMode = change.display_value != null;
     if (!probeIndexMatches
       || !probeIdentMatches
-      || !Number.isFinite(probeNormalized)
-      || Math.abs(probeNormalized - change.normalized_value) > 0.000001
+      || (displayMode ? !Number.isFinite(probeValue) : !Number.isFinite(probeNormalized))
+      || (!displayMode && Math.abs(probeNormalized - change.normalized_value) > 0.000001)
       || typeof probeFormatted !== "string"
       || probeFormatted.length === 0) {
       return failureEnvelope({
@@ -390,6 +410,7 @@ export async function executeExactAssignmentsBatch({
     }
     prepared.push({
       ...change,
+      ...(displayMode ? { value: probeValue } : { normalized_value: probeNormalized }),
       fx_ref: row.resolved_fx_ref,
       native_target_formatted_value: probeFormatted,
       step_sizes_available: probe?.step_sizes_available ?? false,
@@ -444,7 +465,9 @@ export async function executeExactAssignmentsBatch({
         id: SET_FX_PARAMETER_ID,
         input: {
           param_index: row.param_index,
-          normalized_value: row.normalized_value,
+          ...(row.display_value != null
+            ? { display_value: row.display_value }
+            : { normalized_value: row.normalized_value }),
           ...(row.param_ident ? { param_ident: row.param_ident } : {}),
         },
         refs: { fx_ref: row.fx_ref },
@@ -519,8 +542,9 @@ export async function executeExactAssignmentsBatch({
     }
     readbackWallMs += monoElapsed(readbackStarted, monoNow);
 
-    const actual = Number(observed?.normalized_value);
-    const expected = row.normalized_value;
+    const displayMode = row.display_value != null;
+    const actual = Number(displayMode ? observed?.value : observed?.normalized_value);
+    const expected = displayMode ? row.value : row.normalized_value;
     const nativeTolerance = Number(writeReadback?.tolerance);
     const tolerance = Number.isFinite(nativeTolerance) && nativeTolerance >= 0 ? nativeTolerance : 0.001;
     const identityOk = observed?.param_index === row.param_index
@@ -532,12 +556,12 @@ export async function executeExactAssignmentsBatch({
       || row.is_discrete === true
       || writeReadback?.is_discrete === true
       || writeReadback?.verification_mode === "native_discrete_format";
-    const formattedOk = discrete && row.native_target_formatted_value === (observed?.formatted_value ?? null);
+    const formattedOk = formattedReadbackMatches(observed?.formatted_value, row.native_target_formatted_value);
     const continuousOk = Number.isFinite(actual) && Number.isFinite(expected) && Math.abs(actual - expected) <= tolerance;
-    const valueOk = discrete ? formattedOk : continuousOk;
+    const valueOk = displayMode ? formattedOk && continuousOk : discrete ? formattedOk : continuousOk;
     const fields = [];
     if (!identityOk) fields.push("param_identity");
-    if (!valueOk) fields.push(discrete ? "formatted_value" : "normalized_value");
+    if (!valueOk) fields.push(displayMode || discrete ? "formatted_value" : "normalized_value");
     if (fields.length === 0) {
       change.live_readback = { status: "passed", source: "final_read_fx_parameter" };
       if (!mutationFailed && !mutationUnknown) change.status = "applied";
@@ -751,6 +775,12 @@ async function executeNativeExactAssignmentsBatch({
 
   for (const [index, row] of validated.rows.entries()) {
     const change = state.changes[index];
+    if (normalized.assignments[index]?.display_value != null) {
+      change.value = Number(row.requested_value);
+      change.display_value = normalized.assignments[index].display_value;
+    } else {
+      change.normalized_value = Number(row.requested_normalized_value);
+    }
     change.status = dryRun ? "planned" : "applied";
     change.mutation = { status: dryRun ? "not_run" : "completed", source: "native_batch" };
     change.live_readback = { status: "passed", source: dryRun ? "native_preflight" : "native_aggregate_readback" };
@@ -806,16 +836,27 @@ function validateNativeBatchReadback(assignments, readback) {
     seen.add(row.id);
     const input = expected.get(row.id);
     const normalized = Number(row.normalized_value);
+    const requestedNormalized = Number(row.requested_normalized_value);
+    const value = Number(row.value);
+    const requestedValue = Number(row.requested_value);
     const tolerance = Number(row.tolerance);
     const identityOk = row.fx_ref === input.fx_ref
       && (input.param_index === null || row.param_index === input.param_index)
       && (!input.param_ident || row.param_ident === input.param_ident)
       && (!input.param_name || typeof row.name === "string" && row.name.toLocaleLowerCase() === input.param_name.toLocaleLowerCase());
     const formattedOk = typeof row.formatted_value === "string" && row.formatted_value.length > 0
-      && (!input.requested_formatted_value || row.requested_formatted_value === input.requested_formatted_value);
-    const valueOk = row.verification_mode === "native_discrete_format"
+      && typeof row.requested_formatted_value === "string" && row.requested_formatted_value.length > 0
+      && formattedReadbackMatches(row.formatted_value, row.requested_formatted_value)
+      && (!input.requested_formatted_value || formattedReadbackMatches(row.requested_formatted_value, input.requested_formatted_value));
+    const expectedNormalized = input.display_value == null ? input.normalized_value : requestedNormalized;
+    const valueOk = input.display_value != null
+      ? row.verification_mode === "native_display_value"
+        && Number.isFinite(value) && Number.isFinite(requestedValue) && Number.isFinite(tolerance)
+        && tolerance >= 0 && Math.abs(value - requestedValue) <= tolerance && formattedOk
+      : row.verification_mode === "native_discrete_format"
       ? formattedOk && row.formatted_value === row.requested_formatted_value
-      : Number.isFinite(normalized) && Number.isFinite(tolerance) && tolerance >= 0 && Math.abs(normalized - input.normalized_value) <= tolerance;
+      : Number.isFinite(normalized) && Number.isFinite(expectedNormalized) && Number.isFinite(tolerance)
+        && tolerance >= 0 && Math.abs(normalized - expectedNormalized) <= tolerance;
     if (!identityOk || !formattedOk || row.updated !== true || !valueOk) {
       return failed("FX_ASSIGNMENTS_NATIVE_BATCH_READBACK_MISMATCH", `Native aggregate readback for ${row.id} did not preserve exact identity and native value truth.`);
     }
@@ -978,7 +1019,36 @@ function batchRowChange(row, { status, mutation, readback, index, code, fields }
     fx_ref: row.fx_ref,
     param_index: row.param_index,
     normalized_value: row.normalized_value,
+    value: row.value,
+    display_value: row.display_value,
   });
+}
+
+export function formattedReadbackMatches(readback, requested) {
+  if (typeof readback !== "string" || typeof requested !== "string") return false;
+  if (readback === requested) return true;
+  const actual = formattedQuantity(readback);
+  const expected = formattedQuantity(requested);
+  if (!actual || !expected) return false;
+  const compatible = actual.family === expected.family
+    || (actual.family === "" && expected.family !== "");
+  if (!compatible) return false;
+  const magnitude = Math.max(1, Math.abs(actual.value), Math.abs(expected.value));
+  return Math.abs(actual.value - expected.value) <= magnitude * 1e-9;
+}
+
+function formattedQuantity(value) {
+  const match = value.trim().toLowerCase().match(/^([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)\s*([^\s]*)$/u);
+  if (!match) return null;
+  const number = Number(match[1]);
+  if (!Number.isFinite(number)) return null;
+  const unit = match[2];
+  const scales = {
+    hz: ["hz", 1], khz: ["hz", 1_000], mhz: ["hz", 1_000_000],
+    s: ["seconds", 1], ms: ["seconds", 0.001],
+  };
+  const [family, scale] = scales[unit] ?? [unit, 1];
+  return { value: number * scale, family };
 }
 
 function compactBatchData(state, { dry_run, unique_fx_count = 0 } = {}) {

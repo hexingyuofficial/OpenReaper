@@ -118,6 +118,40 @@ describe("Alpha3.2-E render target planner", () => {
     }
   });
 
+  it("normalizes managed H.264/AAC MP4 and MOV exports with audited defaults and controls", () => {
+    const cases = [
+      [{ target_kind: "whole_project", format: "mp4", dry_run: false }, { width: 1920, height: 1080, frameRate: 30, videoBitrate: 8000, audioBitrate: 192 }],
+      [{ target_kind: "time_selection", format: "mov", video_width: 1280, video_height: 720, video_frame_rate: 24, video_bitrate_kbps: 4096, audio_bitrate_kbps: 128, dry_run: false }, { width: 1280, height: 720, frameRate: 24, videoBitrate: 4096, audioBitrate: 128 }],
+    ];
+    for (const [input, expected] of cases) {
+      const plan = planAlpha3_2ERenderTargetsMacro(input);
+      assert.equal(plan.ok, true, JSON.stringify(plan.blockers));
+      assert.equal(plan.preview.render_settings.video_width, expected.width);
+      assert.equal(plan.preview.render_settings.video_height, expected.height);
+      assert.equal(plan.preview.render_settings.video_frame_rate, expected.frameRate);
+      assert.equal(plan.preview.render_settings.video_codec, "h264");
+      assert.equal(plan.preview.render_settings.video_bitrate_kbps, expected.videoBitrate);
+      assert.equal(plan.preview.render_settings.audio_codec, "aac");
+      assert.equal(plan.preview.render_settings.audio_bitrate_kbps, expected.audioBitrate);
+      assert.deepEqual(plan.mutation_requests[0].input, {
+        target_kind: input.target_kind,
+        format: input.format,
+        output_policy: "openreaper_managed_render_root",
+        collision_policy: "fail_if_exists",
+        sample_rate_hz: 48_000,
+        channel_count: 2,
+        max_targets: 16,
+        video_width: expected.width,
+        video_height: expected.height,
+        video_frame_rate: expected.frameRate,
+        video_codec: "h264",
+        video_bitrate_kbps: expected.videoBitrate,
+        audio_codec: "aac",
+        audio_bitrate_kbps: expected.audioBitrate,
+      });
+    }
+  });
+
   it("keeps fail_if_exists as default and forwards explicit overwrite or suffix policies", () => {
     for (const policy of ["fail_if_exists", "overwrite", "suffix"]) {
       const plan = planAlpha3_2ERenderTargetsMacro({
@@ -135,6 +169,77 @@ describe("Alpha3.2-E render target planner", () => {
       assert.equal(plan.mutation_requests[0].input.collision_policy, policy);
       assert.equal(plan.mutation_requests[0].input.output_basename, "中文 混音");
     }
+  });
+
+  it("defaults an in-project Stem to the current selected Tracks and one verified WAV mixdown", () => {
+    const plan = planAlpha3_2ERenderTargetsMacro({
+      destination: "new_project_track",
+      stem_mode: "mixdown",
+      source_post_action: "mute_after_verified_insert",
+      output_track_name: "Dialog Stem",
+      dry_run: false,
+    });
+
+    assert.equal(plan.ok, true, JSON.stringify(plan.blockers));
+    assert.equal(plan.preview.target_kind, "selected_tracks");
+    assert.equal(plan.preview.format, "wav");
+    assert.deepEqual(plan.preview.target_binding, {
+      bind_at: "execution",
+      domain: "tracks",
+      selector: "selected",
+      refs: [],
+      range: null,
+      constraints: [],
+      cardinality: { minimum: 1, maximum: 16 },
+      aggregation: "batch",
+    });
+    assert.deepEqual(plan.mutation_requests[0].refs, {});
+    assert.deepEqual(plan.mutation_requests[0].input, {
+      target_kind: "selected_tracks",
+      format: "wav",
+      output_policy: "openreaper_managed_render_root",
+      collision_policy: "fail_if_exists",
+      sample_rate_hz: 48_000,
+      channel_count: 2,
+      max_targets: 16,
+      destination: "new_project_track",
+      stem_mode: "mixdown",
+      source_post_action: "mute_after_verified_insert",
+      output_track_name: "Dialog Stem",
+      wav_bit_depth: 24,
+    });
+  });
+
+  it("compiles explicit Track membership and an explicit Stem range into one D31 request", () => {
+    const plan = planAlpha3_2ERenderTargetsMacro({
+      target_binding: {
+        domain: "tracks",
+        selector: "explicit_refs",
+        refs: ["track:guid:{A}", "track:guid:{B}"],
+        cardinality: { minimum: 1, maximum: 16 },
+        aggregation: "batch",
+        constraints: [{
+          kind: "time_relation",
+          relation: "overlaps",
+          source: { domain: "time_range", selector: "explicit_range", range: { start_seconds: 2, end_seconds: 8 } },
+        }],
+      },
+      destination: "new_project_track",
+      stem_mode: "mixdown",
+      source_post_action: "mute_after_verified_insert",
+      dry_run: false,
+    });
+
+    assert.equal(plan.ok, true, JSON.stringify(plan.blockers));
+    assert.equal(plan.preview.target_kind, "explicit_tracks");
+    assert.deepEqual(plan.mutation_requests[0].refs.track_refs.map((ref) => ref.ref), ["track:guid:{A}", "track:guid:{B}"]);
+    assert.deepEqual(plan.mutation_requests[0].input.render_range, {
+      mode: "explicit_range",
+      start_seconds: 2,
+      end_seconds: 8,
+      relation: "overlaps",
+    });
+    assert.equal(plan.mutation_requests.length, 1);
   });
 
   it("fails closed for target/ref mismatches, unsafe output policy, and unsupported settings", () => {
@@ -158,10 +263,26 @@ describe("Alpha3.2-E render target planner", () => {
       [{ target_kind: "whole_project", format: "mp3", ogg_quality: 0.5 }, "RENDER_MP3_OGG_QUALITY_FORBIDDEN"],
       [{ target_kind: "whole_project", format: "wav", mp3_bitrate_kbps: 320 }, "RENDER_WAV_MP3_BITRATE_FORBIDDEN"],
       [{ target_kind: "whole_project", format: "ogg", mp3_bitrate_kbps: 320 }, "RENDER_OGG_MP3_BITRATE_FORBIDDEN"],
+      [{ target_kind: "whole_project", format: "wav", video_width: 1920 }, "RENDER_AUDIO_VIDEO_FIELDS_FORBIDDEN"],
+      [{ target_kind: "whole_project", format: "mp4", video_width: 1919 }, "RENDER_VIDEO_WIDTH_UNSUPPORTED"],
+      [{ target_kind: "whole_project", format: "mp4", video_height: 0 }, "RENDER_VIDEO_HEIGHT_UNSUPPORTED"],
+      [{ target_kind: "whole_project", format: "mp4", video_frame_rate: 29.97 }, "RENDER_VIDEO_FRAME_RATE_UNSUPPORTED"],
+      [{ target_kind: "whole_project", format: "mp4", video_codec: "prores" }, "RENDER_VIDEO_CODEC_UNSUPPORTED"],
+      [{ target_kind: "whole_project", format: "mp4", video_bitrate_kbps: 100 }, "RENDER_VIDEO_BITRATE_UNSUPPORTED"],
+      [{ target_kind: "whole_project", format: "mov", audio_codec: "pcm" }, "RENDER_AUDIO_CODEC_UNSUPPORTED"],
+      [{ target_kind: "whole_project", format: "mov", audio_bitrate_kbps: 160 }, "RENDER_AUDIO_BITRATE_UNSUPPORTED"],
+      [{ target_kind: "whole_project", format: "mov", wav_bit_depth: 24 }, "RENDER_VIDEO_AUDIO_FORMAT_FIELDS_FORBIDDEN"],
+      [{ target_kind: "whole_project", format: "mp4", output_basename: "mix.mp4" }, "RENDER_OUTPUT_BASENAME_INVALID"],
       [{ target_kind: "whole_project", format: "wav", output_basename: "../mix" }, "RENDER_OUTPUT_BASENAME_INVALID"],
       [{ target_kind: "whole_project", format: "wav", output_basename: "mix.wav" }, "RENDER_OUTPUT_BASENAME_INVALID"],
       [{ target_kind: "whole_project", format: "mp3", output_basename: "mix.mp3" }, "RENDER_OUTPUT_BASENAME_INVALID"],
       [{ target_kind: "whole_project", format: "wav", output_basename: "$project" }, "RENDER_OUTPUT_BASENAME_INVALID"],
+      [{ destination: "new_project_track", source_post_action: "mute_after_verified_insert" }, "RENDER_STEM_MODE_REQUIRED"],
+      [{ destination: "new_project_track", stem_mode: "mixdown" }, "RENDER_SOURCE_POST_ACTION_REQUIRED"],
+      [{ destination: "new_project_track", stem_mode: "mixdown", source_post_action: "mute_after_verified_insert", format: "ogg" }, "RENDER_STEM_FORMAT_UNSUPPORTED"],
+      [{ target_kind: "selected_items", destination: "new_project_track", stem_mode: "mixdown", source_post_action: "mute_after_verified_insert" }, "RENDER_STEM_TARGET_UNSUPPORTED"],
+      [{ target_kind: "whole_project", format: "wav", output_track_name: "Stem" }, "RENDER_STEM_FIELDS_CONFLICT"],
+      [{ destination: "new_project_track", stem_mode: "mixdown", source_post_action: "mute_after_verified_insert", output_track_name: " bad" }, "RENDER_OUTPUT_TRACK_NAME_INVALID"],
     ];
 
     for (const [input, expectedCode] of cases) {
@@ -212,5 +333,11 @@ describe("Alpha3.2-E render target planner", () => {
     assert.equal(item.input_schema.properties.output_policy.const, "openreaper_managed_render_root");
     assert.deepEqual(item.input_schema.properties.collision_policy, { enum: ["fail_if_exists", "overwrite", "suffix"], default: "fail_if_exists" });
     assert.deepEqual(item.input_schema.properties.max_targets, { type: "integer", minimum: 1, maximum: 16 });
+    assert.deepEqual(item.input_schema.properties.format.enum, ["wav", "ogg", "mp3", "mp4", "mov"]);
+    assert.equal(item.input_schema.properties.video_width.default, 1920);
+    assert.equal(item.input_schema.properties.video_height.default, 1080);
+    assert.equal(item.input_schema.properties.video_frame_rate.default, 30);
+    assert.equal(item.input_schema.properties.video_codec.const, "h264");
+    assert.equal(item.input_schema.properties.audio_codec.const, "aac");
   });
 });

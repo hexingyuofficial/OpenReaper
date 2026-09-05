@@ -89,6 +89,31 @@ function json_array(value) return value or {} end
   lua.lua_close(state);
 }
 
+function isoAtom(type, payload = Buffer.alloc(0)) {
+  const size = Buffer.alloc(4);
+  size.writeUInt32BE(payload.length + 8);
+  return Buffer.concat([size, Buffer.from(type, "ascii"), payload]);
+}
+
+function isoVideoFixture({ brand, width, height, frameRate, quickTimeDataHandler = false }) {
+  const u32 = (value) => {
+    const bytes = Buffer.alloc(4);
+    bytes.writeUInt32BE(value);
+    return bytes;
+  };
+  const fixed = (value) => u32(value * 65536);
+  const hdlr = (kind) => isoAtom("hdlr", Buffer.concat([Buffer.alloc(8), Buffer.from(kind, "ascii"), Buffer.alloc(12)]));
+  const mdhd = isoAtom("mdhd", Buffer.concat([Buffer.alloc(12), u32(frameRate * 1000), u32(frameRate * 1000), Buffer.alloc(4)]));
+  const stts = isoAtom("stts", Buffer.concat([Buffer.alloc(4), u32(1), u32(frameRate), u32(1000)]));
+  const stsd = (codec) => isoAtom("stsd", Buffer.concat([Buffer.alloc(8), isoAtom(codec, Buffer.alloc(8))]));
+  const videoTkhd = isoAtom("tkhd", Buffer.concat([Buffer.alloc(72), fixed(width), fixed(height)]));
+  const dataHandler = quickTimeDataHandler ? isoAtom("dinf", hdlr("alis")) : Buffer.alloc(0);
+  const videoMdia = isoAtom("mdia", Buffer.concat([hdlr("vide"), mdhd, isoAtom("minf", Buffer.concat([dataHandler, isoAtom("stbl", Buffer.concat([stts, stsd("avc1")]))]))]));
+  const audioMdia = isoAtom("mdia", Buffer.concat([hdlr("soun"), mdhd, isoAtom("minf", Buffer.concat([dataHandler, isoAtom("stbl", Buffer.concat([stts, stsd("mp4a")]))]))]));
+  const ftyp = isoAtom("ftyp", Buffer.concat([Buffer.from(brand, "ascii"), u32(0), Buffer.from(brand, "ascii")]));
+  return Buffer.concat([ftyp, isoAtom("moov", Buffer.concat([isoAtom("trak", Buffer.concat([videoTkhd, videoMdia])), isoAtom("trak", audioMdia)])), isoAtom("mdat", Buffer.from([1, 2, 3, 4]))]);
+}
+
 describe("Alpha3.2 D31 render-targets bridge route", () => {
   it("exposes an exact D31 live allowlist while retaining the fixed D29 registry route membership", () => {
     assert.deepEqual(CALL_TEMPLATE_RUNTIME_D31_RENDER_TARGETS_TEMPLATE_IDS, [
@@ -286,6 +311,97 @@ assert(outputs[1].absolute_path == "/tmp/渲染 输出/中文 混音_2_01.wav")
     }
   });
 
+  it("builds the exact audited AVFoundation MP4 and MOV blobs", () => {
+    runHandlerLua(String.raw`
+local mp4, mp4_error = d31_format({
+  format = "mp4", video_width = 1920, video_height = 1080, video_frame_rate = 30,
+  video_codec = "h264", video_bitrate_kbps = 2048, audio_codec = "aac", audio_bitrate_kbps = 128,
+})
+assert(mp4_error == nil)
+assert(mp4.config == "RlZBWAAAAAAAAAAAAAgAAAAAAACAAAAAgAcAADgEAAAAAPBBAQAAAF8AAAAAAA==")
+assert(mp4.extension == "mp4" and mp4.video == true)
+
+local mov, mov_error = d31_format({
+  format = "mov", video_width = 1280, video_height = 720, video_frame_rate = 24,
+  video_codec = "h264", video_bitrate_kbps = 4096, audio_codec = "aac", audio_bitrate_kbps = 192,
+})
+assert(mov_error == nil)
+assert(mov.config == "RlZBWAIAAAAAAAAAABAAAAAAAADAAAAAAAUAANACAAAAAMBBAQAAAF8AAAAAAA==")
+assert(mov.extension == "mov" and mov.video == true)
+
+local invalid, invalid_error = d31_format({
+  format = "mp4", video_width = 1919, video_height = 1080, video_frame_rate = 30,
+  video_codec = "h264", video_bitrate_kbps = 8000, audio_codec = "aac", audio_bitrate_kbps = 192,
+})
+assert(invalid == nil and invalid_error.code == "PARAMS_INVALID")
+assert(invalid_error.details.local_code == "VIDEO_WIDTH_REQUIRED")
+`, ["d31_format"]);
+  });
+
+  it("probes MP4/MOV atoms, H.264/AAC tracks, dimensions, and frame rate", () => {
+    const mp4Hex = isoVideoFixture({ brand: "mp42", width: 1920, height: 1080, frameRate: 30 }).toString("hex");
+    const movHex = isoVideoFixture({ brand: "qt  ", width: 1280, height: 720, frameRate: 24, quickTimeDataHandler: true }).toString("hex");
+    runHandlerLua(String.raw`
+local function from_hex(value) return (value:gsub("..", function(pair) return string.char(tonumber(pair, 16)) end)) end
+local fixtures = { ["/fixture.mp4"] = from_hex(${JSON.stringify(mp4Hex)}), ["/fixture.mov"] = from_hex(${JSON.stringify(movHex)}) }
+io.open = function(path_value, mode)
+  local bytes = fixtures[path_value]
+  if not bytes or mode ~= "rb" then return nil end
+  local position = 0
+  return {
+    seek = function(_, whence, offset)
+      if whence == "end" then position = #bytes
+      elseif whence == "set" then position = offset or 0
+      elseif whence == "cur" then position = position + (offset or 0) end
+      return position
+    end,
+    read = function(_, count)
+      local value = bytes:sub(position + 1, position + count)
+      position = position + #value
+      return value
+    end,
+    close = function() end,
+  }
+end
+
+local mp4_ok, mp4_format, _, mp4 = d31_probe_output("/fixture.mp4", "mp4")
+assert(mp4_ok == true and mp4_format == "mp4")
+assert(mp4.ftyp_verified and mp4.moov_verified and mp4.mdat_verified)
+assert(mp4.video_track_count == 1 and mp4.audio_track_count == 1)
+assert(mp4.width == 1920 and mp4.height == 1080 and math.abs(mp4.frame_rate - 30) < 0.001)
+assert(mp4.video_codec == "h264" and mp4.audio_codec == "aac")
+
+local mov_ok, mov_format, _, mov = d31_probe_output("/fixture.mov", "mov")
+assert(mov_ok == true and mov_format == "mov")
+assert(mov.width == 1280 and mov.height == 720 and math.abs(mov.frame_rate - 24) < 0.001)
+assert(mov.major_brand == "qt  ")
+`, ["d31_probe_output"]);
+  });
+
+  it("waits for REAPER to commit the final MP4/MOV container after AVFoundation returns", () => {
+    runHandlerLua(String.raw`
+local tick = 0
+local polls = 0
+d31_monotonic_seconds = function()
+  tick = tick + 0.01
+  return tick
+end
+d31_size = function(path_value)
+  assert(path_value == "/managed/render.mp4")
+  polls = polls + 1
+  return polls < 3 and 0 or 65536
+end
+d31_probe_output = function(path_value, extension)
+  assert(path_value == "/managed/render.mp4" and extension == "mp4")
+  return true, "mp4", nil, { ok = true, width = 1920, height = 1080, frame_rate = 30, video_codec = "h264", audio_codec = "aac" }
+end
+local size, ok, actual_format, bitrate, probe, attempts = d31_wait_for_final_video("/managed/render.mp4", "mp4")
+assert(size == 65536 and ok == true and actual_format == "mp4" and bitrate == nil)
+assert(probe.video_codec == "h264" and probe.audio_codec == "aac")
+assert(attempts == 3 and polls == 3)
+`, ["d31_monotonic_seconds", "d31_size", "d31_probe_output", "d31_wait_for_final_video"]);
+  });
+
   it("uses audited project-render APIs with strict target refs, preflight, verification, and restoration", () => {
     assert.doesNotMatch(HANDLER, /RenderFileSection\s*\(/);
     assert.match(HANDLER, /GetSetProjectInfo/);
@@ -303,6 +419,8 @@ assert(outputs[1].absolute_path == "/tmp/渲染 输出/中文 混音_2_01.wav")
     assert.match(HANDLER, /Main_OnCommandEx", D31_ACTION_ID, 0, project/);
     assert.match(HANDLER, /D31_ACTION_ID = 41824/);
     assert.match(HANDLER, /D31_MEDIA_ONLINE_ACTION_ID = 40101/);
+    assert.match(HANDLER, /D31_VIDEO_FINALIZATION_WAIT_SECONDS = 5/);
+    assert.match(HANDLER, /d31_wait_for_final_video/);
     assert.match(HANDLER, /d31_target_source_preflight/);
     assert.match(HANDLER, /RENDER_SOURCE_OFFLINE/);
     assert.match(HANDLER, /RENDER_SOURCE_READBACK_UNAVAILABLE = "VERIFY_FAILED"/);
@@ -357,7 +475,7 @@ assert(outputs[1].absolute_path == "/tmp/渲染 输出/中文 混音_2_01.wav")
     assert.match(HANDLER, /request\.params\.output_basename/);
     assert.match(HANDLER, /OUTPUT_BASENAME_INVALID/);
     assert.match(HANDLER, /root_ready, root_blocker, root_message = d31_root_ready\(\)/);
-    assert.match(HANDLER, /restoration = \{ render_settings = true, track_selection = true, item_selection = true \}/);
+    assert.match(HANDLER, /restoration = \{ render_settings = true, track_mix = true, track_selection = true, item_selection = true \}/);
     assert.match(ARTIFACT_HELPER, /\["run_job:render\.targets"\] = true/);
     assert.match(ROUTE_POLICY, /\["run_job:render\.targets"\] = \{ pack = "render", risk = "destructive" \}/);
     assert.match(ROUTE_POLICY, /operation_key == "run_job:render\.targets" or template_execute_write_capability/);
@@ -378,5 +496,30 @@ assert(outputs[1].absolute_path == "/tmp/渲染 输出/中文 混音_2_01.wav")
     assert.ok(sourcePreflight < overwriteRemoval && overwriteRemoval < firstAction, "overwrite removes only the exact old output after source preflight and before the render action");
     assert.ok(firstAction >= 0 && firstAction < finish, "restoration closure runs after any action attempt");
     assert.ok(firstAction < rejectAllZero && rejectAllZero < finish, "all-zero output enters the protected failure path before restoration");
+  });
+
+  it("imports and verifies one Stem before muting its exact source Tracks", () => {
+    const createSource = HANDLER.indexOf('call_reaper("PCM_Source_CreateFromFile", output.absolute_path)');
+    const attachSource = HANDLER.indexOf('call_reaper("SetMediaItemTake_Source", take, source)');
+    const verifySource = HANDLER.indexOf('first_string(actual_path) ~= output.absolute_path');
+    const muteSources = HANDLER.indexOf('d31_write_track_number(target.tracks[index], "B_MUTE", 1)');
+    assert.ok(createSource >= 0 && createSource < attachSource, "verified output is reopened before attachment");
+    assert.ok(attachSource < verifySource && verifySource < muteSources, "exact imported source readback gates source muting");
+    assert.match(HANDLER, /destination_track_count = 1/);
+    assert.match(HANDLER, /destination_item_count = 1/);
+    assert.match(HANDLER, /destination_take_count = 1/);
+    assert.match(HANDLER, /source_tracks_muted = true/);
+    assert.match(HANDLER, /non_silent_verified = output\.is_silent == false/);
+  });
+
+  it("rolls a failed Stem import back by deleting the destination and restoring mix and selections", () => {
+    const rollback = HANDLER.indexOf("local function d31_stem_rollback");
+    const deleteTrack = HANDLER.indexOf('call_reaper("DeleteTrack", context.created_track)', rollback);
+    const restoreMix = HANDLER.indexOf("d31_restore_track_mix(context and context.mix_snapshot)", rollback);
+    const restoreTracks = HANDLER.indexOf("d31_apply_track_selection(project, context and context.prior_tracks", rollback);
+    const restoreItems = HANDLER.indexOf("d31_apply_item_selection(project, context and context.prior_items", rollback);
+    assert.ok(rollback >= 0 && deleteTrack > rollback);
+    assert.ok(deleteTrack < restoreMix && restoreMix < restoreTracks && restoreTracks < restoreItems);
+    assert.match(HANDLER, /if stem_context then d31_stem_rollback\(project, stem_context\) end/);
   });
 });

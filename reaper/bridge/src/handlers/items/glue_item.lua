@@ -217,7 +217,282 @@ local function alpha33_glue_item_source_readback(item)
   }
 end
 
+local function alpha33_glue_item_restore_batch(snapshot, source_items, replacement_item)
+  local current_items = alpha33_glue_item_list_items()
+  if not current_items then return false, false end
+  local track_ok = alpha33_glue_item_clear_track_selection()
+  for index = 1, #snapshot.selected_tracks do
+    if not call_reaper("SetTrackSelected", snapshot.selected_tracks[index], true) then track_ok = false end
+  end
+
+  local item_ok = true
+  for index = 1, #current_items do
+    if not call_reaper("SetMediaItemSelected", current_items[index].item, false) then item_ok = false end
+  end
+  local replacement_selected = false
+  for index = 1, #snapshot.selected_items do
+    local selected = snapshot.selected_items[index]
+    if source_items[selected] then
+      replacement_selected = true
+    elseif alpha33_glue_item_item_exists(selected, current_items) then
+      if not call_reaper("SetMediaItemSelected", selected, true) then item_ok = false end
+    else
+      item_ok = false
+    end
+  end
+  if replacement_selected and (not replacement_item or not call_reaper("SetMediaItemSelected", replacement_item, true)) then
+    item_ok = false
+  end
+
+  local active_ok = true
+  for index = 1, #snapshot.active_takes do
+    local saved = snapshot.active_takes[index]
+    if not source_items[saved.item] and alpha33_glue_item_item_exists(saved.item, current_items) and saved.take then
+      local ok_current, current_take = call_reaper("GetActiveTake", saved.item)
+      if not ok_current or current_take ~= saved.take then
+        if not call_reaper("SetActiveTake", saved.take) then active_ok = false end
+      end
+    end
+  end
+  return track_ok and item_ok, active_ok
+end
+
+local function alpha33_glue_item_select_set(items, selected_items)
+  for index = 1, #items do
+    if not call_reaper("SetMediaItemSelected", items[index].item, selected_items[items[index].item] == true) then return false end
+  end
+  return true
+end
+
+local function alpha33_glue_item_ref_object(kind, ref)
+  local scheme, value = ref:match("^" .. kind .. ":([^:]+):(.+)$")
+  return { kind = kind, ref = ref, identity = { scheme = scheme or "guid", value = tostring(value or "") } }
+end
+
+local function alpha33_glue_item_batch(request)
+  local batch = request.params.batch
+  if not is_json_array(batch) or #batch < 1 or #batch > 64 then
+    return alpha33_glue_item_error("PARAMS_INVALID", "glue_item batch must contain 1-64 exact Item rows.", {
+      row_count = is_json_array(batch) and #batch or 0,
+      zero_write = true,
+    })
+  end
+  local before_items = alpha33_glue_item_list_items()
+  if not before_items then
+    return alpha33_glue_item_error("COMMAND_FAILED", "glue_item batch could not read every Item GUID before mutation.", { zero_write = true }, false)
+  end
+  local selected_tracks = alpha33_glue_item_selected_tracks()
+  local selected_items = alpha33_glue_item_selected_items()
+  local active_takes = alpha33_glue_item_active_snapshot(before_items)
+  if not selected_tracks or not selected_items or not active_takes then
+    return alpha33_glue_item_error("COMMAND_FAILED", "glue_item batch could not snapshot Track, Item, and Active-Take state.", { zero_write = true }, false)
+  end
+  local snapshot = { selected_tracks = selected_tracks, selected_items = selected_items, active_takes = active_takes }
+
+  local live_by_ref = {}
+  local live_counts = {}
+  for index = 1, #before_items do
+    local ref = "item:guid:" .. before_items[index].guid
+    live_counts[ref] = (live_counts[ref] or 0) + 1
+    live_by_ref[ref] = before_items[index].item
+  end
+  local targets = {}
+  local source_set = {}
+  local requested_refs = {}
+  local owner_track = nil
+  local owner_track_guid = nil
+  local range_start = nil
+  local range_end = nil
+  for index = 1, #batch do
+    local row = batch[index]
+    local ref = is_object(row) and row.item_ref or nil
+    if not is_string(ref) or not ref:match("^item:guid:[^:]+$") then
+      return alpha33_glue_item_error("REF_INVALID", "glue_item batch accepts only exact item:guid rows.", { row_index = index, zero_write = true })
+    end
+    if requested_refs[ref] then
+      return alpha33_glue_item_error("REF_INVALID", "glue_item batch repeats an Item ref.", { item_ref = ref, zero_write = true })
+    end
+    requested_refs[ref] = true
+    local item = live_by_ref[ref]
+    if not item or live_counts[ref] ~= 1 then
+      return alpha33_glue_item_error("REF_INVALID", "glue_item batch Item GUID was missing or duplicated in the live project.", {
+        item_ref = ref,
+        duplicate_count = live_counts[ref] or 0,
+        zero_write = true,
+      })
+    end
+    local ok_take, take = call_reaper("GetActiveTake", item)
+    if not ok_take or not take then
+      return alpha33_glue_item_error("TAKE_NOT_FOUND", "glue_item batch requires every Item to expose an active Take.", { item_ref = ref, zero_write = true })
+    end
+    local source = alpha33_glue_item_source_readback(item)
+    if not source then
+      return alpha33_glue_item_error("COMMAND_FAILED", "glue_item batch could not read every source before mutation.", { item_ref = ref, zero_write = true }, false)
+    end
+    local source_type = string.upper(source.source_type or "")
+    if source_type:find("MIDI", 1, true) then
+      return alpha33_glue_item_error("PARAMS_INVALID", "glue_item batch supports audio Items only; MIDI and mixed source sets are zero-write.", {
+        item_ref = ref,
+        source_type = source.source_type,
+        zero_write = true,
+      })
+    end
+    local track = alpha33_glue_item_owner_track(item)
+    local track_guid = track and alpha33_glue_item_track_guid(track) or nil
+    local position = alpha33_glue_item_number(item, "D_POSITION")
+    local length = alpha33_glue_item_number(item, "D_LENGTH")
+    if not track_guid or position == nil or length == nil or length < 0 then
+      return alpha33_glue_item_error("COMMAND_FAILED", "glue_item batch could not read complete owner/range facts before mutation.", { item_ref = ref, zero_write = true }, false)
+    end
+    if owner_track and track ~= owner_track then
+      return alpha33_glue_item_error("PARAMS_INVALID", "glue_item batch supports Items on exactly one Track.", { item_ref = ref, zero_write = true })
+    end
+    owner_track = track
+    owner_track_guid = track_guid
+    range_start = range_start and math.min(range_start, position) or position
+    range_end = range_end and math.max(range_end, position + length) or (position + length)
+    source_set[item] = true
+    targets[#targets + 1] = {
+      id = is_string(row.id) and bounded_string(row.id, 80) or ("i" .. tostring(index)),
+      item_ref = ref,
+      item = item,
+      take = take,
+      source_filename = source.filename,
+      source_type = source.source_type,
+    }
+  end
+
+  if not alpha33_glue_item_select_set(before_items, source_set) then
+    local selection_restored, active_take_restored = alpha33_glue_item_restore_batch(snapshot, source_set, nil)
+    return alpha33_glue_item_error("COMMAND_FAILED", "glue_item batch could not stage the exact Item selection.", {
+      zero_write = true,
+      selection_restored = selection_restored,
+      active_take_restored = active_take_restored,
+    }, false)
+  end
+  for index = 1, #targets do
+    local ok_set, accepted = call_reaper("SetActiveTake", targets[index].take)
+    local ok_read, active = call_reaper("GetActiveTake", targets[index].item)
+    if not ok_set or accepted == false or not ok_read or active ~= targets[index].take then
+      local selection_restored, active_take_restored = alpha33_glue_item_restore_batch(snapshot, source_set, nil)
+      return alpha33_glue_item_error("COMMAND_FAILED", "glue_item batch could not stage every exact Active Take.", {
+        item_ref = targets[index].item_ref,
+        zero_write = true,
+        selection_restored = selection_restored,
+        active_take_restored = active_take_restored,
+      }, false)
+    end
+  end
+
+  local command_ok, command_result = call_reaper("Main_OnCommandEx", ALPHA3_3_GLUE_ITEM_ACTION_ID, 0, 0)
+  if not command_ok or command_result == false then
+    local selection_restored, active_take_restored = alpha33_glue_item_restore_batch(snapshot, source_set, nil)
+    return alpha33_glue_item_error("COMMAND_FAILED", "REAPER rejected the fixed native glue batch action.", {
+      selection_restored = selection_restored,
+      active_take_restored = active_take_restored,
+    }, false)
+  end
+  call_reaper("UpdateArrange")
+
+  local after_items = alpha33_glue_item_list_items()
+  local before_guid_set = {}
+  for index = 1, #before_items do before_guid_set[before_items[index].guid] = true end
+  local new_candidates = {}
+  if after_items then
+    for index = 1, #after_items do
+      if not before_guid_set[after_items[index].guid] then new_candidates[#new_candidates + 1] = after_items[index].item end
+    end
+  end
+  local old_absent = after_items ~= nil
+  for index = 1, #targets do
+    if after_items and alpha33_glue_item_find_guid(after_items, targets[index].item_ref:sub(#"item:guid:" + 1)) ~= nil then old_absent = false end
+  end
+  local replacement_item = #new_candidates == 1 and new_candidates[1] or nil
+  local replacement_track = replacement_item and alpha33_glue_item_owner_track(replacement_item) or nil
+  local replacement_position = replacement_item and alpha33_glue_item_number(replacement_item, "D_POSITION") or nil
+  local replacement_length = replacement_item and alpha33_glue_item_number(replacement_item, "D_LENGTH") or nil
+  local replacement_end = replacement_position and replacement_length and (replacement_position + replacement_length) or nil
+  local expected_count = #before_items - #targets + 1
+  local replacement_matches = replacement_item
+    and replacement_track == owner_track
+    and alpha33_glue_item_numbers_match(replacement_position, range_start)
+    and alpha33_glue_item_numbers_match(replacement_end, range_end)
+    and after_items and #after_items == expected_count
+  local replacement_source = replacement_item and alpha33_glue_item_source_readback(replacement_item) or nil
+  local selection_restored, active_take_restored = alpha33_glue_item_restore_batch(snapshot, source_set, replacement_item)
+  if not old_absent or not replacement_matches or not replacement_source or not selection_restored or not active_take_restored then
+    return alpha33_glue_item_error("VERIFY_FAILED", "glue_item batch could not prove one exact replacement and restore context.", {
+      old_item_guids_absent = old_absent,
+      new_item_candidate_count = #new_candidates,
+      item_count_before = #before_items,
+      item_count_after = after_items and #after_items or nil,
+      expected_item_count_after = expected_count,
+      owner_track_matches = replacement_track == owner_track,
+      range_start_matches = alpha33_glue_item_numbers_match(replacement_position, range_start),
+      range_end_matches = alpha33_glue_item_numbers_match(replacement_end, range_end),
+      selection_restored = selection_restored,
+      active_take_restored = active_take_restored,
+    }, false)
+  end
+
+  local glued_guid = alpha33_glue_item_guid(replacement_item)
+  local glued_item_ref = "item:guid:" .. glued_guid
+  local glued_take_ref = "take:guid:" .. replacement_source.take_guid
+  local source_item_refs = json_array({})
+  local rows = json_array({})
+  local refs = json_array({})
+  for index = 1, #targets do
+    local target = targets[index]
+    source_item_refs[#source_item_refs + 1] = target.item_ref
+    rows[#rows + 1] = {
+      id = target.id,
+      item_ref = target.item_ref,
+      source_item_ref = target.item_ref,
+      glued_item_ref = glued_item_ref,
+      glued_take_ref = glued_take_ref,
+      old_item_guid_absent = true,
+      new_item_unique = true,
+      status = "applied",
+      live_readback = { status = "passed" },
+    }
+    refs[#refs + 1] = alpha33_glue_item_ref_object("item", target.item_ref)
+  end
+  refs[#refs + 1] = alpha33_glue_item_ref_object("item", glued_item_ref)
+  refs[#refs + 1] = alpha33_glue_item_ref_object("take", glued_take_ref)
+  return {
+    kind = "items_glued_batch",
+    source_item_ref = source_item_refs[1],
+    source_item_refs = source_item_refs,
+    glued_item_ref = glued_item_ref,
+    glued_take_ref = glued_take_ref,
+    owner_track_ref = "track:guid:" .. owner_track_guid,
+    position_seconds = replacement_position,
+    length_seconds = replacement_length,
+    source_filename = replacement_source.filename,
+    source_type = replacement_source.source_type,
+    rows = rows,
+    row_count = #rows,
+    native_action_count = 1,
+    fixed_action_id = ALPHA3_3_GLUE_ITEM_ACTION_ID,
+    item_count_before = #before_items,
+    item_count_after = #after_items,
+    item_count_unchanged = #targets == 1,
+    old_item_guid_absent = true,
+    old_item_guids_absent = true,
+    new_item_unique = true,
+    selection_restored = true,
+    active_take_restored = true,
+    source_files_preserved = true,
+    source_media_deleted = false,
+    readback_status = "passed",
+    undo_opened = request.__openreaper_undo_opened == true,
+  }, nil, json_array({}), json_array({}), refs
+end
+
 local function alpha33_glue_item(request)
+  if is_json_array(request.params and request.params.batch) then
+    return alpha33_glue_item_batch(request)
+  end
   local exact, ref_failure = alpha33_glue_item_exact_ref(request)
   if not exact then return alpha33_glue_item_error(ref_failure.code, ref_failure.message, ref_failure.details) end
 

@@ -189,23 +189,29 @@ try {
   }, { track_ref: exactObjectRef("track", trackRefs.life_target) }));
   assertTemplateSuccess(calls.track_channels, "template.routing.set_track_channel_count");
 
+  calls.select_freeze_track = await timed("select_freeze_track", () => callTemplate("template.tracks.select_track", {
+    mode: "replace",
+  }, { track_ref: exactObjectRef("track", trackRefs.life_target) }));
+  assertTemplateSuccess(calls.select_freeze_track, "template.tracks.select_track freeze fixture");
+  assert(summaryOf(calls.select_freeze_track).selected === true, "Freeze fixture Track was not selected");
+
   calls.freeze_cycles = [];
   for (const mode of ["mono", "stereo", "multichannel"]) {
-    const frozen = await timed(`freeze_${mode}`, () => callTemplate("template.tracks.freeze_track", { mode }, {
-      track_ref: exactObjectRef("track", trackRefs.life_target),
-    }));
+    const frozen = await timed(`freeze_${mode}`, () => callTemplate("template.tracks.freeze_track", { mode }));
     assertTemplateSuccess(frozen, `template.tracks.freeze_track ${mode}`);
     const frozenSummary = summaryOf(frozen);
     assert(frozenSummary.mode === mode && frozenSummary.freeze_count_after > frozenSummary.freeze_count_before, `${mode} freeze did not increase I_FREEZECOUNT`);
+    assert(frozenSummary.target_mode === "selected" && frozenSummary.target_count === 1, `${mode} freeze did not bind the execution-time selected Track`);
+    assert(frozenSummary.target_refs?.[0] === trackRefs.life_target, `${mode} freeze selected target did not match the fixture Track`);
     assert(frozenSummary.selection_restored === true, `${mode} freeze did not restore selection`);
 
-    const unfrozen = await timed(`unfreeze_${mode}`, () => callTemplate("template.tracks.unfreeze_track", {}, {
-      track_ref: exactObjectRef("track", trackRefs.life_target),
-    }));
+    const unfrozen = await timed(`unfreeze_${mode}`, () => callTemplate("template.tracks.unfreeze_track", {}));
     assertTemplateSuccess(unfrozen, `template.tracks.unfreeze_track after ${mode}`);
     const unfrozenSummary = summaryOf(unfrozen);
-    assert(unfrozenSummary.freeze_count_before === frozenSummary.freeze_count_after, `${mode} unfreeze did not start from the live frozen count`);
-    assert(unfrozenSummary.freeze_count_after < unfrozenSummary.freeze_count_before, `${mode} unfreeze did not decrease I_FREEZECOUNT`);
+    assert(unfrozenSummary.target_mode === "selected" && unfrozenSummary.target_count === 1, `${mode} unfreeze did not bind the execution-time selected Track`);
+    assert(unfrozenSummary.target_refs?.[0] === trackRefs.life_target, `${mode} unfreeze selected target did not match the fixture Track`);
+    assert(unfrozenSummary.targets?.[0]?.freeze_count_before === frozenSummary.targets?.[0]?.freeze_count_after, `${mode} unfreeze did not start from the live frozen count`);
+    assert(unfrozenSummary.targets?.[0]?.freeze_count_after < unfrozenSummary.targets?.[0]?.freeze_count_before, `${mode} unfreeze did not decrease I_FREEZECOUNT`);
     assert(unfrozenSummary.selection_restored === true, `${mode} unfreeze did not restore selection`);
     calls.freeze_cycles.push({ mode, freeze: frozen, unfreeze: unfrozen });
   }
@@ -293,14 +299,15 @@ const report = {
     pitch_ensure_second: templateOutcome(calls.pitch_envelope_second),
     pitch_points_insert: templateOutcome(calls.pitch_points_insert),
     pitch_points_read: templateOutcome(calls.pitch_points_read),
+    select_freeze_track: templateOutcome(calls.select_freeze_track),
     freeze_cycles: calls.freeze_cycles?.map((cycle) => ({
       mode: cycle.mode,
       freeze: templateOutcome(cycle.freeze),
       unfreeze: templateOutcome(cycle.unfreeze),
       freeze_counts: {
-        before: summaryOf(cycle.freeze).freeze_count_before,
-        frozen: summaryOf(cycle.freeze).freeze_count_after,
-        restored: summaryOf(cycle.unfreeze).freeze_count_after,
+        before: summaryOf(cycle.freeze).targets?.[0]?.freeze_count_before,
+        frozen: summaryOf(cycle.freeze).targets?.[0]?.freeze_count_after,
+        restored: summaryOf(cycle.unfreeze).targets?.[0]?.freeze_count_after,
       },
     })) ?? [],
   },

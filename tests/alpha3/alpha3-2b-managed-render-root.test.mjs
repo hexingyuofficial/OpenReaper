@@ -459,10 +459,15 @@ describe("Alpha3.2-B2 managed render root", () => {
     assert.equal(firstReport.startup_hook.legacy_backup_path, null);
     assert.equal(await readFile(firstReport.startup_hook.backup_path, "utf8"), legacyLua);
     assert.match(conditionalHook, /OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH/);
-    assert.match(conditionalHook, /environment_missing/);
+    assert.match(conditionalHook, /installed defaults allow ordinary REAPER launches/u);
     assert.match(conditionalHook, /stage \.\. "\x5c"\}\x5cn"\)/u);
     assert.doesNotMatch(conditionalHook, /stage \.\. "\x5c"\}\n"\)/u);
     assert.match(conditionalHook, /reaper\.ShowConsoleMsg\('keep user Lua startup'\)/);
+    assert.ok(
+      conditionalHook.indexOf("reaper.ShowConsoleMsg('keep user Lua startup')")
+        < conditionalHook.indexOf(LEGACY_LUA_STARTUP_BEGIN),
+      "OpenReaper startup block must be appended after existing user startup code",
+    );
     const actionScript = await readFile(firstReport.bridge_action.script, "utf8");
     const installedLauncher = await readFile(firstReport.startup_hook.fallback_path, "utf8");
     assert.equal(actionScript, installedLauncher);
@@ -471,9 +476,10 @@ describe("Alpha3.2-B2 managed render root", () => {
     assert.match(actionScript, /bridge_dofile_failed/);
     assert.equal((await lstat(firstReport.startup_hook.fallback_path)).mode & 0o777, 0o444);
     assert.equal((await lstat(firstReport.bridge_action.script)).mode & 0o777, 0o444);
+    // Default install must not touch the user's Action registry, including
+    // lookalike rows that happen to mention OpenReaper paths or titles.
     const installedKb = await readFile(kbPath, "utf8");
-    assert.equal(installedKb.startsWith(originalKb), true);
-    assert.match(installedKb, /Custom: OpenReaper: Start MCP bridge/u);
+    assert.equal(installedKb, originalKb);
 
     const second = await runInstallerWithStartupHook(fixture);
     assert.equal(second.code, 0, second.stderr || second.stdout);
@@ -490,6 +496,72 @@ describe("Alpha3.2-B2 managed render root", () => {
     assert.equal(await readFile(kbPath, "utf8"), originalKb);
     assert.equal(await readFile(hookPath, "utf8"), expectedEel);
     assert.equal(await readFile(legacyLuaPath, "utf8"), expectedLua);
+  });
+
+  it("registers and removes only exact OpenReaper Action rows when explicitly requested", async () => {
+    const fixture = await makeInstallerFixture();
+    const reaperRoot = path.join(fixture.home, "Library", "Application Support", "REAPER");
+    const kbPath = path.join(reaperRoot, "reaper-kb.ini");
+    const originalKb = [
+      "[shortcut]",
+      'SCR 4 0 RSuser "Custom: User Action" "User/action.lua"',
+      'SCR 4 0 RSlookalike "Custom: OpenReaper: Start MCP bridge" "User/lookalike.lua"',
+      "",
+    ].join("\n");
+    await mkdir(reaperRoot, { recursive: true });
+    await writeFile(kbPath, originalKb, "utf8");
+
+    const installed = await runInstallerWithStartupHook(fixture, ["--register-actions"]);
+    assert.equal(installed.code, 0, installed.stderr || installed.stdout);
+    const registeredKb = await readFile(kbPath, "utf8");
+    assert.match(registeredKb, /openreaper-start-mcp-bridge\.lua/u);
+    assert.match(registeredKb, /RSlookalike/u);
+    assert.match(registeredKb, /RSuser /u);
+
+    const defaultUninstall = await runUninstallerWithStartupHook(fixture);
+    assert.equal(defaultUninstall.code, 0, defaultUninstall.stderr || defaultUninstall.stdout);
+    assert.equal(await readFile(kbPath, "utf8"), registeredKb);
+
+    // Reinstall the package, then explicitly remove only rows owned by the
+    // package. User and lookalike rows must remain byte-for-byte intact.
+    const reinstall = await runInstallerWithStartupHook(fixture, ["--register-actions"]);
+    assert.equal(reinstall.code, 0, reinstall.stderr || reinstall.stdout);
+    const removed = await runCaptured(process.execPath, [
+      fixture.uninstallerPath,
+      "--install-root", fixture.installRoot,
+      "--reaper-resource-root", reaperRoot,
+      "--skip-client-config",
+      "--remove-action-registrations",
+    ], { cwd: fixture.packageRoot, env: { ...process.env, HOME: fixture.home } });
+    assert.equal(removed.code, 0, removed.stderr || removed.stdout);
+    assert.equal(await readFile(kbPath, "utf8"), originalKb);
+  });
+
+  it("fails closed when a managed startup marker is incomplete", async () => {
+    const fixture = await makeInstallerFixture();
+    const scriptsRoot = path.join(fixture.home, "Library", "Application Support", "REAPER", "Scripts");
+    const hookPath = path.join(scriptsRoot, "__startup.lua");
+    await mkdir(scriptsRoot, { recursive: true });
+    await writeFile(hookPath, `${LEGACY_LUA_STARTUP_BEGIN}\nuser-owned tail without end marker\n`, "utf8");
+    const result = await runInstallerWithStartupHook(fixture);
+    assert.notEqual(result.code, 0);
+    assert.match(`${result.stderr}${result.stdout}`, /startup marker is incomplete/u);
+    assert.equal(await readFile(hookPath, "utf8"), `${LEGACY_LUA_STARTUP_BEGIN}\nuser-owned tail without end marker\n`);
+  });
+
+  it("restores a startup hook with no final newline byte-for-byte", async () => {
+    const fixture = await makeInstallerFixture();
+    const scriptsRoot = path.join(fixture.home, "Library", "Application Support", "REAPER", "Scripts");
+    const hookPath = path.join(scriptsRoot, "__startup.lua");
+    const original = "-- user startup without final newline";
+    await mkdir(scriptsRoot, { recursive: true });
+    await writeFile(hookPath, original, "utf8");
+    const installed = await runInstallerWithStartupHook(fixture);
+    assert.equal(installed.code, 0, installed.stderr || installed.stdout);
+    assert.match(await readFile(hookPath, "utf8"), /OpenReaper owns the preceding line ending/u);
+    const uninstalled = await runUninstallerWithStartupHook(fixture);
+    assert.equal(uninstalled.code, 0, uninstalled.stderr || uninstalled.stdout);
+    assert.equal(await readFile(hookPath, "utf8"), original);
   });
 
   it("preserves a symlinked Bridge Action during uninstall without following its target", async () => {

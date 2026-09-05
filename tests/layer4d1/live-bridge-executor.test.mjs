@@ -77,6 +77,35 @@ describe("Layer 4D.1 live bridge executor binding", () => {
     assert.equal(beyondBoundedGrace.status, LIVE_BRIDGE_LIVENESS_STATUS.LOOP_UNRESPONSIVE);
   });
 
+  it("fails closed on invalid UTF-8 Bridge result bytes without publishing replacement characters", async () => {
+    const transport = await makeTransport();
+    const bridgeScriptPath = join(transport.root, "openreaper-live-bridge.lua");
+    await writeFile(bridgeScriptPath, "-- minimal test fixture; not a runtime\n");
+    await writeHeartbeat(transport.root, { active_owner: "owner-test", active_generation: 1 });
+    const executor = createLiveBridgeExecutor({
+      transportDir: transport.root,
+      bridgeScriptPath,
+      timeoutMs: 250,
+      pollIntervalMs: 1,
+    });
+    const request = idempotentProjectRequest({
+      id: "cmd_invalid_utf8_result",
+      idempotencyKey: "invalid-utf8-result",
+      name: "Invalid UTF-8 Result",
+      timeoutMs: 250,
+    });
+    const responsePromise = executor.dispatch(request);
+    await waitForSingleRequest(transport.root);
+    await writeFile(
+      join(transport.root, "results", `${request.id}.json`),
+      Buffer.from([0x7B, 0x22, 0x78, 0x22, 0x3A, 0x22, 0xC3, 0x28, 0x22, 0x7D]),
+    );
+    const response = await responsePromise;
+    assert.equal(response.ok, false);
+    assert.equal(response.error.details.blocker, "live_bridge_result_invalid");
+    assert.doesNotMatch(response.error.details.message, /�/u);
+  });
+
   it("dispatches a generic dependency-safe read batch through one existing Template operation", async () => {
     const transport = await makeTransport();
     const bridgeScriptPath = join(transport.root, "openreaper-live-bridge.lua");

@@ -256,7 +256,7 @@ local function project_file_save_as_structural_target(request)
     })
   end
   local target = request.params.target_path
-  if target == "" or #target > PROJECT_FILE_SAVE_PATH_MAX_BYTES or target:find("[%c%z]") then
+  if target == "" or #target > PROJECT_FILE_SAVE_PATH_MAX_BYTES or has_control_byte(target) then
     return project_file_save_error("PARAMS_INVALID", "save_project_as target failed bounded structural validation.", {
       blocker = "target_structure_invalid",
     })

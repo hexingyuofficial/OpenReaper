@@ -5,7 +5,8 @@ param(
     [string] $RenderRoot,
     [string] $EvidenceRoot,
     [switch] $SkipClientConfig,
-    [switch] $SkipStartupHook
+    [switch] $SkipStartupHook,
+    [switch] $RegisterActions
 )
 
 $ErrorActionPreference = "Stop"
@@ -57,6 +58,7 @@ $arguments = @("$nodeScript", "--install-root", $InstallRoot, "--reaper-resource
 if ($RenderRoot) { $arguments += @("--render-root", $RenderRoot) }
 if ($SkipClientConfig) { $arguments += "--skip-client-config" }
 if ($SkipStartupHook) { $arguments += "--skip-startup-hook" }
+if ($RegisterActions) { $arguments += "--register-actions" }
 $installLog = Join-Path $EvidenceRoot "install.log"
 $previousErrorActionPreference = $ErrorActionPreference
 $previousNativeErrorActionPreference = $null

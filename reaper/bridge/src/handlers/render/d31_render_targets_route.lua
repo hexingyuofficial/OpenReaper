@@ -16,6 +16,7 @@ local D31_EVIDENCE_SPEC = {
 local D31_ACTION_ID = 41824
 local D31_MEDIA_ONLINE_ACTION_ID = 40101
 local D31_MAX_TARGETS = 16
+local D31_VIDEO_FINALIZATION_WAIT_SECONDS = 5
 local D31_NUMERIC_KEYS = {
   "RENDER_BOUNDSFLAG",
   "RENDER_STARTPOS",
@@ -50,6 +51,15 @@ local D31_MP3_FORMATS = {
   [256] = "bDNwbQABAAAAAAAAAAAAAP////8EAAAAAAEAAAAAAAA=",
   [320] = "bDNwbUABAAAAAAAAAAAAAP////8EAAAAQAEAAAAAAAA=",
 }
+local D31_VIDEO_FRAME_RATE_BYTES = {
+  [24] = string.char(0x00, 0x00, 0xC0, 0x41),
+  [25] = string.char(0x00, 0x00, 0xC8, 0x41),
+  [30] = string.char(0x00, 0x00, 0xF0, 0x41),
+  [50] = string.char(0x00, 0x00, 0x48, 0x42),
+  [60] = string.char(0x00, 0x00, 0x70, 0x42),
+}
+local D31_AUDIO_BITRATES = { [64] = true, [96] = true, [128] = true, [192] = true, [256] = true, [320] = true }
+local D31_BASE64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 
 local D31_ERROR_CODE_MAP = {
   RENDER_SETTINGS_UNAVAILABLE = "INTERNAL_ERROR",
@@ -64,6 +74,14 @@ local D31_ERROR_CODE_MAP = {
   WAV_BIT_DEPTH_REQUIRED = "PARAMS_INVALID",
   OGG_QUALITY_REQUIRED = "PARAMS_INVALID",
   MP3_BITRATE_REQUIRED = "PARAMS_INVALID",
+  VIDEO_WIDTH_REQUIRED = "PARAMS_INVALID",
+  VIDEO_HEIGHT_REQUIRED = "PARAMS_INVALID",
+  VIDEO_FRAME_RATE_REQUIRED = "PARAMS_INVALID",
+  VIDEO_CODEC_REQUIRED = "PARAMS_INVALID",
+  VIDEO_BITRATE_REQUIRED = "PARAMS_INVALID",
+  VIDEO_AUDIO_CODEC_REQUIRED = "PARAMS_INVALID",
+  VIDEO_AUDIO_BITRATE_REQUIRED = "PARAMS_INVALID",
+  VIDEO_DESTINATION_UNSUPPORTED = "PARAMS_INVALID",
   FORMAT_INVALID = "PARAMS_INVALID",
   TIME_SELECTION_EMPTY = "PARAMS_INVALID",
   TARGET_REFS_DUPLICATE = "REF_INVALID",
@@ -77,10 +95,73 @@ local D31_ERROR_CODE_MAP = {
   RENDER_SOURCE_OFFLINE = "FILE_NOT_FOUND",
   RENDER_OUTPUT_ALL_ZERO = "VERIFY_FAILED",
   RENDER_OVERWRITE_REMOVE_FAILED = "INTERNAL_ERROR",
+  STEM_MODE_INVALID = "PARAMS_INVALID",
+  STEM_SOURCE_MUTED = "PARAMS_INVALID",
+  STEM_IMPORT_FAILED = "COMMAND_FAILED",
+  STEM_READBACK_FAILED = "VERIFY_FAILED",
   RESTORE_FAILED = "VERIFY_FAILED",
 }
 
-local function d31_error(code, message, details, recoverable)
+local d31_error
+
+local function d31_u32le_bytes(value)
+  return string.char(
+    value % 256,
+    math.floor(value / 256) % 256,
+    math.floor(value / 65536) % 256,
+    math.floor(value / 16777216) % 256
+  )
+end
+
+local function d31_base64_encode(bytes)
+  local output = {}
+  for index = 1, #bytes, 3 do
+    local a = bytes:byte(index) or 0
+    local b = bytes:byte(index + 1)
+    local c = bytes:byte(index + 2)
+    local packed = a * 65536 + (b or 0) * 256 + (c or 0)
+    output[#output + 1] = D31_BASE64_ALPHABET:sub(math.floor(packed / 262144) % 64 + 1, math.floor(packed / 262144) % 64 + 1)
+    output[#output + 1] = D31_BASE64_ALPHABET:sub(math.floor(packed / 4096) % 64 + 1, math.floor(packed / 4096) % 64 + 1)
+    output[#output + 1] = b and D31_BASE64_ALPHABET:sub(math.floor(packed / 64) % 64 + 1, math.floor(packed / 64) % 64 + 1) or "="
+    output[#output + 1] = c and D31_BASE64_ALPHABET:sub(packed % 64 + 1, packed % 64 + 1) or "="
+  end
+  return table.concat(output)
+end
+
+local function d31_avfoundation_format(params)
+  local width = tonumber(params.video_width)
+  local height = tonumber(params.video_height)
+  local frame_rate = tonumber(params.video_frame_rate)
+  local video_bitrate = tonumber(params.video_bitrate_kbps)
+  local audio_bitrate = tonumber(params.audio_bitrate_kbps)
+  if not width or width ~= math.floor(width) or width < 16 or width > 7680 or width % 2 ~= 0 then return d31_error("VIDEO_WIDTH_REQUIRED", "MP4/MOV video_width must be an even integer from 16 through 7680.", { video_width = params.video_width }, false) end
+  if not height or height ~= math.floor(height) or height < 16 or height > 4320 or height % 2 ~= 0 then return d31_error("VIDEO_HEIGHT_REQUIRED", "MP4/MOV video_height must be an even integer from 16 through 4320.", { video_height = params.video_height }, false) end
+  if not D31_VIDEO_FRAME_RATE_BYTES[frame_rate] then return d31_error("VIDEO_FRAME_RATE_REQUIRED", "MP4/MOV video_frame_rate must be 24, 25, 30, 50, or 60.", { video_frame_rate = params.video_frame_rate }, false) end
+  if params.video_codec ~= "h264" then return d31_error("VIDEO_CODEC_REQUIRED", "MP4/MOV video_codec must be h264.", { video_codec = params.video_codec }, false) end
+  if not video_bitrate or video_bitrate ~= math.floor(video_bitrate) or video_bitrate < 256 or video_bitrate > 100000 then return d31_error("VIDEO_BITRATE_REQUIRED", "MP4/MOV video_bitrate_kbps must be an integer from 256 through 100000.", { video_bitrate_kbps = params.video_bitrate_kbps }, false) end
+  if params.audio_codec ~= "aac" then return d31_error("VIDEO_AUDIO_CODEC_REQUIRED", "MP4/MOV audio_codec must be aac.", { audio_codec = params.audio_codec }, false) end
+  if not audio_bitrate or not D31_AUDIO_BITRATES[audio_bitrate] then return d31_error("VIDEO_AUDIO_BITRATE_REQUIRED", "MP4/MOV audio_bitrate_kbps must be 64, 96, 128, 192, 256, or 320.", { audio_bitrate_kbps = params.audio_bitrate_kbps }, false) end
+  if params.destination ~= nil and params.destination ~= "managed_file" then return d31_error("VIDEO_DESTINATION_UNSUPPORTED", "MP4/MOV support managed_file destination only.", { destination = params.destination }, false) end
+  local container = params.format == "mov" and 2 or 0
+  local bytes = "FVAX" .. d31_u32le_bytes(container) .. d31_u32le_bytes(0) ..
+    d31_u32le_bytes(video_bitrate) .. d31_u32le_bytes(0) .. d31_u32le_bytes(audio_bitrate) ..
+    d31_u32le_bytes(width) .. d31_u32le_bytes(height) .. D31_VIDEO_FRAME_RATE_BYTES[frame_rate] ..
+    d31_u32le_bytes(1) .. d31_u32le_bytes(95) .. string.char(0, 0)
+  return {
+    extension = params.format,
+    config = d31_base64_encode(bytes),
+    video_width = width,
+    video_height = height,
+    video_frame_rate = frame_rate,
+    video_codec = "h264",
+    video_bitrate_kbps = video_bitrate,
+    audio_codec = "aac",
+    audio_bitrate_kbps = audio_bitrate,
+    video = true,
+  }
+end
+
+d31_error = function(code, message, details, recoverable)
   local mapped = D31_ERROR_CODE_MAP[code] or code
   local bounded_details = details or {}
   if mapped ~= code then bounded_details.local_code = code end
@@ -116,7 +197,7 @@ local function d31_output_basename(value)
     return nil, "output_basename contains a path, wildcard, reserved, control, or unsafe trailing character."
   end
   local lower = value:lower()
-  if lower:match("%.wav$") or lower:match("%.ogg$") or lower:match("%.mp3$") then
+  if lower:match("%.wav$") or lower:match("%.ogg$") or lower:match("%.mp3$") or lower:match("%.mp4$") or lower:match("%.mov$") then
     return nil, "output_basename is a filename stem and must not include the output extension."
   end
   return value
@@ -163,6 +244,165 @@ local function d31_mp3_probe(header)
   return false
 end
 
+local function d31_be_u32(bytes, offset)
+  local a, b, c, d = bytes:byte(offset, offset + 3)
+  if not a or not b or not c or not d then return nil end
+  return a * 16777216 + b * 65536 + c * 256 + d
+end
+
+local function d31_atom_header(bytes, offset, limit)
+  if offset + 7 > limit then return nil end
+  local size = d31_be_u32(bytes, offset)
+  local kind = bytes:sub(offset + 4, offset + 7)
+  local header_size = 8
+  if size == 1 then
+    local high = d31_be_u32(bytes, offset + 8)
+    local low = d31_be_u32(bytes, offset + 12)
+    if not high or not low then return nil end
+    size = high * 4294967296 + low
+    header_size = 16
+  elseif size == 0 then
+    size = limit - offset + 1
+  end
+  if size < header_size or offset + size - 1 > limit then return nil end
+  return kind, offset + header_size, offset + size - 1, offset + size
+end
+
+local D31_ISO_CONTAINERS = {
+  mdia = true,
+  minf = true,
+  stbl = true,
+  dinf = true,
+  edts = true,
+}
+
+local function d31_walk_track_atoms(bytes, start_offset, limit, state, depth)
+  if depth > 8 then return end
+  local offset = start_offset
+  while offset and offset <= limit do
+    local kind, payload_start, atom_end, next_offset = d31_atom_header(bytes, offset, limit)
+    if not kind then return end
+    if kind == "tkhd" and atom_end - payload_start + 1 >= 8 then
+      state.width = (d31_be_u32(bytes, atom_end - 7) or 0) / 65536
+      state.height = (d31_be_u32(bytes, atom_end - 3) or 0) / 65536
+    elseif kind == "hdlr" and payload_start + 11 <= atom_end then
+      local handler = bytes:sub(payload_start + 8, payload_start + 11)
+      if handler == "vide" or handler == "soun" then state.handler = handler end
+    elseif kind == "mdhd" then
+      local version = bytes:byte(payload_start)
+      local timescale_offset = version == 1 and payload_start + 20 or payload_start + 12
+      state.timescale = d31_be_u32(bytes, timescale_offset)
+    elseif kind == "stts" and payload_start + 7 <= atom_end then
+      local entry_count = d31_be_u32(bytes, payload_start + 4) or 0
+      local cursor = payload_start + 8
+      local sample_count = 0
+      local sample_duration = 0
+      for _ = 1, math.min(entry_count, 100000) do
+        local count = d31_be_u32(bytes, cursor)
+        local delta = d31_be_u32(bytes, cursor + 4)
+        if not count or not delta then break end
+        sample_count = sample_count + count
+        sample_duration = sample_duration + count * delta
+        cursor = cursor + 8
+      end
+      state.sample_count = sample_count
+      state.sample_duration = sample_duration
+    elseif kind == "stsd" then
+      local payload = bytes:sub(payload_start, atom_end)
+      if payload:find("avc1", 1, true) or payload:find("avc3", 1, true) then state.video_codec = "h264" end
+      if payload:find("mp4a", 1, true) then state.audio_codec = "aac" end
+    end
+    if D31_ISO_CONTAINERS[kind] then d31_walk_track_atoms(bytes, payload_start, atom_end, state, depth + 1) end
+    offset = next_offset
+  end
+end
+
+local function d31_parse_moov(moov_bytes, moov_payload_start)
+  local tracks = json_array({})
+  local offset = moov_payload_start
+  while offset and offset <= #moov_bytes do
+    local kind, payload_start, atom_end, next_offset = d31_atom_header(moov_bytes, offset, #moov_bytes)
+    if not kind then break end
+    if kind == "trak" then
+      local track = {}
+      d31_walk_track_atoms(moov_bytes, payload_start, atom_end, track, 0)
+      if track.timescale and track.timescale > 0 and track.sample_count and track.sample_count > 0 and track.sample_duration and track.sample_duration > 0 then
+        track.frame_rate = track.timescale * track.sample_count / track.sample_duration
+      end
+      tracks[#tracks + 1] = track
+    end
+    offset = next_offset
+  end
+  return tracks
+end
+
+local function d31_probe_iso_bmff(path_value)
+  local handle = io.open(path_value, "rb")
+  if not handle then return nil end
+  local file_size = handle:seek("end") or 0
+  local offset = 0
+  local state = { ftyp = false, moov = false, mdat = false, brand = nil, tracks = json_array({}) }
+  while offset + 8 <= file_size do
+    handle:seek("set", offset)
+    local header = handle:read(16) or ""
+    if #header < 8 then break end
+    local size = d31_be_u32(header, 1)
+    local kind = header:sub(5, 8)
+    local header_size = 8
+    if size == 1 then
+      local high = d31_be_u32(header, 9)
+      local low = d31_be_u32(header, 13)
+      if not high or not low then break end
+      size = high * 4294967296 + low
+      header_size = 16
+    elseif size == 0 then
+      size = file_size - offset
+    end
+    if not size or size < header_size or offset + size > file_size then break end
+    if kind == "ftyp" then
+      state.ftyp = true
+      handle:seek("set", offset + header_size)
+      state.brand = handle:read(4)
+    elseif kind == "moov" then
+      state.moov = true
+      if size <= 16777216 then
+        handle:seek("set", offset)
+        local bytes = handle:read(size) or ""
+        state.tracks = d31_parse_moov(bytes, header_size + 1)
+      end
+    elseif kind == "mdat" then
+      state.mdat = true
+    end
+    offset = offset + size
+  end
+  handle:close()
+  local video_track = nil
+  local audio_track = nil
+  local video_count = 0
+  local audio_count = 0
+  for index = 1, #state.tracks do
+    local track = state.tracks[index]
+    if track.handler == "vide" then video_count = video_count + 1; video_track = video_track or track end
+    if track.handler == "soun" then audio_count = audio_count + 1; audio_track = audio_track or track end
+  end
+  local actual_format = state.brand == "qt  " and "mov" or "mp4"
+  return {
+    ok = state.ftyp and state.moov and state.mdat and video_track ~= nil and video_track.video_codec == "h264",
+    actual_format = actual_format,
+    major_brand = state.brand,
+    ftyp_verified = state.ftyp,
+    moov_verified = state.moov,
+    mdat_verified = state.mdat,
+    video_track_count = video_count,
+    audio_track_count = audio_count,
+    width = video_track and math.floor((video_track.width or 0) + 0.5) or nil,
+    height = video_track and math.floor((video_track.height or 0) + 0.5) or nil,
+    frame_rate = video_track and video_track.frame_rate or nil,
+    video_codec = video_track and video_track.video_codec or nil,
+    audio_codec = audio_track and audio_track.audio_codec or nil,
+  }
+end
+
 local function d31_probe_output(path_value, extension)
   local handle = io.open(path_value, "rb")
   if not handle then return false end
@@ -174,7 +414,33 @@ local function d31_probe_output(path_value, extension)
     local ok, bitrate = d31_mp3_probe(header)
     return ok, ok and "mp3" or nil, bitrate
   end
+  if extension == "mp4" or extension == "mov" then
+    local probe = d31_probe_iso_bmff(path_value)
+    return probe ~= nil and probe.ok == true and probe.actual_format == extension, probe and probe.actual_format or nil, nil, probe
+  end
   return false
+end
+
+local function d31_monotonic_seconds()
+  local ok, value = call_reaper("time_precise")
+  if ok and type(value) == "number" then return value end
+  return os.clock()
+end
+
+local function d31_wait_for_final_video(path_value, extension)
+  local started_at = d31_monotonic_seconds()
+  local attempts = 0
+  local size = 0
+  local header_ok, actual_format, actual_bitrate, video_probe = false, nil, nil, nil
+  repeat
+    attempts = attempts + 1
+    size = d31_size(path_value)
+    if size > 0 then
+      header_ok, actual_format, actual_bitrate, video_probe = d31_probe_output(path_value, extension)
+      if header_ok then return size, header_ok, actual_format, actual_bitrate, video_probe, attempts end
+    end
+  until d31_monotonic_seconds() - started_at >= D31_VIDEO_FINALIZATION_WAIT_SECONDS
+  return size, header_ok, actual_format, actual_bitrate, video_probe, attempts
 end
 
 local function d31_u16(bytes, offset)
@@ -508,6 +774,22 @@ end
 -- claim success.  MIDI/VSTi targets have no file-backed audio source and are
 -- intentionally excluded from this probe.
 local function d31_item_overlaps_target(project, item, target)
+  if target.tracks then
+    local ok_track, item_track = call_reaper("GetMediaItem_Track", item)
+    if not ok_track or not item_track then return false end
+    local matched = false
+    for index = 1, #target.tracks do
+      if target.tracks[index] == item_track then matched = true break end
+    end
+    if not matched then return false end
+    if target.bounds == 0 and type(target.start_seconds) == "number" and type(target.end_seconds) == "number" then
+      local ok_position, position = call_reaper("GetMediaItemInfo_Value", item, "D_POSITION")
+      local ok_length, length = call_reaper("GetMediaItemInfo_Value", item, "D_LENGTH")
+      if not ok_position or not ok_length or type(position) ~= "number" or type(length) ~= "number" then return false end
+      return position < target.end_seconds and (position + math.max(0, length)) > target.start_seconds
+    end
+    return true
+  end
   if target.item then
     local item_guid = is_string(target.ref) and target.ref:match("^item:guid:(.+)$") or nil
     if item_guid then
@@ -706,6 +988,153 @@ local function d31_track_name(track, fallback)
   return ok and is_string(name) and name ~= "" and name or fallback
 end
 
+local function d31_take_ref(take, fallback)
+  local ok, _, guid = call_reaper("GetSetMediaItemTakeInfo_String", take, "GUID", "", false)
+  local value = ok and first_string(guid) or ""
+  return value ~= "" and ("take:guid:" .. value) or ("take:take_index:" .. tostring(fallback or 0))
+end
+
+local function d31_track_mix_snapshot(project)
+  local ok_count, count = call_reaper("CountTracks", project)
+  if not ok_count or type(count) ~= "number" then return d31_error("SELECTION_UNAVAILABLE", "Could not snapshot Track mix state before Stem rendering.", {}, false) end
+  local rows = json_array({})
+  for index = 0, math.floor(count) - 1 do
+    local ok_track, track = call_reaper("GetTrack", project, index)
+    local ok_mute, mute = false, nil
+    local ok_solo, solo = false, nil
+    if track then
+      ok_mute, mute = call_reaper("GetMediaTrackInfo_Value", track, "B_MUTE")
+      ok_solo, solo = call_reaper("GetMediaTrackInfo_Value", track, "I_SOLO")
+    end
+    if not ok_track or not track or not ok_mute or type(mute) ~= "number" or not ok_solo or type(solo) ~= "number" then
+      return d31_error("SELECTION_UNAVAILABLE", "Could not read exact Track mute/solo state before Stem rendering.", { track_index = index }, false)
+    end
+    rows[#rows + 1] = { track = track, muted = mute, solo = solo }
+  end
+  return rows
+end
+
+local function d31_write_track_number(track, key, value)
+  local ok, accepted = call_reaper("SetMediaTrackInfo_Value", track, key, value)
+  if not ok or accepted == false then return false end
+  local ok_read, actual = call_reaper("GetMediaTrackInfo_Value", track, key)
+  return ok_read and type(actual) == "number" and math.abs(actual - value) < 0.000001
+end
+
+local function d31_restore_track_mix(snapshot)
+  if not snapshot then return true end
+  for index = 1, #snapshot do
+    local row = snapshot[index]
+    if not d31_write_track_number(row.track, "B_MUTE", row.muted) or not d31_write_track_number(row.track, "I_SOLO", row.solo) then return false end
+  end
+  return true
+end
+
+local function d31_isolate_stem_tracks(target, snapshot)
+  local members = {}
+  for index = 1, #target.tracks do members[target.tracks[index]] = true end
+  for index = 1, #snapshot do
+    local row = snapshot[index]
+    if members[row.track] and row.muted ~= 0 then
+      return d31_error("STEM_SOURCE_MUTED", "Stem source Tracks must be audible before rendering; OpenReaper does not silently unmute them.", { track_ref = d31_track_ref(row.track, index - 1), zero_write = true }, true)
+    end
+  end
+  for index = 1, #snapshot do
+    local row = snapshot[index]
+    if not d31_write_track_number(row.track, "I_SOLO", members[row.track] and 2 or 0) then
+      return d31_error("SELECTION_SET_FAILED", "Could not apply temporary Stem source isolation.", { track_index = index - 1 }, false)
+    end
+  end
+  return true
+end
+
+local function d31_stem_rollback(project, context)
+  local track_deleted = true
+  if context and context.created_track then
+    local ok_delete, accepted = call_reaper("DeleteTrack", context.created_track)
+    track_deleted = ok_delete and accepted ~= false
+  end
+  local mix_restored = d31_restore_track_mix(context and context.mix_snapshot)
+  local tracks_restored = d31_apply_track_selection(project, context and context.prior_tracks or json_array({}))
+  local items_restored = d31_apply_item_selection(project, context and context.prior_items or json_array({}))
+  return track_deleted and mix_restored and tracks_restored and items_restored, {
+    destination_track_deleted = track_deleted,
+    source_mix_restored = mix_restored,
+    track_selection_restored = tracks_restored,
+    item_selection_restored = items_restored,
+  }
+end
+
+local function d31_import_verified_stem(project, request, target, output, mix_snapshot, prior_tracks, prior_items)
+  local context = { created_track = nil, mix_snapshot = mix_snapshot, prior_tracks = prior_tracks, prior_items = prior_items }
+  local ok_source, source = call_reaper("PCM_Source_CreateFromFile", output.absolute_path)
+  if not ok_source or not source then return d31_error("STEM_IMPORT_FAILED", "Verified Stem output could not be reopened for project import.", { output_basename = output.output_basename }, false) end
+  local source_owned = false
+  local function fail(code, message, details, recoverable)
+    if not source_owned then call_reaper("PCM_Source_Destroy", source) end
+    local rolled_back, recovery = d31_stem_rollback(project, context)
+    details = details or {}
+    details.recovery = recovery
+    if not rolled_back then return d31_error("RESTORE_FAILED", "Stem import failed and exact project recovery did not complete.", details, false) end
+    return d31_error(code, message, details, recoverable)
+  end
+  local ok_length, length, length_is_qn = call_reaper("GetMediaSourceLength", source)
+  if not ok_length or type(length) ~= "number" or length <= 0 or length_is_qn == true then return fail("STEM_READBACK_FAILED", "Stem source length could not be verified in seconds.", {}, false) end
+  local ok_count, count = call_reaper("CountTracks", project)
+  if not ok_count or type(count) ~= "number" then return fail("STEM_IMPORT_FAILED", "Could not resolve the destination Track index.", {}, false) end
+  local track_index = math.floor(count)
+  local ok_insert, accepted_insert = call_reaper("InsertTrackAtIndex", track_index, true)
+  if not ok_insert or accepted_insert == false then return fail("STEM_IMPORT_FAILED", "Could not create the Stem destination Track.", { track_index = track_index }, false) end
+  local ok_track, track = call_reaper("GetTrack", project, track_index)
+  if not ok_track or not track then return fail("STEM_READBACK_FAILED", "Created Stem destination Track could not be read back.", { track_index = track_index }, false) end
+  context.created_track = track
+  local expected_name = request.params.output_track_name or output.output_basename
+  local ok_name, accepted_name = call_reaper("GetSetMediaTrackInfo_String", track, "P_NAME", expected_name, true)
+  if not ok_name or accepted_name == false or d31_track_name(track, "") ~= expected_name then return fail("STEM_READBACK_FAILED", "Stem destination Track name did not read back exactly.", { expected_name = bounded_string(expected_name, 160) }, false) end
+  local ok_item, item = call_reaper("AddMediaItemToTrack", track)
+  if not ok_item or not item then return fail("STEM_IMPORT_FAILED", "Could not create the Stem destination Item.", {}, false) end
+  local position = target.start_seconds or 0
+  local ok_position, accepted_position = call_reaper("SetMediaItemInfo_Value", item, "D_POSITION", position)
+  local ok_item_length, accepted_length = call_reaper("SetMediaItemInfo_Value", item, "D_LENGTH", length)
+  if not ok_position or accepted_position == false or not ok_item_length or accepted_length == false then return fail("STEM_IMPORT_FAILED", "Could not set exact Stem Item bounds.", { position = position, length = length }, false) end
+  local ok_take, take = call_reaper("AddTakeToMediaItem", item)
+  if not ok_take or not take then return fail("STEM_IMPORT_FAILED", "Could not create the Stem destination Take.", {}, false) end
+  local ok_attach, accepted_attach = call_reaper("SetMediaItemTake_Source", take, source)
+  if not ok_attach or accepted_attach == false then return fail("STEM_IMPORT_FAILED", "Could not attach the verified Stem source to its Take.", {}, false) end
+  source_owned = true
+  local ok_update, accepted_update = call_reaper("UpdateItemInProject", item)
+  if not ok_update or accepted_update == false then return fail("STEM_IMPORT_FAILED", "Could not refresh the imported Stem Item.", {}, false) end
+  local ok_items, item_count = call_reaper("CountTrackMediaItems", track)
+  local ok_first, actual_item = call_reaper("GetTrackMediaItem", track, 0)
+  local ok_active, actual_take = call_reaper("GetActiveTake", item)
+  local ok_attached, actual_source = call_reaper("GetMediaItemTake_Source", take)
+  local ok_path, actual_path = false, nil
+  if actual_source then ok_path, actual_path = call_reaper("GetMediaSourceFileName", actual_source, "") end
+  if not ok_items or item_count ~= 1 or not ok_first or actual_item ~= item or not ok_active or actual_take ~= take or not ok_attached or actual_source ~= source or not ok_path or first_string(actual_path) ~= output.absolute_path then
+    return fail("STEM_READBACK_FAILED", "Stem destination did not read back as exactly one Track, Item, Take, and exact source.", {}, false)
+  end
+  for index = 1, #target.tracks do
+    if not d31_write_track_number(target.tracks[index], "B_MUTE", 1) then return fail("STEM_READBACK_FAILED", "A source Track did not read back muted after verified Stem insertion.", { source_track_index = index - 1 }, false) end
+  end
+  if not d31_apply_track_selection(project, prior_tracks) or not d31_apply_item_selection(project, prior_items) then return fail("RESTORE_FAILED", "Stem succeeded but visible selection could not be restored.", {}, false) end
+  local source_refs = json_array({})
+  for index = 1, #target.tracks do source_refs[#source_refs + 1] = d31_track_ref(target.tracks[index], index - 1) end
+  return {
+    destination_track_ref = d31_track_ref(track, track_index),
+    destination_item_ref = d31_item_ref(item, 0),
+    destination_take_ref = d31_take_ref(take, 0),
+    output_basename = output.output_basename,
+    source_track_refs = source_refs,
+    source_track_count = #target.tracks,
+    source_tracks_muted = true,
+    destination_track_count = 1,
+    destination_item_count = 1,
+    destination_take_count = 1,
+    imported_source_verified = true,
+    non_silent_verified = output.is_silent == false,
+  }, context
+end
+
 local function d31_format(params)
   if params.format == "wav" then
     local depth = tonumber(params.wav_bit_depth)
@@ -725,7 +1154,8 @@ local function d31_format(params)
     if not config then return d31_error("MP3_BITRATE_REQUIRED", "MP3 renders require mp3_bitrate_kbps 128, 192, 256, or 320.", { mp3_bitrate_kbps = params.mp3_bitrate_kbps }, false) end
     return { extension = "mp3", config = config, mp3_bitrate_kbps = bitrate }
   end
-  return d31_error("FORMAT_INVALID", "D31 supports only wav, ogg, and mp3.", { format = params.format }, false)
+  if params.format == "mp4" or params.format == "mov" then return d31_avfoundation_format(params) end
+  return d31_error("FORMAT_INVALID", "D31 supports only wav, ogg, mp3, mp4, and mov.", { format = params.format }, false)
 end
 
 local function d31_resolve_targets(project, request, groups)
@@ -782,6 +1212,46 @@ local function d31_resolve_targets(project, request, groups)
     end
   else
     return d31_error("TARGET_KIND_INVALID", "Unsupported D31 target_kind.", { target_kind = kind }, false)
+  end
+  if request.params.destination == "new_project_track" then
+    if (kind ~= "selected_tracks" and kind ~= "explicit_tracks") or request.params.stem_mode ~= "mixdown" or request.params.source_post_action ~= "mute_after_verified_insert" or request.params.format ~= "wav" then
+      return d31_error("STEM_MODE_INVALID", "In-project Stem requires selected/explicit Tracks, WAV, mixdown, and mute_after_verified_insert.", { target_kind = kind, format = request.params.format }, false)
+    end
+    local source_tracks = json_array({})
+    local source_refs = json_array({})
+    for index = 1, #targets do
+      source_tracks[#source_tracks + 1] = targets[index].track
+      source_refs[#source_refs + 1] = targets[index].ref
+    end
+    local bounds = 1
+    local start_seconds = nil
+    local end_seconds = nil
+    local range = request.params.render_range
+    if is_object(range) then
+      if range.mode == "time_selection" then
+        local ok_range, start_pos, end_pos = call_reaper("GetSet_LoopTimeRange", false, false, 0, 0, false)
+        if not ok_range or type(start_pos) ~= "number" or type(end_pos) ~= "number" or end_pos <= start_pos then return d31_error("TIME_SELECTION_EMPTY", "Stem time_selection requires a non-empty time selection.", {}) end
+        start_seconds, end_seconds = start_pos, end_pos
+      elseif range.mode == "explicit_range" and type(range.start_seconds) == "number" and type(range.end_seconds) == "number" and range.end_seconds > range.start_seconds then
+        start_seconds, end_seconds = range.start_seconds, range.end_seconds
+      else
+        return d31_error("STEM_MODE_INVALID", "Stem render_range must be a non-empty explicit_range or time_selection.", {}, false)
+      end
+      bounds = 0
+    end
+    targets = json_array({ {
+      source = 0,
+      bounds = bounds,
+      start_seconds = start_seconds,
+      end_seconds = end_seconds,
+      tracks = source_tracks,
+      refs = source_refs,
+      source_name = request.params.output_track_name or "OpenReaper_Stem",
+      label = "project_stem",
+      ref = "target-set:stem",
+    } })
+  elseif request.params.destination ~= nil and request.params.destination ~= "managed_file" then
+    return d31_error("STEM_MODE_INVALID", "destination must be managed_file or new_project_track.", { destination = request.params.destination }, false)
   end
   return targets
 end
@@ -889,13 +1359,15 @@ local function d31_job_ref(request)
   return { kind = "job", ref = "job:job_id:" .. job_id, identity = { scheme = "job_id", value = job_id }, summary = { template_id = "template.render.render_targets", pack = "render" } }
 end
 
-local function d31_finish_render_attempt(project, settings, prior_tracks, prior_items, call_ok, outcome)
+local function d31_finish_render_attempt(project, settings, prior_tracks, prior_items, call_ok, outcome, mix_snapshot)
   local settings_restored, failed_settings = d31_restore_settings(project, settings)
+  local mix_restored = d31_restore_track_mix(mix_snapshot)
   local tracks_restored = d31_apply_track_selection(project, prior_tracks)
   local items_restored = d31_apply_item_selection(project, prior_items)
-  if not settings_restored or not tracks_restored or not items_restored then
+  if not settings_restored or not mix_restored or not tracks_restored or not items_restored then
     return d31_error("RESTORE_FAILED", "D31 could not restore pre-render settings or selections.", {
       failed_render_setting_keys = failed_settings,
+      track_mix_restored = mix_restored,
       track_selection_restored = tracks_restored,
       item_selection_restored = items_restored,
       render_attempt_failed = not call_ok or (is_object(outcome) and outcome.failure ~= nil),
@@ -947,7 +1419,8 @@ local function d31_render_targets(request)
   if not refs_ok then return nil, refs_error end
   local targets, targets_error = d31_resolve_targets(project, request, groups)
   if not targets then return nil, targets_error end
-  if #targets < 1 or #targets > max_targets or #targets > D31_MAX_TARGETS then return d31_error("TARGET_COUNT_EXCEEDED", "Resolved targets exceed max_targets.", { resolved_target_count = #targets, max_targets = max_targets, hard_max_targets = D31_MAX_TARGETS }, false) end
+  local resolved_target_count = targets[1] and targets[1].tracks and #targets[1].tracks or #targets
+  if #targets < 1 or resolved_target_count > max_targets or resolved_target_count > D31_MAX_TARGETS then return d31_error("TARGET_COUNT_EXCEEDED", "Resolved targets exceed max_targets.", { resolved_target_count = resolved_target_count, max_targets = max_targets, hard_max_targets = D31_MAX_TARGETS }, false) end
   local outputs, collision_suffix_index_or_error = d31_resolve_outputs(request, targets, format.extension, requested_basename)
   if not outputs then return nil, collision_suffix_index_or_error end
   local collision_suffix_index = collision_suffix_index_or_error
@@ -960,9 +1433,20 @@ local function d31_render_targets(request)
   if not prior_tracks then return nil, tracks_error end
   local prior_items, items_error = d31_selected_items(project)
   if not prior_items then return nil, items_error end
+  local mix_snapshot = nil
+  if request.params.destination == "new_project_track" then
+    mix_snapshot, items_error = d31_track_mix_snapshot(project)
+    if not mix_snapshot then return nil, items_error end
+  end
 
   local function render_all()
     local result_outputs = json_array({})
+    if mix_snapshot then
+      local isolated, isolation_error = d31_isolate_stem_tracks(targets[1], mix_snapshot)
+      if not isolated then
+        return { failure = { code = isolation_error.details and isolation_error.details.local_code or isolation_error.code, message = isolation_error.message, details = isolation_error.details, recoverable = isolation_error.recoverable } }
+      end
+    end
     for index = 1, #outputs do
       local output = outputs[index]
       local target = output.target
@@ -1003,12 +1487,26 @@ local function d31_render_targets(request)
       end
       local action_ok = call_reaper("Main_OnCommandEx", D31_ACTION_ID, 0, project)
       if not action_ok then return { failure = { code = "COMMAND_FAILED", message = "The audited REAPER project-render action 41824 failed.", details = { action_id = D31_ACTION_ID, target_index = index - 1 }, recoverable = false } } end
-      local size = d31_size(output.absolute_path)
-      local header_ok, actual_format, actual_bitrate = d31_probe_output(output.absolute_path, output.extension)
-      if size <= 0 or not header_ok or actual_format ~= request.params.format or (format.mp3_bitrate_kbps and actual_bitrate ~= format.mp3_bitrate_kbps) then return { failure = { code = "VERIFY_FAILED", message = "Rendered output is absent, empty, or has the wrong container, MPEG layer, or bitrate.", details = { output_basename = output.output_basename, requested_format = request.params.format, actual_format = actual_format, requested_bitrate_kbps = format.mp3_bitrate_kbps, actual_bitrate_kbps = actual_bitrate, extension = output.extension, file_size_bytes = size, target_index = index - 1 }, recoverable = false } } end
-      local measurement, measurement_error = d31_measure_output(output.absolute_path, output.extension)
-      if not measurement then return { failure = { code = "VERIFY_FAILED", message = "Rendered output could not be measured without inferring audible content from file size.", details = { output_basename = output.output_basename, measurement_error = measurement_error and measurement_error.message or "unknown_measurement_failure", target_index = index - 1 }, recoverable = false } } end
-      if measurement.is_silent == true then return { failure = { code = "RENDER_OUTPUT_ALL_ZERO", message = "Rendered output decoded successfully but every measured sample was zero; media was explicitly brought online first, so the render is not accepted as successful.", details = { output_basename = output.output_basename, requested_format = request.params.format, actual_format = actual_format, measurement_status = measurement.measurement_status, measurement_scope = measurement.measurement_scope, silence_classification = measurement.silence_classification, measured_peak_linear = measurement.peak_linear, target_identity = target.ref or target.label, target_index = index - 1, media_online_action_id = D31_MEDIA_ONLINE_ACTION_ID, render_action_id = D31_ACTION_ID, probable_causes = json_array({ "intentionally_silent_target", "unavailable_source_or_instrument", "silent_signal_path" }), retry_requires_fresh_output_basename = true, audio_device_required = false }, recoverable = true } } end
+      local size, header_ok, actual_format, actual_bitrate, video_probe, finalization_poll_count
+      if format.video then
+        size, header_ok, actual_format, actual_bitrate, video_probe, finalization_poll_count = d31_wait_for_final_video(output.absolute_path, output.extension)
+      else
+        size = d31_size(output.absolute_path)
+        header_ok, actual_format, actual_bitrate, video_probe = d31_probe_output(output.absolute_path, output.extension)
+      end
+      if size <= 0 or not header_ok or actual_format ~= request.params.format or (format.mp3_bitrate_kbps and actual_bitrate ~= format.mp3_bitrate_kbps) then return { failure = { code = "VERIFY_FAILED", message = "Rendered output is absent, empty, or has the wrong container, MPEG layer, bitrate, or video atom structure.", details = { output_basename = output.output_basename, requested_format = request.params.format, actual_format = actual_format, requested_bitrate_kbps = format.mp3_bitrate_kbps, actual_bitrate_kbps = actual_bitrate, extension = output.extension, file_size_bytes = size, target_index = index - 1, video_probe = video_probe }, recoverable = false } } end
+      local measurement = nil
+      if format.video then
+        local frame_rate_matches = video_probe and type(video_probe.frame_rate) == "number" and math.abs(video_probe.frame_rate - format.video_frame_rate) <= 0.02
+        if not video_probe or video_probe.width ~= format.video_width or video_probe.height ~= format.video_height or not frame_rate_matches or video_probe.video_codec ~= "h264" or video_probe.audio_codec ~= "aac" then
+          return { failure = { code = "VERIFY_FAILED", message = "Rendered video container did not prove the requested dimensions, frame rate, H.264 video track, and AAC audio track.", details = { output_basename = output.output_basename, requested_video_width = format.video_width, requested_video_height = format.video_height, requested_video_frame_rate = format.video_frame_rate, requested_video_codec = format.video_codec, requested_audio_codec = format.audio_codec, video_probe = video_probe, target_index = index - 1 }, recoverable = false } }
+        end
+      else
+        local measurement_error
+        measurement, measurement_error = d31_measure_output(output.absolute_path, output.extension)
+        if not measurement then return { failure = { code = "VERIFY_FAILED", message = "Rendered output could not be measured without inferring audible content from file size.", details = { output_basename = output.output_basename, measurement_error = measurement_error and measurement_error.message or "unknown_measurement_failure", target_index = index - 1 }, recoverable = false } } end
+        if measurement.is_silent == true then return { failure = { code = "RENDER_OUTPUT_ALL_ZERO", message = "Rendered output decoded successfully but every measured sample was zero; media was explicitly brought online first, so the render is not accepted as successful.", details = { output_basename = output.output_basename, requested_format = request.params.format, actual_format = actual_format, measurement_status = measurement.measurement_status, measurement_scope = measurement.measurement_scope, silence_classification = measurement.silence_classification, measured_peak_linear = measurement.peak_linear, target_identity = target.ref or target.label, target_index = index - 1, media_online_action_id = D31_MEDIA_ONLINE_ACTION_ID, render_action_id = D31_ACTION_ID, probable_causes = json_array({ "intentionally_silent_target", "unavailable_source_or_instrument", "silent_signal_path" }), retry_requires_fresh_output_basename = true, audio_device_required = false }, recoverable = true } } end
+      end
       local project_copy_path = output.absolute_path .. ".RPP"
       local project_copy_retained = file_exists(project_copy_path)
       result_outputs[#result_outputs + 1] = {
@@ -1021,19 +1519,39 @@ local function d31_render_targets(request)
         actual_format = actual_format,
         requested_bitrate_kbps = format.mp3_bitrate_kbps or JSON_NULL,
         actual_bitrate_kbps = actual_bitrate or JSON_NULL,
-        measurement_status = measurement.measurement_status,
-        measurement_scope = measurement.measurement_scope,
-        measurement_format = measurement.measurement_format,
-        sample_rate_hz = measurement.sample_rate_hz or JSON_NULL,
-        measured_channel_count = measurement.channel_count or JSON_NULL,
-        frame_count = measurement.frame_count or JSON_NULL,
-        sample_count = measurement.sample_count or JSON_NULL,
-        measured_peak_linear = measurement.peak_linear,
-        measured_peak_dbfs = measurement.peak_dbfs,
-        measured_rms_linear = measurement.rms_linear,
-        measured_rms_dbfs = measurement.rms_dbfs,
-        silence_classification = measurement.silence_classification,
-        is_silent = measurement.is_silent,
+        measurement_status = format.video and "video_container_verified" or measurement.measurement_status,
+        measurement_scope = format.video and "iso_bmff_atoms_and_track_metadata" or measurement.measurement_scope,
+        measurement_format = format.video and request.params.format or measurement.measurement_format,
+        sample_rate_hz = measurement and measurement.sample_rate_hz or JSON_NULL,
+        measured_channel_count = measurement and measurement.channel_count or JSON_NULL,
+        frame_count = measurement and measurement.frame_count or JSON_NULL,
+        sample_count = measurement and measurement.sample_count or JSON_NULL,
+        measured_peak_linear = measurement and measurement.peak_linear or JSON_NULL,
+        measured_peak_dbfs = measurement and measurement.peak_dbfs or JSON_NULL,
+        measured_rms_linear = measurement and measurement.rms_linear or JSON_NULL,
+        measured_rms_dbfs = measurement and measurement.rms_dbfs or JSON_NULL,
+        silence_classification = format.video and "not_applicable_video" or measurement.silence_classification,
+        is_silent = format.video and JSON_NULL or measurement.is_silent,
+        requested_video_width = format.video and format.video_width or nil,
+        actual_video_width = format.video and video_probe.width or nil,
+        requested_video_height = format.video and format.video_height or nil,
+        actual_video_height = format.video and video_probe.height or nil,
+        requested_video_frame_rate = format.video and format.video_frame_rate or nil,
+        actual_video_frame_rate = format.video and video_probe.frame_rate or nil,
+        requested_video_codec = format.video and format.video_codec or nil,
+        actual_video_codec = format.video and video_probe.video_codec or nil,
+        requested_audio_codec = format.video and format.audio_codec or nil,
+        actual_audio_codec = format.video and video_probe.audio_codec or nil,
+        configured_video_bitrate_kbps = format.video and format.video_bitrate_kbps or nil,
+        configured_audio_bitrate_kbps = format.video and format.audio_bitrate_kbps or nil,
+        video_track_count = format.video and video_probe.video_track_count or nil,
+        audio_track_count = format.video and video_probe.audio_track_count or nil,
+        iso_bmff_major_brand = format.video and video_probe.major_brand or nil,
+        iso_bmff_ftyp_verified = format.video and video_probe.ftyp_verified or nil,
+        iso_bmff_moov_verified = format.video and video_probe.moov_verified or nil,
+        iso_bmff_mdat_verified = format.video and video_probe.mdat_verified or nil,
+        native_video_settings_readback_verified = format.video and true or nil,
+        video_finalization_poll_count = format.video and finalization_poll_count or nil,
         target_identity = target.ref or target.label,
         collision_policy = request.params.collision_policy,
         collision_suffix_index = output.collision_suffix_index,
@@ -1047,16 +1565,32 @@ local function d31_render_targets(request)
   end
 
   local call_ok, outcome = xpcall(render_all, function(message) return tostring(message) end)
-  local finished_outcome, finish_error = d31_finish_render_attempt(project, settings, prior_tracks, prior_items, call_ok, outcome)
+  local finished_outcome, finish_error = d31_finish_render_attempt(project, settings, prior_tracks, prior_items, call_ok, outcome, mix_snapshot)
   if not finished_outcome then return nil, finish_error end
   outcome = finished_outcome
 
+  local stem = nil
+  local stem_context = nil
+  if request.params.destination == "new_project_track" then
+    stem, stem_context = d31_import_verified_stem(project, request, targets[1], outcome.outputs[1], mix_snapshot, prior_tracks, prior_items)
+    if not stem then return nil, stem_context end
+  end
+
+  local audio_outputs = format.video and json_array({}) or outcome.outputs
+  local video_outputs = format.video and outcome.outputs or json_array({})
+
   local job_ref = d31_job_ref(request)
-  local manifest_summary = { job_ref = job_ref.ref, format = request.params.format, mp3_bitrate_kbps = format.mp3_bitrate_kbps, requested_output_basename = requested_basename, collision_suffix_index = collision_suffix_index, file_count = #outcome.outputs, max_targets = max_targets, output_policy = request.params.output_policy, collision_policy = request.params.collision_policy, truncated = false }
-  local manifest, manifest_error = write_a2_artifact(request, D31_MANIFEST_SPEC, manifest_summary, { target_kind = request.params.target_kind, outputs = outcome.outputs })
-  if not manifest then return d31_error(manifest_error.code, manifest_error.message, manifest_error.details, manifest_error.recoverable) end
+  local manifest_summary = { job_ref = job_ref.ref, format = request.params.format, mp3_bitrate_kbps = format.mp3_bitrate_kbps, video_width = format.video_width, video_height = format.video_height, video_frame_rate = format.video_frame_rate, video_codec = format.video_codec, video_bitrate_kbps = format.video_bitrate_kbps, audio_codec = format.audio_codec, audio_bitrate_kbps = format.audio_bitrate_kbps, requested_output_basename = requested_basename, collision_suffix_index = collision_suffix_index, file_count = #outcome.outputs, max_targets = max_targets, output_policy = request.params.output_policy, collision_policy = request.params.collision_policy, truncated = false }
+  local manifest, manifest_error = write_a2_artifact(request, D31_MANIFEST_SPEC, manifest_summary, { target_kind = request.params.target_kind, destination = request.params.destination or "managed_file", outputs = outcome.outputs, audio_outputs = audio_outputs, video_outputs = video_outputs, stem = stem })
+  if not manifest then
+    if stem_context then d31_stem_rollback(project, stem_context) end
+    return d31_error(manifest_error.code, manifest_error.message, manifest_error.details, manifest_error.recoverable)
+  end
   local evidence_summary = { job_ref = job_ref.ref, output_artifact_ref = manifest.ref, verification_status = "passed", media_online_verified = true, render_settings_restored = true, selections_restored = true, truncated = false }
-  local evidence, evidence_error = write_a2_artifact(request, D31_EVIDENCE_SPEC, evidence_summary, { action_id = D31_ACTION_ID, media_online_action_id = D31_MEDIA_ONLINE_ACTION_ID, source_online_preflight = true, render_action_id = D31_ACTION_ID, target_kind = request.params.target_kind, render_request = { format = request.params.format, output_basename = requested_basename, sample_rate_hz = request.params.sample_rate_hz, channel_count = request.params.channel_count, wav_bit_depth = format.wav_bit_depth, ogg_quality = format.ogg_quality, mp3_bitrate_kbps = format.mp3_bitrate_kbps, max_targets = max_targets }, restoration = { render_settings = true, track_selection = true, item_selection = true }, outputs = outcome.outputs })
-  if not evidence then return d31_error(evidence_error.code, evidence_error.message, evidence_error.details, evidence_error.recoverable) end
-  return { job_ref = job_ref.ref, output_artifact_ref = manifest.ref, evidence_artifact_ref = evidence.ref, format = request.params.format, output_policy = request.params.output_policy, collision_policy = request.params.collision_policy, collision_suffix_index = collision_suffix_index, file_count = #outcome.outputs, outputs = outcome.outputs, restoration = { render_settings = true, track_selection = true, item_selection = true }, truncated = false }, nil, json_array({ manifest.object_ref, evidence.object_ref }), json_array({ job_ref })
+  local evidence, evidence_error = write_a2_artifact(request, D31_EVIDENCE_SPEC, evidence_summary, { action_id = D31_ACTION_ID, media_online_action_id = D31_MEDIA_ONLINE_ACTION_ID, source_online_preflight = true, render_action_id = D31_ACTION_ID, target_kind = request.params.target_kind, destination = request.params.destination or "managed_file", render_request = { format = request.params.format, output_basename = requested_basename, sample_rate_hz = request.params.sample_rate_hz, channel_count = request.params.channel_count, wav_bit_depth = format.wav_bit_depth, ogg_quality = format.ogg_quality, mp3_bitrate_kbps = format.mp3_bitrate_kbps, video_width = format.video_width, video_height = format.video_height, video_frame_rate = format.video_frame_rate, video_codec = format.video_codec, video_bitrate_kbps = format.video_bitrate_kbps, audio_codec = format.audio_codec, audio_bitrate_kbps = format.audio_bitrate_kbps, max_targets = max_targets }, restoration = { render_settings = true, track_mix = true, track_selection = true, item_selection = true }, outputs = outcome.outputs, audio_outputs = audio_outputs, video_outputs = video_outputs, stem = stem })
+  if not evidence then
+    if stem_context then d31_stem_rollback(project, stem_context) end
+    return d31_error(evidence_error.code, evidence_error.message, evidence_error.details, evidence_error.recoverable)
+  end
+  return { job_ref = job_ref.ref, output_artifact_ref = manifest.ref, evidence_artifact_ref = evidence.ref, format = request.params.format, output_policy = request.params.output_policy, collision_policy = request.params.collision_policy, collision_suffix_index = collision_suffix_index, file_count = #outcome.outputs, outputs = outcome.outputs, audio_outputs = audio_outputs, video_outputs = video_outputs, stem = stem, restoration = { render_settings = true, track_mix = true, track_selection = true, item_selection = true }, truncated = false }, nil, json_array({ manifest.object_ref, evidence.object_ref }), json_array({ job_ref })
 end

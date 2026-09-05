@@ -99,10 +99,12 @@ function makeExecutor({
   failMutationAt = null,
   mismatchAt = null,
   discreteIndexes = new Set(),
+  displayFinalReadback = null,
 }) {
   const calls = [];
   let mutationCount = 0;
   const values = new Map();
+  const formattedValues = new Map();
   return {
     calls,
     executeAtomic: async (child) => {
@@ -151,13 +153,20 @@ function makeExecutor({
         const index = child.input.param_index;
         const key = `${fx}#${index}`;
         const requested = child.input.probe_normalized_value;
-        const current = values.has(key) ? values.get(key) : (Number.isFinite(requested) ? requested : 0);
+        const displayMode = child.input.probe_display_value !== undefined;
+        const compiled = displayMode ? 0.375 : null;
+        const current = values.has(key) ? values.get(key) : (Number.isFinite(requested) ? requested : compiled ?? 0);
         const discrete = discreteIndexes.has(index);
         return execution(child.id, {
           param_index: index,
           param_ident: `p${index}`,
-          normalized_value: current,
-          formatted_value: discrete ? `step:${Math.round(current)}` : String(current),
+          value: current,
+          normalized_value: displayMode ? null : current,
+          formatted_value: child.input.probe_display_value !== undefined
+            ? child.input.probe_display_value
+            : formattedValues.has(key) && typeof displayFinalReadback === "string"
+              ? displayFinalReadback
+              : formattedValues.get(key) ?? (discrete ? `step:${Math.round(current)}` : String(current)),
           is_discrete: discrete,
           is_toggle: false,
           step_sizes_available: discrete,
@@ -173,17 +182,20 @@ function makeExecutor({
         const fx = child.refs?.fx_ref?.ref ?? child.refs?.fx_ref;
         const index = child.input.param_index;
         const key = `${fx}#${index}`;
-        let value = child.input.normalized_value;
+        const displayMode = child.input.display_value !== undefined;
+        let value = displayMode ? 0.375 : child.input.normalized_value;
         if (mismatchAt !== null && mutationCount === mismatchAt) value = Math.min(1, value + 0.2);
         values.set(key, value);
+        if (displayMode) formattedValues.set(key, child.input.display_value);
         const discrete = discreteIndexes.has(index);
         return execution(child.id, {
           param_index: index,
           param_ident: child.input.param_ident ?? `p${index}`,
+          value,
           normalized_value: value,
-          formatted_value: discrete ? `step:${Math.round(value)}` : String(value),
+          formatted_value: displayMode ? child.input.display_value : discrete ? `step:${Math.round(value)}` : String(value),
           updated: true,
-          verification_mode: discrete ? "native_discrete_format" : "normalized_tolerance",
+          verification_mode: displayMode ? "native_display_value" : discrete ? "native_discrete_format" : "normalized_tolerance",
           tolerance: discrete ? 0 : 0.001,
           is_discrete: discrete,
         });
@@ -219,6 +231,69 @@ function countLua(dir) {
 }
 
 describe("Alpha3.4-D2 exact_assignments multi-target FX batch", () => {
+  it("accepts display targets and rejects absent or conflicting value modes before dispatch", () => {
+    const accepted = normalizeExactAssignmentsInput({
+      mode: "exact_assignments",
+      assignments: [{ id: "freq", fx_ref: fxRef(1), param_ident: "frequency", display_value: " 3000 Hz " }],
+    });
+    assert.equal(accepted.ok, true, JSON.stringify(accepted));
+    assert.equal(accepted.assignments[0].display_value, "3000 Hz");
+    assert.equal(Object.hasOwn(accepted.assignments[0], "normalized_value"), false);
+    for (const row of [
+      { id: "freq", fx_ref: fxRef(1), param_ident: "frequency" },
+      { id: "freq", fx_ref: fxRef(1), param_ident: "frequency", display_value: "" },
+      { id: "freq", fx_ref: fxRef(1), param_ident: "frequency", display_value: "3000 Hz", normalized_value: 0.5 },
+    ]) {
+      assert.equal(normalizeExactAssignmentsInput({ mode: "exact_assignments", assignments: [row] }).ok, false);
+    }
+  });
+
+  it("fallback execution preflights every display target before the first native display write", async () => {
+    const fixture = makeExecutor({});
+    const takeRef = "take:guid:{AUDIO-TAKE-02}";
+    const response = await executeAlpha3_2_5CControlMacro({
+      request: request({
+        mode: "exact_assignments",
+        dry_run: false,
+        assignments: [
+          { id: "freq1", fx_ref: fxRef(1), param_ident: "p0", display_value: "3000 Hz" },
+          { id: "gain2", fx_ref: `fx:${takeRef}:0`, param_ident: "p1", display_value: "-3 dB" },
+        ],
+      }),
+      executeAtomic: fixture.executeAtomic,
+      projectIndexRuntime: fakeIndex(),
+    });
+    assert.equal(response.ok, true, JSON.stringify(response));
+    const firstWrite = fixture.calls.findIndex((call) => call.id === "template.fx.set_fx_parameter_normalized");
+    const probes = fixture.calls.slice(0, firstWrite).filter((call) => call.input.probe_display_value !== undefined);
+    assert.deepEqual(probes.map((call) => call.input.probe_display_value), ["3000 Hz", "-3 dB"]);
+    assert.deepEqual(
+      fixture.calls.filter((call) => call.id === "template.fx.set_fx_parameter_normalized").map((call) => call.input.display_value),
+      ["3000 Hz", "-3 dB"],
+    );
+    const resolves = fixture.calls.filter((call) => call.id === "template.fx.resolve_fx_ref");
+    assert.equal(resolves.some((call) => call.input.owner_kind === "track" && call.refs?.track_ref?.ref), true);
+    assert.equal(resolves.some((call) => call.input.owner_kind === "take" && call.refs?.take_ref?.ref === takeRef), true);
+  });
+
+  it("rejects display readback mismatch even when the raw value still matches", async () => {
+    const fixture = makeExecutor({ displayFinalReadback: "-9 dB" });
+    const response = await executeAlpha3_2_5CControlMacro({
+      request: request({
+        mode: "exact_assignments",
+        dry_run: false,
+        assignments: [
+          { id: "gain", fx_ref: fxRef(1), param_ident: "p0", display_value: "-3 dB" },
+        ],
+      }),
+      executeAtomic: fixture.executeAtomic,
+      projectIndexRuntime: fakeIndex(),
+    });
+    assert.equal(response.ok, false, JSON.stringify(response));
+    assert.equal(response.error.code, "FX_ASSIGNMENTS_READBACK_MISMATCH");
+    assert.equal(response.result.changes[0].fields.includes("formatted_value"), true);
+  });
+
   it("accepts 1, 8, and 64 exact assignments without truncation and rejects 65 before dispatch", async () => {
     for (const count of [1, 8, 64]) {
       const response = await executeAlpha3_2_5CControlMacro({

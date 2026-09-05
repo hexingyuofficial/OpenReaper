@@ -69,6 +69,28 @@ local function bounded_string(value, max_length)
   return utf8_prefix_by_bytes(text, limit - 3) .. "..."
 end
 
+local function has_control_byte(value)
+  if type(value) ~= "string" then
+    return false
+  end
+  for index = 1, #value do
+    local byte = value:byte(index)
+    if byte < 0x20 or byte == 0x7F then
+      return true
+    end
+  end
+  return false
+end
+
+local function read_track_name(track, max_length)
+  local ok_name, success, explicit_name = call_reaper("GetSetMediaTrackInfo_String", track, "P_NAME", "", false)
+  if ok_name and success ~= false and type(explicit_name) == "string" and explicit_name ~= "" then
+    return bounded_string(explicit_name, max_length or 160)
+  end
+  local ok_display, _, display_name = call_reaper("GetTrackName", track, "")
+  return bounded_string(ok_display and first_string(display_name) or "", max_length or 160)
+end
+
 local function is_object(value)
   return type(value) == "table" and value ~= JSON_NULL and not is_json_array(value)
 end
@@ -167,6 +189,9 @@ local function normalize_bridge_error_code(code)
   end
   if code == "VIDEO_PROCESSOR_NOT_FOUND" then
     return "FX_NOT_FOUND", code
+  end
+  if code == "PROJECT_LOCKING_ENABLED" then
+    return "COMMAND_FAILED", code
   end
   return code, nil
 end

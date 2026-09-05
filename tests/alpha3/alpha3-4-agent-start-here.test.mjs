@@ -178,6 +178,18 @@ test("canonical AGENT_START_HERE markers project under 16 KiB with exact 15 Macr
   assert.match(instructions, /fresh\s+run binds the current generation after reconnect/u);
   assert.match(instructions, /resume remains bound to\s+the failed run's generation/u);
   assert.match(instructions, /Never execute an inline or unsaved draft/u);
+  assert.match(instructions, /open_project_in_tab/u);
+  assert.match(instructions, /bridge_ready` proves\s+transport only/u);
+  assert.match(instructions, /never macOS `open -a`/u);
+  assert.match(instructions, /opened_but_index_not_ready/u);
+  assert.match(instructions, /project_identity_verified:true/u);
+  assert.match(instructions, /index_project_identity_verified:true/u);
+  assert.match(instructions, /never click or close it automatically/u);
+  assert.match(instructions, /exactly\s+three public calls/u);
+  assert.match(instructions, /set_controls\(inspect_set\)/u);
+  assert.match(instructions, /set_controls\(shared_plan\)/u);
+  assert.match(instructions, /Never enumerate\/cache members/u);
+  assert.match(instructions, /Project\/generation changes invalidate both/u);
   assert.match(instructions, /rediscovered after reconnect/u);
   assert.match(instructions, /one public `call_recipe` call/u);
   assert.match(instructions, /list_recipes/u);
@@ -198,6 +210,11 @@ test("canonical AGENT_START_HERE markers project under 16 KiB with exact 15 Macr
   assert.match(instructions, /Native paths are JSON values, not shell arguments/u);
   assert.match(instructions, /keep Unicode and spaces literal/u);
   assert.match(instructions, /file:\/\/.*percent encoding.*`~`/u);
+  assert.match(instructions, /source_basename/u);
+  assert.match(instructions, /source_identity_status/u);
+  assert.match(instructions, /Never use\s+timeline position/u);
+  assert.match(instructions, /Same Track is no-op\s+success/u);
+  assert.match(instructions, /On `TRACK_NOT_FOUND`, refresh and rebuild/u);
 });
 
 test("marker parser fails closed on missing, duplicate, order, and budget errors", () => {
@@ -351,6 +368,9 @@ test("package builder copies byte-identical bilingual Agent and user guides", as
   assert.match(builder, /docs\\\\AGENT_START_HERE\.zh-CN\.md/u);
   assert.match(builder, /Agent entry \(unique\):/u);
   assert.match(builder, /MCP initialization instructions are projected from that document/u);
+  assert.match(builder, /client\.getInstructions/u);
+  assert.match(builder, /assertPackagedInitializationInstructions/u);
+  assert.doesNotMatch(builder, /compact list_templates startup guidance/u);
   assert.match(builder, /docs\/USER_GUIDE\.md/u);
   assert.match(builder, /docs\\\\USER_GUIDE\.zh-CN\.md/u);
   assert.match(builder, /User guide:/u);

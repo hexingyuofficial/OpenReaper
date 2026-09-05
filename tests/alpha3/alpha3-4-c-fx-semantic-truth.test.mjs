@@ -649,11 +649,12 @@ function exactSingleParameterAtomic(calls, { writeFailure = false, readbackForma
       });
     }
     if (id === "template.fx.read_fx_parameter") {
-      const probing = input.probe_normalized_value !== undefined;
+      const probing = input.probe_normalized_value !== undefined || input.probe_display_value !== undefined;
       return atomic(id, {
         param_index: 0,
         param_ident: "enabled",
-        normalized_value: 0.5,
+        value: 0.25,
+        normalized_value: input.probe_display_value !== undefined ? null : 0.5,
         formatted_value: probing ? "On" : readbackFormatted,
         step_sizes_available: true,
         step_size: 1,
@@ -672,12 +673,15 @@ function exactSingleParameterAtomic(calls, { writeFailure = false, readbackForma
       return atomic(id, {
         param_index: 0,
         param_ident: "enabled",
+        value: 0.25,
         normalized_value: 0.5,
         formatted_value: "On",
-        requested_normalized_value: 0.5,
+        requested_normalized_value: null,
+        requested_display_value: input.display_value,
+        requested_value: 0.25,
         requested_formatted_value: "On",
         tolerance: 0.001,
-        verification_mode: "native_discrete_format",
+        verification_mode: "native_display_value",
         is_discrete: true,
         updated: true,
       });
@@ -706,6 +710,46 @@ test("normalize rejects fuzzy-less exact_parameters rows and defaults mode to se
   }).ok, false);
 });
 
+test("exact_parameters accepts one native display target and rejects missing or conflicting value modes", () => {
+  const display = normalizeAlpha34CFxSetControlsInput({
+    mode: "exact_parameters",
+    changes: [{ id: "freq", param_ident: "frequency", display_value: " 3000 Hz " }],
+  });
+  assert.equal(display.ok, true, JSON.stringify(display));
+  assert.equal(display.changes[0].display_value, "3000 Hz");
+  assert.equal(Object.hasOwn(display.changes[0], "normalized_value"), false);
+  for (const changes of [
+    [{ id: "freq", param_ident: "frequency" }],
+    [{ id: "freq", param_ident: "frequency", display_value: "" }],
+    [{ id: "freq", param_ident: "frequency", display_value: "3000 Hz", normalized_value: 0.5 }],
+  ]) {
+    assert.equal(normalizeAlpha34CFxSetControlsInput({ mode: "exact_parameters", changes }).ok, false);
+  }
+});
+
+test("exact_parameters sends display_value through the raw native setter path", async () => {
+  const calls = [];
+  const response = await executeAlpha3_2_5CControlMacro({
+    request: {
+      id: "macro.set_stock_plugin_controls",
+      input: {
+        mode: "exact_parameters",
+        dry_run: false,
+        changes: [{ id: "enabled", param_ident: "enabled", display_value: "On" }],
+      },
+      refs: { fx_ref: "fx:track:guid:{TRACK-A}:0" },
+    },
+    executeAtomic: exactSingleParameterAtomic(calls),
+    projectIndexRuntime: exactIndexRuntime([]),
+  });
+  assert.equal(response.ok, true, JSON.stringify(response));
+  const probe = calls.find((call) => call.id === "template.fx.read_fx_parameter" && call.input.probe_display_value);
+  const write = calls.find((call) => call.id === "template.fx.set_fx_parameter_normalized");
+  assert.equal(probe.input.probe_display_value, "On");
+  assert.equal(write.input.display_value, "On");
+  assert.equal(Object.hasOwn(write.input, "normalized_value"), false);
+});
+
 test("AGENT_START_HERE and discovery manuals teach exact_parameters highway", () => {
   const start = loadOpenReaperAgentStartHereProjection();
   assert.match(start.compact_text, /exact_parameters/u);
@@ -716,6 +760,7 @@ test("AGENT_START_HERE and discovery manuals teach exact_parameters highway", ()
   assert.equal(exact.items[0].inputSchema.oneOf.length, 2);
   assert.equal(exact.items[0].inputSchema.properties.changes.minItems, 1);
   assert.equal(exact.items[0].inputSchema.properties.changes.items.additionalProperties, false);
+  assert.equal(exact.items[0].inputSchema.properties.changes.items.properties.display_value.maxLength, 80);
   assert.match(JSON.stringify(expansion.action_manual), /exact_parameters/u);
   assert.deepEqual(expansion.action_manual.examples[0].input.selector, { plugin_id: "reacomp" });
   assert.ok(expansion.first_try_execution_guide);

@@ -10,8 +10,7 @@ local function resolve_track_ref_error(code, message, details, recoverable)
 end
 
 local function resolve_track_ref_track_name(track)
-  local ok, _, name = call_reaper("GetTrackName", track, "")
-  return bounded_string(ok and first_string(name) or "", 160)
+  return read_track_name(track, 160)
 end
 
 local function resolve_track_ref_track_guid(track)

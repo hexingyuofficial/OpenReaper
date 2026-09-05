@@ -34,6 +34,7 @@ const STARTUP_HOOKS = Object.freeze([
     ]),
   }),
 ]);
+const STARTUP_OWNED_SEPARATOR = "-- OpenReaper owns the preceding line ending";
 const BRIDGE_ACTION_TITLE = "OpenReaper: Start MCP bridge";
 const BRIDGE_ACTION_RELATIVE_SCRIPT = "OpenReaper/openreaper-start-mcp-bridge.lua";
 const BRIDGE_ACTION_COMMAND_ID = `RS${createHash("sha1").update("openreaper.alpha.start_mcp_bridge.v1").digest("hex")}`;
@@ -46,6 +47,8 @@ const S3_ACTIONS = Object.freeze([
     relativeScript: "OpenReaper/remove-silence.lua",
     commandId: `RS${createHash("sha1").update("openreaper.s3.remove_silence.v1").digest("hex")}`,
   }),
+]);
+const LEGACY_S3_ACTIONS = Object.freeze([
   Object.freeze({
     title: "OpenReaper: Repeat Remove Silence with Last Settings",
     relativeScript: "OpenReaper/repeat-remove-silence.lua",
@@ -77,13 +80,14 @@ const executableRecipeRoot = path.join(path.dirname(installRoot), "data", "execu
 const startupDialogConsentPath = path.join(path.dirname(installRoot), "data", "startup-dialog-consent");
 const skipClientConfig = options.skip_client_config === true;
 const skipStartupHook = options.skip_startup_hook === true;
+const removeActionRegistrations = options.remove_action_registrations === true;
 const managedRenderRootRecordResult = await readManagedRenderRootRecord();
 const executableRecipeRootResult = await inspectExecutableRecipeRoot();
 const report = {
   product: "OpenReaper alpha",
   install_root: installRoot,
   reaper_resource_root: reaperResourceRoot,
-  s3_actions: S3_ACTIONS.map((action) => ({
+  s3_actions: [...S3_ACTIONS, ...LEGACY_S3_ACTIONS].map((action) => ({
     title: action.title,
     command_id: `_${action.commandId}`,
     script: path.join(reaperResourceRoot, "Scripts", ...action.relativeScript.split("/")),
@@ -396,6 +400,9 @@ Options:
                               %APPDATA%/REAPER on Windows
   --skip-client-config        Do not update supported MCP client configs
   --skip-startup-hook         Keep the manual Action and legacy startup blocks
+  --remove-action-registrations
+                              Explicitly remove OpenReaper SCR lines from
+                              reaper-kb.ini (disabled by default)
   --help                      Show this help without uninstalling
 `);
 }
@@ -413,7 +420,10 @@ async function removeStartupIntegration() {
     }
     const existing = await readFile(hookPath, "utf8");
     let next = existing;
-    for (const block of hook.blocks) next = removeMarkedBlock(next, block.begin, block.end);
+    for (const block of hook.blocks) {
+      next = removeOwnedStartupSeparator(next, block.begin);
+      next = removeMarkedBlock(next, block.begin, block.end);
+    }
     if (next !== existing) {
       await writeFile(hookPath, next, "utf8");
       report.changed.push(`removed obsolete OpenReaper startup blocks from ${hookPath}`);
@@ -433,6 +443,10 @@ async function removeBridgeAction() {
     }
   }
 
+  if (!removeActionRegistrations) {
+    report.skipped.push("REAPER Action registry left unchanged; pass --remove-action-registrations to remove OpenReaper entries");
+    return;
+  }
   const kbPath = path.join(reaperResourceRoot, "reaper-kb.ini");
   const kbStatus = await safeLstat(kbPath);
   if (!kbStatus) return;
@@ -441,7 +455,7 @@ async function removeBridgeAction() {
     return;
   }
   const existing = await readFile(kbPath, "utf8");
-  const ownedLines = new Set([bridgeActionRegistryLine(), ...s3ActionRegistryLines()]);
+  const ownedLines = new Set([bridgeActionRegistryLine(), ...s3ActionRegistryLines(), ...legacyS3ActionRegistryLines()]);
   const next = removeLinesPreservingBytes(existing, (line) => !ownedLines.has(line));
   if (next !== existing) {
     await writeFile(kbPath, next, "utf8");
@@ -452,6 +466,7 @@ async function removeBridgeAction() {
 async function removeS3Actions() {
   const entries = [
     ...S3_ACTIONS,
+    ...LEGACY_S3_ACTIONS,
     { title: "OpenReaper S3 shared Remove Silence core", relativeScript: S3_ACTION_SUPPORT_RELATIVE_SCRIPT },
   ];
   for (const action of entries) {
@@ -475,6 +490,12 @@ function bridgeActionRegistryLine() {
 
 function s3ActionRegistryLines() {
   return S3_ACTIONS.map((action) =>
+    `SCR 4 0 ${action.commandId} "Custom: ${action.title}" "${action.relativeScript}"`,
+  );
+}
+
+function legacyS3ActionRegistryLines() {
+  return LEGACY_S3_ACTIONS.map((action) =>
     `SCR 4 0 ${action.commandId} "Custom: ${action.title}" "${action.relativeScript}"`,
   );
 }
@@ -518,13 +539,37 @@ function removeMarkedBlock(existing, begin, end) {
   let next = existing;
   while (true) {
     const start = next.indexOf(begin);
+    if (start === -1) return next;
     const finish = next.indexOf(end, start + begin.length);
-    if (start === -1 || finish === -1 || finish <= start) return next;
+    if (finish === -1 || finish <= start) {
+      throw new Error(`OpenReaper startup marker is incomplete (${begin}); refusing to rewrite REAPER startup hook`);
+    }
+    const nestedBegin = next.indexOf(begin, start + begin.length);
+    if (nestedBegin !== -1 && nestedBegin < finish) {
+      throw new Error(`OpenReaper startup marker is nested (${begin}); refusing to rewrite REAPER startup hook`);
+    }
     let after = finish + end.length;
     if (next.startsWith("\r\n", after)) after += 2;
     else if (next[after] === "\n" || next[after] === "\r") after += 1;
     next = `${next.slice(0, start)}${next.slice(after)}`;
   }
+}
+
+function removeOwnedStartupSeparator(existing, begin) {
+  const blockStart = existing.indexOf(begin);
+  if (blockStart === -1) return existing;
+  const markerStart = existing.lastIndexOf(STARTUP_OWNED_SEPARATOR, blockStart);
+  if (markerStart === -1 || markerStart >= blockStart) return existing;
+  const afterMarker = markerStart + STARTUP_OWNED_SEPARATOR.length;
+  if (!/^(?:\r\n|\n|\r)/u.test(existing.slice(afterMarker))) return existing;
+  const beforeMarker = existing.slice(0, markerStart);
+  if (!/(?:\r\n|\n|\r)$/u.test(beforeMarker)) return existing;
+  const separatorStart = beforeMarker.endsWith("\r\n") ? markerStart - 2 : markerStart - 1;
+  let separatorEnd = afterMarker;
+  if (existing.startsWith("\r\n", separatorEnd)) separatorEnd += 2;
+  else separatorEnd += 1;
+  if (separatorEnd !== blockStart) return existing;
+  return `${existing.slice(0, separatorStart)}${existing.slice(separatorEnd)}`;
 }
 
 function removeLinesPreservingBytes(existing, keepLine) {

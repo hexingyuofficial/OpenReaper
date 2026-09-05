@@ -4,6 +4,7 @@ export const ALPHA3_2E_RENDER_TARGETS_MACRO_VERSION = "1.0.0";
 
 import { stat } from "node:fs/promises";
 import path from "node:path";
+import { normalizeTargetBinding } from "../../core/src/target-binding-v1.mjs";
 import {
   MACRO_CONTRACT_CEILINGS,
   MACRO_EXECUTION_CONTRACT,
@@ -22,17 +23,24 @@ export const ALPHA3_2E_RENDER_TARGET_KINDS = Object.freeze([
   "selected_tracks",
   "explicit_tracks",
 ]);
-export const ALPHA3_2E_RENDER_FORMATS = Object.freeze(["wav", "ogg", "mp3"]);
+export const ALPHA3_2E_RENDER_FORMATS = Object.freeze(["wav", "ogg", "mp3", "mp4", "mov"]);
 export const ALPHA3_2E_RENDER_SAMPLE_RATES = Object.freeze([44_100, 48_000]);
 export const ALPHA3_2E_RENDER_CHANNEL_COUNTS = Object.freeze([1, 2]);
 export const ALPHA3_2E_RENDER_WAV_BIT_DEPTHS = Object.freeze([16, 24]);
 export const ALPHA3_2E_RENDER_OGG_QUALITIES = Object.freeze([0.3, 0.5, 0.6, 0.8, 1.0]);
 export const ALPHA3_2E_RENDER_MP3_BITRATES = Object.freeze([128, 192, 256, 320]);
+export const ALPHA3_2E_RENDER_VIDEO_FRAME_RATES = Object.freeze([24, 25, 30, 50, 60]);
+export const ALPHA3_2E_RENDER_AUDIO_BITRATES = Object.freeze([64, 96, 128, 192, 256, 320]);
+export const ALPHA3_2E_RENDER_VIDEO_WIDTH_RANGE = Object.freeze({ minimum: 16, maximum: 7680 });
+export const ALPHA3_2E_RENDER_VIDEO_HEIGHT_RANGE = Object.freeze({ minimum: 16, maximum: 4320 });
+export const ALPHA3_2E_RENDER_VIDEO_BITRATE_RANGE = Object.freeze({ minimum: 256, maximum: 100_000 });
 export const ALPHA3_2E_RENDER_COLLISION_POLICIES = Object.freeze(["fail_if_exists", "overwrite", "suffix"]);
 export const ALPHA3_2E_RENDER_MAX_TARGETS = 16;
+export const ALPHA3_2E_RENDER_DESTINATIONS = Object.freeze(["managed_file", "new_project_track"]);
 
 const ALLOWED_INPUT_FIELDS = new Set([
   "target_kind",
+  "target_binding",
   "format",
   "refs",
   "region_refs",
@@ -43,12 +51,23 @@ const ALLOWED_INPUT_FIELDS = new Set([
   "wav_bit_depth",
   "ogg_quality",
   "mp3_bitrate_kbps",
+  "video_width",
+  "video_height",
+  "video_frame_rate",
+  "video_codec",
+  "video_bitrate_kbps",
+  "audio_codec",
+  "audio_bitrate_kbps",
   "output_basename",
   "output_policy",
   "collision_policy",
   "max_targets",
   "dry_run",
   "compact_response",
+  "destination",
+  "stem_mode",
+  "source_post_action",
+  "output_track_name",
 ]);
 const FORBIDDEN_INPUT_FIELDS = new Set([
   "output_path",
@@ -130,16 +149,18 @@ export function planAlpha3_2ERenderTargetsMacro(input = {}, requestPosture = {})
       "macro.render.targets does not accept idempotency_key because the audited render route is non-idempotent.",
     ));
   }
-  const sourceRefs = normalizeRefs(normalized, requestPosture, normalized.target_kind);
+  const bindingResult = normalizeRenderTargetBinding(normalized);
+  blockers.push(...bindingResult.blockers);
+  const targetKind = bindingResult.target_kind ?? normalized.target_kind;
+  const sourceRefs = normalizeRefs({ ...normalized, ...bindingResult.refs }, requestPosture, targetKind);
   blockers.push(...sourceRefs.blockers);
-  blockers.push(...validateTargetRefs(normalized.target_kind, sourceRefs.refs));
+  blockers.push(...validateTargetRefs(targetKind, sourceRefs.refs));
 
-  const settingsResult = normalizeSettings(normalized);
+  const settingsResult = normalizeSettings({ ...normalized, target_kind: targetKind }, bindingResult);
   blockers.push(...settingsResult.blockers);
   const settings = settingsResult.settings;
-  const targetKind = normalized.target_kind;
   const targetRefs = refsForTargetKind(targetKind, sourceRefs.refs);
-  const preview = buildPreview({ targetKind, targetRefs, refs: sourceRefs.refs, settings });
+  const preview = buildPreview({ targetKind, targetRefs, refs: sourceRefs.refs, settings, targetBinding: bindingResult.binding });
   if (["regions", "explicit_items", "explicit_tracks"].includes(targetKind) && targetRefs.length > settings.max_targets) {
     blockers.push(blocker("RENDER_MAX_TARGETS_EXCEEDED", `Resolved target refs exceed max_targets (${settings.max_targets}).`, { count: targetRefs.length, max_targets: settings.max_targets }));
   }
@@ -337,6 +358,8 @@ export async function executeAlpha3_2_5CRenderTargetsMacro({ request = {}, execu
       requestedCollisionPolicy: plan.preview.render_settings.collision_policy,
       requestedFormat: plan.preview.format,
       requestedMp3Bitrate: plan.preview.render_settings.mp3_bitrate_kbps ?? null,
+      requestedVideoSettings: ["mp4", "mov"].includes(plan.preview.format) ? plan.preview.render_settings : null,
+      requestedDestination: plan.preview.render_settings.destination,
     });
     const canonicalRefs = uniqueStrings([
       ...resolved.canonical_refs,
@@ -344,6 +367,7 @@ export async function executeAlpha3_2_5CRenderTargetsMacro({ request = {}, execu
       ...canonicalRefStrings(result.refs ?? result.canonical_refs),
       ...canonicalRefStrings(result.artifacts),
       ...canonicalRefStrings(result.jobs),
+      ...canonicalRefStrings(completion.stem),
     ]);
     const verification = {
       status: "passed",
@@ -367,6 +391,7 @@ export async function executeAlpha3_2_5CRenderTargetsMacro({ request = {}, execu
         file_count: completion.file_count,
         outputs: completion.outputs,
         audio_outputs: completion.audio_outputs,
+        video_outputs: completion.video_outputs,
         retained_project_copies: completion.retained_project_copies,
         dirty_before: dirtyBefore.dirty,
         dirty_after: null,
@@ -380,7 +405,7 @@ export async function executeAlpha3_2_5CRenderTargetsMacro({ request = {}, execu
       },
       canonicalRefs,
       verification,
-      changes: [{ kind: "render", action: "render_targets", file_count: completion.file_count }],
+      changes: [{ kind: "render", action: completion.stem ? "render_project_stem" : "render_targets", file_count: completion.file_count }],
       sqlite: null,
     };
     const invalidation = invalidateRenderIndex(projectIndexRuntime, now);
@@ -613,7 +638,7 @@ function renderArtifactRefs(result, payload) {
   ]);
 }
 
-function requireRenderCompletion({ result, payload, readback, artifactRefs, requestedOutputBasename = null, requestedCollisionPolicy, requestedFormat, requestedMp3Bitrate = null }) {
+function requireRenderCompletion({ result, payload, readback, artifactRefs, requestedOutputBasename = null, requestedCollisionPolicy, requestedFormat, requestedMp3Bitrate = null, requestedVideoSettings = null, requestedDestination = "managed_file" }) {
   const manifestRef = payload.output_artifact_ref;
   const evidenceRef = payload.evidence_artifact_ref;
   if (typeof manifestRef !== "string" || !manifestRef.startsWith("artifact:") || !artifactRefs.includes(manifestRef)) {
@@ -651,9 +676,27 @@ function requireRenderCompletion({ result, payload, readback, artifactRefs, requ
     (requestedFormat === "mp3" && (
       output.requested_bitrate_kbps !== requestedMp3Bitrate ||
       output.actual_bitrate_kbps !== requestedMp3Bitrate
-    ))
+    )) ||
+    (requestedVideoSettings !== null && !validVideoOutput(output, requestedVideoSettings))
   ))) {
     throw coded("RENDER_OUTPUT_ROW_INVALID", "The audited render route returned an invalid output row.");
+  }
+  let stem = null;
+  if (requestedDestination === "new_project_track") {
+    stem = payload.stem;
+    if (fileCount !== 1 || !isPlainObject(stem) ||
+      typeof stem.destination_track_ref !== "string" || !stem.destination_track_ref.startsWith("track:") ||
+      typeof stem.destination_item_ref !== "string" || !stem.destination_item_ref.startsWith("item:") ||
+      typeof stem.destination_take_ref !== "string" || !stem.destination_take_ref.startsWith("take:") ||
+      stem.destination_track_count !== 1 || stem.destination_item_count !== 1 || stem.destination_take_count !== 1 ||
+      stem.source_tracks_muted !== true || stem.imported_source_verified !== true || stem.non_silent_verified !== true ||
+      !Number.isInteger(stem.source_track_count) || stem.source_track_count < 1 ||
+      !Array.isArray(stem.source_track_refs) || stem.source_track_refs.length !== stem.source_track_count ||
+      stem.source_track_refs.some((ref) => typeof ref !== "string" || !ref.startsWith("track:"))) {
+      throw coded("RENDER_STEM_READBACK_INVALID", "The audited Stem route did not prove one imported Track/Item/Take and exact post-verification source mute truth.");
+    }
+  } else if (payload.stem !== undefined && payload.stem !== null) {
+    throw coded("RENDER_STEM_UNEXPECTED", "Managed-file Render returned unexpected project Stem mutation truth.");
   }
   if (requestedOutputBasename !== null) {
     const collisionSuffixIndex = requestedCollisionPolicy === "suffix"
@@ -673,7 +716,8 @@ function requireRenderCompletion({ result, payload, readback, artifactRefs, requ
       throw coded("RENDER_OUTPUT_BASENAME_MISMATCH", `The audited render route did not preserve the requested managed basename for output ${mismatch + 1}.`);
     }
   }
-  const audioOutputs = outputs.map((output) => ({
+  const videoFormat = requestedVideoSettings !== null;
+  const audioOutputs = videoFormat ? [] : outputs.map((output) => ({
     absolute_path: output.absolute_path,
     size: output.size,
     extension: output.extension,
@@ -683,6 +727,21 @@ function requireRenderCompletion({ result, payload, readback, artifactRefs, requ
     actual_bitrate_kbps: output.actual_bitrate_kbps ?? null,
     target_identity: output.target_identity,
   }));
+  const videoOutputs = videoFormat ? outputs.map((output) => ({
+    absolute_path: output.absolute_path,
+    size: output.size,
+    extension: output.extension,
+    requested_format: output.requested_format,
+    actual_format: output.actual_format,
+    width: output.actual_video_width,
+    height: output.actual_video_height,
+    frame_rate: output.actual_video_frame_rate,
+    video_codec: output.actual_video_codec,
+    audio_codec: output.actual_audio_codec,
+    video_bitrate_kbps: output.configured_video_bitrate_kbps,
+    audio_bitrate_kbps: output.configured_audio_bitrate_kbps,
+    target_identity: output.target_identity,
+  })) : [];
   const retainedProjectCopies = outputs
     .filter((output) => output.generated_project_copy_retained === true && typeof output.generated_project_copy_path === "string")
     .map((output) => ({
@@ -697,8 +756,31 @@ function requireRenderCompletion({ result, payload, readback, artifactRefs, requ
     file_count: fileCount,
     outputs: structuredClone(outputs),
     audio_outputs: audioOutputs,
+    video_outputs: videoOutputs,
     retained_project_copies: retainedProjectCopies,
+    stem: stem === null ? null : structuredClone(stem),
   };
+}
+
+function validVideoOutput(output, requested) {
+  return output.requested_video_width === requested.video_width &&
+    output.actual_video_width === requested.video_width &&
+    output.requested_video_height === requested.video_height &&
+    output.actual_video_height === requested.video_height &&
+    output.requested_video_frame_rate === requested.video_frame_rate &&
+    Number.isFinite(output.actual_video_frame_rate) &&
+    Math.abs(output.actual_video_frame_rate - requested.video_frame_rate) <= 0.02 &&
+    output.requested_video_codec === "h264" &&
+    output.actual_video_codec === "h264" &&
+    output.requested_audio_codec === "aac" &&
+    output.actual_audio_codec === "aac" &&
+    output.configured_video_bitrate_kbps === requested.video_bitrate_kbps &&
+    output.configured_audio_bitrate_kbps === requested.audio_bitrate_kbps &&
+    output.video_track_count >= 1 &&
+    output.iso_bmff_ftyp_verified === true &&
+    output.iso_bmff_moov_verified === true &&
+    output.iso_bmff_mdat_verified === true &&
+    output.native_video_settings_readback_verified === true;
 }
 
 async function readRenderDirtyState({ executeAtomic, request }) {
@@ -905,7 +987,7 @@ export function createAlpha3_2ERenderTargetsMacroDiscoveryItems(options = {}) {
   return deepFreeze([{
     id: ALPHA3_2E_RENDER_TARGETS_MACRO_ID,
     title: "Render targets",
-    summary: "Execute bounded managed-root WAV/OGG/native-MP3 exports with an optional user-owned output basename through the audited render route.",
+    summary: "Execute bounded managed-root WAV/OGG/MP3 or H.264/AAC MP4/MOV exports, or create one verified in-project WAV mixdown Stem.",
     pack: "render",
     lifecycle: "experimental",
     risk: "destructive",
@@ -931,6 +1013,7 @@ export function createAlpha3_2ERenderTargetsMacroDiscoveryItems(options = {}) {
       type: "object",
       properties: {
         target_kind: { enum: [...ALPHA3_2E_RENDER_TARGET_KINDS] },
+        target_binding: { description: "Shared live/explicit Track target binding. Project Stem mode safely defaults to the current selected Tracks when omitted." },
         format: { enum: [...ALPHA3_2E_RENDER_FORMATS] },
         refs: { description: "Canonical refs array or grouped canonical ref arrays; target kind must match." },
         sample_rate_hz: { enum: [...ALPHA3_2E_RENDER_SAMPLE_RATES] },
@@ -938,13 +1021,24 @@ export function createAlpha3_2ERenderTargetsMacroDiscoveryItems(options = {}) {
         wav_bit_depth: { enum: [...ALPHA3_2E_RENDER_WAV_BIT_DEPTHS] },
         ogg_quality: { enum: [...ALPHA3_2E_RENDER_OGG_QUALITIES] },
         mp3_bitrate_kbps: { enum: [...ALPHA3_2E_RENDER_MP3_BITRATES] },
+        video_width: { type: "integer", minimum: ALPHA3_2E_RENDER_VIDEO_WIDTH_RANGE.minimum, maximum: ALPHA3_2E_RENDER_VIDEO_WIDTH_RANGE.maximum, multipleOf: 2, default: 1920 },
+        video_height: { type: "integer", minimum: ALPHA3_2E_RENDER_VIDEO_HEIGHT_RANGE.minimum, maximum: ALPHA3_2E_RENDER_VIDEO_HEIGHT_RANGE.maximum, multipleOf: 2, default: 1080 },
+        video_frame_rate: { enum: [...ALPHA3_2E_RENDER_VIDEO_FRAME_RATES], default: 30 },
+        video_codec: { const: "h264", default: "h264" },
+        video_bitrate_kbps: { type: "integer", minimum: ALPHA3_2E_RENDER_VIDEO_BITRATE_RANGE.minimum, maximum: ALPHA3_2E_RENDER_VIDEO_BITRATE_RANGE.maximum, default: 8000 },
+        audio_codec: { const: "aac", default: "aac" },
+        audio_bitrate_kbps: { enum: [...ALPHA3_2E_RENDER_AUDIO_BITRATES], default: 192 },
         output_basename: { type: "string", description: "Optional safe filename stem without an extension. Multi-target renders append _01, _02, and so on." },
         output_policy: { const: "openreaper_managed_render_root" },
         collision_policy: { enum: [...ALPHA3_2E_RENDER_COLLISION_POLICIES], default: "fail_if_exists" },
         max_targets: { type: "integer", minimum: 1, maximum: ALPHA3_2E_RENDER_MAX_TARGETS },
+        destination: { enum: [...ALPHA3_2E_RENDER_DESTINATIONS], default: "managed_file" },
+        stem_mode: { const: "mixdown" },
+        source_post_action: { const: "mute_after_verified_insert" },
+        output_track_name: { type: "string", minLength: 1, maxLength: 96 },
         dry_run: { type: "boolean" },
       },
-      required: ["target_kind", "format"],
+      required: [],
       additionalProperties: false,
     },
     output_schema: {
@@ -962,12 +1056,16 @@ export function createAlpha3_2ERenderTargetsMacroDiscoveryItems(options = {}) {
       { name: "whole_project_wav_preview", input: { target_kind: "whole_project", format: "wav", output_basename: "my_mix", sample_rate_hz: 48_000, channel_count: 2, wav_bit_depth: 24, dry_run: true } },
       { name: "explicit_regions_ogg_plan", input: { target_kind: "regions", refs: ["region:project:3"], format: "ogg", ogg_quality: 0.6, collision_policy: "fail_if_exists", dry_run: false } },
       { name: "whole_project_mp3_delivery", input: { target_kind: "whole_project", format: "mp3", mp3_bitrate_kbps: 320, collision_policy: "fail_if_exists", dry_run: false } },
+      { name: "whole_project_1080p_mp4", input: { target_kind: "whole_project", format: "mp4", video_width: 1920, video_height: 1080, video_frame_rate: 30, video_bitrate_kbps: 8000, audio_bitrate_kbps: 192, collision_policy: "fail_if_exists", dry_run: false } },
+      { name: "time_selection_720p_mov", input: { target_kind: "time_selection", format: "mov", video_width: 1280, video_height: 720, video_frame_rate: 24, video_bitrate_kbps: 4096, audio_bitrate_kbps: 192, collision_policy: "fail_if_exists", dry_run: false } },
+      { name: "selected_tracks_to_project_stem", input: { destination: "new_project_track", stem_mode: "mixdown", source_post_action: "mute_after_verified_insert", output_track_name: "Dialog Stem", dry_run: false } },
     ],
   }]);
 }
 
 function validateInput(rawInput, input) {
   const blockers = [];
+  const projectStem = input.destination === "new_project_track";
   if (!isPlainObject(rawInput)) blockers.push(blocker("RENDER_INPUT_NOT_OBJECT", "macro.render.targets input must be an object."));
   const unknown = Object.keys(input).filter((field) => !ALLOWED_INPUT_FIELDS.has(field));
   for (const field of unknown.slice(0, UNKNOWN_FIELD_DETAIL_LIMIT)) {
@@ -980,11 +1078,46 @@ function validateInput(rawInput, input) {
     ));
   }
   if (unknown.length > UNKNOWN_FIELD_DETAIL_LIMIT) blockers.push(blocker("RENDER_INPUT_UNKNOWN_FIELD", "Too many unsupported macro.render.targets input fields.", { omitted_count: unknown.length - UNKNOWN_FIELD_DETAIL_LIMIT }));
-  if (!ALPHA3_2E_RENDER_TARGET_KINDS.includes(input.target_kind)) blockers.push(blocker("RENDER_TARGET_KIND_INVALID", "target_kind must be one of the bounded render target kinds.", { allowed: ALPHA3_2E_RENDER_TARGET_KINDS }));
-  if (!ALPHA3_2E_RENDER_FORMATS.includes(input.format)) blockers.push(blocker("RENDER_FORMAT_INVALID", "format must be wav, ogg, or mp3."));
+  if (input.target_kind !== undefined && !ALPHA3_2E_RENDER_TARGET_KINDS.includes(input.target_kind)) blockers.push(blocker("RENDER_TARGET_KIND_INVALID", "target_kind must be one of the bounded render target kinds.", { allowed: ALPHA3_2E_RENDER_TARGET_KINDS }));
+  if (input.target_kind === undefined && input.target_binding === undefined && input.destination !== "new_project_track") blockers.push(blocker("RENDER_TARGET_KIND_INVALID", "target_kind or target_binding is required unless project Stem mode uses its safe selected-Track default."));
+  if (!ALPHA3_2E_RENDER_FORMATS.includes(input.format ?? (projectStem ? "wav" : undefined))) blockers.push(blocker("RENDER_FORMAT_INVALID", "format must be wav, ogg, mp3, mp4, or mov; project Stem mode defaults to wav."));
   if (input.dry_run !== undefined && typeof input.dry_run !== "boolean") blockers.push(blocker("RENDER_DRY_RUN_INVALID", "dry_run must be boolean when supplied."));
   if (input.compact_response !== undefined && typeof input.compact_response !== "boolean") blockers.push(blocker("RENDER_COMPACT_RESPONSE_INVALID", "compact_response must be boolean when supplied."));
   return blockers;
+}
+
+function normalizeRenderTargetBinding(input) {
+  const blockers = [];
+  const stemDefault = input.destination === "new_project_track" && input.target_binding === undefined && input.target_kind === undefined;
+  const raw = input.target_binding ?? (stemDefault ? {
+    bind_at: "execution",
+    domain: "tracks",
+    selector: "selected",
+    aggregation: "batch",
+    cardinality: { minimum: 1, maximum: ALPHA3_2E_RENDER_MAX_TARGETS },
+  } : null);
+  if (raw === null) return { blockers, binding: null, target_kind: input.target_kind, refs: {} };
+  const normalized = normalizeTargetBinding(raw);
+  if (!normalized.ok) {
+    blockers.push(blocker(normalized.code, normalized.message, normalized.blockers?.[0]?.details));
+    return { blockers, binding: null, target_kind: input.target_kind, refs: {} };
+  }
+  const binding = normalized.value;
+  if (binding.domain !== "tracks" || !["selected", "explicit_refs"].includes(binding.selector)) blockers.push(blocker("RENDER_TARGET_BINDING_UNSUPPORTED", "Render target_binding currently supports selected or explicit Track sets."));
+  if (binding.bind_at !== "execution" || binding.aggregation !== "batch") blockers.push(blocker("RENDER_TARGET_BINDING_UNSUPPORTED", "Render Track bindings require bind_at=execution and aggregation=batch."));
+  if (binding.cardinality.minimum < 1 || binding.cardinality.maximum > ALPHA3_2E_RENDER_MAX_TARGETS) blockers.push(blocker("RENDER_TARGET_BINDING_CARDINALITY_INVALID", `Render Track bindings require cardinality 1-${ALPHA3_2E_RENDER_MAX_TARGETS}.`));
+  const nonTimeConstraints = binding.constraints.filter((constraint) => constraint.kind !== "time_relation");
+  const timeConstraints = binding.constraints.filter((constraint) => constraint.kind === "time_relation");
+  if (nonTimeConstraints.length > 0 || timeConstraints.length > 1) blockers.push(blocker("RENDER_TARGET_BINDING_CONSTRAINT_UNSUPPORTED", "Render Track bindings accept at most one time_relation constraint."));
+  if (timeConstraints.length === 1 && input.destination !== "new_project_track") blockers.push(blocker("RENDER_TARGET_BINDING_CONSTRAINT_UNSUPPORTED", "Track range constraints are currently accepted only for the verified in-project Stem destination."));
+  const targetKind = binding.selector === "explicit_refs" ? "explicit_tracks" : "selected_tracks";
+  if (input.target_kind !== undefined && input.target_kind !== targetKind) blockers.push(blocker("RENDER_TARGET_BINDING_CONFLICT", `target_kind=${input.target_kind} conflicts with the Track target_binding selector.`));
+  return {
+    blockers,
+    binding,
+    target_kind: targetKind,
+    refs: binding.selector === "explicit_refs" ? { track_refs: binding.refs } : {},
+  };
 }
 
 function normalizeRefs(input, posture, targetKind) {
@@ -1060,8 +1193,10 @@ function validateTargetRefs(targetKind, refs) {
   return blockers;
 }
 
-function normalizeSettings(input) {
+function normalizeSettings(input, bindingResult = {}) {
   const blockers = [];
+  const projectStem = input.destination === "new_project_track";
+  const format = input.format ?? (projectStem ? "wav" : undefined);
   const sampleRate = input.sample_rate_hz ?? 48_000;
   const channels = input.channel_count ?? 2;
   const maxTargets = input.max_targets ?? ALPHA3_2E_RENDER_MAX_TARGETS;
@@ -1076,39 +1211,93 @@ function normalizeSettings(input) {
   if (input.output_basename !== undefined && outputBasename === null) blockers.push(blocker("RENDER_OUTPUT_BASENAME_INVALID", "output_basename must be a safe 1-96 byte filename stem without an extension, path separator, control character, surrounding whitespace, or reserved dot name."));
 
   const settings = {
-    format: input.format,
+    format,
     sample_rate_hz: sampleRate,
     channel_count: channels,
     max_targets: maxTargets,
     output_policy: "openreaper_managed_render_root",
     collision_policy: collisionPolicy,
+    destination: input.destination ?? "managed_file",
+    stem_mode: input.stem_mode ?? null,
+    source_post_action: input.source_post_action ?? null,
+    output_track_name: normalizeOutputTrackName(input.output_track_name),
+    range: renderRangeFromBinding(bindingResult.binding),
     ...(outputBasename === null ? {} : { output_basename: outputBasename }),
   };
-  if (input.format === "wav") {
+  const videoFormat = format === "mp4" || format === "mov";
+  if (!ALPHA3_2E_RENDER_DESTINATIONS.includes(settings.destination)) blockers.push(blocker("RENDER_DESTINATION_INVALID", "destination must be managed_file or new_project_track."));
+  if (settings.destination === "new_project_track") {
+    if (settings.stem_mode !== "mixdown") blockers.push(blocker("RENDER_STEM_MODE_REQUIRED", "new_project_track requires stem_mode=mixdown."));
+    if (settings.source_post_action !== "mute_after_verified_insert") blockers.push(blocker("RENDER_SOURCE_POST_ACTION_REQUIRED", "new_project_track requires source_post_action=mute_after_verified_insert."));
+    if (format !== "wav") blockers.push(blocker("RENDER_STEM_FORMAT_UNSUPPORTED", "In-project Stem accepts WAV only so REAPER can verify and import the exact product-owned output."));
+    if (!["selected_tracks", "explicit_tracks"].includes(input.target_kind)) blockers.push(blocker("RENDER_STEM_TARGET_UNSUPPORTED", "In-project Stem accepts selected or explicit Tracks only."));
+    if (input.output_track_name !== undefined && settings.output_track_name === null) blockers.push(blocker("RENDER_OUTPUT_TRACK_NAME_INVALID", "output_track_name must be a trimmed 1-96 byte name without control characters."));
+  } else if (settings.stem_mode !== null || settings.source_post_action !== null || settings.output_track_name !== null) {
+    blockers.push(blocker("RENDER_STEM_FIELDS_CONFLICT", "stem_mode, source_post_action, and output_track_name require destination=new_project_track."));
+  }
+  if (format === "wav") {
     const bitDepth = input.wav_bit_depth ?? 24;
     if (!ALPHA3_2E_RENDER_WAV_BIT_DEPTHS.includes(bitDepth)) blockers.push(blocker("RENDER_WAV_BIT_DEPTH_UNSUPPORTED", "WAV wav_bit_depth must be 16 or 24."));
     if (input.ogg_quality !== undefined) blockers.push(blocker("RENDER_WAV_QUALITY_FORBIDDEN", "ogg_quality is only valid for OGG."));
     if (input.mp3_bitrate_kbps !== undefined) blockers.push(blocker("RENDER_WAV_MP3_BITRATE_FORBIDDEN", "mp3_bitrate_kbps is only valid for MP3."));
+    if (hasVideoFields(input)) blockers.push(blocker("RENDER_AUDIO_VIDEO_FIELDS_FORBIDDEN", "Video settings are valid only for MP4 or MOV."));
     settings.wav_bit_depth = bitDepth;
   }
-  if (input.format === "ogg") {
+  if (format === "ogg") {
     const quality = input.ogg_quality ?? 0.5;
     if (!ALPHA3_2E_RENDER_OGG_QUALITIES.includes(quality)) blockers.push(blocker("RENDER_OGG_QUALITY_UNSUPPORTED", "OGG ogg_quality must be one of 0.3, 0.5, 0.6, 0.8, or 1.0."));
     if (input.wav_bit_depth !== undefined) blockers.push(blocker("RENDER_OGG_BIT_DEPTH_FORBIDDEN", "wav_bit_depth is only valid for WAV."));
     if (input.mp3_bitrate_kbps !== undefined) blockers.push(blocker("RENDER_OGG_MP3_BITRATE_FORBIDDEN", "mp3_bitrate_kbps is only valid for MP3."));
+    if (hasVideoFields(input)) blockers.push(blocker("RENDER_AUDIO_VIDEO_FIELDS_FORBIDDEN", "Video settings are valid only for MP4 or MOV."));
     settings.ogg_quality = quality;
   }
-  if (input.format === "mp3") {
+  if (format === "mp3") {
     const bitrate = input.mp3_bitrate_kbps ?? 320;
     if (!ALPHA3_2E_RENDER_MP3_BITRATES.includes(bitrate)) blockers.push(blocker("RENDER_MP3_BITRATE_UNSUPPORTED", "MP3 mp3_bitrate_kbps must be one of 128, 192, 256, or 320."));
     if (input.wav_bit_depth !== undefined) blockers.push(blocker("RENDER_MP3_WAV_BIT_DEPTH_FORBIDDEN", "wav_bit_depth is only valid for WAV."));
     if (input.ogg_quality !== undefined) blockers.push(blocker("RENDER_MP3_OGG_QUALITY_FORBIDDEN", "ogg_quality is only valid for OGG."));
+    if (hasVideoFields(input)) blockers.push(blocker("RENDER_AUDIO_VIDEO_FIELDS_FORBIDDEN", "Video settings are valid only for MP4 or MOV."));
     settings.mp3_bitrate_kbps = bitrate;
+  }
+  if (videoFormat) {
+    const width = input.video_width ?? 1920;
+    const height = input.video_height ?? 1080;
+    const frameRate = input.video_frame_rate ?? 30;
+    const videoCodec = input.video_codec ?? "h264";
+    const videoBitrate = input.video_bitrate_kbps ?? 8000;
+    const audioCodec = input.audio_codec ?? "aac";
+    const audioBitrate = input.audio_bitrate_kbps ?? 192;
+    if (!validEvenInteger(width, ALPHA3_2E_RENDER_VIDEO_WIDTH_RANGE)) blockers.push(blocker("RENDER_VIDEO_WIDTH_UNSUPPORTED", "video_width must be an even integer from 16 through 7680."));
+    if (!validEvenInteger(height, ALPHA3_2E_RENDER_VIDEO_HEIGHT_RANGE)) blockers.push(blocker("RENDER_VIDEO_HEIGHT_UNSUPPORTED", "video_height must be an even integer from 16 through 4320."));
+    if (!ALPHA3_2E_RENDER_VIDEO_FRAME_RATES.includes(frameRate)) blockers.push(blocker("RENDER_VIDEO_FRAME_RATE_UNSUPPORTED", "video_frame_rate must be 24, 25, 30, 50, or 60."));
+    if (videoCodec !== "h264") blockers.push(blocker("RENDER_VIDEO_CODEC_UNSUPPORTED", "video_codec must be h264 for the audited AVFoundation route."));
+    if (!Number.isInteger(videoBitrate) || videoBitrate < ALPHA3_2E_RENDER_VIDEO_BITRATE_RANGE.minimum || videoBitrate > ALPHA3_2E_RENDER_VIDEO_BITRATE_RANGE.maximum) blockers.push(blocker("RENDER_VIDEO_BITRATE_UNSUPPORTED", "video_bitrate_kbps must be an integer from 256 through 100000."));
+    if (audioCodec !== "aac") blockers.push(blocker("RENDER_AUDIO_CODEC_UNSUPPORTED", "audio_codec must be aac for the audited AVFoundation route."));
+    if (!ALPHA3_2E_RENDER_AUDIO_BITRATES.includes(audioBitrate)) blockers.push(blocker("RENDER_AUDIO_BITRATE_UNSUPPORTED", "audio_bitrate_kbps must be 64, 96, 128, 192, 256, or 320."));
+    if (input.wav_bit_depth !== undefined || input.ogg_quality !== undefined || input.mp3_bitrate_kbps !== undefined) blockers.push(blocker("RENDER_VIDEO_AUDIO_FORMAT_FIELDS_FORBIDDEN", "wav_bit_depth, ogg_quality, and mp3_bitrate_kbps are invalid for MP4/MOV."));
+    if (settings.destination !== "managed_file") blockers.push(blocker("RENDER_VIDEO_DESTINATION_UNSUPPORTED", "MP4/MOV support managed_file destination only."));
+    Object.assign(settings, { video_width: width, video_height: height, video_frame_rate: frameRate, video_codec: videoCodec, video_bitrate_kbps: videoBitrate, audio_codec: audioCodec, audio_bitrate_kbps: audioBitrate });
   }
   return { settings: deepFreeze(settings), blockers };
 }
 
-function buildPreview({ targetKind, targetRefs, refs, settings }) {
+function hasVideoFields(input) {
+  return ["video_width", "video_height", "video_frame_rate", "video_codec", "video_bitrate_kbps", "audio_codec", "audio_bitrate_kbps"].some((field) => input[field] !== undefined);
+}
+
+function validEvenInteger(value, range) {
+  return Number.isInteger(value) && value % 2 === 0 && value >= range.minimum && value <= range.maximum;
+}
+
+function renderRangeFromBinding(binding) {
+  const constraint = binding?.constraints?.find((row) => row.kind === "time_relation");
+  if (!constraint) return null;
+  return constraint.source.selector === "explicit_range"
+    ? { mode: "explicit_range", ...constraint.source.range, relation: constraint.relation }
+    : { mode: "time_selection", relation: constraint.relation };
+}
+
+function buildPreview({ targetKind, targetRefs, refs, settings, targetBinding = null }) {
   const explicit = ["regions", "explicit_items", "explicit_tracks"].includes(targetKind);
   const targetCount = explicit ? targetRefs.length : null;
   return deepFreeze({
@@ -1117,9 +1306,10 @@ function buildPreview({ targetKind, targetRefs, refs, settings }) {
     target_refs: [...targetRefs],
     normalized_refs: refs,
     target_count: targetCount,
-    estimated_output_count: targetCount ?? 1,
+    estimated_output_count: settings.destination === "new_project_track" ? 1 : targetCount ?? 1,
     max_targets: settings.max_targets,
     render_settings: { ...settings },
+    target_binding: targetBinding,
     output_policy: {
       root: "openreaper_managed_render_root",
       collision_policy: settings.collision_policy,
@@ -1147,10 +1337,24 @@ function buildMutationRequest(preview) {
     sample_rate_hz: preview.render_settings.sample_rate_hz,
     channel_count: preview.render_settings.channel_count,
     max_targets: preview.max_targets,
+    ...(preview.render_settings.destination === "managed_file" ? {} : { destination: preview.render_settings.destination }),
+    ...(preview.render_settings.stem_mode === null ? {} : { stem_mode: preview.render_settings.stem_mode }),
+    ...(preview.render_settings.source_post_action === null ? {} : { source_post_action: preview.render_settings.source_post_action }),
+    ...(preview.render_settings.output_track_name === null ? {} : { output_track_name: preview.render_settings.output_track_name }),
+    ...(preview.render_settings.range === null ? {} : { render_range: preview.render_settings.range }),
     ...(preview.render_settings.output_basename === undefined ? {} : { output_basename: preview.render_settings.output_basename }),
     ...(preview.format === "wav" ? { wav_bit_depth: preview.render_settings.wav_bit_depth } : {}),
     ...(preview.format === "ogg" ? { ogg_quality: preview.render_settings.ogg_quality } : {}),
     ...(preview.format === "mp3" ? { mp3_bitrate_kbps: preview.render_settings.mp3_bitrate_kbps } : {}),
+    ...(["mp4", "mov"].includes(preview.format) ? {
+      video_width: preview.render_settings.video_width,
+      video_height: preview.render_settings.video_height,
+      video_frame_rate: preview.render_settings.video_frame_rate,
+      video_codec: preview.render_settings.video_codec,
+      video_bitrate_kbps: preview.render_settings.video_bitrate_kbps,
+      audio_codec: preview.render_settings.audio_codec,
+      audio_bitrate_kbps: preview.render_settings.audio_bitrate_kbps,
+    } : {}),
   };
   return childRequest(1, "mutation", "template.render.render_targets", namedRefs, input,
     "Run the single audited D31 project-render route; the child performs collision preflight, settings/selection restoration, output header verification, and manifest/evidence emission.",
@@ -1161,7 +1365,14 @@ function normalizeOutputBasename(value) {
   if (value === undefined) return null;
   if (typeof value !== "string" || value.length === 0 || value !== value.trim()) return null;
   if (Buffer.byteLength(value, "utf8") > 96 || value === "." || value === "..") return null;
-  if (/[\u0000-\u001f\u007f<>:"/\\|?*$]/u.test(value) || /[. ]$/u.test(value) || /\.(?:wav|ogg|mp3)$/iu.test(value)) return null;
+  if (/[\u0000-\u001f\u007f<>:"/\\|?*$]/u.test(value) || /[. ]$/u.test(value) || /\.(?:wav|ogg|mp3|mp4|mov)$/iu.test(value)) return null;
+  return value;
+}
+
+function normalizeOutputTrackName(value) {
+  if (value === undefined) return null;
+  if (typeof value !== "string" || value.length === 0 || value !== value.trim()) return null;
+  if (Buffer.byteLength(value, "utf8") > 96 || /[\u0000-\u001f\u007f]/u.test(value)) return null;
   return value;
 }
 

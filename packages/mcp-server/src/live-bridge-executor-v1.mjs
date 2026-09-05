@@ -709,7 +709,7 @@ async function waitForBridgeResult({
   const deadline = Date.now() + timeoutMs;
   while (Date.now() <= deadline) {
     try {
-      const raw = await readFile(resultPath, "utf8");
+      const raw = new TextDecoder("utf-8", { fatal: true }).decode(await readFile(resultPath));
       const result = JSON.parse(raw);
       validateFoundationBridgeResult(result);
       validateBridgeResultIdentity(result, expectedResultIdentity);

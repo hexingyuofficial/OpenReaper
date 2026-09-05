@@ -356,6 +356,20 @@ local function e2_fx_read_name(owner_kind, owner, slot_index)
   return bounded_string(ok and first_string(name) or "", 160)
 end
 
+local function e2_fx_read_guid(owner_kind, owner, slot_index)
+  local api = owner_kind == "take" and "TakeFX_GetFXGUID" or "TrackFX_GetFXGUID"
+  local ok, guid = call_reaper(api, owner, slot_index)
+  guid = ok and first_string(guid) or nil
+  return type(guid) == "string" and guid ~= "" and guid or nil
+end
+
+local function e2_fx_read_plugin_id(owner_kind, owner, slot_index)
+  local api = owner_kind == "take" and "TakeFX_GetNamedConfigParm" or "TrackFX_GetNamedConfigParm"
+  local ok, available, ident = call_reaper(api, owner, slot_index, "fx_ident")
+  ident = ok and available ~= false and first_string(ident) or nil
+  return type(ident) == "string" and ident ~= "" and bounded_string(ident, 256) or nil
+end
+
 local function e2_fx_read_enabled(owner_kind, owner, slot_index)
   local ok, enabled
   if owner_kind == "take" then
@@ -429,6 +443,15 @@ end
 local function e2_fx_format_param_normalized(owner_kind, owner, slot_index, param_index, normalized_value)
   local api = owner_kind == "take" and "TakeFX_FormatParamValueNormalized" or "TrackFX_FormatParamValueNormalized"
   local ok, formatted_ok, formatted = call_reaper(api, owner, slot_index, param_index, normalized_value, "")
+  if not ok or formatted_ok == false then
+    return nil
+  end
+  return bounded_string(first_string(formatted) or "", 160)
+end
+
+local function e2_fx_format_param_value(owner_kind, owner, slot_index, param_index, value)
+  local api = owner_kind == "take" and "TakeFX_FormatParamValue" or "TrackFX_FormatParamValue"
+  local ok, formatted_ok, formatted = call_reaper(api, owner, slot_index, param_index, value)
   if not ok or formatted_ok == false then
     return nil
   end
@@ -548,8 +571,10 @@ local function e2_fx_read_fx_summary(owner_kind, owner, slot_index)
     fx_ref = e2_fx_read_fx_ref_string(owner_kind, owner_ref, slot_index),
     owner_kind = owner_kind,
     owner_ref = owner_ref,
+    fx_guid = e2_fx_read_guid(owner_kind, owner, slot_index) or JSON_NULL,
     slot_index = slot_index,
     name = name,
+    plugin_id = e2_fx_read_plugin_id(owner_kind, owner, slot_index) or JSON_NULL,
     enabled = e2_fx_read_enabled(owner_kind, owner, slot_index),
     parameter_count = e2_fx_read_param_count(owner_kind, owner, slot_index),
   }, e2_fx_read_fx_object_ref(owner_kind, owner_ref, slot_index, name)
@@ -638,7 +663,12 @@ local function read_fx_summary(request)
   return e2_fx_read_summary(request, summary), nil, json_array({}), json_array({}), e2_fx_read_refs(ref)
 end
 
+local E2_FX_HOMOGENEOUS_SET = {}
+
 local function list_fx_parameters(request)
+  if is_object(request.params) and request.params.mode == "inspect_set" then
+    return E2_FX_HOMOGENEOUS_SET.inspect(request)
+  end
   local owner_kind, owner, slot_index = e2_fx_read_fx_from_request_refs(request)
   if not owner then
     return e2_fx_read_error("FX_REF_NOT_FOUND", "E2 FX-L1 list_fx_parameters requires a resolvable FX ref.")
@@ -709,7 +739,12 @@ local function read_fx_parameter(request)
   local step_sizes = e2_fx_read_param_step_sizes(owner_kind, owner, slot_index, param_index)
   local normalized_value = e2_fx_read_param_normalized(owner_kind, owner, slot_index, param_index)
   local formatted_value = e2_fx_read_param_formatted(owner_kind, owner, slot_index, param_index)
-  if request.params and request.params.probe_normalized_value ~= nil then
+  local has_normalized_probe = request.params and request.params.probe_normalized_value ~= nil
+  local has_display_probe = request.params and request.params.probe_display_value ~= nil
+  if has_normalized_probe and has_display_probe then
+    return e2_fx_read_error("PARAMS_INVALID", "E2 FX-L1 accepts exactly one probe_normalized_value or probe_display_value.")
+  end
+  if has_normalized_probe then
     local probe_normalized_value = tonumber(request.params.probe_normalized_value)
     if not probe_normalized_value or probe_normalized_value < 0 or probe_normalized_value > 1 then
       return e2_fx_read_error("PARAMS_INVALID", "E2 FX-L1 probe_normalized_value must be between 0 and 1.", {
@@ -725,6 +760,26 @@ local function read_fx_parameter(request)
     end
     normalized_value = probe_normalized_value
     formatted_value = probe_formatted
+  elseif has_display_probe then
+    local probe_display_value = request.params.probe_display_value
+    if not is_string(probe_display_value) or probe_display_value == "" or #probe_display_value > 80 then
+      return e2_fx_read_error("PARAMS_INVALID", "E2 FX-L1 probe_display_value must be one bounded native-formatted target string.")
+    end
+    local compiled_value, compiled_formatted = E2_FX_HOMOGENEOUS_SET.search_formatted({
+      owner_kind = owner_kind,
+      owner = owner,
+      slot_index = slot_index,
+    }, param_index, probe_display_value)
+    if not compiled_value then
+      return e2_fx_read_error("FX_DISPLAY_VALUE_UNREACHABLE", "REAPER native formatting could not reach the requested FX display value without mutation.", {
+        param_index = param_index,
+        display_value = bounded_string(probe_display_value, 80),
+        zero_write = true,
+      })
+    end
+    values.value = compiled_value
+    normalized_value = JSON_NULL
+    formatted_value = compiled_formatted
   end
   local _, ref = e2_fx_read_fx_summary(owner_kind, owner, slot_index)
   return e2_fx_read_summary(request, {
@@ -1122,7 +1177,1260 @@ local function add_track_fx(request)
   return e2_fx_write_summary(request, summary), nil, json_array({}), json_array({}), e2_fx_read_refs(ref)
 end
 
+local E2_FX_TAKE_FANOUT_MAX_TARGETS = 64
+local E2_FX_LAYOUT_MAX_PARAMETERS = 4096
+local E2_FX_CHAIN_MAX_INSTANCES = 4096
+
+local function e2_fx_fingerprint_segments(prefix, segments)
+  local lane_a = 104729
+  local lane_b = 130363
+  local byte_index = 0
+  for segment_index = 1, #segments do
+    local value = tostring(segments[segment_index] or "")
+    local framed = tostring(#value) .. ":" .. value .. ";"
+    for index = 1, #framed do
+      local byte = framed:byte(index)
+      byte_index = byte_index + 1
+      lane_a = (lane_a * 131 + byte + byte_index) % 2147483647
+      lane_b = (lane_b * 257 + byte + segment_index) % 2147483629
+    end
+  end
+  return prefix .. ":" .. string.format("%08x", lane_a) .. string.format("%08x", lane_b)
+end
+
+local function e2_fx_parameter_layout(owner_kind, owner, slot_index, plugin_id, plugin_name)
+  local count_api = owner_kind == "take" and "TakeFX_GetNumParams" or "TrackFX_GetNumParams"
+  local ok_count, raw_parameter_count = call_reaper(count_api, owner, slot_index)
+  local parameter_count = ok_count and first_number(raw_parameter_count) or nil
+  if type(parameter_count) ~= "number" or parameter_count < 0
+      or parameter_count ~= math.floor(parameter_count) then
+    return nil, "FX_PARAMETER_LAYOUT_UNAVAILABLE"
+  end
+  if parameter_count > E2_FX_LAYOUT_MAX_PARAMETERS then
+    return nil, "FX_PARAMETER_LAYOUT_LIMIT_EXCEEDED"
+  end
+  local segments = { "openreaper.fx_parameter_layout.v1", plugin_id, plugin_name, parameter_count }
+  for param_index = 0, parameter_count - 1 do
+    local param_ident = e2_fx_read_param_ident(owner_kind, owner, slot_index, param_index)
+    if not param_ident then
+      return nil, "FX_PARAMETER_IDENTITY_UNAVAILABLE"
+    end
+    local name_api = owner_kind == "take" and "TakeFX_GetParamName" or "TrackFX_GetParamName"
+    local ok_name, name_available, raw_param_name = call_reaper(name_api, owner, slot_index, param_index, "")
+    local param_name = ok_name and name_available ~= false and first_string(raw_param_name) or nil
+    if type(param_name) ~= "string" then
+      return nil, "FX_PARAMETER_NAME_UNAVAILABLE"
+    end
+    segments[#segments + 1] = param_index
+    segments[#segments + 1] = param_ident
+    segments[#segments + 1] = bounded_string(param_name, 160)
+  end
+  return {
+    parameter_count = parameter_count,
+    layout_fingerprint = e2_fx_fingerprint_segments("fx-layout-v1", segments),
+  }
+end
+
+local function e2_fx_native_item_guid(item)
+  local ok, _, guid = call_reaper("GetSetMediaItemInfo_String", item, "GUID", "", false)
+  if not ok or not is_string(guid) or guid == "" then
+    return nil
+  end
+  return guid
+end
+
+local function e2_fx_exact_fanout_track(request)
+  if not is_json_array(request.refs) or #request.refs ~= 1 then
+    return nil, nil, "FX_SET_TRACK_REF_INVALID"
+  end
+  local ref = request.refs[1]
+  local identity = is_object(ref) and is_object(ref.identity) and ref.identity or {}
+  local guid = is_object(ref) and is_string(ref.ref) and ref.ref:match("^track:guid:(.+)$") or nil
+  if not guid or ref.kind ~= "track" or identity.scheme ~= "guid" or identity.value ~= guid then
+    return nil, nil, "FX_SET_TRACK_REF_INVALID"
+  end
+  local track = e2_fx_read_find_track_by_guid(guid)
+  if not track or e2_fx_read_track_guid(track) ~= guid then
+    return nil, nil, "TRACK_NOT_FOUND"
+  end
+  return track, ref.ref, nil
+end
+
+local function e2_fx_fanout_binding_valid(binding)
+  if not is_object(binding) then return false end
+  for key in pairs(binding) do
+    if key ~= "bind_at" and key ~= "domain" and key ~= "selector" and key ~= "owner"
+        and key ~= "aggregation" and key ~= "cardinality" then
+      return false
+    end
+  end
+  local owner = binding.owner
+  local cardinality = binding.cardinality
+  if not is_object(owner) or not is_object(cardinality) then return false end
+  for key in pairs(owner) do
+    if key ~= "domain" and key ~= "selector" and key ~= "items" then return false end
+  end
+  for key in pairs(cardinality) do
+    if key ~= "minimum" and key ~= "maximum" then return false end
+  end
+  return binding.bind_at == "execution"
+    and binding.domain == "takes"
+    and binding.selector == "active_take_of_items"
+    and binding.aggregation == "batch"
+    and owner.domain == "tracks"
+    and owner.selector == "explicit_refs"
+    and owner.items == "all"
+    and cardinality.minimum == 1
+    and cardinality.maximum == E2_FX_TAKE_FANOUT_MAX_TARGETS
+end
+
+local function e2_fx_exact_installed_plugin(plugin_name)
+  local inventory, blocker = e2_fx_installed_inventory()
+  if not inventory then return nil, blocker or "installed_inventory_unavailable" end
+  local matched = nil
+  for index = 1, #inventory do
+    local candidate = inventory[index]
+    if candidate.name == plugin_name then
+      if not is_string(candidate.ident) or candidate.ident == "" then
+        return nil, "installed_plugin_identity_unavailable"
+      end
+      if matched and matched.ident ~= candidate.ident then
+        return nil, "installed_plugin_identity_ambiguous"
+      end
+      matched = candidate
+    end
+  end
+  if not matched then return nil, "installed_plugin_not_found" end
+  return matched, nil
+end
+
+local function e2_fx_installed_identity_matches_live(installed_identity, live_identity)
+  if not is_string(installed_identity) or installed_identity == ""
+      or not is_string(live_identity) or live_identity == "" then
+    return false
+  end
+  if live_identity == installed_identity then return true end
+  if installed_identity:find("<", 1, true)
+      or live_identity:sub(1, #installed_identity) ~= installed_identity then
+    return false
+  end
+  return live_identity:sub(#installed_identity + 1):match("^<%d+$") ~= nil
+end
+
+local function e2_fx_current_project_truth()
+  local ok, project, project_path = call_reaper("EnumProjects", -1, "")
+  if not ok or not project or type(project_path) ~= "string" then return nil end
+  local ok_change, state_change_count = call_reaper("GetProjectStateChangeCount", project)
+  if not ok_change or type(state_change_count) ~= "number" then return nil end
+  return {
+    project = project,
+    project_ref = "project:current",
+    project_path = bounded_string(project_path, 4096),
+    project_instance_id = e2_fx_fingerprint_segments("native-project-v1", { tostring(project) }),
+    state_change_count = math.floor(state_change_count),
+  }
+end
+
+local E2_FX_SET_FOUNDATION_ERROR_CODES = {
+  PARAMS_INVALID = true,
+  PROJECT_NOT_FOUND = true,
+  FX_NOT_FOUND = true,
+  COMMAND_FAILED = true,
+  VERIFY_FAILED = true,
+}
+
+function E2_FX_HOMOGENEOUS_SET.contract_error(code, message, details, recoverable)
+  details = details or {}
+  if details.zero_write == nil then details.zero_write = true end
+  local public_code = E2_FX_SET_FOUNDATION_ERROR_CODES[code] and code or "PARAMS_INVALID"
+  if public_code ~= code and details.reason_code == nil then details.reason_code = code end
+  return e2_fx_read_error(public_code, message, details, recoverable)
+end
+
+function E2_FX_HOMOGENEOUS_SET.error(code, message, details, recoverable)
+  local _, failure = E2_FX_HOMOGENEOUS_SET.contract_error(code, message, details, recoverable)
+  return failure
+end
+
+function E2_FX_HOMOGENEOUS_SET.only_fields(value, allowed)
+  if not is_object(value) then return false, nil end
+  for key in pairs(value) do
+    if not allowed[key] then return false, key end
+  end
+  return true, nil
+end
+
+function E2_FX_HOMOGENEOUS_SET.finite(value)
+  return type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge
+end
+
+function E2_FX_HOMOGENEOUS_SET.exact_ref(ref)
+  if not is_object(ref) or ref.kind ~= "fx" or not is_string(ref.ref) then return nil end
+  local take_ref, slot_text = ref.ref:match("^fx:(take:guid:.+):(%d+)$")
+  local identity = is_object(ref.identity) and ref.identity or {}
+  local slot_index = tonumber(slot_text)
+  if not take_ref or not slot_index or identity.scheme ~= "take_fx"
+      or identity.value ~= take_ref .. ":" .. tostring(math.floor(slot_index)) then
+    return nil
+  end
+  return take_ref, math.floor(slot_index)
+end
+
+function E2_FX_HOMOGENEOUS_SET.validate_request(request, mode)
+  local params = is_object(request.params) and request.params or {}
+  local allowed = mode == "inspect_set" and {
+    mode = true,
+    expected_set_fingerprint = true,
+    expected_plugin_identity = true,
+    expected_layout_fingerprint = true,
+    expected_representative_fx_ref = true,
+    expected_members = true,
+    controls = true,
+  } or {
+    mode = true,
+    dry_run = true,
+    batch = true,
+    set_fingerprint = true,
+    plan_hash = true,
+    expected_plugin_identity = true,
+    expected_layout_fingerprint = true,
+    expected_representative_fx_ref = true,
+    expected_members = true,
+    controls = true,
+  }
+  local fields_ok, unexpected = E2_FX_HOMOGENEOUS_SET.only_fields(params, allowed)
+  if not fields_ok then
+    return nil, E2_FX_HOMOGENEOUS_SET.error("FX_SET_REQUEST_INVALID", "Homogeneous FX-set request contains an unsupported field.", {
+      field = bounded_string(tostring(unexpected), 120),
+    })
+  end
+  if params.mode ~= mode then
+    return nil, E2_FX_HOMOGENEOUS_SET.error("FX_SET_MODE_INVALID", "Homogeneous FX-set request mode does not match its native route.")
+  end
+  local set_fingerprint = mode == "inspect_set" and params.expected_set_fingerprint or params.set_fingerprint
+  if not is_string(set_fingerprint) or #set_fingerprint ~= 64 or not set_fingerprint:match("^[0-9a-f]+$") then
+    return nil, E2_FX_HOMOGENEOUS_SET.error("FX_SET_FINGERPRINT_INVALID", "Homogeneous FX-set request requires one exact SHA-256 set fingerprint.")
+  end
+  if mode == "shared_plan" then
+    if not is_json_array(params.batch) or #params.batch ~= 0 then
+      return nil, E2_FX_HOMOGENEOUS_SET.error("FX_SHARED_PLAN_BATCH_SENTINEL_INVALID", "Shared FX plan requires the exact empty legacy batch sentinel.")
+    end
+    if type(params.dry_run) ~= "boolean" then
+      return nil, E2_FX_HOMOGENEOUS_SET.error("FX_SHARED_PLAN_DRY_RUN_INVALID", "Shared FX plan requires explicit boolean dry_run.")
+    end
+    if not is_string(params.plan_hash) or #params.plan_hash ~= 64 or not params.plan_hash:match("^[0-9a-f]+$") then
+      return nil, E2_FX_HOMOGENEOUS_SET.error("FX_PARAMETER_PLAN_HASH_INVALID", "Shared FX plan requires one exact SHA-256 plan hash.")
+    end
+  end
+  local plugin = params.expected_plugin_identity
+  local plugin_fields_ok, plugin_unexpected = E2_FX_HOMOGENEOUS_SET.only_fields(plugin, {
+    name = true,
+    plugin_id = true,
+    installed_index = true,
+  })
+  if not plugin_fields_ok or not is_string(plugin.name) or plugin.name == ""
+      or not is_string(plugin.plugin_id) or plugin.plugin_id == "" then
+    return nil, E2_FX_HOMOGENEOUS_SET.error("FX_SET_PLUGIN_IDENTITY_INVALID", "Homogeneous FX-set request lacks one exact plug-in identity.", {
+      field = plugin_unexpected and bounded_string(tostring(plugin_unexpected), 120) or JSON_NULL,
+    })
+  end
+  if not is_string(params.expected_layout_fingerprint) or params.expected_layout_fingerprint == "" then
+    return nil, E2_FX_HOMOGENEOUS_SET.error("FX_SET_LAYOUT_FINGERPRINT_INVALID", "Homogeneous FX-set request lacks one exact parameter-layout fingerprint.")
+  end
+  if not is_json_array(params.expected_members) or #params.expected_members < 1
+      or #params.expected_members > E2_FX_TAKE_FANOUT_MAX_TARGETS then
+    return nil, E2_FX_HOMOGENEOUS_SET.error("FX_SET_CARDINALITY_INVALID", "Homogeneous FX-set request accepts 1-64 expected members.", {
+      target_count = is_json_array(params.expected_members) and #params.expected_members or 0,
+    })
+  end
+  if not is_json_array(request.refs) or #request.refs ~= #params.expected_members then
+    return nil, E2_FX_HOMOGENEOUS_SET.error("FX_SET_REF_COVERAGE_INVALID", "Every retained FX-set member requires exactly one native FX object ref.", {
+      expected_count = #params.expected_members,
+      ref_count = is_json_array(request.refs) and #request.refs or 0,
+    })
+  end
+  return {
+    params = params,
+    set_fingerprint = set_fingerprint,
+    plugin = plugin,
+    layout_fingerprint = params.expected_layout_fingerprint,
+  }, nil
+end
+
+function E2_FX_HOMOGENEOUS_SET.resolve_members(request, validated)
+  local params = validated.params
+  local ref_map = {}
+  local returned_refs = json_array({})
+  for index = 1, #request.refs do
+    local ref = request.refs[index]
+    local take_ref = E2_FX_HOMOGENEOUS_SET.exact_ref(ref)
+    if not take_ref or ref_map[ref.ref] then
+      return nil, nil, E2_FX_HOMOGENEOUS_SET.error("FX_SET_MEMBER_REF_INVALID", "Homogeneous FX-set request contains a malformed or duplicate exact Take-FX ref.", {
+        ref_index = index,
+      })
+    end
+    ref_map[ref.ref] = ref
+    returned_refs[#returned_refs + 1] = ref
+  end
+
+  local prepared = {}
+  local seen_takes = {}
+  local seen_fx_guids = {}
+  local expected_fields = {
+    fx_ref = true,
+    take_ref = true,
+    fx_guid = true,
+    plugin_id = true,
+    parameter_count = true,
+    layout_fingerprint = true,
+  }
+  for index = 1, #params.expected_members do
+    local expected = params.expected_members[index]
+    local fields_ok, unexpected = E2_FX_HOMOGENEOUS_SET.only_fields(expected, expected_fields)
+    local ref = fields_ok and is_string(expected.fx_ref) and ref_map[expected.fx_ref] or nil
+    local take_ref, slot_index = ref and E2_FX_HOMOGENEOUS_SET.exact_ref(ref) or nil, nil
+    if ref then take_ref, slot_index = E2_FX_HOMOGENEOUS_SET.exact_ref(ref) end
+    if not fields_ok or not ref or take_ref ~= expected.take_ref or not is_string(expected.fx_guid)
+        or expected.fx_guid == "" or not is_string(expected.plugin_id) or expected.plugin_id == ""
+        or type(expected.parameter_count) ~= "number" or expected.parameter_count < 0
+        or expected.parameter_count ~= math.floor(expected.parameter_count)
+        or not is_string(expected.layout_fingerprint) or expected.layout_fingerprint == ""
+        or unexpected ~= nil then
+      return nil, nil, E2_FX_HOMOGENEOUS_SET.error("FX_SET_EXPECTED_MEMBER_INVALID", "A retained FX-set member lacks exact owner, FX, plug-in, count, or layout identity.", {
+        member_index = index,
+        field = unexpected and bounded_string(tostring(unexpected), 120) or JSON_NULL,
+      })
+    end
+    if expected.plugin_id ~= validated.plugin.plugin_id
+        or expected.layout_fingerprint ~= validated.layout_fingerprint or seen_takes[take_ref] then
+      return nil, nil, E2_FX_HOMOGENEOUS_SET.error("FX_SET_EXPECTED_MEMBER_MISMATCH", "Retained FX-set members do not share the declared exact plug-in/layout identity.", {
+        member_index = index,
+      })
+    end
+    local owner_kind, take, live_slot = e2_fx_read_fx_owner_from_ref_object(ref, request)
+    local take_guid = take and e2_fx_read_take_guid(take) or nil
+    local expected_take_guid = take_ref:match("^take:guid:(.+)$")
+    if owner_kind ~= "take" or not take or live_slot ~= slot_index or take_guid ~= expected_take_guid then
+      return nil, nil, E2_FX_HOMOGENEOUS_SET.error("FX_SET_MEMBER_STALE", "A retained Take-FX owner no longer resolves to the exact native Take and slot.", {
+        member_index = index,
+        fx_ref = expected.fx_ref,
+      })
+    end
+    local live_fx_guid = e2_fx_read_guid("take", take, slot_index)
+    local live_plugin_id = e2_fx_read_plugin_id("take", take, slot_index)
+    local layout, layout_blocker = e2_fx_parameter_layout(
+      "take",
+      take,
+      slot_index,
+      live_plugin_id or "",
+      validated.plugin.name
+    )
+    if live_fx_guid ~= expected.fx_guid or seen_fx_guids[live_fx_guid]
+        or live_plugin_id ~= expected.plugin_id or not layout
+        or layout.parameter_count ~= expected.parameter_count
+        or layout.layout_fingerprint ~= expected.layout_fingerprint then
+      return nil, nil, E2_FX_HOMOGENEOUS_SET.error("FX_SET_MEMBER_IDENTITY_STALE", "A retained Take-FX instance no longer matches its exact native GUID, plug-in, count, or layout.", {
+        member_index = index,
+        fx_ref = expected.fx_ref,
+        blocker = layout_blocker or JSON_NULL,
+        expected_fx_guid = expected.fx_guid,
+        live_fx_guid = live_fx_guid or JSON_NULL,
+      })
+    end
+    seen_takes[take_ref] = true
+    seen_fx_guids[live_fx_guid] = true
+    prepared[#prepared + 1] = {
+      expected = expected,
+      ref = ref,
+      take = take,
+      slot_index = slot_index,
+      layout = layout,
+    }
+  end
+  if not ref_map[params.expected_representative_fx_ref] then
+    return nil, nil, E2_FX_HOMOGENEOUS_SET.error("FX_SET_REPRESENTATIVE_STALE", "The retained representative FX is not a member of the exact native set.")
+  end
+  local representative = nil
+  for index = 1, #prepared do
+    if prepared[index].expected.fx_ref == params.expected_representative_fx_ref then
+      representative = prepared[index]
+      break
+    end
+  end
+  if not representative then
+    return nil, nil, E2_FX_HOMOGENEOUS_SET.error("FX_SET_REPRESENTATIVE_STALE", "The exact native representative FX could not be resolved.")
+  end
+  return prepared, { refs = returned_refs, representative = representative }, nil
+end
+
+function E2_FX_HOMOGENEOUS_SET.parameter_inventory(member)
+  local parameters = json_array({})
+  for param_index = 0, member.layout.parameter_count - 1 do
+    local param_ident = e2_fx_read_param_ident("take", member.take, member.slot_index, param_index)
+    local name = e2_fx_read_param_name("take", member.take, member.slot_index, param_index)
+    local normalized = e2_fx_read_param_normalized("take", member.take, member.slot_index, param_index)
+    local formatted = e2_fx_read_param_formatted("take", member.take, member.slot_index, param_index)
+    if not is_string(param_ident) or param_ident == "" or not is_string(name)
+        or not E2_FX_HOMOGENEOUS_SET.finite(normalized) or not is_string(formatted) or formatted == "" then
+      return nil, E2_FX_HOMOGENEOUS_SET.error("FX_SET_PARAMETER_INVENTORY_INCOMPLETE", "Representative FX did not expose one complete native parameter inventory.", {
+        param_index = param_index,
+      })
+    end
+    local values = e2_fx_read_param_value("take", member.take, member.slot_index, param_index)
+    parameters[#parameters + 1] = {
+      param_index = param_index,
+      param_ident = param_ident,
+      name = name,
+      value = values.value,
+      min_value = values.min_value,
+      max_value = values.max_value,
+      normalized_value = normalized,
+      formatted_value = formatted,
+    }
+  end
+  return parameters, nil
+end
+
+function E2_FX_HOMOGENEOUS_SET.formatted_quantity(value)
+  if not is_string(value) then return nil end
+  local number_text, unit_text = value:match("^%s*([-+]?%d*[.,]?%d+)%s*([^%s]*)%s*$")
+  local number = number_text and tonumber((number_text:gsub(",", "."))) or nil
+  if not E2_FX_HOMOGENEOUS_SET.finite(number) then return nil end
+  local unit = (unit_text or ""):lower()
+  local family = unit
+  local scale = 1
+  if unit == "hz" then
+    family = "hz"
+  elseif unit == "khz" then
+    family = "hz"
+    scale = 1000
+  elseif unit == "mhz" then
+    family = "hz"
+    scale = 1000000
+  elseif unit == "s" then
+    family = "seconds"
+  elseif unit == "ms" then
+    family = "seconds"
+    scale = 0.001
+  end
+  return { value = number * scale, family = family }
+end
+
+function E2_FX_HOMOGENEOUS_SET.formatted_matches(formatted, target, target_quantity)
+  if formatted == target then return true end
+  local candidate = E2_FX_HOMOGENEOUS_SET.formatted_quantity(formatted)
+  local expected = target_quantity or E2_FX_HOMOGENEOUS_SET.formatted_quantity(target)
+  if not candidate or not expected or candidate.family ~= expected.family then return false end
+  local magnitude = math.max(1, math.abs(candidate.value), math.abs(expected.value))
+  return math.abs(candidate.value - expected.value) <= magnitude * 0.000000001
+end
+
+function E2_FX_HOMOGENEOUS_SET.formatted_readback_matches(readback, requested)
+  if E2_FX_HOMOGENEOUS_SET.formatted_matches(readback, requested) then return true end
+  local candidate = E2_FX_HOMOGENEOUS_SET.formatted_quantity(readback)
+  local expected = E2_FX_HOMOGENEOUS_SET.formatted_quantity(requested)
+  if not candidate or not expected or candidate.family ~= "" or expected.family == "" then return false end
+  local magnitude = math.max(1, math.abs(candidate.value), math.abs(expected.value))
+  return math.abs(candidate.value - expected.value) <= magnitude * 0.000000001
+end
+
+function E2_FX_HOMOGENEOUS_SET.format_at_normalized(member, param_index, normalized)
+  if not E2_FX_HOMOGENEOUS_SET.finite(normalized) or normalized < 0 or normalized > 1 then
+    return nil
+  end
+  local owner_kind = member.owner_kind or "take"
+  local owner = member.owner or member.take
+  return e2_fx_format_param_normalized(
+    owner_kind,
+    owner,
+    member.slot_index,
+    param_index,
+    normalized
+  )
+end
+
+function E2_FX_HOMOGENEOUS_SET.format_at_value(member, param_index, value)
+  if not E2_FX_HOMOGENEOUS_SET.finite(value) then return nil end
+  local owner_kind = member.owner_kind or "take"
+  local owner = member.owner or member.take
+  return e2_fx_format_param_value(owner_kind, owner, member.slot_index, param_index, value)
+end
+
+function E2_FX_HOMOGENEOUS_SET.comparable_formatted_number(value, target_quantity)
+  local quantity = E2_FX_HOMOGENEOUS_SET.formatted_quantity(value)
+  if not quantity or not target_quantity or quantity.family ~= target_quantity.family then return nil end
+  return quantity.value
+end
+
+function E2_FX_HOMOGENEOUS_SET.search_formatted(member, param_index, target)
+  local owner_kind = member.owner_kind or "take"
+  local owner = member.owner or member.take
+  local values = e2_fx_read_param_value(owner_kind, owner, member.slot_index, param_index)
+  local minimum = values.min_value
+  local maximum = values.max_value
+  if not E2_FX_HOMOGENEOUS_SET.finite(minimum)
+      or not E2_FX_HOMOGENEOUS_SET.finite(maximum) or maximum < minimum then
+    return nil
+  end
+  local function formatted_at(value)
+    return E2_FX_HOMOGENEOUS_SET.format_at_value(member, param_index, value)
+  end
+  local target_quantity = E2_FX_HOMOGENEOUS_SET.formatted_quantity(target)
+  local function matched(value)
+    local formatted = formatted_at(value)
+    if E2_FX_HOMOGENEOUS_SET.formatted_matches(formatted, target, target_quantity) then
+      return true, formatted
+    end
+    return false, formatted
+  end
+  local current = values.value
+  if E2_FX_HOMOGENEOUS_SET.finite(current) then
+    local current_matches, current_formatted = matched(current)
+    if current_matches then return current, current_formatted end
+  end
+  local target_number = target_quantity and target_quantity.value or nil
+  local span = maximum - minimum
+  local previous_value = minimum
+  local previous_formatted = formatted_at(minimum)
+  if E2_FX_HOMOGENEOUS_SET.formatted_matches(previous_formatted, target, target_quantity) then
+    return minimum, previous_formatted
+  end
+  local previous_number = E2_FX_HOMOGENEOUS_SET.comparable_formatted_number(previous_formatted, target_quantity)
+  for sample_index = 1, 256 do
+    local value = minimum + span * sample_index / 256
+    local formatted = formatted_at(value)
+    if E2_FX_HOMOGENEOUS_SET.formatted_matches(formatted, target, target_quantity) then
+      return value, formatted
+    end
+    local number = E2_FX_HOMOGENEOUS_SET.comparable_formatted_number(formatted, target_quantity)
+    if target_number and previous_number and number and number ~= previous_number
+        and target_number >= math.min(previous_number, number)
+        and target_number <= math.max(previous_number, number) then
+      local low = previous_value
+      local high = value
+      local low_number = previous_number
+      local high_number = number
+      for _ = 1, 64 do
+        local middle = (low + high) / 2
+        local middle_formatted = formatted_at(middle)
+        if E2_FX_HOMOGENEOUS_SET.formatted_matches(middle_formatted, target, target_quantity) then
+          return middle, middle_formatted
+        end
+        local middle_number = E2_FX_HOMOGENEOUS_SET.comparable_formatted_number(middle_formatted, target_quantity)
+        if not middle_number then break end
+        if target_number >= math.min(low_number, middle_number)
+            and target_number <= math.max(low_number, middle_number) then
+          high = middle
+          high_number = middle_number
+        else
+          low = middle
+          low_number = middle_number
+        end
+      end
+    end
+    previous_value = value
+    previous_formatted = formatted
+    previous_number = number
+  end
+  for sample_index = 0, 4096 do
+    local value = minimum + span * sample_index / 4096
+    local is_match, formatted = matched(value)
+    if is_match then return value, formatted end
+  end
+  return nil
+end
+
+function E2_FX_HOMOGENEOUS_SET.compile_controls(member, parameters, controls)
+  if controls == nil then return json_array({}), nil end
+  if not is_json_array(controls) or #controls < 1 or #controls > 8 then
+    return nil, E2_FX_HOMOGENEOUS_SET.error("FX_SET_CONTROLS_SIZE_INVALID", "FX-set inspection accepts 1-8 natural-unit controls.")
+  end
+  local compiled = json_array({})
+  local seen_ids = {}
+  local seen_targets = {}
+  for index = 1, #controls do
+    local control = controls[index]
+    local fields_ok, unexpected = E2_FX_HOMOGENEOUS_SET.only_fields(control, {
+      id = true,
+      param_index = true,
+      param_ident = true,
+      param_name = true,
+      natural_value = true,
+      display_value = true,
+      tolerance = true,
+    })
+    local display_value = control.display_value or control.natural_value
+    if not fields_ok or not is_string(control.id) or #control.id < 1 or #control.id > 24
+        or not control.id:match("^[%w_-]+$") or seen_ids[control.id]
+        or (control.display_value ~= nil and control.natural_value ~= nil)
+        or not is_string(display_value) or display_value == "" then
+      return nil, E2_FX_HOMOGENEOUS_SET.error("FX_SET_CONTROL_INVALID", "A natural-unit FX control is malformed or duplicated.", {
+        control_index = index,
+        field = unexpected and bounded_string(tostring(unexpected), 120) or JSON_NULL,
+      })
+    end
+    local param_index = tonumber(control.param_index)
+    if param_index ~= nil and (param_index < 0 or param_index ~= math.floor(param_index)) then param_index = nil end
+    local matches = {}
+    for candidate_index = 1, #parameters do
+      local parameter = parameters[candidate_index]
+      local matched = false
+      if control.param_name ~= nil then
+        matched = is_string(control.param_name) and parameter.name == control.param_name
+      elseif param_index ~= nil then
+        matched = parameter.param_index == param_index
+          and (control.param_ident == nil or parameter.param_ident == control.param_ident)
+      elseif is_string(control.param_ident) and control.param_ident ~= "" then
+        matched = parameter.param_ident == control.param_ident
+      end
+      if matched then matches[#matches + 1] = parameter end
+    end
+    if #matches ~= 1 then
+      return nil, E2_FX_HOMOGENEOUS_SET.error("FX_SET_PARAMETER_SELECTOR_AMBIGUOUS", "Each natural-unit FX control must resolve exactly one representative parameter.", {
+        control_index = index,
+        match_count = #matches,
+      })
+    end
+    local parameter = matches[1]
+    local target_key = tostring(parameter.param_index) .. ":" .. parameter.param_ident
+    if seen_targets[target_key] then
+      return nil, E2_FX_HOMOGENEOUS_SET.error("FX_SET_CONTROL_TARGET_DUPLICATE", "Natural-unit controls contain a duplicate exact parameter target.", {
+        control_index = index,
+      })
+    end
+    local value, native_formatted = E2_FX_HOMOGENEOUS_SET.search_formatted(
+      member,
+      parameter.param_index,
+      display_value
+    )
+    if not value then
+      return nil, E2_FX_HOMOGENEOUS_SET.error("FX_SET_NATURAL_VALUE_UNREACHABLE", "REAPER native formatting could not reach the requested natural-unit value without mutation.", {
+        control_index = index,
+        param_index = parameter.param_index,
+        display_value = bounded_string(display_value, 80),
+      })
+    end
+    local owner_kind = member.owner_kind or "take"
+    local owner = member.owner or member.take
+    local step_sizes = e2_fx_read_param_step_sizes(owner_kind, owner, member.slot_index, parameter.param_index)
+    local tolerance = tonumber(control.tolerance)
+    if not E2_FX_HOMOGENEOUS_SET.finite(tolerance) or tolerance < 0 then
+      tolerance = step_sizes.is_discrete == true and 0 or 0.000001
+    end
+    seen_ids[control.id] = true
+    seen_targets[target_key] = true
+    compiled[#compiled + 1] = {
+      id = control.id,
+      param_index = parameter.param_index,
+      param_ident = parameter.param_ident,
+      param_name = parameter.name,
+      natural_value = display_value,
+      display_value = display_value,
+      value = value,
+      requested_formatted_value = native_formatted,
+      tolerance = tolerance,
+    }
+  end
+  return compiled, nil
+end
+
+function E2_FX_HOMOGENEOUS_SET.member_checks(members)
+  local checks = json_array({})
+  for index = 1, #members do
+    local member = members[index]
+    checks[#checks + 1] = {
+      fx_ref = member.expected.fx_ref,
+      take_ref = member.expected.take_ref,
+      fx_guid = member.expected.fx_guid,
+      plugin_id = member.expected.plugin_id,
+      parameter_count = member.expected.parameter_count,
+      layout_fingerprint = member.expected.layout_fingerprint,
+      status = "passed",
+    }
+  end
+  return checks
+end
+
+function E2_FX_HOMOGENEOUS_SET.inspect(request)
+  local validated, validation_failure = E2_FX_HOMOGENEOUS_SET.validate_request(request, "inspect_set")
+  if not validated then return nil, validation_failure end
+  local project_before = e2_fx_current_project_truth()
+  if not project_before then
+    return nil, E2_FX_HOMOGENEOUS_SET.error("PROJECT_NOT_FOUND", "FX-set inspection could not bind the active native project instance.")
+  end
+  local members, resolved, member_failure = E2_FX_HOMOGENEOUS_SET.resolve_members(request, validated)
+  if not members then return nil, member_failure end
+  local parameters, inventory_failure = E2_FX_HOMOGENEOUS_SET.parameter_inventory(resolved.representative)
+  if not parameters then return nil, inventory_failure end
+  local compiled, compile_failure = E2_FX_HOMOGENEOUS_SET.compile_controls(
+    resolved.representative,
+    parameters,
+    validated.params.controls
+  )
+  if not compiled then return nil, compile_failure end
+  local project_after = e2_fx_current_project_truth()
+  if not project_after or project_after.project_instance_id ~= project_before.project_instance_id then
+    return nil, E2_FX_HOMOGENEOUS_SET.error("FX_SET_PROJECT_STALE", "The active native project changed during FX-set inspection.")
+  end
+  return e2_fx_read_summary(request, {
+    mode = "inspect_set",
+    set_fingerprint = validated.set_fingerprint,
+    plugin_identity = validated.plugin,
+    layout_fingerprint = validated.layout_fingerprint,
+    representative_fx_ref = validated.params.expected_representative_fx_ref,
+    member_count = #members,
+    member_checks = E2_FX_HOMOGENEOUS_SET.member_checks(members),
+    parameter_count = #parameters,
+    parameters = parameters,
+    compiled_controls = compiled,
+    returned_count = #parameters,
+    truncated = false,
+    inventory_complete = true,
+    coverage_status = "complete",
+    project_instance_id = project_after.project_instance_id,
+    native_project_instance_verified = true,
+  }), nil, json_array({}), json_array({}), resolved.refs
+end
+
+function E2_FX_HOMOGENEOUS_SET.validate_compiled_controls(member, controls)
+  if not is_json_array(controls) or #controls < 1 or #controls > 8 then
+    return nil, E2_FX_HOMOGENEOUS_SET.error("FX_PARAMETER_PLAN_SIZE_INVALID", "Shared FX plan accepts 1-8 compiled controls.")
+  end
+  local prepared = {}
+  local seen_ids = {}
+  local seen_targets = {}
+  for index = 1, #controls do
+    local control = controls[index]
+    local fields_ok, unexpected = E2_FX_HOMOGENEOUS_SET.only_fields(control, {
+      id = true,
+      param_index = true,
+      param_ident = true,
+      param_name = true,
+      natural_value = true,
+      value = true,
+      requested_formatted_value = true,
+      tolerance = true,
+    })
+    local param_index = is_object(control) and tonumber(control.param_index) or nil
+    local value = is_object(control) and tonumber(control.value) or nil
+    local tolerance = is_object(control) and tonumber(control.tolerance) or nil
+    if not fields_ok or not is_string(control.id) or #control.id < 1 or #control.id > 24
+        or not control.id:match("^[%w_-]+$") or seen_ids[control.id]
+        or not param_index or param_index < 0 or param_index ~= math.floor(param_index)
+        or param_index >= member.layout.parameter_count
+        or not is_string(control.param_ident) or control.param_ident == ""
+        or not is_string(control.natural_value) or control.natural_value == ""
+        or not is_string(control.requested_formatted_value) or control.requested_formatted_value == ""
+        or not E2_FX_HOMOGENEOUS_SET.finite(value)
+        or not E2_FX_HOMOGENEOUS_SET.finite(tolerance) or tolerance < 0 then
+      return nil, E2_FX_HOMOGENEOUS_SET.error("FX_PARAMETER_PLAN_CONTROL_INVALID", "A compiled shared FX control is malformed, stale, or duplicated.", {
+        control_index = index,
+        field = unexpected and bounded_string(tostring(unexpected), 120) or JSON_NULL,
+      })
+    end
+    local live_ident = e2_fx_read_param_ident("take", member.take, member.slot_index, param_index)
+    local live_name = e2_fx_read_param_name("take", member.take, member.slot_index, param_index)
+    local native_formatted = E2_FX_HOMOGENEOUS_SET.format_at_value(
+      member,
+      param_index,
+      value
+    )
+    local target_key = tostring(param_index) .. ":" .. control.param_ident
+    if live_ident ~= control.param_ident
+        or (control.param_name ~= nil and live_name ~= control.param_name)
+        or native_formatted ~= control.requested_formatted_value or seen_targets[target_key] then
+      return nil, E2_FX_HOMOGENEOUS_SET.error("FX_PARAMETER_PLAN_STALE", "A compiled shared FX control no longer matches native parameter identity or formatting.", {
+        control_index = index,
+        param_index = param_index,
+        native_formatted_value = native_formatted or JSON_NULL,
+      })
+    end
+    seen_ids[control.id] = true
+    seen_targets[target_key] = true
+    prepared[#prepared + 1] = {
+      id = control.id,
+      param_index = param_index,
+      param_ident = control.param_ident,
+      value = value,
+      requested_formatted_value = control.requested_formatted_value,
+      tolerance = tolerance,
+    }
+  end
+  return prepared, nil
+end
+
+function E2_FX_HOMOGENEOUS_SET.member_results(members, controls, status)
+  local results = json_array({})
+  for index = 1, #members do
+    local member = members[index]
+    results[#results + 1] = {
+      fx_ref = member.expected.fx_ref,
+      take_ref = member.expected.take_ref,
+      fx_guid = member.expected.fx_guid,
+      plugin_id = member.expected.plugin_id,
+      parameter_count = member.expected.parameter_count,
+      layout_fingerprint = member.expected.layout_fingerprint,
+      control_count = #controls,
+      status = status,
+    }
+  end
+  return results
+end
+
+function E2_FX_HOMOGENEOUS_SET.apply(request)
+  local validated, validation_failure = E2_FX_HOMOGENEOUS_SET.validate_request(request, "shared_plan")
+  if not validated then return nil, validation_failure end
+  local project_before = e2_fx_current_project_truth()
+  if not project_before then
+    return nil, E2_FX_HOMOGENEOUS_SET.error("PROJECT_NOT_FOUND", "Shared FX plan could not bind the active native project instance.")
+  end
+  local members, resolved, member_failure = E2_FX_HOMOGENEOUS_SET.resolve_members(request, validated)
+  if not members then return nil, member_failure end
+  local controls, controls_failure = E2_FX_HOMOGENEOUS_SET.validate_compiled_controls(
+    resolved.representative,
+    validated.params.controls
+  )
+  if not controls then return nil, controls_failure end
+  for member_index = 1, #members do
+    local member = members[member_index]
+    for control_index = 1, #controls do
+      local control = controls[control_index]
+      local live_ident = e2_fx_read_param_ident("take", member.take, member.slot_index, control.param_index)
+      local native_formatted = E2_FX_HOMOGENEOUS_SET.format_at_value(
+        member,
+        control.param_index,
+        control.value
+      )
+      if live_ident ~= control.param_ident or native_formatted ~= control.requested_formatted_value then
+        return nil, E2_FX_HOMOGENEOUS_SET.error("FX_PARAMETER_PLAN_MEMBER_STALE", "A shared FX control does not match every member's native parameter identity and formatting.", {
+          member_index = member_index,
+          control_index = control_index,
+          fx_ref = member.expected.fx_ref,
+        })
+      end
+    end
+  end
+  if validated.params.dry_run == true then
+    return e2_fx_write_summary(request, {
+      mode = "shared_plan",
+      set_fingerprint = validated.set_fingerprint,
+      plan_hash = validated.params.plan_hash,
+      layout_fingerprint = validated.layout_fingerprint,
+      target_count = #members,
+      control_count = #controls,
+      mutation_count = 0,
+      undo_block_count = 0,
+      mutation_attempted = false,
+      zero_write = true,
+      member_results = E2_FX_HOMOGENEOUS_SET.member_results(members, controls, "planned"),
+      project_instance_id = project_before.project_instance_id,
+      native_project_instance_verified = true,
+    }), nil, json_array({}), json_array({}), resolved.refs
+  end
+
+  local mutation_count = 0
+  for member_index = 1, #members do
+    local member = members[member_index]
+    for control_index = 1, #controls do
+      local control = controls[control_index]
+      if not e2_fx_set_param_value(
+        "take",
+        member.take,
+        member.slot_index,
+        control.param_index,
+        control.value
+      ) then
+        return nil, E2_FX_HOMOGENEOUS_SET.error("COMMAND_FAILED", "REAPER rejected one shared FX parameter setter.", {
+          member_index = member_index,
+          control_index = control_index,
+          mutation_attempted = mutation_count > 0,
+          completed_mutations = mutation_count,
+          zero_write = mutation_count == 0,
+        }, false)
+      end
+      mutation_count = mutation_count + 1
+    end
+  end
+
+  for member_index = 1, #members do
+    local member = members[member_index]
+    if e2_fx_read_guid("take", member.take, member.slot_index) ~= member.expected.fx_guid
+        or e2_fx_read_plugin_id("take", member.take, member.slot_index) ~= member.expected.plugin_id then
+      return nil, E2_FX_HOMOGENEOUS_SET.error("VERIFY_FAILED", "Shared FX aggregate readback lost exact member identity.", {
+        member_index = member_index,
+        mutation_attempted = true,
+        completed_mutations = mutation_count,
+        zero_write = false,
+      }, false)
+    end
+    for control_index = 1, #controls do
+      local control = controls[control_index]
+      local values = e2_fx_read_param_value("take", member.take, member.slot_index, control.param_index)
+      local formatted = e2_fx_read_param_formatted("take", member.take, member.slot_index, control.param_index)
+      local updated = E2_FX_HOMOGENEOUS_SET.finite(values.value)
+        and math.abs(values.value - control.value) <= control.tolerance
+        and E2_FX_HOMOGENEOUS_SET.formatted_readback_matches(
+          formatted,
+          control.requested_formatted_value
+        )
+      if not updated then
+        return nil, E2_FX_HOMOGENEOUS_SET.error("VERIFY_FAILED", "Shared FX aggregate readback did not match every native control target.", {
+          member_index = member_index,
+          control_index = control_index,
+          mutation_attempted = true,
+          completed_mutations = mutation_count,
+          zero_write = false,
+          readback_value = values.value,
+          readback_formatted_value = formatted,
+        }, false)
+      end
+    end
+  end
+  local project_after = e2_fx_current_project_truth()
+  if not project_after or project_after.project_instance_id ~= project_before.project_instance_id then
+    return nil, E2_FX_HOMOGENEOUS_SET.error("FX_SET_PROJECT_STALE", "The active native project changed during shared FX mutation/readback.", {
+      mutation_attempted = true,
+      completed_mutations = mutation_count,
+      zero_write = false,
+    }, false)
+  end
+  return e2_fx_write_summary(request, {
+    mode = "shared_plan",
+    set_fingerprint = validated.set_fingerprint,
+    plan_hash = validated.params.plan_hash,
+    layout_fingerprint = validated.layout_fingerprint,
+    target_count = #members,
+    control_count = #controls,
+    mutation_count = mutation_count,
+    undo_block_count = 1,
+    mutation_attempted = true,
+    zero_write = false,
+    member_results = E2_FX_HOMOGENEOUS_SET.member_results(members, controls, "passed"),
+    project_instance_id = project_after.project_instance_id,
+    native_project_instance_verified = true,
+  }), nil, json_array({}), json_array({}), resolved.refs
+end
+
+local function e2_fx_take_fanout_error(code, message, details, recoverable)
+  return E2_FX_HOMOGENEOUS_SET.contract_error(code, message, details, recoverable)
+end
+
+local function e2_fx_add_take_fx_fanout(request)
+  local params = is_object(request.params) and request.params or {}
+  if params.duplicate_policy ~= "reuse_exact" or params.include_parameter_layout ~= true
+      or params.dry_run ~= false or not e2_fx_fanout_binding_valid(params.target_binding) then
+    return e2_fx_take_fanout_error(
+      "FX_SET_REQUEST_INVALID",
+      "Track-owned Take-FX fanout requires duplicate_policy=reuse_exact, include_parameter_layout=true, dry_run=false, and the exact active-Take batch binding."
+    )
+  end
+  for key in pairs(params) do
+    if key ~= "plugin_name" and key ~= "duplicate_policy" and key ~= "include_parameter_layout"
+        and key ~= "dry_run" and key ~= "target_binding" then
+      return e2_fx_take_fanout_error("FX_SET_REQUEST_INVALID", "Track-owned Take-FX fanout received an unsupported parameter.", {
+        field = bounded_string(tostring(key), 120),
+      })
+    end
+  end
+
+  local track, track_ref, track_blocker = e2_fx_exact_fanout_track(request)
+  if not track then
+    return e2_fx_take_fanout_error(track_blocker, "Track-owned Take-FX fanout requires one live exact Track GUID object ref.")
+  end
+  local plugin_name = e2_fx_plugin_name(request)
+  if not plugin_name then
+    return e2_fx_take_fanout_error("PARAMS_INVALID", "Track-owned Take-FX fanout requires one exact installed plugin_name.")
+  end
+  local installed, installed_blocker = e2_fx_exact_installed_plugin(plugin_name)
+  if not installed then
+    return e2_fx_take_fanout_error("FX_NOT_FOUND", "Track-owned Take-FX fanout could not prove one exact installed plug-in identity.", {
+      plugin_name = plugin_name,
+      blocker = installed_blocker,
+    })
+  end
+  local project_truth = e2_fx_current_project_truth()
+  if not project_truth then
+    return e2_fx_take_fanout_error("PROJECT_NOT_FOUND", "Track-owned Take-FX fanout could not bind the active native project instance.")
+  end
+
+  local ok_count, raw_item_count = call_reaper("CountTrackMediaItems", track)
+  local item_count = ok_count and first_number(raw_item_count) or nil
+  if type(item_count) ~= "number" or item_count < 0 or item_count ~= math.floor(item_count) then
+    return e2_fx_take_fanout_error("API_UNAVAILABLE", "REAPER did not return the target Track Item count.", {
+      api = "CountTrackMediaItems",
+    })
+  end
+  if item_count < 1 or item_count > E2_FX_TAKE_FANOUT_MAX_TARGETS then
+    return e2_fx_take_fanout_error("FX_SET_CARDINALITY_INVALID", "Track-owned Take-FX fanout accepts 1-64 active audio Take targets.", {
+      target_count = item_count,
+      maximum = E2_FX_TAKE_FANOUT_MAX_TARGETS,
+    })
+  end
+
+  local prepared = {}
+  local seen_items = {}
+  local seen_takes = {}
+  local expected_layout = nil
+  local expected_plugin_id = nil
+  for item_index = 0, item_count - 1 do
+    local ok_item, item = call_reaper("GetTrackMediaItem", track, item_index)
+    local item_guid = ok_item and item and e2_fx_native_item_guid(item) or nil
+    if not item_guid or seen_items[item_guid] then
+      return e2_fx_take_fanout_error("FX_SET_ITEM_IDENTITY_INVALID", "Track-owned Take-FX fanout could not prove one unique native Item GUID for every target.", {
+        item_index = item_index,
+      })
+    end
+    seen_items[item_guid] = true
+    local ok_take, take = call_reaper("GetActiveTake", item)
+    if not ok_take or not take then
+      return e2_fx_take_fanout_error("FX_SET_ACTIVE_TAKE_MISSING", "A target Item has no active Take; the complete FX set remains zero-write.", {
+        item_ref = "item:guid:" .. item_guid,
+      })
+    end
+    local ok_midi, is_midi = call_reaper("TakeIsMIDI", take)
+    if not ok_midi then
+      return e2_fx_take_fanout_error("API_UNAVAILABLE", "REAPER could not classify an active Take as audio or MIDI.", {
+        api = "TakeIsMIDI",
+        item_ref = "item:guid:" .. item_guid,
+      })
+    end
+    if is_midi == true then
+      return e2_fx_take_fanout_error("FX_SET_MIDI_UNSUPPORTED", "Track-owned Take-FX fanout accepts audio active Takes only.", {
+        item_ref = "item:guid:" .. item_guid,
+      })
+    end
+    local take_guid = e2_fx_read_take_guid(take)
+    if not take_guid or seen_takes[take_guid] then
+      return e2_fx_take_fanout_error("FX_SET_TAKE_IDENTITY_INVALID", "Track-owned Take-FX fanout could not prove one unique native Take GUID for every target.", {
+        item_ref = "item:guid:" .. item_guid,
+      })
+    end
+    seen_takes[take_guid] = true
+
+    local ok_fx_count, raw_fx_count = call_reaper("TakeFX_GetCount", take)
+    local fx_count = ok_fx_count and first_number(raw_fx_count) or nil
+    if type(fx_count) ~= "number" or fx_count < 0 or fx_count ~= math.floor(fx_count)
+        or fx_count > E2_FX_CHAIN_MAX_INSTANCES then
+      return e2_fx_take_fanout_error("FX_SET_CHAIN_COVERAGE_INVALID", "An active Take did not expose one complete bounded FX chain.", {
+        take_ref = "take:guid:" .. take_guid,
+      })
+    end
+    local matched_slot = nil
+    local matched_plugin_id = nil
+    for slot_index = 0, fx_count - 1 do
+      local live_plugin_id = e2_fx_read_plugin_id("take", take, slot_index)
+      if not live_plugin_id then
+        return e2_fx_take_fanout_error("FX_SET_PLUGIN_IDENTITY_UNAVAILABLE", "An existing Take FX lacks native plug-in identity, so duplicate analysis cannot complete safely.", {
+          take_ref = "take:guid:" .. take_guid,
+          slot_index = slot_index,
+        })
+      elseif e2_fx_installed_identity_matches_live(installed.ident, live_plugin_id) then
+        if matched_slot ~= nil then
+          return e2_fx_take_fanout_error("FX_SET_DUPLICATE_AMBIGUOUS", "An active Take contains multiple instances of the exact requested plug-in identity.", {
+            take_ref = "take:guid:" .. take_guid,
+            plugin_id = installed.ident,
+          })
+        end
+        matched_slot = slot_index
+        matched_plugin_id = live_plugin_id
+      end
+    end
+
+    local layout = nil
+    local fx_guid = nil
+    if matched_slot ~= nil then
+      if expected_plugin_id and expected_plugin_id ~= matched_plugin_id then
+        return e2_fx_take_fanout_error("FX_SET_PLUGIN_IDENTITY_MISMATCH", "Reusable Take FX instances do not share one exact native plug-in identity.", {
+          take_ref = "take:guid:" .. take_guid,
+          expected_plugin_id = expected_plugin_id,
+          live_plugin_id = matched_plugin_id,
+        })
+      end
+      expected_plugin_id = expected_plugin_id or matched_plugin_id
+      fx_guid = e2_fx_read_guid("take", take, matched_slot)
+      if not fx_guid then
+        return e2_fx_take_fanout_error("FX_SET_FX_GUID_UNAVAILABLE", "A reusable Take FX did not expose an exact native FX GUID.", {
+          take_ref = "take:guid:" .. take_guid,
+          slot_index = matched_slot,
+        })
+      end
+      local layout_blocker
+      layout, layout_blocker = e2_fx_parameter_layout("take", take, matched_slot, matched_plugin_id, plugin_name)
+      if not layout then
+        return e2_fx_take_fanout_error(layout_blocker, "A reusable Take FX did not expose a complete stable parameter layout.", {
+          take_ref = "take:guid:" .. take_guid,
+          slot_index = matched_slot,
+        })
+      end
+      if expected_layout and expected_layout.layout_fingerprint ~= layout.layout_fingerprint then
+        return e2_fx_take_fanout_error("FX_SET_LAYOUT_MISMATCH", "Reusable Take FX instances do not share one exact parameter layout.", {
+          take_ref = "take:guid:" .. take_guid,
+          expected_layout_fingerprint = expected_layout.layout_fingerprint,
+          live_layout_fingerprint = layout.layout_fingerprint,
+        })
+      end
+      expected_layout = expected_layout or layout
+    end
+    prepared[#prepared + 1] = {
+      item = item,
+      take = take,
+      item_ref = "item:guid:" .. item_guid,
+      take_ref = "take:guid:" .. take_guid,
+      fx_count_before = fx_count,
+      slot_index = matched_slot,
+      fx_guid = fx_guid,
+      layout = layout,
+      status = matched_slot ~= nil and "reused" or "created",
+    }
+  end
+
+  local mutation_count = 0
+  for index = 1, #prepared do
+    local member = prepared[index]
+    if member.slot_index == nil then
+      local slot_index = e2_fx_take_add_by_name(member.take, plugin_name, member.fx_count_before)
+      mutation_count = mutation_count + 1
+      local fx_count_after = e2_fx_read_count("take", member.take)
+      if not slot_index or slot_index < 0 or fx_count_after ~= member.fx_count_before + 1 then
+        return e2_fx_take_fanout_error("COMMAND_FAILED", "REAPER rejected one prepared Take-FX creation.", {
+          member_index = index,
+          item_ref = member.item_ref,
+          mutation_attempted = true,
+          zero_write = false,
+          completed_mutations = mutation_count - 1,
+        }, false)
+      end
+      member.slot_index = slot_index
+      member.fx_guid = e2_fx_read_guid("take", member.take, slot_index)
+      local live_plugin_id = e2_fx_read_plugin_id("take", member.take, slot_index)
+      local layout, layout_blocker = e2_fx_parameter_layout("take", member.take, slot_index, live_plugin_id or "", plugin_name)
+      if not member.fx_guid or not e2_fx_installed_identity_matches_live(installed.ident, live_plugin_id) or not layout then
+        return e2_fx_take_fanout_error("VERIFY_FAILED", "A created Take FX did not preserve exact native plug-in, GUID, and layout identity.", {
+          member_index = index,
+          item_ref = member.item_ref,
+          blocker = layout_blocker,
+          mutation_attempted = true,
+          zero_write = false,
+          completed_mutations = mutation_count,
+        }, false)
+      end
+      if expected_plugin_id and expected_plugin_id ~= live_plugin_id then
+        return e2_fx_take_fanout_error("FX_SET_PLUGIN_IDENTITY_MISMATCH", "A created Take FX did not match the homogeneous set native plug-in identity.", {
+          member_index = index,
+          item_ref = member.item_ref,
+          expected_plugin_id = expected_plugin_id,
+          live_plugin_id = live_plugin_id,
+          mutation_attempted = true,
+          zero_write = false,
+          completed_mutations = mutation_count,
+        }, false)
+      end
+      expected_plugin_id = expected_plugin_id or live_plugin_id
+      if expected_layout and expected_layout.layout_fingerprint ~= layout.layout_fingerprint then
+        return e2_fx_take_fanout_error("FX_SET_LAYOUT_MISMATCH", "A created Take FX did not match the homogeneous set parameter layout.", {
+          member_index = index,
+          item_ref = member.item_ref,
+          expected_layout_fingerprint = expected_layout.layout_fingerprint,
+          live_layout_fingerprint = layout.layout_fingerprint,
+          mutation_attempted = true,
+          zero_write = false,
+          completed_mutations = mutation_count,
+        }, false)
+      end
+      expected_layout = expected_layout or layout
+      member.layout = layout
+    end
+  end
+
+  local members = json_array({})
+  local refs = json_array({})
+  local created_count = 0
+  local reused_count = 0
+  local seen_fx_guids = {}
+  for index = 1, #prepared do
+    local member = prepared[index]
+    local live_plugin_id = e2_fx_read_plugin_id("take", member.take, member.slot_index)
+    local live_fx_guid = e2_fx_read_guid("take", member.take, member.slot_index)
+    local live_layout, layout_blocker = e2_fx_parameter_layout(
+      "take",
+      member.take,
+      member.slot_index,
+      live_plugin_id or "",
+      plugin_name
+    )
+    if not e2_fx_installed_identity_matches_live(installed.ident, live_plugin_id)
+        or live_plugin_id ~= expected_plugin_id or live_fx_guid ~= member.fx_guid or not live_layout
+        or live_layout.layout_fingerprint ~= expected_layout.layout_fingerprint or seen_fx_guids[live_fx_guid] then
+      return e2_fx_take_fanout_error("VERIFY_FAILED", "Aggregate Take-FX set readback did not preserve exact unique member identity and layout truth.", {
+        member_index = index,
+        item_ref = member.item_ref,
+        blocker = layout_blocker,
+        mutation_attempted = mutation_count > 0,
+        zero_write = mutation_count == 0,
+        completed_mutations = mutation_count,
+      }, false)
+    end
+    seen_fx_guids[live_fx_guid] = true
+    local fx_ref = e2_fx_read_fx_object_ref("take", member.take_ref, member.slot_index, plugin_name)
+    refs[#refs + 1] = fx_ref
+    members[#members + 1] = {
+      track_ref = track_ref,
+      item_ref = member.item_ref,
+      take_ref = member.take_ref,
+      fx_ref = fx_ref.ref,
+      fx_guid = live_fx_guid,
+      plugin_id = live_plugin_id,
+      parameter_count = live_layout.parameter_count,
+      layout_fingerprint = live_layout.layout_fingerprint,
+      status = member.status,
+    }
+    if member.status == "created" then created_count = created_count + 1 else reused_count = reused_count + 1 end
+  end
+  local after_truth = e2_fx_current_project_truth()
+  if not after_truth or after_truth.project_instance_id ~= project_truth.project_instance_id then
+    return e2_fx_take_fanout_error("VERIFY_FAILED", "The active native project instance changed during Take-FX fanout.", {
+      mutation_attempted = mutation_count > 0,
+      zero_write = mutation_count == 0,
+      completed_mutations = mutation_count,
+    }, false)
+  end
+
+  return e2_fx_write_summary(request, {
+    mode = "track_owned_active_take_fx_set",
+    track_ref = track_ref,
+    member_count = #members,
+    members = members,
+    representative_fx_ref = members[1].fx_ref,
+    plugin_identity = {
+      name = plugin_name,
+      plugin_id = expected_plugin_id,
+      installed_index = installed.index,
+    },
+    layout_fingerprint = expected_layout.layout_fingerprint,
+    project_ref = project_truth.project_ref,
+    project_path = project_truth.project_path,
+    project_instance_id = project_truth.project_instance_id,
+    native_project_instance_verified = true,
+    project_state_change_count_before = project_truth.state_change_count,
+    project_state_change_count_after = after_truth.state_change_count,
+    created_count = created_count,
+    reused_count = reused_count,
+    mutation_attempted = mutation_count > 0,
+    native_mutation_count = mutation_count,
+    aggregate_verification = {
+      status = "passed",
+      member_count = #members,
+      exact_identity = true,
+      homogeneous_layout = true,
+      project_instance_preserved = true,
+    },
+  }), nil, json_array({}), json_array({}), refs
+end
+
 local function add_take_fx(request)
+  if is_object(request.params) and request.params.target_binding ~= nil then
+    return e2_fx_add_take_fx_fanout(request)
+  end
   local take = e2_fx_read_take_from_request_refs(request)
   if not take then
     return e2_fx_read_error("TAKE_NOT_FOUND", "E2 FX-B1 add_take_fx requires a resolvable take ref.")
@@ -1200,11 +2508,20 @@ local function set_fx_parameter_normalized(request)
   if not param_index or param_index < 0 or param_index ~= math.floor(param_index) then
     return e2_fx_read_error("FX_PARAMETER_INVALID", "E2 FX-B1 set_fx_parameter_normalized requires a non-negative integer param_index.")
   end
-  local normalized_value = tonumber(request.params and request.params.normalized_value)
-  if not normalized_value or normalized_value < 0 or normalized_value > 1 then
+  local has_normalized_value = request.params and request.params.normalized_value ~= nil
+  local has_display_value = request.params and request.params.display_value ~= nil
+  if has_normalized_value == has_display_value then
+    return e2_fx_read_error("PARAMS_INVALID", "E2 FX-B1 requires exactly one normalized_value or display_value.")
+  end
+  local normalized_value = has_normalized_value and tonumber(request.params.normalized_value) or nil
+  if has_normalized_value and (not normalized_value or normalized_value < 0 or normalized_value > 1) then
     return e2_fx_read_error("PARAMS_INVALID", "E2 FX-B1 normalized_value must be between 0 and 1.", {
-      normalized_value = request.params and request.params.normalized_value,
+      normalized_value = request.params.normalized_value,
     })
+  end
+  local display_value = has_display_value and request.params.display_value or nil
+  if has_display_value and (not is_string(display_value) or display_value == "" or #display_value > 80) then
+    return e2_fx_read_error("PARAMS_INVALID", "E2 FX-B1 display_value must be one bounded native-formatted target string.")
   end
   local count = e2_fx_read_param_count(owner_kind, owner, slot_index)
   if param_index >= count then
@@ -1227,24 +2544,48 @@ local function set_fx_parameter_normalized(request)
     })
   end
   local step_sizes = e2_fx_read_param_step_sizes(owner_kind, owner, slot_index, param_index)
-  local requested_formatted_value = e2_fx_format_param_normalized(
-    owner_kind,
-    owner,
-    slot_index,
-    param_index,
-    normalized_value
-  )
-  if not e2_fx_set_param_normalized(owner_kind, owner, slot_index, param_index, normalized_value) then
+  local requested_value
+  local requested_formatted_value
+  if has_display_value then
+    requested_value, requested_formatted_value = E2_FX_HOMOGENEOUS_SET.search_formatted({
+      owner_kind = owner_kind,
+      owner = owner,
+      slot_index = slot_index,
+    }, param_index, display_value)
+    if not requested_value then
+      return e2_fx_read_error("FX_DISPLAY_VALUE_UNREACHABLE", "REAPER native formatting could not reach the requested FX display value without mutation.", {
+        param_index = param_index,
+        display_value = bounded_string(display_value, 80),
+        zero_write = true,
+      })
+    end
+  else
+    requested_formatted_value = e2_fx_format_param_normalized(
+      owner_kind,
+      owner,
+      slot_index,
+      param_index,
+      normalized_value
+    )
+  end
+  local accepted
+  if has_display_value then
+    accepted = e2_fx_set_param_value(owner_kind, owner, slot_index, param_index, requested_value)
+  else
+    accepted = e2_fx_set_param_normalized(owner_kind, owner, slot_index, param_index, normalized_value)
+  end
+  if not accepted then
     return e2_fx_read_error("COMMAND_FAILED", "REAPER rejected the FX parameter update.", {}, false)
   end
-  local tolerance = tonumber(request.params and request.params.tolerance) or 0.001
+  local tolerance = tonumber(request.params and request.params.tolerance)
+    or (has_display_value and 0.000001 or 0.001)
   if tolerance < 0 then
-    tolerance = 0.001
+    tolerance = has_display_value and 0.000001 or 0.001
   end
   local values = e2_fx_read_param_value(owner_kind, owner, slot_index, param_index)
   local readback_normalized = e2_fx_read_param_normalized(owner_kind, owner, slot_index, param_index)
   local readback_formatted_value = e2_fx_read_param_formatted(owner_kind, owner, slot_index, param_index)
-  if step_sizes.is_discrete ~= true
+  if not has_display_value and step_sizes.is_discrete ~= true
       and type(requested_formatted_value) == "string"
       and requested_formatted_value == readback_formatted_value
       and e2_fx_infer_native_discrete_format(
@@ -1256,17 +2597,31 @@ local function set_fx_parameter_normalized(request)
       ) then
     step_sizes.is_discrete = true
   end
-  local updated, verification_mode = e2_fx_parameter_readback_matches(
-    normalized_value,
-    requested_formatted_value,
-    readback_normalized,
-    readback_formatted_value,
-    tolerance,
-    step_sizes
-  )
+  local updated
+  local verification_mode
+  if has_display_value then
+    updated = E2_FX_HOMOGENEOUS_SET.finite(values.value)
+      and math.abs(values.value - requested_value) <= tolerance
+      and E2_FX_HOMOGENEOUS_SET.formatted_readback_matches(
+        readback_formatted_value,
+        requested_formatted_value
+      )
+    verification_mode = "native_display_value"
+  else
+    updated, verification_mode = e2_fx_parameter_readback_matches(
+      normalized_value,
+      requested_formatted_value,
+      readback_normalized,
+      readback_formatted_value,
+      tolerance,
+      step_sizes
+    )
+  end
   if not updated then
-    return e2_fx_read_error("VERIFY_FAILED", "E2 FX-B1 set_fx_parameter_normalized did not read back the requested continuous value or native discrete value.", {
-      requested_normalized_value = normalized_value,
+    return e2_fx_read_error("VERIFY_FAILED", "E2 FX-B1 set_fx_parameter_normalized did not read back the requested normalized or native display value.", {
+      requested_normalized_value = has_normalized_value and normalized_value or JSON_NULL,
+      requested_display_value = has_display_value and display_value or JSON_NULL,
+      requested_value = has_display_value and requested_value or JSON_NULL,
       requested_formatted_value = requested_formatted_value or JSON_NULL,
       readback_normalized_value = readback_normalized,
       readback_formatted_value = readback_formatted_value,
@@ -1292,7 +2647,9 @@ local function set_fx_parameter_normalized(request)
     max_value = values.max_value,
     normalized_value = readback_normalized,
     formatted_value = readback_formatted_value,
-    requested_normalized_value = normalized_value,
+    requested_normalized_value = has_normalized_value and normalized_value or JSON_NULL,
+    requested_display_value = has_display_value and display_value or JSON_NULL,
+    requested_value = has_display_value and requested_value or JSON_NULL,
     requested_formatted_value = requested_formatted_value or JSON_NULL,
     tolerance = tolerance,
     verification_mode = verification_mode,
@@ -1388,7 +2745,8 @@ local function e2_fx_batch_validate_rows(request, ref_map)
     end
     for key in pairs(row) do
       if key ~= "id" and key ~= "fx_ref" and key ~= "param_index" and key ~= "param_ident"
-          and key ~= "param_name" and key ~= "normalized_value" and key ~= "requested_formatted_value" then
+          and key ~= "param_name" and key ~= "normalized_value" and key ~= "display_value"
+          and key ~= "requested_formatted_value" then
         return nil, e2_fx_batch_row_failure("PARAMS_INVALID", "FX assignment batch row contains an unsupported field.", index, { field = key })
       end
     end
@@ -1409,9 +2767,17 @@ local function e2_fx_batch_validate_rows(request, ref_map)
     if has_index and (not param_index or param_index < 0 or param_index ~= math.floor(param_index)) then
       return nil, e2_fx_batch_row_failure("PARAMS_INVALID", "FX assignment batch param_index must be a non-negative integer.", index)
     end
-    local normalized_value = tonumber(row.normalized_value)
-    if not e2_fx_batch_finite(normalized_value) or normalized_value < 0 or normalized_value > 1 then
+    local has_normalized_value = row.normalized_value ~= nil
+    local has_display_value = row.display_value ~= nil
+    if has_normalized_value == has_display_value then
+      return nil, e2_fx_batch_row_failure("PARAMS_INVALID", "FX assignment batch row requires exactly one normalized_value or display_value.", index)
+    end
+    local normalized_value = has_normalized_value and tonumber(row.normalized_value) or nil
+    if has_normalized_value and (not e2_fx_batch_finite(normalized_value) or normalized_value < 0 or normalized_value > 1) then
       return nil, e2_fx_batch_row_failure("PARAMS_INVALID", "FX assignment batch normalized_value must be finite and between 0 and 1.", index)
+    end
+    if has_display_value and (not is_string(row.display_value) or row.display_value == "" or #row.display_value > 80) then
+      return nil, e2_fx_batch_row_failure("PARAMS_INVALID", "FX assignment batch display_value must be one bounded native-formatted target string.", index)
     end
     if row.requested_formatted_value ~= nil and (not is_string(row.requested_formatted_value) or row.requested_formatted_value == "") then
       return nil, e2_fx_batch_row_failure("PARAMS_INVALID", "FX assignment batch requested_formatted_value must be a non-empty string.", index)
@@ -1446,11 +2812,27 @@ local function e2_fx_batch_validate_rows(request, ref_map)
     if has_name and (type(live_name) ~= "string" or string.lower(live_name) ~= string.lower(row.param_name)) then
       return nil, e2_fx_batch_row_failure("FX_PARAMETER_NAME_MISMATCH", "FX assignment batch param_name does not match native name.", index, { live_param_name = live_name })
     end
-    local formatted = e2_fx_format_param_normalized(owner_kind, owner, slot_index, param_index, normalized_value)
+    local value
+    local formatted
+    if has_display_value then
+      value, formatted = E2_FX_HOMOGENEOUS_SET.search_formatted({
+        owner_kind = owner_kind,
+        owner = owner,
+        slot_index = slot_index,
+      }, param_index, row.display_value)
+      if not value then
+        return nil, e2_fx_batch_row_failure("FX_DISPLAY_VALUE_UNREACHABLE", "REAPER native formatting could not reach the requested FX display value without mutation.", index, {
+          display_value = bounded_string(row.display_value, 80),
+        })
+      end
+    else
+      formatted = e2_fx_format_param_normalized(owner_kind, owner, slot_index, param_index, normalized_value)
+    end
     if not is_string(formatted) or formatted == "" then
       return nil, e2_fx_batch_row_failure("API_UNAVAILABLE", "FX assignment batch could not format the native target value.", index)
     end
-    if is_string(row.requested_formatted_value) and row.requested_formatted_value ~= formatted then
+    if is_string(row.requested_formatted_value)
+        and not E2_FX_HOMOGENEOUS_SET.formatted_readback_matches(formatted, row.requested_formatted_value) then
       return nil, e2_fx_batch_row_failure("FX_ASSIGNMENTS_FORMATTED_TARGET_MISMATCH", "FX assignment batch requested formatted value does not match native formatting.", index, { requested_formatted_value = row.requested_formatted_value, native_formatted_value = formatted })
     end
     local step_sizes = e2_fx_read_param_step_sizes(owner_kind, owner, slot_index, param_index)
@@ -1463,15 +2845,20 @@ local function e2_fx_batch_validate_rows(request, ref_map)
       param_ident = live_ident,
       name = live_name,
       normalized_value = normalized_value,
+      value = value,
+      display_value = row.display_value,
       requested_formatted_value = formatted,
       step_sizes = step_sizes,
-      tolerance = step_sizes.is_discrete == true and 0 or 0.001,
+      tolerance = has_display_value and 0.000001 or step_sizes.is_discrete == true and 0 or 0.001,
     }
   end
   return prepared
 end
 
 local function e2_fx_parameter_assignments_batch(request)
+  if is_object(request.params) and request.params.mode == "shared_plan" then
+    return E2_FX_HOMOGENEOUS_SET.apply(request)
+  end
   local ref_map, ref_failure = e2_fx_batch_ref_map(request)
   if not ref_map then return nil, ref_failure end
   local prepared, validation_failure = e2_fx_batch_validate_rows(request, ref_map)
@@ -1495,12 +2882,16 @@ local function e2_fx_parameter_assignments_batch(request)
         param_index = item.param_index,
         param_ident = item.param_ident,
         name = item.name,
-        normalized_value = item.normalized_value,
+        value = item.display_value ~= nil and item.value or JSON_NULL,
+        normalized_value = item.normalized_value or JSON_NULL,
         formatted_value = item.requested_formatted_value,
-        requested_normalized_value = item.normalized_value,
+        requested_normalized_value = item.display_value == nil and item.normalized_value or JSON_NULL,
+        requested_display_value = item.display_value or JSON_NULL,
+        requested_value = item.display_value ~= nil and item.value or JSON_NULL,
         requested_formatted_value = item.requested_formatted_value,
         tolerance = item.tolerance,
-        verification_mode = item.tolerance == 0 and "native_discrete_format" or "numeric_tolerance",
+        verification_mode = item.display_value ~= nil and "native_display_value"
+          or item.tolerance == 0 and "native_discrete_format" or "numeric_tolerance",
         updated = true,
         readback_status = "preflight_passed",
       }
@@ -1515,7 +2906,13 @@ local function e2_fx_parameter_assignments_batch(request)
     for index = chunk_start, chunk_end do
       local item = prepared[index]
       batch_timings.native_mutation_count = batch_timings.native_mutation_count + 1
-      if not e2_fx_set_param_normalized(item.owner_kind, item.owner, item.slot_index, item.param_index, item.normalized_value) then
+      local accepted
+      if item.display_value ~= nil then
+        accepted = e2_fx_set_param_value(item.owner_kind, item.owner, item.slot_index, item.param_index, item.value)
+      else
+        accepted = e2_fx_set_param_normalized(item.owner_kind, item.owner, item.slot_index, item.param_index, item.normalized_value)
+      end
+      if not accepted then
         mutation_failure = e2_fx_batch_row_failure("COMMAND_FAILED", "REAPER rejected an FX assignment batch setter.", index, { mutation_attempted = true, zero_write = false })
         break
       end
@@ -1531,10 +2928,18 @@ local function e2_fx_parameter_assignments_batch(request)
     local normalized_value = e2_fx_read_param_normalized(item.owner_kind, item.owner, item.slot_index, item.param_index)
     local formatted_value = e2_fx_read_param_formatted(item.owner_kind, item.owner, item.slot_index, item.param_index)
     local values = e2_fx_read_param_value(item.owner_kind, item.owner, item.slot_index, item.param_index)
-    local updated = item.tolerance == 0
-      and formatted_value == item.requested_formatted_value
-      or e2_fx_batch_finite(normalized_value) and math.abs(normalized_value - item.normalized_value) <= item.tolerance
-    if not e2_fx_batch_finite(normalized_value) or not is_string(formatted_value) or formatted_value == "" or not updated then
+    local updated
+    if item.display_value ~= nil then
+      updated = e2_fx_batch_finite(values.value)
+        and math.abs(values.value - item.value) <= item.tolerance
+        and E2_FX_HOMOGENEOUS_SET.formatted_readback_matches(formatted_value, item.requested_formatted_value)
+    else
+      updated = item.tolerance == 0
+        and formatted_value == item.requested_formatted_value
+        or e2_fx_batch_finite(normalized_value) and math.abs(normalized_value - item.normalized_value) <= item.tolerance
+    end
+    if not e2_fx_batch_finite(values.value) or not e2_fx_batch_finite(normalized_value)
+        or not is_string(formatted_value) or formatted_value == "" or not updated then
       readback_failure = e2_fx_batch_row_failure("VERIFY_FAILED", "FX assignment batch aggregate readback did not match native identity or value truth.", index, { mutation_attempted = batch_timings.native_mutation_count > 0, zero_write = false })
       break
     end
@@ -1552,10 +2957,13 @@ local function e2_fx_parameter_assignments_batch(request)
       max_value = values.max_value,
       normalized_value = normalized_value,
       formatted_value = formatted_value,
-      requested_normalized_value = item.normalized_value,
+      requested_normalized_value = item.display_value == nil and item.normalized_value or JSON_NULL,
+      requested_display_value = item.display_value or JSON_NULL,
+      requested_value = item.display_value ~= nil and item.value or JSON_NULL,
       requested_formatted_value = item.requested_formatted_value,
       tolerance = item.tolerance,
-      verification_mode = item.tolerance == 0 and "native_discrete_format" or "numeric_tolerance",
+      verification_mode = item.display_value ~= nil and "native_display_value"
+        or item.tolerance == 0 and "native_discrete_format" or "numeric_tolerance",
       step_sizes_available = item.step_sizes.step_sizes_available,
       step_size = item.step_sizes.step_size,
       small_step_size = item.step_sizes.small_step_size,

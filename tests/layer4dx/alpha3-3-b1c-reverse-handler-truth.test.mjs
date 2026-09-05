@@ -61,6 +61,7 @@ take_b_other.item = item_b
 items = { item_a, item_b }
 calls = { action = 0 }
 action_mode = "toggle"
+locking_enabled = false
 
 reaper = {}
 reaper.CountTracks = function() return #tracks end
@@ -99,6 +100,10 @@ reaper.GetMediaItemTake_Source = function(take) return take.source end
 reaper.PCM_Source_GetSectionInfo = function(source) return source.section_available, 0, 1, source.reversed end
 reaper.UpdateItemInProject = function() return true end
 reaper.UpdateArrange = function() return true end
+reaper.GetToggleCommandStateEx = function(section_id, action_id)
+  assert(section_id == 0 and action_id == 1135)
+  return locking_enabled and 1 or 0
+end
 reaper.Main_OnCommandEx = function(action_id, flag, project)
   calls.action = calls.action + 1
   assert(action_id == 41051 and flag == 0 and project == 0)
@@ -132,6 +137,22 @@ request.params.reverse = false
 summary, failure = d13_items_set_reverse(request)
 assert(failure == nil and summary.reverse == false and summary.changed == true and calls.action == 2)
 
+locking_enabled = true
+request.params.reverse = true
+local item_a_selected_before = item_a.selected
+local item_b_selected_before = item_b.selected
+local track_a_selected_before = track_a.selected
+local track_b_selected_before = track_b.selected
+local item_b_active_before = item_b.active
+summary, failure = d13_items_set_reverse(request)
+assert(summary == nil and failure.code == "PROJECT_LOCKING_ENABLED")
+assert(failure.details.zero_write == true and failure.details.native_action_count == 0)
+assert(failure.details.locking_action_id == 1135 and calls.action == 2)
+assert(item_a.selected == item_a_selected_before and item_b.selected == item_b_selected_before)
+assert(track_a.selected == track_a_selected_before and track_b.selected == track_b_selected_before)
+assert(item_b.active == item_b_active_before and take_a.source.reversed == false)
+locking_enabled = false
+
 action_mode = "no_toggle"
 request.params.reverse = true
 summary, failure = d13_items_set_reverse(request)
@@ -143,6 +164,9 @@ assert(item_a.selected == false and item_b.selected == true and track_b.selected
 
   it("uses only native source-section readback and the audited fixed Action", () => {
     assert.match(HANDLER_SOURCE, /D13_ITEMS_TOGGLE_TAKE_REVERSE_ACTION_ID\s*=\s*41051/u);
+    assert.match(HANDLER_SOURCE, /D13_ITEMS_GLOBAL_LOCKING_ACTION_ID\s*=\s*1135/u);
+    assert.match(HANDLER_SOURCE, /GetToggleCommandStateEx/u);
+    assert.match(HANDLER_SOURCE, /PROJECT_LOCKING_ENABLED/u);
     assert.match(HANDLER_SOURCE, /PCM_Source_GetSectionInfo/u);
     assert.match(HANDLER_SOURCE, /Main_OnCommandEx", D13_ITEMS_TOGGLE_TAKE_REVERSE_ACTION_ID, 0, 0/u);
     assert.doesNotMatch(HANDLER_SOURCE, /B_REVERSE/u);

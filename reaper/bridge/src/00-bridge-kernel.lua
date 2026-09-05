@@ -41,6 +41,35 @@ local function skip_ws(source, position)
   return (next_position or (position - 1)) + 1
 end
 
+local function codepoint_to_utf8(codepoint, position)
+  if codepoint < 0 or codepoint > 0x10FFFF or (codepoint >= 0xD800 and codepoint <= 0xDFFF) then
+    parse_error("invalid unicode codepoint", position)
+  end
+  if utf8 and utf8.char then
+    return utf8.char(codepoint)
+  end
+  if codepoint <= 0x7F then
+    return string.char(codepoint)
+  elseif codepoint <= 0x7FF then
+    return string.char(
+      0xC0 + math.floor(codepoint / 0x40),
+      0x80 + (codepoint % 0x40)
+    )
+  elseif codepoint <= 0xFFFF then
+    return string.char(
+      0xE0 + math.floor(codepoint / 0x1000),
+      0x80 + (math.floor(codepoint / 0x40) % 0x40),
+      0x80 + (codepoint % 0x40)
+    )
+  end
+  return string.char(
+    0xF0 + math.floor(codepoint / 0x40000),
+    0x80 + (math.floor(codepoint / 0x1000) % 0x40),
+    0x80 + (math.floor(codepoint / 0x40) % 0x40),
+    0x80 + (codepoint % 0x40)
+  )
+end
+
 local function parse_string(source, position)
   if source:sub(position, position) ~= '"' then
     parse_error("expected string", position)
@@ -78,18 +107,33 @@ local function parse_string(source, position)
           parse_error("invalid unicode escape", position)
         end
         local codepoint = tonumber(hex, 16)
-        if utf8 and utf8.char then
-          parts[#parts + 1] = utf8.char(codepoint)
-        elseif codepoint <= 127 then
-          parts[#parts + 1] = string.char(codepoint)
-        else
-          parts[#parts + 1] = "?"
+        local consumed = 6
+        if codepoint >= 0xD800 and codepoint <= 0xDBFF then
+          if source:sub(position + 6, position + 7) ~= "\\u" then
+            parse_error("missing unicode low surrogate", position)
+          end
+          local low_hex = source:sub(position + 8, position + 11)
+          if not low_hex:match("^[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]$") then
+            parse_error("invalid unicode low surrogate", position)
+          end
+          local low = tonumber(low_hex, 16)
+          if low < 0xDC00 or low > 0xDFFF then
+            parse_error("invalid unicode low surrogate", position)
+          end
+          codepoint = 0x10000 + ((codepoint - 0xD800) * 0x400) + (low - 0xDC00)
+          consumed = 12
+        elseif codepoint >= 0xDC00 and codepoint <= 0xDFFF then
+          parse_error("unexpected unicode low surrogate", position)
         end
-        position = position + 6
+        parts[#parts + 1] = codepoint_to_utf8(codepoint, position)
+        position = position + consumed
       else
         parse_error("invalid string escape", position)
       end
     else
+      if char:byte() < 0x20 then
+        parse_error("unescaped control character", position)
+      end
       parts[#parts + 1] = char
       position = position + 1
     end
@@ -241,9 +285,20 @@ local ESCAPES = {
 }
 
 local function encode_string(value)
-  return '"' .. value:gsub('[%c\\"]', function(char)
-    return ESCAPES[char] or string.format("\\u%04x", char:byte())
-  end) .. '"'
+  local parts = { '"' }
+  for index = 1, #value do
+    local char = value:sub(index, index)
+    local byte = char:byte()
+    if ESCAPES[char] then
+      parts[#parts + 1] = ESCAPES[char]
+    elseif byte < 0x20 then
+      parts[#parts + 1] = string.format("\\u%04x", byte)
+    else
+      parts[#parts + 1] = char
+    end
+  end
+  parts[#parts + 1] = '"'
+  return table.concat(parts)
 end
 
 local function is_finite_number(value)
@@ -318,7 +373,16 @@ local function parse_generation(value)
   return number
 end
 
-local ACTIVE_OWNER = non_empty(os.getenv(OWNER_ENV)) or DEFAULT_OWNER
-local ACTIVE_GENERATION = parse_generation(os.getenv(GENERATION_ENV))
-local ARTIFACT_ROOT = non_empty(os.getenv(ARTIFACT_ROOT_ENV))
-local RENDER_ROOT = non_empty(os.getenv(RENDER_ROOT_ENV))
+local function configured_value(env_name, global_name)
+  local from_environment = non_empty(os.getenv(env_name))
+  if from_environment then return from_environment end
+  if global_name and type(_G) == "table" then
+    return non_empty(rawget(_G, global_name))
+  end
+  return nil
+end
+
+local ACTIVE_OWNER = configured_value(OWNER_ENV, "__OPENREAPER_DEFAULT_OWNER") or DEFAULT_OWNER
+local ACTIVE_GENERATION = parse_generation(configured_value(GENERATION_ENV, "__OPENREAPER_DEFAULT_GENERATION"))
+local ARTIFACT_ROOT = configured_value(ARTIFACT_ROOT_ENV, "__OPENREAPER_DEFAULT_ARTIFACT_ROOT")
+local RENDER_ROOT = configured_value(RENDER_ROOT_ENV, "__OPENREAPER_DEFAULT_RENDER_ROOT")

@@ -5,10 +5,12 @@ import {
   RECIPE_RISKS,
   normalizeRecipeContract,
 } from "./recipe-contract-v1.mjs";
+import { normalizeTargetBinding } from "./target-binding-v1.mjs";
 
 export const EXECUTABLE_RECIPE_DRAFT_CONTRACT = "recipe.executable.draft.v1";
 export const EXECUTABLE_RECIPE_REVISION_CONTRACT = "recipe.executable.revision.v1";
 export const EXECUTABLE_RECIPE_VALIDATION_CONTRACT = "recipe.executable.validation.v1";
+export const EXECUTABLE_RECIPE_TARGET_SET_MAX_COUNT = 16;
 export const EXECUTABLE_RECIPE_DEPENDENCY_LOCK_CONTRACT = "recipe.executable.dependency_lock.v1";
 export const EXECUTABLE_RECIPE_TRUST_CONTRACT = "recipe.executable.trust.v1";
 export const EXECUTABLE_RECIPE_PREFLIGHT_CONTRACT = "recipe.executable.preflight.v1";
@@ -219,26 +221,28 @@ export function validateExecutableRecipeDraft(input, options = {}) {
   }
 
   rejectForbiddenFields(input, errors, "draft");
+  const draftFields = [
+    "contract",
+    "id",
+    "title",
+    "summary",
+    "pack",
+    "risk",
+    "inputs",
+    "outputs",
+    "stages",
+    "bindings",
+    "dependencies",
+    "required_capabilities",
+    "risk_grants",
+    "checkpoints",
+    "preflight",
+    "portability",
+  ];
+  if (Object.hasOwn(input, "target_sets")) draftFields.push("target_sets");
   requireExactObjectFields(
     input,
-    [
-      "contract",
-      "id",
-      "title",
-      "summary",
-      "pack",
-      "risk",
-      "inputs",
-      "outputs",
-      "stages",
-      "bindings",
-      "dependencies",
-      "required_capabilities",
-      "risk_grants",
-      "checkpoints",
-      "preflight",
-      "portability",
-    ],
+    draftFields,
     "draft",
     errors,
   );
@@ -256,6 +260,7 @@ export function validateExecutableRecipeDraft(input, options = {}) {
   const inputIds = validateDeclaredPorts(input.inputs, "draft.inputs", EXECUTABLE_RECIPE_BUDGETS.input_max_count, errors);
   const outputIds = validateDeclaredPorts(input.outputs, "draft.outputs", EXECUTABLE_RECIPE_BUDGETS.output_max_count, errors);
   const stageIndex = validateStages(input.stages, catalog, errors);
+  validateRecipeTargetSets(input.target_sets, stageIndex, errors);
   const dependencyIndex = validateDependencies(input.dependencies, catalog, stageIndex, errors);
   validateBindings(input.bindings, inputIds, outputIds, stageIndex, errors);
   validateCapabilities(input.required_capabilities, catalog, dependencyIndex, errors);
@@ -293,6 +298,7 @@ export function canonicalExecutableRecipeContent(input, options = {}) {
     risk: draft.risk,
     inputs: draft.inputs,
     outputs: draft.outputs,
+    ...(Array.isArray(draft.target_sets) ? { target_sets: draft.target_sets } : {}),
     stages: draft.stages,
     bindings: draft.bindings,
     dependencies: draft.dependencies,
@@ -548,11 +554,12 @@ function validateStages(stages, catalog, errors) {
   const stageOutputs = new Map();
   const stageInputs = new Map();
   const stageCheckpoints = new Map();
+  const stageTargetSets = [];
   const dependencyRefs = [];
 
   if (!Array.isArray(stages)) {
     errors.push("draft.stages must be an array.");
-    return { stageIds, stagePositions, stageOutputs, stageInputs, stageCheckpoints, dependencyRefs, maxRisk: "read" };
+    return { stageIds, stagePositions, stageOutputs, stageInputs, stageCheckpoints, stageTargetSets, dependencyRefs, maxRisk: "read" };
   }
   if (stages.length === 0) errors.push("draft.stages must contain at least one stage.");
   if (stages.length > EXECUTABLE_RECIPE_BUDGETS.stage_max_count) {
@@ -567,9 +574,11 @@ function validateStages(stages, catalog, errors) {
       errors.push(`${field} must be an object.`);
       continue;
     }
+    const stageFields = ["id", "kind", "dependency", "inputs", "outputs", "risk", "checkpoint"];
+    if (Object.hasOwn(stage, "target_set_id")) stageFields.push("target_set_id");
     requireExactObjectFields(
       stage,
-      ["id", "kind", "dependency", "inputs", "outputs", "risk", "checkpoint"],
+      stageFields,
       field,
       errors,
     );
@@ -588,6 +597,13 @@ function validateStages(stages, catalog, errors) {
     validateStringArray(stage.outputs, `${field}.outputs`, errors, { allowEmpty: true });
     validateStringArray(stage.inputs, `${field}.inputs`, errors, { allowEmpty: true });
     validateIdentifier(stage.checkpoint, `${field}.checkpoint`, errors);
+    if (Object.hasOwn(stage, "target_set_id")) validateIdentifier(stage.target_set_id, `${field}.target_set_id`, errors);
+    if (typeof stage.target_set_id === "string") {
+      stageTargetSets.push({ stage_id: stage.id, target_set_id: stage.target_set_id });
+      if (!(["macro", "template"].includes(stage.kind))) {
+        errors.push(`${field}.target_set_id is accepted only for macro or template stages.`);
+      }
+    }
     if (typeof stage.id === "string") {
       stageOutputs.set(stage.id, new Set(Array.isArray(stage.outputs) ? stage.outputs : []));
       stageInputs.set(stage.id, new Set(Array.isArray(stage.inputs) ? stage.inputs : []));
@@ -629,7 +645,73 @@ function validateStages(stages, catalog, errors) {
     errors.push("draft.stages must include at least one macro or template stage.");
   }
 
-  return { stageIds, stagePositions, stageOutputs, stageInputs, stageCheckpoints, dependencyRefs, maxRisk };
+  return { stageIds, stagePositions, stageOutputs, stageInputs, stageCheckpoints, stageTargetSets, dependencyRefs, maxRisk };
+}
+
+export function normalizeExecutableRecipeTargetSet(row) {
+  if (!isPlainObject(row)) {
+    return { ok: false, errors: ["Recipe target set must be an object."] };
+  }
+  const allowed = new Set([
+    "id",
+    "resolve_at",
+    "domain",
+    "selector",
+    "refs",
+    "range",
+    "constraints",
+    "cardinality",
+    "aggregation",
+  ]);
+  const unknown = Object.keys(row).filter((field) => !allowed.has(field));
+  const errors = [];
+  if (unknown.length > 0) errors.push(`Unknown Recipe target-set field(s): ${unknown.join(", ")}.`);
+  if (typeof row.id !== "string" || !IDENTIFIER_PATTERN.test(row.id)) errors.push("Recipe target-set id must use lower snake-case.");
+  if (row.resolve_at !== "run_start") errors.push("Recipe target-set resolve_at must be run_start.");
+  const binding = normalizeTargetBinding({
+    bind_at: "run_start",
+    domain: row.domain,
+    ...(Object.hasOwn(row, "selector") ? { selector: row.selector } : {}),
+    ...(Object.hasOwn(row, "refs") ? { refs: row.refs } : {}),
+    ...(Object.hasOwn(row, "range") ? { range: row.range } : {}),
+    ...(Object.hasOwn(row, "constraints") ? { constraints: row.constraints } : {}),
+    ...(Object.hasOwn(row, "cardinality") ? { cardinality: row.cardinality } : {}),
+    ...(Object.hasOwn(row, "aggregation") ? { aggregation: row.aggregation } : {}),
+  });
+  if (!binding.ok) errors.push(binding.message);
+  return errors.length > 0
+    ? { ok: false, errors }
+    : { ok: true, id: row.id, binding: binding.value };
+}
+
+function validateRecipeTargetSets(targetSets, stageIndex, errors) {
+  if (targetSets === undefined) {
+    for (const stage of stageIndex.stageTargetSets ?? []) {
+      errors.push(`Stage ${stage.stage_id} references target_set_id ${stage.target_set_id}, but draft.target_sets is absent.`);
+    }
+    return;
+  }
+  if (!Array.isArray(targetSets)) {
+    errors.push("draft.target_sets must be an array.");
+    return;
+  }
+  if (targetSets.length > EXECUTABLE_RECIPE_TARGET_SET_MAX_COUNT) {
+    errors.push(`draft.target_sets may contain at most ${EXECUTABLE_RECIPE_TARGET_SET_MAX_COUNT} rows.`);
+  }
+  const ids = new Set();
+  for (const [index, row] of targetSets.entries()) {
+    const normalized = normalizeExecutableRecipeTargetSet(row);
+    if (!normalized.ok) errors.push(...normalized.errors.map((message) => `draft.target_sets[${index}]: ${message}`));
+    if (normalized.ok) {
+      if (ids.has(normalized.id)) errors.push(`Duplicate target-set id: ${normalized.id}.`);
+      ids.add(normalized.id);
+    }
+  }
+  for (const stage of stageIndex.stageTargetSets ?? []) {
+    if (!ids.has(stage.target_set_id)) {
+      errors.push(`Stage ${stage.stage_id} references unknown target_set_id ${stage.target_set_id}.`);
+    }
+  }
 }
 
 function validateStageDependency(dependency, stageKind, catalog, field, errors) {

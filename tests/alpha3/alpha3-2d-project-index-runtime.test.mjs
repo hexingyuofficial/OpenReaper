@@ -128,7 +128,16 @@ describe("Alpha3.2-D Product Project Index runtime", () => {
         track_ref: "track:guid:{T1}",
         items: [{
           item_ref: "item:guid:{I1}", track_ref: "track:guid:{T1}", position_seconds: 1, length_seconds: 2,
-          takes: [{ take_ref: "take:guid:{K1}", name: "对白 Take 你好", active: true, source_ref: "file:path:/audio/kick.wav" }],
+          takes: [{
+            take_ref: "take:guid:{K1}",
+            item_ref: "item:guid:{I1}",
+            name: "对白 Take 你好",
+            active: true,
+            source_ref: "file:path:/Users/Zhuanz/工程/对白 素材/vo_角色_male1.ogg",
+            source_path: "/Users/Zhuanz/工程/对白 素材/vo_角色_male1.ogg",
+            source_basename: "vo_角色_male1.ogg",
+            source_identity_status: "available",
+          }],
         }],
       }));
       assertObserved(runtime, execution("template.fx.list_track_fx_chain", identity, {
@@ -194,6 +203,10 @@ describe("Alpha3.2-D Product Project Index runtime", () => {
       // Artifact project maps do not currently carry take refs, so the prior canonical take page is retained rather than fabricated or erased.
       assert.deepEqual(snapshot.rows.takes.map((row) => row.ref), ["take:guid:{K1}"]);
       assert.equal(snapshot.rows.takes[0].name, "对白 Take 你好");
+      assert.equal(snapshot.rows.takes[0].item_ref, "item:guid:{I1}");
+      assert.equal(snapshot.rows.takes[0].source_path, "/Users/Zhuanz/工程/对白 素材/vo_角色_male1.ogg");
+      assert.equal(snapshot.rows.takes[0].source_basename, "vo_角色_male1.ogg");
+      assert.equal(snapshot.rows.takes[0].source_identity_status, "available");
       assert.deepEqual(snapshot.rows.fx.map((row) => row.ref), ["fx:track:guid:{T1}:slot:0"]);
       assert.deepEqual(snapshot.rows.sends.map((row) => row.ref), ["send:track:guid:{T1}:0"]);
       assert.deepEqual(snapshot.rows.envelopes.map((row) => row.ref), ["envelope:track:guid:{T1}:volume"]);
@@ -257,6 +270,15 @@ describe("Alpha3.2-D Product Project Index runtime", () => {
             })),
             selected_items: [],
           },
+          transport: {
+            time_selection: {
+              read_status: "available",
+              active: true,
+              start_seconds: 2.6,
+              end_seconds: 4.94,
+              length_seconds: 2.34,
+            },
+          },
           coverage: { project_map: "complete_page" },
         },
       });
@@ -268,6 +290,13 @@ describe("Alpha3.2-D Product Project Index runtime", () => {
       assert.equal(snapshot.freshness_scopes.tracks.coverage_status, "partial");
       const projectHead = snapshot.rows.selection_state.find((row) => row.scope_kind === "project_head");
       assert.equal(projectHead.summary.track_count, 14);
+      assert.deepEqual(projectHead.summary.time_selection, {
+        read_status: "available",
+        active: true,
+        start_seconds: 2.6,
+        end_seconds: 4.94,
+        length_seconds: 2.34,
+      });
     } finally {
       runtime?.close();
       await fixture.cleanup();

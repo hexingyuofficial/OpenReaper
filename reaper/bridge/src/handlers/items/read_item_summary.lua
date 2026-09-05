@@ -31,6 +31,34 @@ local function read_item_summary_linear_to_db(value)
   return 20 * math.log(linear) / math.log(10)
 end
 
+local function read_item_summary_source_basename(path)
+  if type(path) ~= "string" or path == "" then return "" end
+  local posix_style = path:sub(1, 1) == "/"
+  local normalized = posix_style and path:gsub("/+$", "") or path:gsub("[\\/]+$", "")
+  local separator = normalized:match("^.*()/") or 0
+  if not posix_style then separator = math.max(separator, normalized:match("^.*()\\") or 0) end
+  return normalized:sub(separator + 1)
+end
+
+local function read_item_summary_source_identity(take, source)
+  local ok_midi, is_midi = call_reaper("TakeIsMIDI", take)
+  if ok_midi and (is_midi == true or is_midi == 1) then
+    return "midi", JSON_NULL, JSON_NULL, JSON_NULL, "not_file_backed"
+  end
+  local source_kind = "unknown"
+  if source then
+    local ok_type, source_type = call_reaper("GetMediaSourceType", source, "")
+    source_type = ok_type and first_string(source_type) or nil
+    if type(source_type) == "string" and source_type ~= "" then source_kind = source_type:lower() end
+    local ok_path, path = call_reaper("GetMediaSourceFileName", source, "")
+    path = ok_path and first_string(path) or nil
+    if type(path) == "string" and path ~= "" then
+      return source_kind, "file:path:" .. path, path, read_item_summary_source_basename(path), "available"
+    end
+  end
+  return source_kind, JSON_NULL, JSON_NULL, JSON_NULL, "unavailable"
+end
+
 local function read_item_summary_track_guid(track)
   local ok, guid = call_reaper("GetTrackGUID", track)
   guid = ok and first_string(guid) or nil
@@ -283,6 +311,11 @@ local function read_item_summary_value(item, include_take_summary)
     end
     summary.active_take_ref = JSON_NULL
     summary.active_take_name = ""
+    summary.active_take_source_kind = "unknown"
+    summary.active_take_source_ref = JSON_NULL
+    summary.active_take_source_path = JSON_NULL
+    summary.active_take_source_basename = JSON_NULL
+    summary.active_take_source_identity_status = "no_active_take"
     return summary
   end
 
@@ -358,6 +391,8 @@ local function read_item_summary_value(item, include_take_summary)
       reverse = available == true and (reversed == true or reversed == 1) or false
     end
   end
+  local source_kind, source_ref, source_path, source_basename, source_identity_status =
+    read_item_summary_source_identity(take, ok_source and source or nil)
   local ok_take_fx, take_fx_count_raw = call_reaper("TakeFX_GetCount", take)
   local take_fx_count = ok_take_fx and read_item_summary_finite_number(first_number(take_fx_count_raw)) or nil
   if take_fx_count ~= nil and (take_fx_count < 0 or take_fx_count ~= math.floor(take_fx_count)) then
@@ -370,6 +405,11 @@ local function read_item_summary_value(item, include_take_summary)
   summary.playrate = playrate
   summary.preserve_pitch = ppitch == 1
   summary.reverse = reverse == nil and JSON_NULL or reverse
+  summary.active_take_source_kind = source_kind
+  summary.active_take_source_ref = source_ref
+  summary.active_take_source_path = source_path
+  summary.active_take_source_basename = source_basename
+  summary.active_take_source_identity_status = source_identity_status
   summary.take_fx_count = take_fx_count == nil and JSON_NULL or take_fx_count
   summary.has_take_fx = take_fx_count == nil and JSON_NULL or take_fx_count > 0
   return summary

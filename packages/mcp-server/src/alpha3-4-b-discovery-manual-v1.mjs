@@ -33,7 +33,7 @@ const MACRO_TARGET_FACTS = deepFreeze({
     required_targets: ["entity"],
     preview_or_dry_run_mandatory: false,
     identity_required: false,
-    notes: "SQLite navigation only; returns candidate refs for later live writes.",
+    notes: "For ordinary index search, returns candidate refs for later live writes. For Items/Tracks/Automation target_binding reads, resolves the complete live set and returns exact membership/fingerprint without SQLite authority. Use the same binding only when the user asks which objects match; fixed mutations consume it directly without a selected_context pre-query. REAPER Media Item FX means Take FX: inspect it by exact take:guid owner_ref and require owner_kind=take plus native fx_guid/slot. If visible UI and Index truth disagree, use one force_read_only_refresh and direct list_take_fx_chain readback; never publish a contradictory zero-FX claim.",
   },
   "macro.project.delete_targets": {
     required_targets: ["exact refs or unambiguous selectors"],
@@ -51,7 +51,7 @@ const MACRO_TARGET_FACTS = deepFreeze({
     required_targets: ["operation"],
     preview_or_dry_run_mandatory: false,
     identity_required: false,
-    notes: "Six operations: save_current, save_as, list_open_projects, create_project_tab, open_project_in_tab, activate_project_tab. target_path is one native absolute .RPP JSON string with Unicode/spaces literal, never shell/URI encoded; save_as/create also need overwrite:true. activate requires exact saved project:path ref. dry_run only for saves. list pages with string cursor; switches rebind Project Index from live inventory.",
+    notes: "Six operations: save_current, save_as, list_open_projects, create_project_tab, open_project_in_tab, activate_project_tab. Open/switch an .RPP only here, never with macOS open -a, LaunchServices, shell launch, or startup recovery. target_path is one native absolute .RPP JSON string with Unicode/spaces literal, never shell/URI encoded; save_as/create also need overwrite:true. bridge_ready proves transport only: open success requires project_identity_verified and index_project_identity_verified. If partial_state is opened_but_index_not_ready, do not reopen; activate the returned exact project:path ref, then inspect or force a read-only query refresh. Unknown dialogs remain user-mediated. dry_run only for saves; list pages with string cursor.",
   },
   "macro.routing.apply": {
     required_targets: ["exact track/send refs"],
@@ -75,7 +75,7 @@ const MACRO_TARGET_FACTS = deepFreeze({
     required_targets: ["selected or exact item refs; set_item_take_controls requires exact item_ref rows and take_ref for Take fields"],
     preview_or_dry_run_mandatory: false,
     identity_required: false,
-    notes: "align/move/sequence/fades/properties plus set_item_take_controls batch; Item pan unsupported; Active-Take pan requires take_ref.",
+    notes: "Reverse and Glue accept one live selected/constrained Item target_binding and perform one aggregate native mutation; do not pre-query selected_context or loop refs. Other modes retain their exact documented target rules. Item pan unsupported; Active-Take pan requires take_ref.",
   },
   "macro.midi.apply": {
     required_targets: ["selector or track_ref for create_clips; exact take_ref for edit modes"],
@@ -84,16 +84,16 @@ const MACRO_TARGET_FACTS = deepFreeze({
     notes: "create_clips may use selector; edit_notes/quantize/write_cc require exact take refs from query.",
   },
   "macro.fx.apply_chain": {
-    required_targets: ["selector or exact track/take ref"],
+    required_targets: ["selector or exact track/take ref; Track-owned active-Take fanout requires one exact track_ref"],
     preview_or_dry_run_mandatory: false,
     identity_required: false,
-    notes: "Legacy single-node plugin=reacomp accepted; chain[] is canonical multi-node when used.",
+    notes: "Legacy single-node plugin=reacomp accepted; chain[] is canonical multi-node. For one homogeneous FX on every Item's active audio Take on one Track, use the fixed execution target_binding and retain the returned server-owned fx_set_ref; never enumerate Item/Take/FX refs in the Agent.",
   },
   "macro.fx.set_controls": {
-    required_targets: ["exact fx_ref or unambiguous selector for semantic/exact_parameters; exact_assignments requires exact fx_ref rows"],
+    required_targets: ["exact fx_ref or unambiguous selector for semantic/exact_parameters; exact_assignments requires exact fx_ref rows; inspect_set/shared_plan require server-owned fx_set_ref"],
     preview_or_dry_run_mandatory: false,
     identity_required: true,
-    notes: "mode=semantic only when native proof exists; exact_parameters for one FX; exact_assignments for multi-FX exact rows; complete inventory paging before param_index/ident.",
+    notes: "mode=semantic only when native proof exists; exact_parameters for one FX; exact_assignments for caller-enumerated rows. Prefer display_value in REAPER-native plugin text and never guess normalized coordinates; normalized_value is compatibility/debug fallback. A Skill may retain plugin_id/layout fingerprint/param_ident semantics after one complete inventory, but live identity and native formatting are revalidated every use. For a homogeneous active-Take FX set, call inspect_set once, then shared_plan with the same fx_set_ref and returned parameter_plan_ref. OpenReaper inspects one representative and revalidates all members; never loop or cache per-member refs. Project/generation changes invalidate both refs.",
   },
   "macro.controls.set": {
     required_targets: ["target_kind + fields, or changes[]"],
@@ -105,13 +105,13 @@ const MACRO_TARGET_FACTS = deepFreeze({
     required_targets: ["exact envelope/track/fx refs"],
     preview_or_dry_run_mandatory: false,
     identity_required: true,
-    notes: "Always obtain canonical envelope/track/fx refs via macro.project.query first.",
+    notes: "Mutation remains exact-ref only. macro.project.query entity=automation can resolve the selected Envelope, native D_UISEL-selected Automation Items, or all points under one selected/exact Envelope plus a range. Selected-point UI semantics are unsupported and return AUTOMATION_POINT_SELECTION_UNPROVEN.",
   },
   "macro.render.targets": {
-    required_targets: ["target_kind + format"],
+    required_targets: ["target_kind + format, or destination=new_project_track with its selected-Track default"],
     preview_or_dry_run_mandatory: true,
     identity_required: false,
-    notes: "Preview/render bounded targets; region/item targets need exact refs when not whole_project.",
+    notes: "Preview/render bounded targets; region/item targets need exact refs when not whole_project. In-project Stem mode omits target only for its declared selected-Track default, renders one non-silent WAV, imports/readbacks one Track/Item/Take, then mutes sources; never enumerate Tracks or mutate visible selection in the Agent.",
   },
 });
 
@@ -912,10 +912,11 @@ function annotateExpansionPlaceholderExamples(expansion) {
     action_manual: {
       ...expansion.action_manual,
       examples: examples.map((entry, index) => {
-      const projected = annotatePlaceholderExample(expansion.id, {
+        const projected = annotatePlaceholderExample(expansion.id, {
           name: entry?.name ?? `manual_${index}`,
           input: entry?.input ?? entry,
           ...(isPlainObject(entry?.refs) ? { refs: entry.refs } : {}),
+          ...(entry?.prerequisite ? { prerequisite: entry.prerequisite } : {}),
           source: "action_manual",
         });
         if (projected.executable_now !== false) return entry;

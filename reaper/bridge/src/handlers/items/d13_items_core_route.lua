@@ -1,6 +1,16 @@
 -- Extracted D13 handler: items core read/write controls.
 
 local D13_ITEMS_TOGGLE_TAKE_REVERSE_ACTION_ID = 41051
+local D13_ITEMS_GLOBAL_LOCKING_ACTION_ID = 1135
+
+local function d13_items_global_locking_enabled()
+  local ok, state = call_reaper(
+    "GetToggleCommandStateEx",
+    0,
+    D13_ITEMS_GLOBAL_LOCKING_ACTION_ID
+  )
+  return ok and first_number(state) == 1
+end
 
 local function d13_items_error(code, message, details, recoverable)
   return nil, {
@@ -111,8 +121,7 @@ local function d13_items_find_track_by_guid(guid)
 end
 
 local function d13_items_track_name(track)
-  local ok, _, name = call_reaper("GetTrackName", track, "")
-  return bounded_string(ok and first_string(name) or "", 160)
+  return read_track_name(track, 160)
 end
 
 local function d13_items_find_track_by_name(name)
@@ -1615,6 +1624,15 @@ local function d13_items_apply_item_selection(items, target_item)
   return true
 end
 
+local function d13_items_apply_item_selection_set(items, selected_items)
+  for index = 1, #items do
+    local selected = selected_items[items[index].item] == true
+    local ok_set, accepted = call_reaper("SetMediaItemSelected", items[index].item, selected)
+    if not ok_set or accepted == false then return false end
+  end
+  return true
+end
+
 local function d13_items_restore_reverse_context(snapshot)
   local selection_ok = d13_items_clear_track_selection()
   for index = 1, #snapshot.selected_tracks do
@@ -1651,7 +1669,175 @@ local function d13_items_restore_reverse_context(snapshot)
   return selection_ok, active_ok
 end
 
+local function d13_items_set_reverse_batch(request)
+  local batch = request.params.batch
+  if not is_json_array(batch) or #batch < 1 or #batch > 64 then
+    return d13_items_error("PARAMS_INVALID", "Take reverse batch must contain 1-64 exact Item rows.", {
+      row_count = is_json_array(batch) and #batch or 0,
+      zero_write = true,
+    })
+  end
+  if request.params.reverse ~= true and request.params.reverse ~= false then
+    return d13_items_error("PARAMS_INVALID", "Take reverse batch requires a boolean reverse value.", { zero_write = true })
+  end
+
+  local items = d13_items_all_items()
+  local selected_tracks = d13_items_selected_tracks()
+  if not items or not selected_tracks then
+    return d13_items_error("COMMAND_FAILED", "Take reverse batch could not snapshot complete Item, Track-selection, and Active-Take state.", { zero_write = true }, false)
+  end
+  local by_ref = {}
+  local ref_counts = {}
+  for index = 1, #items do
+    local ref = d13_items_item_ref_string(items[index].item)
+    ref_counts[ref] = (ref_counts[ref] or 0) + 1
+    by_ref[ref] = items[index]
+  end
+
+  local targets = {}
+  local requested_refs = {}
+  for index = 1, #batch do
+    local row = batch[index]
+    local ref = is_object(row) and row.item_ref or nil
+    if not is_string(ref) or not ref:match("^item:guid:[^:]+$") then
+      return d13_items_error("REF_INVALID", "Take reverse batch accepts only exact item:guid rows.", { row_index = index, zero_write = true })
+    end
+    if requested_refs[ref] then
+      return d13_items_error("REF_INVALID", "Take reverse batch repeats an Item ref.", { item_ref = ref, zero_write = true })
+    end
+    requested_refs[ref] = true
+    local saved = by_ref[ref]
+    if not saved or ref_counts[ref] ~= 1 then
+      return d13_items_error("REF_INVALID", "Take reverse batch Item GUID was missing or duplicated in the live project.", {
+        item_ref = ref,
+        duplicate_count = ref_counts[ref] or 0,
+        zero_write = true,
+      })
+    end
+    if not saved.active_take then
+      return d13_items_error("TAKE_NOT_FOUND", "Take reverse batch requires every Item to expose an active Take.", { item_ref = ref, zero_write = true })
+    end
+    local before = d13_items_take_reverse_state(saved.active_take)
+    if before == nil then
+      return d13_items_error("COMMAND_FAILED", "Take reverse batch could not read every active Take reverse state before mutation.", { item_ref = ref, zero_write = true }, false)
+    end
+    targets[#targets + 1] = {
+      id = is_string(row.id) and bounded_string(row.id, 80) or ("i" .. tostring(index)),
+      item_ref = ref,
+      item = saved.item,
+      take = saved.active_take,
+      before = before,
+    }
+  end
+
+  local snapshot = { items = items, selected_tracks = selected_tracks }
+  local action_set = {}
+  local action_count = 0
+  for index = 1, #targets do
+    if targets[index].before ~= request.params.reverse then
+      action_set[targets[index].item] = true
+      action_count = action_count + 1
+    end
+  end
+  if action_count > 0 and d13_items_global_locking_enabled() then
+    return d13_items_error("PROJECT_LOCKING_ENABLED", "REAPER project Locking is enabled; disable Locking and retry the same Take reverse request.", {
+      zero_write = true,
+      locking_action_id = D13_ITEMS_GLOBAL_LOCKING_ACTION_ID,
+      native_action_count = 0,
+      selection_restored = true,
+      active_take_restored = true,
+    })
+  end
+  if not d13_items_apply_item_selection_set(items, action_set) then
+    local selection_restored, active_take_restored = d13_items_restore_reverse_context(snapshot)
+    return d13_items_error("COMMAND_FAILED", "Take reverse batch could not stage the exact Item selection.", {
+      zero_write = true,
+      selection_restored = selection_restored,
+      active_take_restored = active_take_restored,
+    }, false)
+  end
+  for index = 1, #targets do
+    local target = targets[index]
+    local ok_set, accepted = call_reaper("SetActiveTake", target.take)
+    local ok_read, active = call_reaper("GetActiveTake", target.item)
+    if not ok_set or accepted == false or not ok_read or active ~= target.take then
+      local selection_restored, active_take_restored = d13_items_restore_reverse_context(snapshot)
+      return d13_items_error("COMMAND_FAILED", "Take reverse batch could not stage every exact active Take.", {
+        item_ref = target.item_ref,
+        zero_write = true,
+        selection_restored = selection_restored,
+        active_take_restored = active_take_restored,
+      }, false)
+    end
+  end
+
+  local native_action_count = 0
+  if action_count > 0 then
+    local command_ok, command_result = call_reaper("Main_OnCommandEx", D13_ITEMS_TOGGLE_TAKE_REVERSE_ACTION_ID, 0, 0)
+    if not command_ok or command_result == false then
+      local selection_restored, active_take_restored = d13_items_restore_reverse_context(snapshot)
+      return d13_items_error("COMMAND_FAILED", "REAPER rejected the fixed native Take reverse batch action.", {
+        selection_restored = selection_restored,
+        active_take_restored = active_take_restored,
+      }, false)
+    end
+    native_action_count = 1
+    for index = 1, #targets do call_reaper("UpdateItemInProject", targets[index].item) end
+    call_reaper("UpdateArrange")
+  end
+
+  local rows = json_array({})
+  local refs = json_array({})
+  local readback_ok = true
+  for index = 1, #targets do
+    local target = targets[index]
+    local observed = d13_items_take_reverse_state(target.take)
+    if observed ~= request.params.reverse then readback_ok = false end
+    local take_ref = d13_items_take_ref_string(target.take)
+    rows[#rows + 1] = {
+      id = target.id,
+      item_ref = target.item_ref,
+      active_take_ref = take_ref,
+      before_reverse = target.before,
+      reverse = observed == true,
+      changed = target.before ~= request.params.reverse,
+      status = observed == request.params.reverse and "applied" or "readback_failed",
+      live_readback = { status = observed == request.params.reverse and "passed" or "failed" },
+    }
+    refs[#refs + 1] = d13_items_item_object_ref(target.item)
+    local take_guid = take_ref:match("^take:guid:(.+)$")
+    if take_guid then refs[#refs + 1] = { kind = "take", ref = take_ref, identity = { scheme = "guid", value = take_guid } } end
+  end
+  local selection_restored, active_take_restored = d13_items_restore_reverse_context(snapshot)
+  if not readback_ok or not selection_restored or not active_take_restored then
+    return d13_items_error("VERIFY_FAILED", "Take reverse batch aggregate readback or context restoration failed.", {
+      row_count = #rows,
+      native_action_count = native_action_count,
+      readback_status = readback_ok and "passed" or "failed",
+      selection_restored = selection_restored,
+      active_take_restored = active_take_restored,
+    }, false)
+  end
+  return {
+    kind = "take_reverse_batch",
+    rows = rows,
+    row_count = #rows,
+    requested_reverse = request.params.reverse,
+    changed_count = action_count,
+    native_action_count = native_action_count,
+    fixed_action_id = D13_ITEMS_TOGGLE_TAKE_REVERSE_ACTION_ID,
+    selection_restored = true,
+    active_take_restored = true,
+    readback_status = "passed",
+    undo_opened = request.__openreaper_undo_opened == true,
+    source_media_deleted = false,
+  }, nil, json_array({}), json_array({}), refs
+end
+
 local function d13_items_set_reverse(request)
+  if is_json_array(request.params and request.params.batch) then
+    return d13_items_set_reverse_batch(request)
+  end
   local item, failure = d13_items_item_for_write(request)
   if not item then return d13_items_error(failure.code, failure.message, failure.details) end
   local take, take_failure = d13_items_take_for_write(request, item)
@@ -1670,6 +1856,17 @@ local function d13_items_set_reverse(request)
     summary.selection_restored = true
     summary.active_take_restored = true
     return summary, err, artifacts, jobs, refs
+  end
+
+  if d13_items_global_locking_enabled() then
+    return d13_items_error("PROJECT_LOCKING_ENABLED", "REAPER project Locking is enabled; disable Locking and retry the same Take reverse request.", {
+      item_ref = d13_items_item_ref_string(item),
+      zero_write = true,
+      locking_action_id = D13_ITEMS_GLOBAL_LOCKING_ACTION_ID,
+      native_action_count = 0,
+      selection_restored = true,
+      active_take_restored = true,
+    })
   end
 
   local items = d13_items_all_items()

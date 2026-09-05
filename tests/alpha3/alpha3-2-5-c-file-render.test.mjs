@@ -53,6 +53,36 @@ function verifiedRenderResult(overrides = {}) {
   };
 }
 
+function verifiedStemResult(overrides = {}) {
+  return verifiedRenderResult({
+    ...overrides,
+    data: {
+      outputs: [{
+        absolute_path: "/managed/renders/dialog-stem.wav",
+        size: 8192,
+        extension: "wav",
+        requested_format: "wav",
+        actual_format: "wav",
+        target_identity: "target-set:stem",
+      }],
+      stem: {
+        destination_track_ref: "track:guid:{STEM-TRACK}",
+        destination_item_ref: "item:guid:{STEM-ITEM}",
+        destination_take_ref: "take:guid:{STEM-TAKE}",
+        destination_track_count: 1,
+        destination_item_count: 1,
+        destination_take_count: 1,
+        source_track_refs: ["track:guid:{SOURCE-A}", "track:guid:{SOURCE-B}"],
+        source_track_count: 2,
+        source_tracks_muted: true,
+        imported_source_verified: true,
+        non_silent_verified: true,
+      },
+      ...overrides.data,
+    },
+  });
+}
+
 function assertExecutableRenderEnvelope(response) {
   const serialized = JSON.stringify(response);
   for (const forbidden of ["plan_only", "agent_executed_child", "bound_plan_only_child_route"]) {
@@ -419,6 +449,63 @@ describe("Alpha3.2.5-C executable file/render Macros", () => {
     assertExecutableRenderEnvelope(response);
   });
 
+  it("accepts only complete verified Stem truth from the single audited route", async () => {
+    const calls = [];
+    const response = await executeAlpha3_2_5CRenderTargetsMacro({
+      request: {
+        request_id: "render-stem",
+        input: {
+          destination: "new_project_track",
+          stem_mode: "mixdown",
+          source_post_action: "mute_after_verified_insert",
+          output_track_name: "Dialog Stem",
+          dry_run: false,
+        },
+      },
+      now,
+      managedRenderRoot,
+      executeAtomic: async ({ id, input }) => {
+        calls.push({ id, input });
+        return id === "template.project.read_dirty_state"
+          ? atomicExecution({ readback: { dirty: true } })
+          : atomicExecution(verifiedStemResult());
+      },
+    });
+
+    assert.equal(response.ok, true, JSON.stringify(response));
+    assert.deepEqual(calls.map(({ id }) => id), ["template.project.read_dirty_state", "template.render.render_targets", "template.project.read_dirty_state"]);
+    assert.equal(calls[1].input.target_kind, "selected_tracks");
+    assert.equal(calls[1].input.destination, "new_project_track");
+    assert.equal(response.result.data.stem.destination_track_ref, "track:guid:{STEM-TRACK}");
+    assert.equal(response.result.changes[0].action, "render_project_stem");
+    assert.equal(response.result.canonical_refs.includes("item:guid:{STEM-ITEM}"), true);
+    assert.deepEqual(validateMacroExecutionEnvelope(response), { valid: true, errors: [] });
+  });
+
+  it("rejects malformed Stem completion truth instead of promoting a partial project mutation", async () => {
+    for (const [name, stemPatch] of [
+      ["missing destination Take", { destination_take_ref: null }],
+      ["source not muted", { source_tracks_muted: false }],
+      ["silent output", { non_silent_verified: false }],
+      ["source count mismatch", { source_track_count: 1 }],
+    ]) {
+      const base = verifiedStemResult();
+      const response = await executeAlpha3_2_5CRenderTargetsMacro({
+        request: {
+          request_id: `render-stem-invalid-${name}`,
+          input: { destination: "new_project_track", stem_mode: "mixdown", source_post_action: "mute_after_verified_insert", dry_run: false },
+        },
+        now,
+        managedRenderRoot,
+        executeAtomic: async ({ id }) => id === "template.project.read_dirty_state"
+          ? atomicExecution({ readback: { dirty: false } })
+          : atomicExecution(verifiedStemResult({ data: { stem: { ...base.data.stem, ...stemPatch } } })),
+      });
+      assert.equal(response.ok, false, name);
+      assert.equal(response.error.code, "RENDER_STEM_READBACK_INVALID", name);
+    }
+  });
+
   it("passes a user-owned basename to D31 and rejects mismatched output naming", async () => {
     const calls = [];
     const request = { request_id: "render-named", input: { target_kind: "whole_project", format: "wav", output_basename: "Client Mix", dry_run: false } };
@@ -602,6 +689,80 @@ describe("Alpha3.2.5-C executable file/render Macros", () => {
     const failed = await run(256);
     assert.equal(failed.ok, false);
     assert.equal(failed.error.code, "RENDER_OUTPUT_ROW_INVALID");
+  });
+
+  it("requires and projects verified H.264/AAC MP4 completion truth", async () => {
+    const run = async (overrides = {}) => executeAlpha3_2_5CRenderTargetsMacro({
+      request: { request_id: "render-video-mp4", input: { target_kind: "whole_project", format: "mp4", video_width: 1920, video_height: 1080, video_frame_rate: 30, video_bitrate_kbps: 8000, audio_bitrate_kbps: 192, dry_run: false } },
+      now,
+      managedRenderRoot,
+      executeAtomic: async ({ id, input }) => {
+        if (id === "template.project.read_dirty_state") return atomicExecution({ readback: { dirty: false } });
+        assert.equal(input.video_codec, "h264");
+        assert.equal(input.audio_codec, "aac");
+        return atomicExecution(verifiedRenderResult({
+          data: {
+            outputs: [{
+              absolute_path: "/managed/renders/trial.mp4",
+              size: 65536,
+              extension: "mp4",
+              requested_format: "mp4",
+              actual_format: "mp4",
+              requested_video_width: 1920,
+              actual_video_width: 1920,
+              requested_video_height: 1080,
+              actual_video_height: 1080,
+              requested_video_frame_rate: 30,
+              actual_video_frame_rate: 30,
+              requested_video_codec: "h264",
+              actual_video_codec: "h264",
+              requested_audio_codec: "aac",
+              actual_audio_codec: "aac",
+              configured_video_bitrate_kbps: 8000,
+              configured_audio_bitrate_kbps: 192,
+              video_track_count: 1,
+              audio_track_count: 1,
+              iso_bmff_ftyp_verified: true,
+              iso_bmff_moov_verified: true,
+              iso_bmff_mdat_verified: true,
+              native_video_settings_readback_verified: true,
+              target_identity: "whole_project",
+              ...overrides,
+            }],
+          },
+        }));
+      },
+    });
+
+    const passed = await run();
+    assert.equal(passed.ok, true, JSON.stringify(passed));
+    assert.deepEqual(passed.result.data.audio_outputs, []);
+    assert.deepEqual(passed.result.data.video_outputs, [{
+      absolute_path: "/managed/renders/trial.mp4",
+      size: 65536,
+      extension: "mp4",
+      requested_format: "mp4",
+      actual_format: "mp4",
+      width: 1920,
+      height: 1080,
+      frame_rate: 30,
+      video_codec: "h264",
+      audio_codec: "aac",
+      video_bitrate_kbps: 8000,
+      audio_bitrate_kbps: 192,
+      target_identity: "whole_project",
+    }]);
+
+    for (const overrides of [
+      { actual_video_width: 1280 },
+      { actual_video_frame_rate: 25 },
+      { actual_video_codec: "prores" },
+      { iso_bmff_moov_verified: false },
+    ]) {
+      const failed = await run(overrides);
+      assert.equal(failed.ok, false, JSON.stringify(overrides));
+      assert.equal(failed.error.code, "RENDER_OUTPUT_ROW_INVALID");
+    }
   });
 
   it("retains completed render evidence when post-render dirty readback fails", async () => {

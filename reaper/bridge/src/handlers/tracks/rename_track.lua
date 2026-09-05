@@ -58,8 +58,7 @@ local function native_color_from_hex(value)
 end
 
 local function track_name(track)
-  local ok, _, name = call_reaper("GetTrackName", track, "")
-  return bounded_string(ok and first_string(name) or "", 160)
+  return read_track_name(track, 160)
 end
 
 local function track_guid(track)
@@ -248,13 +247,25 @@ end
 
 local function safe_write_rename_track(request)
   return safe_write_track_update(request, function(track)
-    local ok, success = call_reaper("GetSetMediaTrackInfo_String", track, "P_NAME", tostring(request.params.name or ""), true)
+    local expected_name = tostring(request.params.name or "")
+    local ok, success = call_reaper("GetSetMediaTrackInfo_String", track, "P_NAME", expected_name, true)
     if not ok or success == false then
       return false, {
         code = "COMMAND_FAILED",
         message = "Could not rename Safe-Write-A track.",
         recoverable = false,
         details = {},
+      }
+    end
+    if read_track_name(track, 160) ~= bounded_string(expected_name, 160) then
+      return false, {
+        code = "READBACK_MISMATCH",
+        message = "Renamed Safe-Write-A track name did not read back exactly.",
+        recoverable = false,
+        details = {
+          expected_name = bounded_string(expected_name, 160),
+          actual_name = read_track_name(track, 160),
+        },
       }
     end
     return true

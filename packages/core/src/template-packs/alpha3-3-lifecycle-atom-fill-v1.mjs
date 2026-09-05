@@ -143,13 +143,17 @@ export const ALPHA3_3_LIFECYCLE_ATOM_TEMPLATES = deepFreeze([
   }),
   destructiveDescriptor({
     id: "template.items.glue_item",
-    title: "Glue exact Item",
-    summary: "Glue one exact Item through the fixed native glue action and prove the old Item GUID is gone and one new readable Item/Take exists.",
+    title: "Glue exact Item set",
+    summary: "Glue one exact Item or 1-64 same-Track audio Items through one fixed native action and prove exact replacement identity.",
     pack: "items",
     entity_kind: "item",
-    tags: ["alpha3_3", "items", "glue", "destructive", "exact_ref", "native"],
+    tags: ["alpha3_3", "items", "glue", "destructive", "exact_ref", "batch", "native"],
     capability: "items.glue_item",
     timeout_ms: 300_000,
+    inputSchema: objectSchema({
+      batch: { type: "array", minItems: 1, maxItems: 64, items: { type: "object" } },
+      dry_run: { type: "boolean" },
+    }, []),
     outputSchema: objectSchema({
       source_item_ref: { type: "string" },
       glued_item_ref: { type: "string" },
@@ -166,16 +170,36 @@ export const ALPHA3_3_LIFECYCLE_ATOM_TEMPLATES = deepFreeze([
       new_item_unique: { type: "boolean" },
       selection_restored: { type: "boolean" },
       active_take_restored: { type: "boolean" },
-    }),
+      source_item_refs: { type: "array" },
+      rows: { type: "array" },
+      row_count: { type: "integer" },
+      native_action_count: { type: "integer" },
+    }, [
+      "source_item_ref",
+      "glued_item_ref",
+      "glued_take_ref",
+      "owner_track_ref",
+      "position_seconds",
+      "length_seconds",
+      "source_filename",
+      "source_type",
+      "item_count_before",
+      "item_count_after",
+      "item_count_unchanged",
+      "old_item_guid_absent",
+      "new_item_unique",
+      "selection_restored",
+      "active_take_restored",
+    ]),
     refs: refs({
-      input: [ref("item_ref", "item", true, "Exact Item GUID ref; selection and index aliases are rejected.")],
+      input: [ref("item_ref", "item", false, "Optional exact Item GUID ref for the backward-compatible single-Item form; batch rows carry exact GUIDs internally.")],
       output: [
         ref("glued_item_ref", "item", true, "Unique new Item GUID read back after glue."),
         ref("glued_take_ref", "take", true, "Active Take GUID read back from the new glued Item."),
       ],
     }),
     expectedDelta: mutationDelta({
-      summary: "Replaces one exact Item with one native glued Item and readable source Take.",
+      summary: "Replaces one or 1-64 same-Track audio Items with one native glued Item and readable source Take.",
       entities: [
         { entity_kind: "item", action: "delete", summary: "The exact source Item GUID disappears after the native glue action." },
         { entity_kind: "item", action: "create", summary: "Exactly one new Item GUID is identified from post-action live state." },
@@ -194,69 +218,115 @@ export const ALPHA3_3_LIFECYCLE_ATOM_TEMPLATES = deepFreeze([
       name: "glue_exact_item",
       summary: "Glue one previously resolved exact Item GUID.",
       input: {},
+    }, {
+      name: "glue_exact_item_batch",
+      summary: "Glue a bounded same-Track audio Item set into one replacement with one native action.",
+      input: { batch: [{ id: "i001", item_ref: "item:guid:{ITEM-GUID}" }], dry_run: false },
     }],
   }),
   writeDescriptor({
     id: "template.tracks.freeze_track",
-    title: "Freeze exact Track",
-    summary: "Freeze one exact Track in mono, stereo, or multichannel mode through fixed native actions and prove I_FREEZECOUNT increased.",
+    title: "Freeze Track target set",
+    summary: "Freeze one exact Track or 1-64 execution-time selected Tracks with one fixed native action; omitted targets safely default to selected Tracks.",
     pack: "tracks",
     entity_kind: "track",
-    tags: ["alpha3_3", "tracks", "freeze", "exact_ref", "native"],
+    tags: ["alpha3_3", "tracks", "freeze", "exact_ref", "target_binding", "selected", "batch", "native"],
     capability: "tracks.freeze_track",
     timeout_ms: 300_000,
-    inputSchema: objectSchema({ mode: { enum: ["mono", "stereo", "multichannel"] } }),
+    inputSchema: objectSchema({
+      mode: { enum: ["mono", "stereo", "multichannel"] },
+      target_binding: selectedTrackTargetBindingSchema(),
+    }, ["mode"]),
     outputSchema: objectSchema({
       track_ref: { type: "string" },
+      target_mode: { enum: ["exact", "selected"] },
+      target_count: { type: "integer", minimum: 1, maximum: 64 },
+      target_refs: { type: "array", minItems: 1, maxItems: 64, items: { type: "string" } },
+      target_fingerprint: { type: "string" },
+      targets: {
+        type: "array",
+        minItems: 1,
+        maxItems: 64,
+        items: objectSchema({
+          track_ref: { type: "string" },
+          freeze_count_before: { type: "integer" },
+          freeze_count_after: { type: "integer" },
+          verified: { const: true },
+        }),
+      },
       mode: { enum: ["mono", "stereo", "multichannel"] },
       freeze_count_before: { type: "integer" },
       freeze_count_after: { type: "integer" },
       selection_restored: { type: "boolean" },
     }),
     refs: refs({
-      input: [ref("track_ref", "track", true, "Exact Track GUID ref; selection and index aliases are rejected.")],
-      output: [ref("track_ref", "track", true, "The exact Track GUID verified after freezing.")],
+      input: [ref("track_ref", "track", false, "Optional exact Track GUID ref; when both it and target_binding are omitted, execution consumes selected Tracks.")],
+      output: [ref("track_ref", "track", true, "Every exact Track GUID verified after freezing.")],
     }),
     expectedDelta: mutationDelta({
-      summary: "Increments the native freeze count of one exact Track.",
-      entities: [{ entity_kind: "track", action: "update", summary: "The exact Track native I_FREEZECOUNT increases in the requested mode." }],
+      summary: "Increments the native freeze count of one exact Track or one frozen execution-time selected Track set.",
+      entities: [{ entity_kind: "track", action: "update", summary: "Every target Track native I_FREEZECOUNT increases in the requested mode." }],
       idempotent: false,
     }),
     verification: requiredVerification([
-      check("freeze_count_increased", "state_delta", "Live I_FREEZECOUNT readback is greater than its pre-action value."),
+      check("freeze_count_increased", "state_delta", "Every target's live I_FREEZECOUNT readback is greater than its pre-action value."),
       check("selection_restored", "state_delta", "Track and Item selection are restored after the fixed freeze action."),
     ]),
-    examples: [{ name: "freeze_exact_track", summary: "Freeze one exact Track in stereo mode.", input: { mode: "stereo" } }],
+    examples: [
+      { name: "freeze_exact_track", summary: "Freeze one exact Track in stereo mode.", input: { mode: "stereo" } },
+      { name: "freeze_selected_tracks_default", summary: "Freeze the 1-64 Tracks selected when execution begins by omitting the target.", input: { mode: "stereo" } },
+      { name: "freeze_selected_tracks_binding", summary: "Freeze selected Tracks through the shared target-binding shorthand.", input: { mode: "stereo", target_binding: { domain: "tracks", selector: "selected" } } },
+    ],
   }),
   destructiveDescriptor({
     id: "template.tracks.unfreeze_track",
-    title: "Unfreeze exact Track",
-    summary: "Unfreeze one exact previously frozen Track through the fixed native action and prove I_FREEZECOUNT decreased.",
+    title: "Unfreeze Track target set",
+    summary: "Unfreeze one exact Track or 1-64 execution-time selected frozen Tracks with one fixed native action; omitted targets safely default to selected Tracks.",
     pack: "tracks",
     entity_kind: "track",
-    tags: ["alpha3_3", "tracks", "unfreeze", "exact_ref", "native"],
+    tags: ["alpha3_3", "tracks", "unfreeze", "exact_ref", "target_binding", "selected", "batch", "native"],
     capability: "tracks.unfreeze_track",
-    timeout_ms: 60_000,
+    timeout_ms: 300_000,
+    inputSchema: objectSchema({ target_binding: selectedTrackTargetBindingSchema() }, []),
     outputSchema: objectSchema({
       track_ref: { type: "string" },
+      target_mode: { enum: ["exact", "selected"] },
+      target_count: { type: "integer", minimum: 1, maximum: 64 },
+      target_refs: { type: "array", minItems: 1, maxItems: 64, items: { type: "string" } },
+      target_fingerprint: { type: "string" },
+      targets: {
+        type: "array",
+        minItems: 1,
+        maxItems: 64,
+        items: objectSchema({
+          track_ref: { type: "string" },
+          freeze_count_before: { type: "integer" },
+          freeze_count_after: { type: "integer" },
+          verified: { const: true },
+        }),
+      },
       freeze_count_before: { type: "integer" },
       freeze_count_after: { type: "integer" },
       selection_restored: { type: "boolean" },
     }),
     refs: refs({
-      input: [ref("track_ref", "track", true, "Exact Track GUID ref; selection and index aliases are rejected.")],
-      output: [ref("track_ref", "track", true, "The exact Track GUID verified after unfreezing.")],
+      input: [ref("track_ref", "track", false, "Optional exact Track GUID ref; when both it and target_binding are omitted, execution consumes selected Tracks.")],
+      output: [ref("track_ref", "track", true, "Every exact Track GUID verified after unfreezing.")],
     }),
     expectedDelta: mutationDelta({
-      summary: "Decrements the native freeze count of one exact Track.",
-      entities: [{ entity_kind: "track", action: "update", summary: "The exact Track native I_FREEZECOUNT decreases after the fixed unfreeze action." }],
+      summary: "Decrements the native freeze count of one exact Track or one frozen execution-time selected Track set.",
+      entities: [{ entity_kind: "track", action: "update", summary: "Every target Track native I_FREEZECOUNT decreases after the fixed unfreeze action." }],
       idempotent: false,
     }),
     verification: requiredVerification([
-      check("freeze_count_decreased", "state_delta", "Live I_FREEZECOUNT readback is lower than its pre-action value."),
+      check("freeze_count_decreased", "state_delta", "Every target's live I_FREEZECOUNT readback is lower than its pre-action value."),
       check("selection_restored", "state_delta", "Track and Item selection are restored after the fixed unfreeze action."),
     ]),
-    examples: [{ name: "unfreeze_exact_track", summary: "Unfreeze one exact previously frozen Track.", input: {} }],
+    examples: [
+      { name: "unfreeze_exact_track", summary: "Unfreeze one exact previously frozen Track.", input: {} },
+      { name: "unfreeze_selected_tracks_default", summary: "Unfreeze the 1-64 frozen Tracks selected when execution begins by omitting the target.", input: {} },
+      { name: "unfreeze_selected_tracks_binding", summary: "Unfreeze selected frozen Tracks through the shared target-binding shorthand.", input: { target_binding: { domain: "tracks", selector: "selected" } } },
+    ],
   }),
   writeDescriptor({
     id: "template.automation.ensure_take_pitch_envelope",
@@ -410,6 +480,19 @@ function writeDescriptor(options) {
 
 function objectSchema(properties = {}, required = Object.keys(properties)) {
   return { type: "object", properties, required, additionalProperties: false };
+}
+
+function selectedTrackTargetBindingSchema() {
+  return objectSchema({
+    bind_at: { const: "execution" },
+    domain: { const: "tracks" },
+    selector: { const: "selected" },
+    aggregation: { const: "batch" },
+    cardinality: objectSchema({
+      minimum: { const: 1 },
+      maximum: { const: 64 },
+    }),
+  }, ["domain"]);
 }
 
 function refs(overrides = {}) {

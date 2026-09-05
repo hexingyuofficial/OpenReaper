@@ -28,6 +28,7 @@ import {
 import {
   CALL_RECIPE_STAGE_BUDGET,
   createStdioCallRecipeRuntime,
+  createStdioRecipeTargetSetHydrators,
   createStdioRecipeUndoController,
   readFreshOpenProjectInventory,
 } from "../../packages/mcp-server/src/openreaper-mcp-stdio.mjs";
@@ -41,6 +42,110 @@ import { createExecutableRecipeProductCatalog } from "../../packages/mcp-server/
 const STDIO_SERVER = path.resolve("packages/mcp-server/src/openreaper-mcp-stdio.mjs");
 
 describe("Alpha3.4-E2 call_recipe runtime", () => {
+  it("resolves Recipe target sets once and injects frozen explicit membership into every stage", async () => {
+    const calls = [];
+    const callTemplateRuntime = {
+      async call_template(request) {
+        calls.push(structuredClone(request));
+        return {
+          ok: true,
+          result: {
+            canonical_refs: ["item:guid:{I1}", "item:guid:{I2}"],
+            data: { target_set: { domain: "items", count: 2, fingerprint: "target-set:recipe-fixture" } },
+          },
+        };
+      },
+    };
+    let sequence = 0;
+    const hydrators = createStdioRecipeTargetSetHydrators({
+      callTemplateRuntime,
+      callContext: { allocate: () => ({ sequence: ++sequence }) },
+    });
+    const revision = {
+      draft: {
+        target_sets: [{
+          id: "items_to_process",
+          resolve_at: "run_start",
+          domain: "items",
+          selector: "selected",
+          aggregation: "batch",
+          cardinality: { minimum: 1, maximum: 64 },
+        }],
+      },
+    };
+    const run = await hydrators.runHydrator({ operation: "run", revision, inputs: {} });
+    assert.equal(run.ok, true, JSON.stringify(run));
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].id, "macro.project.query");
+    assert.equal(calls[0].input.target_binding.bind_at, "run_start");
+    assert.deepEqual(run.context.target_sets[0].member_refs, ["item:guid:{I1}", "item:guid:{I2}"]);
+
+    const first = await hydrators.stageInputHydrator({
+      stage: { id: "reverse_once", target_set_id: "items_to_process" },
+      inputs: { mode: "reverse" },
+      refs: null,
+      run_hydration: run.context,
+    });
+    const second = await hydrators.stageInputHydrator({
+      stage: { id: "reverse_again", target_set_id: "items_to_process" },
+      inputs: { mode: "reverse" },
+      refs: null,
+      run_hydration: run.context,
+    });
+    assert.deepEqual(first.inputs.target_binding.refs, ["item:guid:{I1}", "item:guid:{I2}"]);
+    assert.deepEqual(second.inputs.target_binding, first.inputs.target_binding);
+    assert.deepEqual(first.inputs.target_binding.cardinality, { minimum: 2, maximum: 2 });
+
+    const resumed = await hydrators.runHydrator({ operation: "resume", revision, inputs: {}, retained: run.context });
+    assert.equal(resumed.ok, true);
+    assert.equal(calls.length, 1);
+    assert.deepEqual(resumed.context, run.context);
+
+    const conflict = await hydrators.stageInputHydrator({
+      stage: { id: "conflict", target_set_id: "items_to_process" },
+      inputs: { target_binding: { domain: "items", selector: "selected" } },
+      run_hydration: run.context,
+    });
+    assert.equal(conflict.ok, false);
+    assert.equal(conflict.details.zero_write, true);
+  });
+
+  it("hydrates Take and Envelope target sets through the public query Macro and rejects constraint-only ranges", async () => {
+    const calls = [];
+    const callTemplateRuntime = {
+      async call_template(request) {
+        calls.push(structuredClone(request));
+        const domain = request.input.target_binding.domain;
+        const refs = domain === "takes"
+          ? ["take:guid:{T1}", "take:guid:{T2}"]
+          : ["envelope:guid:{ENV1}"];
+        return { ok: true, result: { canonical_refs: refs, data: { target_set: { domain, count: refs.length, fingerprint: `target-set:${domain}` } } } };
+      },
+    };
+    const hydrators = createStdioRecipeTargetSetHydrators({ callTemplateRuntime, callContext: { allocate: () => ({}) } });
+    const revision = {
+      draft: {
+        target_sets: [
+          { id: "takes_to_read", resolve_at: "run_start", domain: "takes", selector: "all", aggregation: "batch", cardinality: { minimum: 1, maximum: 64 } },
+          { id: "selected_envelope", resolve_at: "run_start", domain: "envelopes", selector: "selected", aggregation: "single", cardinality: { minimum: 1, maximum: 1 } },
+        ],
+      },
+    };
+    const run = await hydrators.runHydrator({ operation: "run", revision, inputs: {} });
+    assert.equal(run.ok, true, JSON.stringify(run));
+    assert.deepEqual(calls.map((row) => row.input.entity), ["takes", "automation"]);
+    assert.deepEqual(run.context.target_sets.map((row) => row.member_refs), [["take:guid:{T1}", "take:guid:{T2}"], ["envelope:guid:{ENV1}"]]);
+    const rangeHydrator = createStdioRecipeTargetSetHydrators({ callTemplateRuntime, callContext: { allocate: () => ({}) } });
+    const range = await rangeHydrator.runHydrator({
+      operation: "run",
+      revision: { draft: { target_sets: [{ id: "range", resolve_at: "run_start", domain: "time_range", selector: "time_selection", aggregation: "single", cardinality: { minimum: 1, maximum: 1 } }] } },
+      inputs: {},
+    });
+    assert.equal(range.ok, false);
+    assert.equal(range.details.code, "RECIPE_TARGET_SET_DOMAIN_CONSTRAINT_ONLY");
+    assert.equal(range.details.zero_write, true);
+  });
+
   it("fails closed before official seeding when user and official Recipe roots resolve identically", () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "openreaper-e2-root-collision-"));
     const sentinel = path.join(root, "user-sentinel.recipe.json");

@@ -224,12 +224,15 @@ describe("S3 remove-silence and normalization static release contract", () => {
     sourceWith(d27Source, /MIDI_UNSUPPORTED[\s\S]{0,160}typed_truth/u, "MIDI rejection must carry typed truth");
   });
 
-  it("ships both no-Agent Action names through one shared silence implementation", () => {
-    assert.ok(actionSources.length > 0, "the two S3 Actions must exist in product source, not only in tests");
+  it("ships one no-Agent Action through the shared silence implementation and retires the duplicate", () => {
+    const currentActions = actionSources.filter(({ path: sourcePath }) => sourcePath.endsWith("/remove-silence.lua"));
+    const legacyActions = actionSources.filter(({ path: sourcePath }) => sourcePath.endsWith("/repeat-remove-silence.lua"));
+    assert.equal(currentActions.length, 1, "exactly one current S3 Action must be exposed");
+    assert.equal(legacyActions.length, 1, "the legacy source remains available only for upgrade cleanup");
     assert.match(actionSourceCorpus, /OpenReaper: Remove Silence\.\.\./);
     assert.match(actionSourceCorpus, /OpenReaper: Repeat Remove Silence with Last Settings/);
 
-    for (const { path: sourcePath, source } of actionSources) {
+    for (const { path: sourcePath, source } of currentActions) {
       assert.match(source, /GetUserInputs|ShowMessageBox/, `${sourcePath}: Action settings must use REAPER's built-in input/message APIs`);
       assert.match(source, /GetExtState/, `${sourcePath}: Action settings must read OpenReaper-owned ExtState`);
       assert.match(source, /SetExtState/, `${sourcePath}: Action settings must persist OpenReaper-owned ExtState`);
@@ -241,6 +244,12 @@ describe("S3 remove-silence and normalization static release contract", () => {
       );
       assert.doesNotMatch(source, /\b(?:40315|40760)\b/, `${sourcePath}: no dialog-backed stock Action automation`);
     }
+
+    const installerActions = readProductFile("scripts/openreaper-alpha-package/install-openreaper.mjs");
+    const currentActionBlock = between(installerActions, "const S3_ACTIONS = Object.freeze([", "]);\nconst LEGACY_S3_ACTIONS");
+    assert.match(currentActionBlock, /remove-silence\.lua/);
+    assert.doesNotMatch(currentActionBlock, /repeat-remove-silence\.lua/);
+    assert.match(installerActions, /cleanupLegacyS3Actions/);
 
     const sharedCore = allProductSources.find(({ path: sourcePath, source }) =>
       sourcePath.startsWith("reaper/")

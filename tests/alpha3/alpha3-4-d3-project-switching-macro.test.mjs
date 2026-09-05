@@ -51,8 +51,10 @@ function makeExecutor(handlers) {
 
 function makeIndex({ project_ref, project_path }) {
   let current = { project_ref, project_path };
+  let revision = 1;
+  let snapshotId = "snap";
   return {
-    status: () => ({ ...current, revision: 1, snapshot_id: "snap" }),
+    status: () => ({ ...current, revision, snapshot_id: snapshotId }),
     rebindProjectIdentity: async ({ project_path: nextPath, expected_previous_project_ref }) => {
       if (expected_previous_project_ref !== current.project_ref) {
         return {
@@ -62,6 +64,8 @@ function makeIndex({ project_ref, project_path }) {
         };
       }
       current = { project_ref: `project:path:${nextPath}`, project_path: nextPath };
+      revision = 2;
+      snapshotId = "snap2";
       return {
         ok: true,
         status: "identity_rebound",
@@ -81,6 +85,21 @@ function makeIndex({ project_ref, project_path }) {
       revision: 3,
       snapshot_id: "snap3",
     }),
+    reconcileProjectRevision: async ({ change_count }) => {
+      if (!Number.isInteger(change_count) || change_count < 0) {
+        return { ok: false, blockers: [{ code: "PROJECT_CHANGE_COUNT_REQUIRED", message: "invalid change count" }] };
+      }
+      revision = `reaper-change-count:${change_count}`;
+      snapshotId = "snap-ready";
+      return {
+        ok: true,
+        status: "revision_initialized",
+        changed: false,
+        live_change_count: change_count,
+        revision,
+        snapshot_id: snapshotId,
+      };
+    },
   };
 }
 
@@ -119,7 +138,7 @@ describe("Alpha3.4-D3 upper macro.project.file highway", () => {
     assert.equal(items.length, 1);
     assert.deepEqual(items[0].inputSchema.properties.operation.enum, SIX_OPS);
     assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 242);
-    assert.equal(ALPHA3_2C3D_PROJECT_FILE_MACRO_VERSION, "1.2.1");
+    assert.equal(ALPHA3_2C3D_PROJECT_FILE_MACRO_VERSION, "1.2.2");
     assert.equal(ALPHA3_2C3D_PROJECT_FILE_MACRO_ID, "macro.project.file");
   });
 
@@ -380,7 +399,7 @@ describe("Alpha3.4-D3 upper macro.project.file highway", () => {
 
   it("opens exact path, rebinds index, and reports truthful sqlite used", async () => {
     const pathA = "/session/Parent.RPP";
-    const pathB = "/session/Child.RPP";
+    const pathB = "/session/【音频】 白×滑动音阶 🎛️/工程 demo.RPP";
     const index = makeIndex({ project_ref: `project:path:${pathA}`, project_path: pathA });
     const envelope = await executeAlpha3_2_5CProjectFileMacro({
       request: {
@@ -406,15 +425,124 @@ describe("Alpha3.4-D3 upper macro.project.file highway", () => {
             },
           },
         }),
+        "template.project.read_dirty_state": () => ({
+          ok: true,
+          result: { summary: { project_ref: "project:current", dirty: false, dirty_state: "clean", raw_dirty_state: 0 } },
+        }),
+        "template.project.read_summary": () => ({
+          ok: true,
+          result: { summary: { project_ref: "project:current", track_count: 8, item_count: 64, change_count: 14 } },
+        }),
       }),
     });
     assert.equal(envelope.ok, true, JSON.stringify(envelope.error));
     assert.equal(envelope.result.changes[0].status, "applied");
     assert.equal(envelope.result.changes[0].live_readback.status, "passed");
     assert.equal(envelope.sqlite.used, true);
-    assert.equal(envelope.sqlite.source, "warm_index");
+    assert.equal(envelope.sqlite.source, "refreshed_index");
+    assert.equal(envelope.sqlite.freshness, "refreshed");
+    assert.equal(envelope.sqlite.refreshed, true);
+    assert.equal(envelope.sqlite.revision, "reaper-change-count:14");
+    assert.equal(envelope.result.data.project_identity_verified, true);
+    assert.equal(envelope.result.data.index_project_identity_verified, true);
+    assert.equal(envelope.result.data.index_readiness, "project_head_fresh");
+    assert.equal(envelope.result.data.requested_project_path, pathB);
+    assert.equal(envelope.result.data.active_project_path, pathB);
+    assert.equal(envelope.result.data.dirty, false);
+    assert.deepEqual(envelope.result.data.live_summary, { track_count: 8, item_count: 64, change_count: 14 });
+    assert.equal(envelope.result.changes[0].project_ref, `project:path:${pathB}`);
     assert.equal(index.status().project_path, pathB);
     assert.ok(envelope.budget.actual_bytes <= 4096);
+  });
+
+  it("returns typed opened_but_index_not_ready without advising an open replay", async () => {
+    const pathA = "/session/Parent.RPP";
+    const pathB = "/session/Child.RPP";
+    const index = makeIndex({ project_ref: `project:path:${pathA}`, project_path: pathA });
+    const envelope = await executeAlpha3_2_5CProjectFileMacro({
+      request: {
+        input: { operation: "open_project_in_tab", target_path: pathB },
+        request_id: "open-index-not-ready",
+        budget: { max_response_bytes: 4096 },
+      },
+      projectIndexRuntime: index,
+      executeAtomic: makeExecutor({
+        "template.project.list_open_projects": () => makeInventory([row(pathA, { active: true })]),
+        "template.project.open_project_in_tab": () => ({
+          ok: true,
+          result: { summary: {
+            opened: true,
+            project_ref: `project:path:${pathB}`,
+            path: pathB,
+            active: true,
+            prior_project_remains_open: true,
+            prior_dirty_unchanged: true,
+            live_materialization: "native_open_in_tab_verified",
+          } },
+        }),
+        "template.project.read_dirty_state": () => ({
+          ok: true,
+          result: { summary: { project_ref: "project:current", dirty: false, dirty_state: "clean", raw_dirty_state: 0 } },
+        }),
+        "template.project.read_summary": () => ({
+          ok: true,
+          result: { summary: { project_ref: "project:current", track_count: 8, item_count: 64 } },
+        }),
+      }),
+    });
+    assert.equal(envelope.ok, false);
+    assert.equal(envelope.execution.status, "partial_failure");
+    assert.equal(envelope.error.code, "PROJECT_FILE_OPENED_INDEX_NOT_READY");
+    assert.equal(envelope.result.data.partial_state, "opened_but_index_not_ready");
+    assert.equal(envelope.result.changes[0].project_ref, `project:path:${pathB}`);
+    assert.equal(envelope.result.changes[0].status, "applied");
+    assert.equal(envelope.result.changes[0].live_readback.status, "passed");
+    assert.match(envelope.recovery.action, /Do not replay open/u);
+    assert.doesNotMatch(envelope.recovery.action, /retry.*open|open.*retry/iu);
+    assert.deepEqual(validateMacroExecutionEnvelope(envelope), { valid: true, errors: [] });
+  });
+
+  it("normalizes a post-open Index rebind failure to opened_but_index_not_ready", async () => {
+    const pathA = "/session/Parent.RPP";
+    const pathB = "/session/Child.RPP";
+    const baseIndex = makeIndex({ project_ref: `project:path:${pathA}`, project_path: pathA });
+    const envelope = await executeAlpha3_2_5CProjectFileMacro({
+      request: {
+        input: { operation: "open_project_in_tab", target_path: pathB },
+        request_id: "open-rebind-not-ready",
+        budget: { max_response_bytes: 4096 },
+      },
+      projectIndexRuntime: {
+        ...baseIndex,
+        rebindProjectIdentity: async () => ({
+          ok: false,
+          blockers: [{ code: "INDEX_REBIND_FAILED", message: "rebind failed" }],
+          scopes: [],
+        }),
+      },
+      executeAtomic: makeExecutor({
+        "template.project.list_open_projects": () => makeInventory([row(pathA, { active: true })]),
+        "template.project.open_project_in_tab": () => ({
+          ok: true,
+          result: { summary: {
+            opened: true,
+            project_ref: `project:path:${pathB}`,
+            path: pathB,
+            active: true,
+            prior_project_remains_open: true,
+            prior_dirty_unchanged: true,
+            live_materialization: "native_open_in_tab_verified",
+          } },
+        }),
+      }),
+    });
+    assert.equal(envelope.ok, false);
+    assert.equal(envelope.execution.status, "partial_failure");
+    assert.equal(envelope.error.code, "PROJECT_FILE_OPENED_INDEX_NOT_READY");
+    assert.equal(envelope.result.data.partial_state, "opened_but_index_not_ready");
+    assert.equal(envelope.result.changes[0].project_ref, `project:path:${pathB}`);
+    assert.match(envelope.recovery.action, /Do not replay open/u);
+    assert.deepEqual(validateMacroExecutionEnvelope(envelope), { valid: true, errors: [] });
   });
 
   it("already-active is idempotent with mutation not_run and unsaved refs fail closed", async () => {

@@ -138,11 +138,13 @@ test("Windows live bridge default script path converts file URLs natively", () =
   assert.doesNotMatch(liveBridgeExecutor, /new URL\("\.\.\/\.\.\/\.\.\/reaper\/bridge\/openreaper-live-bridge\.lua", import\.meta\.url\)\.pathname/u);
 });
 
-test("Windows start refuses an unmanaged REAPER process before launching", () => {
+test("Windows start attaches one existing REAPER and refuses ambiguous multi-instance startup", () => {
   assert.match(startPs1, /function Get-RunningReaperProcesses/u);
   assert.match(startPs1, /\$runningReaperProcesses = @\(Get-RunningReaperProcesses\)/u);
-  assert.match(startPs1, /An unmanaged REAPER process is already running/u);
-  assert.match(startPs1, /Refusing duplicate startup to protect REAPER configuration and Bridge identity/u);
+  assert.match(startPs1, /\$attachingExisting = \$true/u);
+  assert.match(startPs1, /Multiple REAPER processes are already running/u);
+  assert.match(startPs1, /refusing to guess which project to attach/u);
+  assert.match(startPs1, /A REAPER session is already running; do not combine attach with -ProjectPath/u);
   assert.match(startPs1, /New-Item -ItemType Directory -Force -Path \$ReaperResourceRoot/u);
 });
 
@@ -180,6 +182,10 @@ test("Windows installer preserves after-manifest evidence when Node writes stder
   assert.match(installerPs1, /\$PSNativeCommandUseErrorActionPreference = \$false/u);
   assert.match(installerPs1, /finally \{[\s\S]*\$ErrorActionPreference = \$previousErrorActionPreference/u);
   assert.match(installerPs1, /Get-ExternalManifest \$after/u);
+  assert.match(installerPs1, /\[switch\] \$RegisterActions/u);
+  assert.match(installerPs1, /RegisterActions\) \{ \$arguments \+= "--register-actions" \}/u);
+  assert.match(uninstallerPs1, /\[switch\] \$RemoveActionRegistrations/u);
+  assert.match(uninstallerPs1, /RemoveActionRegistrations\) \{ \$arguments \+= "--remove-action-registrations" \}/u);
 });
 
 test("Windows installer can upgrade its own read-only S3 Action files", () => {

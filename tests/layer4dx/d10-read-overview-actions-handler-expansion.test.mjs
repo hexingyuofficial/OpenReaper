@@ -66,6 +66,12 @@ function call_reaper(name, ...)
   if not reaper or type(reaper[name]) ~= "function" then return false end
   return pcall(reaper[name], ...)
 end
+function read_track_name(track, max_bytes)
+  local ok, available, name = call_reaper("GetSetMediaTrackInfo_String", track, "P_NAME", "", false)
+  if ok and available ~= false and type(name) == "string" then return bounded_string(name, max_bytes) end
+  local fallback_ok, _, fallback_name = call_reaper("GetTrackName", track, "")
+  return bounded_string(fallback_ok and first_string(fallback_name) or "", max_bytes)
+end
 
 local tracks = {
   { guid = "{COUNT-A}", index = 0, name = "Count A" },
@@ -80,6 +86,10 @@ reaper.GetTrack = function(project, index) assert(project == 0); return tracks[i
 reaper.GetTrackGUID = function(track) return track.guid end
 reaper.GetMediaTrackInfo_Value = function(track, key) assert(key == "IP_TRACKNUMBER"); return track.index + 1 end
 reaper.GetTrackName = function(track) return true, track.name end
+reaper.GetSetMediaTrackInfo_String = function(track, key, _, set_new_value)
+  assert(key == "P_NAME" and set_new_value == false)
+  return true, track.name
+end
 reaper.IsTrackSelected = function(track) return track.index == 1 end
 reaper.CountTrackMediaItems = function(track)
   if track.index == 0 then return 2 end
@@ -290,7 +300,7 @@ assert(tostring(failure):find("invalid Track selection value", 1, true) ~= nil)
   it("pages a canonical native Take inventory and omits Take count claims when not requested", () => {
     const assertions = String.raw`
 local media_items = {
-  { guid = "{ITEM-A}", takes = { { guid = "{TAKE-A1}", midi = true, name = "MIDI 甲" }, { guid = "{TAKE-A2}", source_type = "WAVE", name = "Audio A" } } },
+  { guid = "{ITEM-A}", takes = { { guid = "{TAKE-A1}", midi = true, name = "MIDI 甲" }, { guid = "{TAKE-A2}", source_type = "WAVE", source_path = [[C:\用户 名称\对白素材\vo_角色_male1.ogg]], name = "Audio A" } } },
   { guid = "{ITEM-B}", takes = { { guid = "{TAKE-B1}", midi = true, name = "MIDI B" } } },
 }
 reaper.CountMediaItems = function() return #media_items end
@@ -313,6 +323,7 @@ end
 reaper.TakeIsMIDI = function(take) return take.midi == true end
 reaper.GetMediaItemTake_Source = function(take) return take end
 reaper.GetMediaSourceType = function(source) return source.source_type or "MIDI" end
+reaper.GetMediaSourceFileName = function(source) return source.source_path or "" end
 
 local unrequested = select(1, read_track_item_overview({
   params = { include_track_items = false, include_selected_items = false, max_tracks = 1, max_items = 1 },
@@ -332,7 +343,12 @@ assert(first.next_take_cursor == "2")
 assert(first.take_coverage_status == "paged")
 assert(first.takes[1].take_ref == "take:guid:{TAKE-A1}")
 assert(first.takes[1].source_kind == "midi")
+assert(first.takes[1].source_identity_status == "not_file_backed")
 assert(first.takes[2].source_kind == "wave")
+assert(first.takes[2].source_ref == [[file:path:C:\用户 名称\对白素材\vo_角色_male1.ogg]])
+assert(first.takes[2].source_path == [[C:\用户 名称\对白素材\vo_角色_male1.ogg]])
+assert(first.takes[2].source_basename == [[vo_角色_male1.ogg]])
+assert(first.takes[2].source_identity_status == "available")
 assert(refs[#refs].kind == "take" and refs[#refs].ref == "take:guid:{TAKE-A2}")
 
 local second = select(1, read_track_item_overview({
@@ -357,6 +373,59 @@ assert(second.take_coverage_status == "complete")
     const callStatus = lua.lua_pcall(state, 0, 0, 0);
     const callMessage = callStatus === lua.LUA_OK ? "Take inventory Lua executed" : to_jsstring(lua.lua_tostring(state, -1));
     assert.equal(callStatus, lua.LUA_OK, callMessage);
+  });
+
+  it("returns GUID-bound Take FX rows with exact owner identity and Unicode Take names", () => {
+    const assertions = String.raw`
+local item = { guid = "{ITEM-FX}" }
+local take = { guid = "{TAKE-FX}", name = "对白 Take 效果", fx = { { guid = "{FX-TAKE-1}", name = "VST: ReaEQ (Cockos)", ident = "VST: ReaEQ", enabled = true } } }
+item.takes = { take }
+reaper.CountMediaItems = function() return 1 end
+reaper.GetMediaItem = function() return item end
+reaper.GetMediaItemTrack = function() return tracks[1] end
+reaper.GetSetMediaItemInfo_String = function(value, key) assert(value == item and key == "GUID"); return true, value.guid end
+reaper.GetMediaItemInfo_Value = function(_, key) if key == "D_LENGTH" then return 1 end; return 0 end
+reaper.CountTakes = function() return 1 end
+reaper.GetTake = function() return take end
+reaper.GetActiveTake = function() return take end
+reaper.GetSetMediaItemTakeInfo_String = function(value, key)
+  if key == "GUID" then return true, value.guid end
+  if key == "P_NAME" then return true, value.name end
+  return false, ""
+end
+reaper.TakeIsMIDI = function() return false end
+reaper.GetMediaItemTake_Source = function() return take end
+reaper.GetMediaSourceType = function() return "WAVE" end
+reaper.TakeFX_GetCount = function(value) assert(value == take); return #value.fx end
+reaper.TakeFX_GetFXGUID = function(value, slot) return value.fx[slot + 1].guid end
+reaper.TakeFX_GetFXName = function(value, slot) return true, value.fx[slot + 1].name end
+reaper.TakeFX_GetNamedConfigParm = function(value, slot, key) assert(key == "fx_ident"); return true, value.fx[slot + 1].ident end
+reaper.TakeFX_GetEnabled = function(value, slot) return value.fx[slot + 1].enabled end
+
+local summary, _, _, _, refs = read_track_item_overview({
+  params = { include_track_items = false, include_selected_items = false, include_takes = true, include_take_fx = true, max_tracks = 1, max_items = 1, max_takes = 8 },
+  budget = { max_items = 64, max_response_bytes = 65536, max_inline_value_bytes = 4096 },
+})
+assert(summary.take_count == 1 and summary.returned_take_count == 1)
+assert(summary.takes[1].name == "对白 Take 效果")
+assert(summary.takes[1].take_fx_count == 1 and summary.takes[1].has_take_fx == true)
+assert(summary.returned_take_fx_count == 1)
+assert(summary.take_fx_coverage_status == "complete")
+assert(summary.take_fx_coverage.internally_complete == true)
+local fx = summary.take_fx[1]
+assert(fx.fx_ref == "fx:take:guid:{TAKE-FX}:0")
+assert(fx.owner_kind == "take" and fx.owner_ref == "take:guid:{TAKE-FX}")
+assert(fx.fx_guid == "{FX-TAKE-1}" and fx.slot_index == 0)
+assert(fx.name == "VST: ReaEQ (Cockos)" and fx.plugin_id == "VST: ReaEQ")
+assert(fx.enabled == true and fx.bypassed == false)
+assert(refs[#refs].kind == "fx" and refs[#refs].ref == fx.fx_ref)
+`;
+    const state = lauxlib.luaL_newstate();
+    lualib.luaL_openlibs(state);
+    const status = lauxlib.luaL_loadstring(state, to_luastring(`${LUA_COUNT_PRELUDE}\n${PROJECT_HANDLER_SOURCE}\n${assertions}`));
+    assert.equal(status, lua.LUA_OK, status === lua.LUA_OK ? "Take FX Lua loaded" : to_jsstring(lua.lua_tostring(state, -1)));
+    const callStatus = lua.lua_pcall(state, 0, 0, 0);
+    assert.equal(callStatus, lua.LUA_OK, callStatus === lua.LUA_OK ? "Take FX Lua executed" : to_jsstring(lua.lua_tostring(state, -1)));
   });
 });
 

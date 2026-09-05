@@ -1646,11 +1646,18 @@ function applyScopedProjection({ adapter, templateId, projection, readback, exec
           count: Number.isInteger(readback.fx_count) ? readback.fx_count : rows.length,
           common,
         })
-      : { ok: true, applied: false, blockers: [] };
+      : syncTakeDerivedFxCount({
+          adapter,
+          takeRef: ownerRef,
+          count: Number.isInteger(readback.fx_count) ? readback.fx_count : rows.length,
+          common,
+        });
     return {
       ok: derived.ok,
       blockers: derived.blockers,
-      applied: derived.applied ? ["fx", "tracks"] : ["fx"],
+      applied: derived.applied
+        ? ["fx", templateId === "template.fx.list_track_fx_chain" ? "tracks" : "takes"]
+        : ["fx"],
     };
   }
   if (templateId === "template.fx.read_fx_summary") {
@@ -1720,6 +1727,42 @@ function syncTrackDerivedCount({ adapter, trackRef, field, count, common }) {
     freshness_status: priorScope.status ?? "unknown",
     coverage_status: priorScope.coverage_status ?? "partial",
     source_template_id: priorScope.source_template_id ?? "template.tracks.list_tracks",
+  });
+  return {
+    ok: result?.ok !== false,
+    applied: result?.ok !== false,
+    blockers: result?.blockers ?? [],
+  };
+}
+
+function syncTakeDerivedFxCount({ adapter, takeRef, count, common }) {
+  if (typeof takeRef !== "string" || !takeRef.startsWith("take:") || !Number.isInteger(count) || count < 0) {
+    return { ok: true, applied: false, blockers: [] };
+  }
+  const snapshot = adapter.snapshot();
+  const existingRows = arrayOf(snapshot.rows?.takes);
+  if (!existingRows.some((row) => row.ref === takeRef)) return { ok: true, applied: false, blockers: [] };
+  const priorScope = snapshot.freshness_scopes?.takes ?? {};
+  const rows = existingRows.map((row) => row.ref === takeRef
+    ? {
+        ...row,
+        snapshot_id: common.snapshot_id,
+        take_fx_count: count,
+        has_take_fx: count > 0,
+        summary: {
+          ...(isObject(row.summary) ? row.summary : {}),
+          take_fx_count: count,
+          has_take_fx: count > 0,
+        },
+      }
+    : { ...row, snapshot_id: common.snapshot_id });
+  const result = adapter.replaceTakes({
+    ...common,
+    rows,
+    scope_ref: priorScope.scope_ref ?? "project",
+    freshness_status: priorScope.status ?? "unknown",
+    coverage_status: priorScope.coverage_status ?? "partial",
+    source_template_id: priorScope.source_template_id ?? "template.project.read_track_item_overview",
   });
   return {
     ok: result?.ok !== false,
@@ -1900,6 +1943,16 @@ function projectMapPayload(overview, projectRef, coverage = {}, options = {}) {
   const itemSource = [...arrayOf(overview.items), ...nestedItems, ...arrayOf(overview.selected_items)];
   const items = dedupeRows([...projectItems, ...mapItems(nestedItems), ...selectedItems]);
   const takes = dedupeRows([...mapTakesFromItems(itemSource), ...mapTakes(overview.takes)]);
+  const takeFxSource = arrayOf(overview.take_fx);
+  const takeFx = mapFx(takeFxSource);
+  if (takeFxSource.length !== takeFx.length) {
+    return {
+      blocker: {
+        code: "NO_CANONICAL_TAKE_FX_ROWS",
+        message: "Take FX overview readback contained rows without canonical FX/owner refs.",
+      },
+    };
+  }
   const selectedItemRefs = new Set(selectedItems.map((row) => row.ref));
   const selectedContext = projectHeadRows(overview, projectRef, [
     ...tracks.filter((row) => row.selected === true).map((row) => ({
@@ -1927,6 +1980,13 @@ function projectMapPayload(overview, projectRef, coverage = {}, options = {}) {
   };
   const takeShapePresent = Array.isArray(overview.takes) || itemSource.some((item) => Array.isArray(item?.takes));
   if (takeShapePresent || overview.item_count === 0) scopes.takes = takes;
+  if (Array.isArray(overview.take_fx)) {
+    scopes.fx = takeFx;
+    projectedCoverage.fx = normalizeCoverage(
+      coverage.fx ?? overview.take_fx_coverage_status,
+      overview.takes_truncated ? "paged" : "complete",
+    );
+  }
   if (overview.track_count === 0 && overview.truncated !== true) {
     scopes.fx = [];
     projectedCoverage.fx = "complete";
@@ -1936,6 +1996,9 @@ function projectMapPayload(overview, projectRef, coverage = {}, options = {}) {
 
 function projectHeadRows(readback, projectRef, selectedRows = []) {
   const changeCount = nonNegativeIntegerOrNull(readback.change_count);
+  const timeSelection = normalizeTimeSelection(
+    readback.time_selection ?? readback.transport?.time_selection,
+  );
   const projectRow = {
     ref: projectRef,
     owner_ref: null,
@@ -1950,10 +2013,35 @@ function projectHeadRows(readback, projectRef, selectedRows = []) {
       marker_count: readback.marker_count,
       region_count: readback.region_count,
       selected_count: readback.selected_count,
+      ...(timeSelection === null ? {} : { time_selection: timeSelection }),
       ...(changeCount === null ? {} : { change_count: changeCount }),
     }),
   };
   return dedupeRows([projectRow, ...selectedRows]);
+}
+
+function normalizeTimeSelection(value) {
+  if (!isObject(value)) return null;
+  const readStatus = value.read_status === "unavailable" ? "unavailable" : "available";
+  const startSeconds = finiteOrNull(value.start_seconds);
+  const endSeconds = finiteOrNull(value.end_seconds);
+  if (readStatus === "unavailable" || startSeconds === null || endSeconds === null) {
+    return {
+      read_status: "unavailable",
+      active: false,
+      start_seconds: null,
+      end_seconds: null,
+      length_seconds: null,
+    };
+  }
+  const active = value.active === true && endSeconds > startSeconds;
+  return {
+    read_status: "available",
+    active,
+    start_seconds: startSeconds,
+    end_seconds: endSeconds,
+    length_seconds: Math.round(Math.max(0, endSeconds - startSeconds) * 1e12) / 1e12,
+  };
 }
 
 function mapTracks(rows, projectRef) {
@@ -2009,6 +2097,11 @@ function mapTakesFromItems(rows) {
       playrate: item.playrate,
       preserve_pitch: item.preserve_pitch,
       reverse: item.reverse,
+      source_kind: item.active_take_source_kind,
+      source_ref: item.active_take_source_ref,
+      source_path: item.active_take_source_path,
+      source_basename: item.active_take_source_basename,
+      source_identity_status: item.active_take_source_identity_status,
       take_fx_count: item.take_fx_count,
       has_take_fx: item.has_take_fx,
     });
@@ -2016,7 +2109,7 @@ function mapTakesFromItems(rows) {
       const ref = canonicalRefFrom(take, ["ref", "take_ref"], "take");
       if (!ref || !itemRef) continue;
       const takeFxCount = integerOrNull(take.take_fx_count ?? take.fx_count);
-      takes.push({ ref, owner_ref: itemRef, item_ref: itemRef, track_ref: canonicalRefFrom(take, ["track_ref"], "track") ?? trackRef, name: stringOr(take.name ?? take.take_name, ""), active: take.active === true || take.is_active === true, selected: take.selected === true, source_kind: stringOrNull(take.source_kind), source_ref: canonicalRefFrom(take, ["source_ref", "file_ref"]), pitch_semitones: finiteOrNull(take.pitch_semitones ?? take.pitch), playrate: finiteOrNull(take.playrate ?? take.play_rate), preserve_pitch: booleanOrNull(take.preserve_pitch), reverse: booleanOrNull(take.reverse ?? take.reversed), has_take_fx: booleanOrNull(take.has_take_fx) ?? (takeFxCount === null ? null : takeFxCount > 0), summary: compactObject(take) });
+      takes.push({ ref, owner_ref: itemRef, item_ref: itemRef, track_ref: canonicalRefFrom(take, ["track_ref"], "track") ?? trackRef, name: stringOr(take.name ?? take.take_name, ""), active: take.active === true || take.is_active === true, selected: take.selected === true, source_kind: stringOrNull(take.source_kind), source_ref: canonicalRefFrom(take, ["source_ref", "file_ref"]), source_path: stringOrNull(take.source_path), source_basename: stringOrNull(take.source_basename), source_identity_status: stringOrNull(take.source_identity_status), pitch_semitones: finiteOrNull(take.pitch_semitones ?? take.pitch), playrate: finiteOrNull(take.playrate ?? take.play_rate), preserve_pitch: booleanOrNull(take.preserve_pitch), reverse: booleanOrNull(take.reverse ?? take.reversed), take_fx_count: takeFxCount, has_take_fx: booleanOrNull(take.has_take_fx) ?? (takeFxCount === null ? null : takeFxCount > 0), summary: compactObject(take) });
     }
   }
   return dedupeRows(takes);
@@ -2038,10 +2131,14 @@ function mapTakes(rows) {
       selected: take.selected === true,
       source_kind: stringOrNull(take.source_kind),
       source_ref: canonicalRefFrom(take, ["source_ref", "file_ref"]),
+      source_path: stringOrNull(take.source_path),
+      source_basename: stringOrNull(take.source_basename),
+      source_identity_status: stringOrNull(take.source_identity_status),
       pitch_semitones: finiteOrNull(take.pitch_semitones ?? take.pitch),
       playrate: finiteOrNull(take.playrate ?? take.play_rate),
       preserve_pitch: booleanOrNull(take.preserve_pitch),
       reverse: booleanOrNull(take.reverse ?? take.reversed),
+      take_fx_count: takeFxCount,
       has_take_fx: booleanOrNull(take.has_take_fx) ?? (takeFxCount === null ? null : takeFxCount > 0),
       summary: compactObject(take),
     };
@@ -2070,7 +2167,10 @@ function mapFx(rows) {
     const ref = canonicalRefFrom(row, ["ref", "fx_ref"], "fx");
     const ownerRef = canonicalRefFrom(row, ["owner_ref", "track_ref", "take_ref"]);
     if (!ref || !ownerRef) return null;
-    return { ref, owner_ref: ownerRef, plugin_name: stringOr(row.plugin_name ?? row.name, ""), plugin_id: stringOrNull(row.plugin_id), slot_index: integerOrNull(row.slot_index ?? row.index), bypassed: row.bypassed === true || row.enabled === false, summary: compactObject(row) };
+    const ownerKind = row.owner_kind === "take" || row.owner_kind === "track"
+      ? row.owner_kind
+      : ownerRef.startsWith("take:") ? "take" : ownerRef.startsWith("track:") ? "track" : null;
+    return { ref, owner_ref: ownerRef, owner_kind: ownerKind, fx_guid: stringOrNull(row.fx_guid), plugin_name: stringOr(row.plugin_name ?? row.name, ""), plugin_id: stringOrNull(row.plugin_id), slot_index: integerOrNull(row.slot_index ?? row.index), bypassed: row.bypassed === true || row.enabled === false, summary: compactObject(row) };
   }).filter(Boolean);
 }
 

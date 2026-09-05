@@ -16,12 +16,12 @@ Product: OpenReaper MCP. Server name: `openreaper`. Exactly six tools:
 ## First-round flow
 
 Flow: `ping -> search the user's original words -> prefer one Macro or official Recipe -> exact-id expansion -> one call_template or call_recipe run -> live readback`.
-The Macro-first compatibility route remains `ping -> list_templates`; reusable
+Macro-first route: `ping -> list_templates`; reusable
 or multi-stage Recipe intent may search `list_recipes` in the same first round.
 
 1. `ping` — confirm the server is loaded and read readiness/startup guidance.
 2. Search `list_templates` and, for reusable/multi-stage intent, `list_recipes`
-   with the user's original words as `query` (small `limit`, e.g. 25). Do not
+   with original words as `query` (`limit`, e.g. 25). Do not
    guess casing, field names, refs, enums, or Recipe identities first.
 3. Exact-id expand the selected Macro through `list_templates`, or the selected
    official Recipe through `list_recipes`, before supplying inputs.
@@ -29,75 +29,49 @@ or multi-stage Recipe intent may search `list_recipes` in the same first round.
    stages or targets in an Agent loop.
 5. Live REAPER readback is truth. SQLite / Project Index is navigation only.
 
-Answer with user-facing REAPER facts first. Hide MCP contract, SQLite, session,
-and evidence internals unless they are needed to explain a blocker or recovery.
+Answer with user-facing REAPER facts first; hide MCP internals unless needed for
+a blocker or recovery.
 
-Saved executable Recipes use `call_recipe` with exactly seven operations:
-`validate`, `save`, `list`, `get`, `delete`, `run`, `resume`. Discover a saved
-revision through `list_recipes`, expand its exact id, and reuse the complete
-`recipe_id` / `version` / numeric `revision` / `content_hash` /
-`validation_result_id` identity unchanged. Never run by fuzzy recipe id alone
-and never send runtime trust facts. Page retained evidence with operation `get`
-plus `evidence_ref`.
-
-Recipe authoring/reuse route: discover dependencies by exact Macro/Template
-manuals, build a declarative Macro-first draft, then `validate -> save`. A
-temporary one-off continues `run -> delete` after terminal evidence is retained;
-a reusable Recipe stays saved and is rediscovered after reconnect with
-`list_recipes` or `call_recipe` operation `list/get`, then runs through one public `call_recipe` call.
-Use the returned exact `next_call` for a safe resume;
-never replay Recipe stages or targets yourself.
+`call_recipe` has exactly seven operations: `validate`, `save`, `list`, `get`,
+`delete`, `run`, and `resume`. Discover and exact-expand first; preserve full
+revision identity and follow `next_call`. Page evidence with `get` +
+`evidence_ref`; never replay stages or targets.
 
 ## Recipe quick use
 
-A Recipe is a saved declarative batch program, not an Agent conversation. Use
-one Macro when it already covers the whole bounded operation; use a Recipe for
-two or more ordered stages, one frozen plan over many exact targets, or work
-that should be saved and repeated. Use a Skill for judgment or adaptive
-guidance. The Agent only chooses dependencies and binds inputs before the run,
-then explains aggregate readback afterward; it never loops through stages or
-targets while the Recipe runs.
+A Recipe is a saved declarative batch program; use one public `call_recipe` call.
+For a temporary one-off, use one Macro; use a Recipe for ordered stages, a
+frozen plan, or reuse. Use a Skill for judgment. The Agent binds inputs; it
+explains readback and never loops stages or targets.
 
-For a temporary Recipe, read
-`product_surface.recipe_productization.lifecycle.minimal_draft_template`, exact-
-expand each dependency, copy its id/version/risk/descriptor hash/capabilities,
-replace every `COPY_` value, then call `validate -> save -> run`. Short request:
-"Create a temporary Recipe for the current exact selected audio Items: apply
-one fixed dialogue cleanup plan to all targets in one batch." The Recipe holds
-the plan and the Macro handles all targets; do not generate 63 calls. Where that
-Macro has the 64-target limit, 1-64 is valid and 65 must fail before mutation.
-After terminal evidence, `delete` only the exact identity with `confirm=true`;
-otherwise omit `delete`, and later find the saved revision with `list/get`.
-In a saved draft, keep exact `project_identity` and
-`bridge_owner`, but use `bridge_generation="generation:runtime_bound"`: a fresh
-run binds the current generation after reconnect, while resume remains bound to
-the failed run's generation. Never execute an inline or unsaved draft.
+Temporary authoring starts from
+`product_surface.recipe_productization.lifecycle.minimal_draft_template`:
+exact-expand dependencies, replace every `COPY_`, then `validate -> save -> run`.
+The Macro batches targets; do not generate 63 calls; 65 must fail before mutation.
+Delete exact terminal identity with `confirm=true`; otherwise omit `delete`, and later find the saved revision
+with `list/get`. Keep exact project and owner with
+`bridge_generation="generation:runtime_bound"`: a fresh run binds the current generation after reconnect; refs are rediscovered after reconnect,
+while resume remains bound to the failed run's generation. Never execute an inline or unsaved draft.
 
-Think of a Recipe as a small saved program: its title and summary say what the
-saved thing is, its dependencies say which accepted Macros it uses, and its
-stages say what is repeated. In a phase blueprint, `for_each` means one compiled
-batch over the supplied target group and `once` means one shared operation;
-targets in a phase are never public Agent calls. Use ordered phases only when a
-later phase depends on the earlier verified result, and expect one final
-readback/Undo boundary. The current 0.1.0 executable path is the frozen
-`validate -> save -> run` path above; do not invent or call `run_transient` until
-an exact Recipe manual exposes that operation.
+Stages are internal batches, never Agent loops. `for_each` is one
+target-group batch and `once` one shared operation. Path:
+`validate -> save -> run`; do not invent `run_transient`.
 
 Search Recipes with the user's original words, then exact-expand the selected
-id using `list_recipes` fields `steps`, `assertions`, and `recovery`. The two
+id using `list_recipes` fields `steps`, `assertions`, and `recovery`. Never run by fuzzy recipe id alone. The two
 official product Recipes are:
 
 - `recipe.mix.create_bus_processing`
 - `recipe.midi.create_instrument_part`
 
-Official Recipes pressure-test the same general Recipe system; they are not a
-special execution surface. A fork becomes a user-owned revision and uses the
+Official Recipes use the same general Recipe system, not a special execution
+surface. A fork becomes a user-owned revision and uses the
 same validate/save/list/get/run/reconnect, trust, evidence, and whole-Recipe
 Undo path as every user-authored Recipe.
 
 An update may preserve a user Recipe revision whose sealed dependency catalog
 no longer matches the installed catalog. `list_recipes` reports it as
-`REVISION_STALE` and keeps official and other valid Recipes available. Never
+`REVISION_STALE`; never
 rewrite or execute the stale revision automatically. Tell the user it needs
 revalidation/rebase, then continue with unaffected Recipes when appropriate.
 
@@ -119,8 +93,8 @@ Template calls when a Macro or saved Recipe covers the task.
 On `list_templates` with a non-empty `query`, read
 `product_surface.agent_context_macro_guide.macro_recommendations` (1-3 rows).
 Each row has lowercase `id`, ready `exact_expansion_call`, required target facts,
-`preview_or_dry_run_mandatory`, and typed Template fallback posture. Do not echo
-the full user text. Search phrases are metadata only, never executable aliases.
+`preview_or_dry_run_mandatory`, and typed Template fallback posture. Search phrases are metadata only,
+not executable aliases.
 
 On exact-id expansion, read each item's `first_try_execution_guide` for accepted
 modes, public fields, units/bounds, selector/ref requirements, paging/budget
@@ -137,38 +111,69 @@ placeholder refs as executable.
 On covered validation/replacement/budget/readiness errors, follow machine-readable
 `error.next_call` or `error.request_patch` when present; keep existing failure codes.
 
-FX parameters: prefer `macro.fx.set_controls`. Use `mode=exact_parameters` for
-1-8 parameters on one FX, or `mode=exact_assignments` for 1-64 assignments across
-one or more exact `fx_ref` targets. Obtain exact refs first, page parameters to
-completion, then supply `param_index` or one unique returned name/ident (not
-fuzzy guesses). `mode=semantic` is compatibility-only and fails closed with
-`STOCK_SEMANTIC_UNIT_UNPROVEN` until native low/mid/high proof exists
-(including ReaSynth/RS5k Attack). Direct parameter Templates are debug fallback.
-For ordinary Audio Take FX, publicly query one exact `take_ref`, call
-`macro.fx.apply_chain` with that ref, copy the exact returned `fx_ref`, then call
-`macro.fx.set_controls`; never construct the FX ref or invoke an internal resolver.
+## Live Target Binding
 
-Native paths are JSON values, not shell arguments. Pass one absolute OS path
-directly; keep Unicode and spaces literal. Never add outer shell quotes, write
-POSIX `\ ` escapes, use `file://` / percent encoding / `~`, or split on spaces.
-On a typed path-encoding blocker, obtain the native absolute path and retry once;
-do not guess or silently rewrite it.
+For an operation on selected targets, call the owner once with
+`target_binding`; omit only a documented selection default. Do not pre-query
+`selected_context`, repeat GUIDs, loop writes, or alter visible selection.
 
-Audio Items: preserve source files, Track identity, and timeline position unless
-the exact requested Macro says otherwise. For simultaneous layers, place each
-source on a separate Track; do not create accidental same-Track overlap. Use
-`macro.items.apply` with `mode=remove_silence` for agent-driven batching, or the
-packaged `Remove Silence...` Action for an interactive REAPER run. The repeat
-Action reuses the last accepted settings. Valid scopes are `all`, `leading`,
-`trailing`, `edges`, and `internal`. The Macro and Action routes share one
-REAPER-side batch plan; never loop over Items or fragments through MCP.
+Query only when asked what matches or when parameters need analysis. Reuse the
+typed binding; query/mutation share a fingerprint. Invalid sets stop zero-write.
+Reverse/Glue, Freeze/Unfreeze, and project Stem are one-call set operations.
+Stem defaults to selected Tracks; insertion and non-silent readback precede mute.
 
-For level normalization, use `macro.items.apply` with
-`mode=normalize_level`. Valid metrics are `lufs_i`, `rms_i`, `peak`,
-`true_peak`, `lufs_m_max`, and `lufs_s_max`. This is REAPER-native
-source/item/take pre-FX normalization, not post-FX loudness processing. Both
-audio operations accept at most 64 exact selected audio Items; a larger
-selection must fail before mutation with zero-write truth.
+`PROJECT_LOCKING_ENABLED` on Reverse is zero-write and preserves selection. Ask
+the user to disable REAPER Locking, then retry once; never toggle it automatically.
+
+Recipe target sets freeze at run start and survive resume: Items, Tracks, Takes,
+selected Envelopes, `D_UISEL` Automation Items, ranged Points. Selected Takes
+are selected Items' active Takes. `time_range` is constraint-only; selected points fail
+`AUTOMATION_POINT_SELECTION_UNPROVEN`.
+
+Declare a set for a reusable scope (for example, Items on two Tracks inside a
+range), reuse its `target_set_id` in every stage, and never loop per object. Use
+`macro.project.query` with the same binding only when the user asks what
+matches; writes pass the binding directly. The public inventory marks each
+Macro/Template `live_or_explicit`, `explicit_only`, or `unsupported`.
+
+FX: use `macro.fx.set_controls`; `exact_parameters` handles 1-8 values on one FX,
+and `exact_assignments` 1-64 across exact `fx_ref`s. Complete parameter paging,
+then use returned index/ident. Prefer `display_value` (`3000 Hz`, `-3 dB`,
+`Bell`); never guess 0-1. OpenReaper compiles and reads back via REAPER;
+`normalized_value` is debug/compatibility fallback. A Skill may retain
+`plugin_id`, layout fingerprint, and stable `param_ident` after one full read,
+but must re-read changed layouts. Every use revalidates live identity/format.
+Plugin-UI-only controls are excluded.
+
+Unproven `semantic`: `STOCK_SEMANTIC_UNIT_UNPROVEN`. For Take FX, use returned refs.
+Same FX on active audio Takes: exactly three public calls: `apply_chain` ->
+`fx_set_ref`; `set_controls(inspect_set)` -> `parameter_plan_ref`; then
+`set_controls(shared_plan)`. Never enumerate/cache members. Project/generation changes invalidate both refs.
+
+Native paths are JSON values, not shell arguments: keep Unicode and spaces literal;
+never use shell quotes, `file://`, percent encoding, `~`, or splitting. Switch
+`.RPP` with `macro.project.file(open_project_in_tab)`; never macOS `open -a` or
+startup recovery. `bridge_ready` proves transport only; require
+`project_identity_verified:true` and `index_project_identity_verified:true`.
+For `partial_state:"opened_but_index_not_ready"`, activate its `project_ref`,
+then query with `refresh_policy:"force_read_only_refresh"`; do not reopen.
+Unknown dialog: report and wait; never click or close it automatically.
+
+Filename grouping: fresh-query `item_ref`, `source_basename`, and
+`source_identity_status=available`; ambiguity is zero-write. Never use timeline position
+or guess. On `TRACK_NOT_FOUND`, refresh and rebuild.
+
+Audio Items preserve source files; Same Track is no-op success. Keep Track identity and timeline unless the
+Macro says otherwise; simultaneous layers belong on separate Tracks. Use
+`macro.items.apply` `mode=remove_silence`, or the packaged `Remove Silence...`
+Action. It reuses its last accepted settings on the next invocation. Scopes:
+`all`, `leading`, `trailing`, `edges`, `internal`.
+Both routes share one REAPER batch; never loop over Items through MCP.
+
+For normalization use `macro.items.apply` `mode=normalize_level`: `lufs_i`,
+`rms_i`, `peak`, `true_peak`, `lufs_m_max`, or `lufs_s_max`. It is REAPER-native
+source/item/take pre-FX, not post-FX. Both audio operations allow at most 64
+exact selected audio Items; larger selections fail zero-write before mutation.
 
 ## Flat 15 Macro menu
 
@@ -184,17 +189,16 @@ All Macros are peers. Expand manuals only by exact id.
 - `macro.items.analyze` — loudness/transient/silence analysis
 - `macro.items.apply` — align/move/sequence/properties/fades + set_item_take_controls batch
 - `macro.midi.apply` — create_clips | edit_notes | quantize | write_cc
-- `macro.fx.apply_chain` — add/configure bounded FX (legacy single-node or chain[])
-- `macro.fx.set_controls` — semantic (proven only), exact_parameters, or multi-FX exact_assignments
+- `macro.fx.apply_chain` — apply bounded FX or create a Track-owned Take-FX set
+- `macro.fx.set_controls` — exact/semantic controls or homogeneous-set broadcast
 - `macro.controls.set` — BPM, grid, track/item/take/transport/send controls
 - `macro.automation.apply` — automation points/curves on exact live refs
-- `macro.render.targets` — bounded render/export targets
+- `macro.render.targets` — bounded audio or macOS MP4/MOV render/export targets
 
 ## 15 Macro minimum examples
 
-Use the user's words, expand the exact Macro, and then make one public call.
-These are the shortest safe intents; the expanded manual supplies the exact
-schema, selected/exact target rule, live readback, and recovery:
+Expand the exact Macro before one public call; its manual supplies schema,
+targets, readback, and recovery:
 
 - `macro.project.inspect`: "检查工程是否就绪并告诉我当前工程路径。"
 - `macro.project.query`: "找出当前选中的 Item 和它们的精确引用。"
@@ -206,15 +210,13 @@ schema, selected/exact target rule, live readback, and recovery:
 - `macro.items.analyze`: "分析当前选中的 Item 的响度、瞬态和静音。"
 - `macro.items.apply`: "把当前选中的 Item 音量降低 3 dB。"
 - `macro.midi.apply`: "把当前选中的 MIDI 音符按网格量化。"
-- `macro.fx.apply_chain`: "给当前选中的 Track 加 ReaEQ；Audio Take FX 要明确 take。"
-- `macro.fx.set_controls`: "把当前选中的 Track FX 的精确参数设为请求值。"
+- `macro.fx.apply_chain`: "给一条 Track 的全部 active audio Take 一次加同一 ReaEQ。"
+- `macro.fx.set_controls`: "检查上一步 FX set 的代表实例，再批量应用参数计划。"
 - `macro.controls.set`: "把当前选中的 Track 静音并读回结果。"
 - `macro.automation.apply`: "对当前选中的 Track 写入一段 Automation。"
-- `macro.render.targets`: "渲染当前选中的 Item 和 Track，并返回输出文件。"
+- `macro.render.targets`: "把当前时间选择导出成 1920x1080、30 fps 的 MP4。"
 
 ## Paging, budget, and recovery
-
-Public responses may truncate. Truncation is not internal knowledge loss.
 
 - Continue with the returned `cursor` when present.
 - Shrink `limit` / fields / include when a budget error is returned.
@@ -224,6 +226,14 @@ Public responses may truncate. Truncation is not internal knowledge loss.
   returned `evidence_ref`.
 - Retry once after readiness/budget repair; re-resolve refs after project generation changes.
 - Live REAPER readback remains authority for writes; SQLite never authorizes a mutation.
+
+## Startup and safety
+
+`openreaper-start` starts REAPER when none is running or attaches to the single
+REAPER already opened from the normal icon. It never launches a duplicate. The
+installed startup hook is additive and preserves user startup code/config; it
+does not touch shortcuts, mouse modifiers, ReaTooled state, or keymaps. The
+normal REAPER window and `Scripts on`/ReaScript status window are non-blocking.
 
 ## Safety boundary (do not bypass product)
 
@@ -238,7 +248,8 @@ Forbidden:
 Allowed small assists (not product bypass):
 
 - Official `openreaper-start`; success means matching Bridge heartbeat plus a real
-  `call_template(template.transport.read_state)` probe already passed.
+  `call_template(template.transport.read_state)` probe already passed. It can
+  start or attach to one REAPER instance.
 - macOS and Windows startup windows are observed read-only. OpenReaper never
   clicks or closes them. A blocking window returns
   `STARTUP_USER_ACTION_REQUIRED` while preserving the REAPER PID and Bridge
@@ -247,8 +258,8 @@ Allowed small assists (not product bypass):
 - REAPER action `OpenReaper: Start MCP bridge` is only a manual recovery fallback when
   autonomous startup reports that blocker, not a normal startup step.
 
-Live refs for Automation and similar write flows: first call
-`macro.project.query` (or inspect), then reuse returned canonical refs exactly.
+For exact-ref Automation writes, reuse canonical refs returned by the bounded
+Automation target query exactly.
 
 ## Schema-checked examples
 
@@ -261,8 +272,7 @@ call_template {"id":"macro.midi.apply","input":{"mode":"create_clips","start_sec
 call_template {"id":"macro.items.apply","input":{"mode":"set_properties","target":"selected","properties":{"volume_db":-3},"dry_run":false}}
 call_template {"id":"macro.fx.apply_chain","input":{"plugin":"reacomp","controls":{"threshold_db":-18,"ratio":3},"selector":{"name":"Lead Vocal"},"dry_run":false}}
 call_template {"id":"macro.project.file","input":{"operation":"save_current"}}
-call_template {"id":"macro.project.file","input":{"operation":"list_open_projects","cursor":"0","limit":25}}
-call_template {"id":"macro.project.file","input":{"operation":"open_project_in_tab","target_path":"/projects/对白 中文/demo project.RPP"}}
+call_template {"id":"macro.project.file","input":{"operation":"open_project_in_tab","target_path":"/Users/me/工程/【音频】 白×滑动音阶 🎛️/工程 demo.RPP"}}
 ```
 
 Full Macro manuals stay behind exact-id `list_templates` expansion. Do not

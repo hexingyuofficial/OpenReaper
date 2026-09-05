@@ -73,6 +73,37 @@ revalidate/rebase，并在合适时继续使用不受影响的 Recipe。
 安全解析、领域尚未接受，或预算更适合原子调用时，才使用 direct Template，并
 记录 typed fallback reason。不要用多个 Template 调用拼出隐藏 workflow。
 
+## Live Target Binding
+
+固定操作加当前选择时，直接对 owning Macro/Template 发一次 `target_binding` 调用；
+只有精确 manual 声明 selection default 时才可省略目标。不要先查询
+`selected_context`，不要把集合展开成 GUID 列表，不要逐对象循环 mutation，也不要
+为了喂给操作而改变用户可见选择。
+
+- Reverse/Glue：`macro.items.apply`，`mode=reverse|glue`；目标省略时默认读取执行
+  瞬间 selected Items，也可传 Item binding、explicit refs，或 selected Tracks 加
+  Time Selection 的复合约束。
+- Freeze：`template.tracks.freeze_track`，例如
+  `{"mode":"stereo"}`；目标省略时读取 1-64 条 selected Tracks。
+- Unfreeze：`template.tracks.unfreeze_track`，输入 `{}`；目标省略时读取 1-64 条
+  selected frozen Tracks。
+- 显式简写统一为 `{"domain":"items|tracks","selector":"selected"}`；runtime
+  补全 `bind_at=execution`、`aggregation=batch` 和有界 cardinality。
+
+Reverse 返回 `PROJECT_LOCKING_ENABLED` 时，selection 已保留且操作为 zero-write。
+请用户关闭 REAPER Locking 后原样重试一次；Agent 不得自动切换 Locking。
+
+仅当用户问“哪些对象符合条件”或操作参数依赖分析时，才用
+`macro.project.query` 和完全相同的 binding。Items 可组合 `owner_in` selected
+Tracks 与 `time_relation` current Time Selection；Query 和 mutation 使用同一 live
+fingerprint。空集、超限、binding/ref 冲突、覆盖不完整或无法唯一解析都必须在第一
+次写入前 typed zero-write。
+
+Recipe target set 在 run start 解析并冻结，resume 保留同一 membership；支持
+Items、Tracks、selected Items 的 Active Takes 或 explicit Takes、selected/explicit
+Envelopes、`D_UISEL` Automation Items 和有范围 Points。`time_range` 只能作为约束；
+selected Automation Points 必须返回 `AUTOMATION_POINT_SELECTION_UNPROVEN`。
+
 原生路径是 JSON 值，不是 shell 参数。把一个绝对 OS 路径直接放进字段，中文和
 空格保持原样；不要再包一层 shell 引号、写 POSIX `\ ` 转义、使用 `file://`、
 百分号编码或 `~`，也不得按空格拆分。收到 typed 路径编码 blocker 后，取得原生
@@ -80,7 +111,7 @@ revalidate/rebase，并在合适时继续使用不受影响的 Recipe。
 
 对于同时放置的音频层，每个 source 使用独立 Track，避免意外的同 Track 重叠。
 Remove Silence 使用 `macro.items.apply` 的 `mode=remove_silence`，或软件包内的
-`Remove Silence...` / `Repeat Remove Silence with Last Settings` Action。支持
+`Remove Silence...` Action；它会在下次调用时复用最近一次已接受设置。支持
 `all`、`leading`、`trailing`、`edges`、`internal` 五种 scope。Macro 与
 Action 共用一个 REAPER-side 批处理计划，不得逐 Item 或逐片段通过 MCP 循环。
 
@@ -107,7 +138,7 @@ source/item/take pre-FX normalization，不是 post-FX。两种音频操作最�
 - `macro.fx.set_controls`
 - `macro.controls.set`
 - `macro.automation.apply`
-- `macro.render.targets`
+- `macro.render.targets`（有界音频导出，或 macOS MP4/MOV 视频导出）
 
 ## 15 个 Macro 最小示例
 
@@ -127,7 +158,16 @@ source/item/take pre-FX normalization，不是 post-FX。两种音频操作最�
 - `macro.fx.set_controls`：设置精确 FX 参数。
 - `macro.controls.set`：修改并读回 Track、Item、Take 或 transport 控制。
 - `macro.automation.apply`：在精确 live ref 上写 Automation。
-- `macro.render.targets`：渲染接受的目标并返回输出证据。
+- `macro.render.targets`：把当前时间选择导出成 1920x1080、30 fps 的 MP4，并返回输出证据。
+
+FX 参数默认使用插件原生显示文本：先完整读取一次参数清单，保留准确的
+`plugin_id`、layout fingerprint 和 `param_ident`，随后给
+`macro.fx.set_controls` 的 `exact_parameters` 或 `exact_assignments` 传
+`display_value`，例如 `3000 Hz`、`-3 dB`、`Bell`、`0.71`。不要自行猜测
+0-1；`normalized_value` 仅作为兼容/调试 fallback。Skill 可以记住这些稳定语义，
+但插件或布局变化后必须重读；OpenReaper 每次仍会校验 live FX 身份、用 REAPER
+原生格式编译并读回。支持范围是 REAPER 能识别、格式化、写入和读回的宿主参数，
+不包含只存在于插件自定义 UI、未暴露为 automation parameter 的功能。
 
 ## 分页、预算与恢复
 
@@ -137,6 +177,14 @@ source/item/take pre-FX normalization，不是 post-FX。两种音频操作最�
 - 通过 `call_recipe get` 与 `evidence_ref` 取回保留的 Recipe 证据。
 - readiness 或预算修复后最多重试一次；generation 改变后重新解析 ref。
 - 写操作始终以 REAPER live readback 为准，SQLite 不能授权 mutation。
+
+## 启动与安全
+
+使用官方 `openreaper-start` 时，如果已有一个从图标打开的 REAPER，代理会接入
+该实例；没有实例时才启动新的，绝不启动第二个。安装的 startup hook 只追加带
+标记的 OpenReaper 区块，保留用户启动脚本、快捷键、鼠标修饰键和 ReaTooled
+状态。REAPER 主窗口与 `Scripts on`/ReaScript 状态窗口是正常的非阻塞界面，
+代理应继续等待 Bridge。
 
 ## 安全边界（不得绕过产品）
 

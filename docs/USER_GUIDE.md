@@ -4,8 +4,8 @@ Status: OpenReaper 0.1.0 release documentation. Support remains evidence-bound.
 
 OpenReaper lets you work with a live REAPER project by talking to an agent. You
 do not need to understand Macros, Templates, SQLite, object refs, artifacts, or
-bridge internals. Describe the result you want; the agent should choose a
-supported route, perform the work, and verify the result in REAPER.
+bridge internals. Describe the result you want; the agent chooses a supported
+route, performs the work, and verifies the result in REAPER.
 
 ## Basic Flow
 
@@ -32,6 +32,94 @@ Save the current project.
 The agent must not report a plan, preview, or successful dispatch as completed
 work. A successful write requires live REAPER readback.
 
+## Selecting More Than One Object
+
+You can describe a scope instead of naming every object. For example:
+
+```text
+Reverse every Item on these two Tracks.
+Glue the selected Track's Items inside the time selection.
+Apply this Recipe to all Takes on the selected Track.
+```
+
+For a one-off operation, the agent passes a live `target_binding` directly to
+the owning Macro. For a reusable workflow, a Recipe declares a `target_set`
+with `resolve_at: run_start`; every stage then references its `target_set_id`.
+Membership is frozen once and retained on resume, so the agent does not loop
+over object names or silently reread selection between stages. Supported
+run-start domains are Items, Tracks, Takes, selected/explicit Envelopes,
+Automation Items, and ranged Points. A `time_range` is a constraint on those
+objects, not a standalone object set. Selected Automation points remain a
+typed unsupported case.
+
+For Takes, “selected” has one precise meaning: the active Take of each selected
+Item. REAPER does not expose a separate selected-Take state. To target a
+non-active Take, use its explicit canonical Take ref or first make it active
+through the owning Item operation.
+
+When you ask “which objects match?”, the agent uses `macro.project.query` with
+the same binding and returns canonical refs. It should only query first when
+you asked for the inventory or when the operation genuinely needs analysis;
+otherwise one set-bearing call is the normal path.
+
+If Reverse reports `PROJECT_LOCKING_ENABLED`, OpenReaper preserved your
+selection and made no changes. Disable REAPER Locking and run the same Reverse
+request again; OpenReaper will not change this global option automatically.
+
+### Live Target Binding Coverage
+
+The current bounded acceptance is explicit:
+
+- `[DONE]` Glue and Reverse over selected or explicitly constrained Items.
+- `[DONE]` Freeze/Unfreeze over selected Tracks.
+- `[DONE]` Render/Stem over selected or explicit Tracks and ranges.
+- `[DONE]` Query of complete constrained Item inventories with stable live
+  fingerprints.
+- `[DONE]` Recipe target sets for Items, Tracks, Takes, selected/explicit
+  Envelopes, Automation Items, and ranged Automation points.
+- `[DONE]` Selected-Take binding resolves only active Takes of selected Items;
+  it never treats every Take on those Items as selected.
+- `[DONE]` One representative inspection plus one shared-plan broadcast for a
+  homogeneous active-Take FX set; 1-64 FX targets are supported and 65 fails
+  before mutation.
+- `[DONE]` Agent guidance that sends one set-bearing owning call and avoids
+  per-object loops or a preliminary selection dump.
+- `[BLOCKED]` Selected Automation points: native stock selection truth is not
+  proven, so OpenReaper returns `AUTOMATION_POINT_SELECTION_UNPROVEN` with
+  zero-write behavior.
+- `[TODO]` Analysis-to-mutation `target_snapshot_ref` and a direct
+  Region-from-time-selection canary are design follow-ups, not current public
+  capabilities.
+- `[TODO]` Windows ReaEQ evidence and the conditional Pro-Q 3 probe require
+  their respective environments; macOS stock ReaEQ is the accepted kernel.
+
+These `[BLOCKED]` and `[TODO]` rows are deliberate safety boundaries, not
+silent fallbacks. The agent must report the typed blocker or the missing
+capability instead of guessing refs, changing selection, or claiming a write.
+
+## Third-Party FX Parameters
+
+For host-exposed FX parameters, you can use the values shown by the plugin:
+
+```text
+Set this EQ frequency to 3000 Hz and gain to -3 dB.
+Set the selected mode to Bell.
+```
+
+The agent reads the FX parameter inventory once, uses stable parameter identity,
+and sends `display_value` text. OpenReaper asks REAPER to compile that text to
+the plugin's normalized coordinate, completes all preflight before writing, and
+verifies native formatted readback. It does not keep a central plugin-profile
+database, and it does not use plugin-specific guesses. Raw `normalized_value`
+input remains available for compatibility and debugging.
+
+An agent Skill may remember `plugin_id`, the layout fingerprint, and what stable
+`param_ident` values mean. A changed plugin or layout requires a fresh read, and
+OpenReaper still validates the exact live instance every time. This works for
+Track FX, Take FX, mixed exact assignment batches, and homogeneous FX sets when
+REAPER exposes the control as a host parameter. Controls that exist only inside
+a plugin's custom UI are outside this guarantee.
+
 ## The Macro Surface
 
 OpenReaper has 15 visible, executable Macros. They are one flat product surface;
@@ -53,11 +141,37 @@ there is no Primary/Secondary tier.
 | `macro.fx.set_controls` | Set accepted controls on an existing supported FX and verify every value. |
 | `macro.controls.set` | Set accepted project, track, transport, and send controls, including project BPM. |
 | `macro.automation.apply` | Apply supported Envelope points, lane/Track modes, FX-parameter points, and Automation Item operations. |
-| `macro.render.targets` | Render supported project, selection, region, Item, or Track targets as managed-root WAV/OGG output. |
+| `macro.render.targets` | Render supported project, selection, region, Item, or Track targets as managed-root WAV/OGG/MP3/MP4/MOV output. |
 
 Each Macro has a bounded schema. "Executable" does not mean that every imagined
 mode is accepted. The exact Macro manual is the authority for supported fields,
 limits, risk, confirmation, readback, and held modes.
+
+## Exporting Video
+
+On macOS, `macro.render.targets` can export `.mp4` or `.mov` through REAPER's
+audited AVFoundation route. You can ask for a whole-project, time-selection,
+Region, Item, or Track render in ordinary language, for example:
+
+```text
+Export the time selection as a 1920x1080, 30 fps MP4 at 8000 kbps.
+Render this Region as a 1280x720, 24 fps MOV with 192 kbps audio.
+```
+
+The adjustable video fields are:
+
+- `video_width`: even integer from 16 through 7680; default 1920.
+- `video_height`: even integer from 16 through 4320; default 1080.
+- `video_frame_rate`: 24, 25, 30, 50, or 60; default 30.
+- `video_bitrate_kbps`: integer from 256 through 100000; default 8000.
+- `audio_bitrate_kbps`: 64, 96, 128, 192, 256, or 320; default 192.
+
+The accepted codecs are fixed to H.264 video and AAC audio. Video always uses
+the managed render root and returns `video_outputs`; it cannot use an arbitrary
+output path or `destination=new_project_track`. Give `output_basename` without
+an extension. OpenReaper verifies the MP4/MOV container, video and audio tracks,
+dimensions, frame rate, codecs, and restored REAPER render/selection state
+before reporting completion.
 
 ## How Discovery Works
 
@@ -95,7 +209,9 @@ Check whether OpenReaper is healthy.
 
 For the installed package, the agent should:
 
-1. Run `~/.openreaper/current/bin/openreaper-start`.
+1. Run `~/.openreaper/current/bin/openreaper-start`. If one REAPER is already
+   open from the normal icon, the helper attaches to it; otherwise it starts a
+   new instance. It never starts a duplicate.
 2. Wait for the Bridge heartbeat and public read probe to pass.
 3. If the helper reports `STARTUP_USER_ACTION_REQUIRED`, ask the user to resolve
    the visible REAPER window; never click or close it automatically.
@@ -125,6 +241,10 @@ generation. Resolve the visible window, then rerun
 `openreaper-start --recover-existing`; do not start a duplicate REAPER. The
 fixed package-local launcher starts the Bridge automatically; the
 `OpenReaper: Start MCP bridge` Action is recovery-only. SWS is not required.
+The normal REAPER main window and the `Scripts on`/ReaScript status window are
+non-blocking and should not be treated as a modal obstruction. The installed
+startup block is additive and does not modify shortcuts, mouse modifiers,
+ReaTooled state, or keymaps.
 
 ## Project Index And Live Truth
 
@@ -172,10 +292,9 @@ artifact, or SQLite query yourself.
 
 ## Remove Silence And Normalize
 
-For selected audio Items, OpenReaper provides two packaged REAPER Actions:
-`Remove Silence...` and `Repeat Remove Silence with Last Settings`. The first
-collects settings; the second reuses the last accepted settings. An agent may
-use the same shared batch core through `macro.items.apply` with
+For selected audio Items, OpenReaper provides one packaged REAPER Action:
+`Remove Silence...`. It collects settings and stores the last accepted values
+for the next invocation. An agent may use the same shared batch core through `macro.items.apply` with
 `mode=remove_silence`. Supported scopes are `all`, `leading`, `trailing`,
 `edges`, and `internal`, with threshold, minimum silence, leading/trailing
 padding, minimum kept audio, and fade settings.
@@ -193,7 +312,7 @@ zero-write overflow rule, one native batch, one readback, and one Undo apply.
 
 ## Recipes And Saved Routines
 
-User-facing language may call a Recipe a Routine: it is a small saved,
+User-facing language may call a Recipe a routine: it is a small saved,
 declarative batch program. The title and summary explain what a saved Routine is;
 its dependencies name accepted Macros, and its stages describe the fixed work.
 The Agent chooses and binds the plan before execution, then reports aggregate
@@ -306,9 +425,10 @@ Support remains narrower than the names of some Macro families:
 - Automation supports the exact modes published by its manual; real-time
   touch/write/latch behavior, arbitrary curves, and raw Action/chunk mutation
   are not exposed.
-- Render uses the managed render root and accepted WAV/OGG target modes. It
-  does not promise arbitrary output paths, overwrite, external encoders, or
-  every format.
+- Render uses the managed render root and accepted WAV/OGG/MP3 target modes,
+  plus the macOS AVFoundation MP4/MOV route described above. It does not
+  promise arbitrary output paths, external encoder arguments, unreviewed
+  codecs, or every format.
 - Project files support save/save-as, listing open projects, explicit creation
   of a new saved tab with an absolute `.RPP` path and `overwrite=true`, opening
   an existing absolute `.RPP` path in a tab, and activating one exact saved

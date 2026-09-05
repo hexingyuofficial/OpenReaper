@@ -50,6 +50,7 @@ import {
   MACRO_EXECUTION_CONTRACT,
   validateMacroExecutionEnvelope,
 } from "./macro-runtime-contract-v1.mjs";
+import { createFxSetStoreV1 } from "./fx-set-store-v1.mjs";
 import {
   ALPHA3_2_5_B_PROJECT_INDEX_RUNTIME_CAPABILITY,
   ALPHA3_2_5_B_PROJECT_UNDERSTANDING_REGISTRY,
@@ -1137,6 +1138,7 @@ export function createCallTemplateRuntime(options = {}) {
   const retainedEvidence = [];
   const evidenceLimit = normalizeEvidenceLimit(options.evidenceLimit);
   const now = typeof options.now === "function" ? options.now : () => new Date();
+  const fxSetStore = options.fxSetStore ?? createFxSetStoreV1({ now });
   const live = normalizeLiveRuntimeOptions(options.live);
   const projectIndexRuntime = options.projectIndexRuntime ?? null;
   const projectIndex = projectIndexRuntime?.adapter ?? options.projectIndex ?? null;
@@ -1471,6 +1473,7 @@ export function createCallTemplateRuntime(options = {}) {
             request: adapted.request,
             executeAtomic: macroAtomic,
             projectIndexRuntime,
+            fxSetStore,
             catalog,
             now,
           });
@@ -1480,6 +1483,7 @@ export function createCallTemplateRuntime(options = {}) {
             executeAtomic: macroAtomic,
             nativeBatchExecutor: macroAtomic,
             projectIndexRuntime,
+            fxSetStore,
             catalog,
             now,
           });
@@ -1605,6 +1609,7 @@ export function createCallTemplateRuntime(options = {}) {
           executeAtomic: macroAtomic,
           nativeBatchExecutor: macroAtomic,
           projectIndexRuntime,
+          fxSetStore,
           catalog,
           now,
         });

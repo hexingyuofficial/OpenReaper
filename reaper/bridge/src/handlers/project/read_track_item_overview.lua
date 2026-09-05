@@ -108,8 +108,7 @@ local function d10_overview_track_ref(track)
 end
 
 local function d10_overview_track_name(track)
-  local ok, _, name = call_reaper("GetTrackName", track, "")
-  return bounded_string(ok and first_string(name) or "", 80)
+  return read_track_name(track, 80)
 end
 
 local function d10_overview_track_selected(track)
@@ -198,31 +197,118 @@ local function d10_overview_take_ref(take)
   }
 end
 
-local function d10_overview_take_source_kind(take)
+local function d10_overview_source_basename(path)
+  if type(path) ~= "string" or path == "" then return "" end
+  local posix_style = path:sub(1, 1) == "/"
+  local normalized = posix_style and path:gsub("/+$", "") or path:gsub("[\\/]+$", "")
+  local separator = normalized:match("^.*()/") or 0
+  if not posix_style then
+    separator = math.max(separator, normalized:match("^.*()\\") or 0)
+  end
+  return normalized:sub(separator + 1)
+end
+
+local function d10_overview_take_source_identity(take)
   local ok_midi, is_midi = call_reaper("TakeIsMIDI", take)
-  if ok_midi and (is_midi == true or is_midi == 1) then return "midi" end
+  if ok_midi and (is_midi == true or is_midi == 1) then
+    return {
+      source_kind = "midi",
+      source_ref = JSON_NULL,
+      source_path = JSON_NULL,
+      source_basename = JSON_NULL,
+      source_identity_status = "not_file_backed",
+    }
+  end
   local ok_source, source = call_reaper("GetMediaItemTake_Source", take)
+  local source_kind = "unknown"
   if ok_source and source then
     local ok_type, source_type = call_reaper("GetMediaSourceType", source, "")
     local value = ok_type and first_string(source_type) or nil
-    if type(value) == "string" and value ~= "" then return value:lower() end
+    if type(value) == "string" and value ~= "" then source_kind = value:lower() end
+    local ok_path, path = call_reaper("GetMediaSourceFileName", source, "")
+    path = ok_path and first_string(path) or nil
+    if type(path) == "string" and path ~= "" then
+      return {
+        source_kind = source_kind,
+        source_ref = "file:path:" .. path,
+        source_path = path,
+        source_basename = d10_overview_source_basename(path),
+        source_identity_status = "available",
+      }
+    end
   end
-  return "unknown"
+  return {
+    source_kind = source_kind,
+    source_ref = JSON_NULL,
+    source_path = JSON_NULL,
+    source_basename = JSON_NULL,
+    source_identity_status = "unavailable",
+  }
 end
 
-local function d10_overview_take_summary(take, item, track, take_index, active_take)
+local d10_overview_native_count
+
+local function d10_overview_take_fx_rows(take, take_ref)
+  local count = d10_overview_native_count("TakeFX_GetCount", take)
+  if count == nil or count > 32 then
+    return json_array({}), count, false
+  end
+  local rows = json_array({})
+  for slot_index = 0, count - 1 do
+    local ok_guid, fx_guid = call_reaper("TakeFX_GetFXGUID", take, slot_index)
+    fx_guid = ok_guid and first_string(fx_guid) or nil
+    local ok_name, name_ok, name = call_reaper("TakeFX_GetFXName", take, slot_index, "")
+    name = ok_name and name_ok ~= false and first_string(name) or nil
+    local ok_enabled, enabled = call_reaper("TakeFX_GetEnabled", take, slot_index)
+    if not fx_guid or fx_guid == "" or type(name) ~= "string" or not ok_enabled or type(enabled) ~= "boolean" then
+      return json_array({}), count, false
+    end
+    local ok_ident, ident_ok, ident = call_reaper("TakeFX_GetNamedConfigParm", take, slot_index, "fx_ident")
+    ident = ok_ident and ident_ok ~= false and first_string(ident) or nil
+    rows[#rows + 1] = {
+      fx_ref = "fx:" .. take_ref .. ":" .. tostring(slot_index),
+      owner_kind = "take",
+      owner_ref = take_ref,
+      fx_guid = fx_guid,
+      slot_index = slot_index,
+      name = bounded_string(name, 160),
+      plugin_id = type(ident) == "string" and ident ~= "" and bounded_string(ident, 256) or JSON_NULL,
+      enabled = enabled,
+      bypassed = not enabled,
+    }
+  end
+  return rows, count, true
+end
+
+local function d10_overview_take_summary(take, item, track, take_index, active_take, include_take_fx)
   local take_ref = d10_overview_take_ref_string(take)
-  if not take_ref then return nil end
+  if not take_ref then return nil, json_array({}), false end
   local ok_name, _, name = call_reaper("GetSetMediaItemTakeInfo_String", take, "P_NAME", "", false)
-  return {
+  local take_fx = json_array({})
+  local take_fx_count = nil
+  local take_fx_complete = true
+  if include_take_fx then
+    take_fx, take_fx_count, take_fx_complete = d10_overview_take_fx_rows(take, take_ref)
+  end
+  local source_identity = d10_overview_take_source_identity(take)
+  local summary = {
     take_ref = take_ref,
     item_ref = d10_overview_item_ref_string(item),
     track_ref = track and d10_overview_track_ref_string(track) or JSON_NULL,
     index = take_index,
     active = take == active_take,
     name = bounded_string(ok_name and first_string(name) or "", 80),
-    source_kind = d10_overview_take_source_kind(take),
+    source_kind = source_identity.source_kind,
+    source_ref = source_identity.source_ref,
+    source_path = source_identity.source_path,
+    source_basename = source_identity.source_basename,
+    source_identity_status = source_identity.source_identity_status,
   }
+  if include_take_fx then
+    summary.take_fx_count = take_fx_count == nil and JSON_NULL or take_fx_count
+    summary.has_take_fx = take_fx_count == nil and JSON_NULL or take_fx_count > 0
+  end
+  return summary, take_fx, take_fx_complete
 end
 
 local function d10_overview_item_summary(item, track, item_index)
@@ -232,6 +318,13 @@ local function d10_overview_item_summary(item, track, item_index)
     local ok_name, _, take_name = call_reaper("GetSetMediaItemTakeInfo_String", take, "P_NAME", "", false)
     if ok_name then active_take_name = bounded_string(first_string(take_name) or "", 80) end
   end
+  local source_identity = ok_take and take and d10_overview_take_source_identity(take) or {
+    source_kind = "unknown",
+    source_ref = JSON_NULL,
+    source_path = JSON_NULL,
+    source_basename = JSON_NULL,
+    source_identity_status = "no_active_take",
+  }
   return {
     item_ref = d10_overview_item_ref_string(item),
     track_ref = track and d10_overview_track_ref_string(track) or JSON_NULL,
@@ -242,6 +335,11 @@ local function d10_overview_item_summary(item, track, item_index)
     muted = (first_number(select(2, call_reaper("GetMediaItemInfo_Value", item, "B_MUTE"))) or 0) == 1,
     locked = (first_number(select(2, call_reaper("GetMediaItemInfo_Value", item, "C_LOCK"))) or 0) ~= 0,
     active_take_name = active_take_name,
+    active_take_source_kind = source_identity.source_kind,
+    active_take_source_ref = source_identity.source_ref,
+    active_take_source_path = source_identity.source_path,
+    active_take_source_basename = source_identity.source_basename,
+    active_take_source_identity_status = source_identity.source_identity_status,
   }
 end
 
@@ -255,7 +353,7 @@ local function d10_overview_selector_matches(summary, filter)
   )
 end
 
-local function d10_overview_native_count(api_name, ...)
+d10_overview_native_count = function(api_name, ...)
   local ok, value = call_reaper(api_name, ...)
   if not ok or type(value) ~= "number" or value ~= value or value == math.huge or value == -math.huge then
     return nil
@@ -301,6 +399,7 @@ local function read_track_item_overview(request)
   local max_items_per_track = include_track_items and d10_overview_budget_item_limit(request, request.params and request.params.max_items_per_track, max_tracks) or 0
   local include_selected_items = request.params == nil or request.params.include_selected_items ~= false
   local include_takes = request.params and request.params.include_takes == true
+  local include_take_fx = include_takes and request.params.include_take_fx == true
   local max_takes = d10_overview_bounded_limit(request, request.params and request.params.max_takes, 64, 513)
   local max_selected_items = d10_overview_bounded_limit(request, request.params and request.params.max_selected_items, 4, 513)
   local selector_filter = request.params and request.params.selector_filter
@@ -312,6 +411,7 @@ local function read_track_item_overview(request)
   local items = json_array({})
   local selected_items = json_array({})
   local takes = json_array({})
+  local take_fx = json_array({})
   local refs = json_array({ d10_overview_project_ref() })
 
   local end_track = math.min(total_tracks, track_cursor + max_tracks)
@@ -389,10 +489,29 @@ local function read_track_item_overview(request)
               visited_take_slots = visited_take_slots + 1
               local ok_take, take = call_reaper("GetTake", item, take_index)
               if ok_take and take then
-                local take_summary = d10_overview_take_summary(take, item, ok_track and track or nil, take_index, ok_active and active_take or nil)
+                local take_summary, take_fx_rows, take_fx_complete = d10_overview_take_summary(
+                  take,
+                  item,
+                  ok_track and track or nil,
+                  take_index,
+                  ok_active and active_take or nil,
+                  include_take_fx
+                )
                 if take_summary then
                   takes[#takes + 1] = take_summary
                   refs[#refs + 1] = d10_overview_take_ref(take)
+                  if include_take_fx then
+                    if not take_fx_complete then takes_internally_complete = false end
+                    for fx_index = 1, #take_fx_rows do
+                      local fx = take_fx_rows[fx_index]
+                      take_fx[#take_fx + 1] = fx
+                      refs[#refs + 1] = {
+                        kind = "fx",
+                        ref = fx.fx_ref,
+                        identity = { scheme = "take_fx", value = fx.owner_ref .. ":" .. tostring(fx.slot_index) },
+                      }
+                    end
+                  end
                 else
                   takes_internally_complete = false
                 end
@@ -445,6 +564,12 @@ local function read_track_item_overview(request)
     summary.takes_truncated = next_take_cursor < total_takes
     summary.take_coverage_status = not takes_internally_complete and "incomplete" or (next_take_cursor < total_takes and "paged" or "complete")
     summary.take_coverage = { internally_complete = takes_internally_complete }
+    if include_take_fx then
+      summary.take_fx = take_fx
+      summary.returned_take_fx_count = #take_fx
+      summary.take_fx_coverage_status = summary.take_coverage_status
+      summary.take_fx_coverage = { internally_complete = takes_internally_complete }
+    end
     if next_take_cursor < total_takes then summary.next_take_cursor = tostring(next_take_cursor) end
   end
   return summary, nil, json_array({}), json_array({}), refs

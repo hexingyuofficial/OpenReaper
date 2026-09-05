@@ -1675,6 +1675,21 @@ local function e5_automation_envelope_from_request(request)
     end
   end
   local parent_kind = request.params.parent_kind
+  if parent_kind == "selected" then
+    local ok_selected, selected = call_reaper("GetSelectedEnvelope", 0)
+    if not ok_selected or not selected then
+      return nil
+    end
+    local guid = e5_automation_envelope_guid(selected)
+    if not guid then
+      return nil
+    end
+    local envelope, info = e5_automation_envelope_by_guid(guid)
+    if not envelope or envelope ~= selected or not is_object(info) then
+      return nil
+    end
+    return envelope, "envelope:guid:" .. guid, info.parent_kind, info.key, info.name, info
+  end
   if parent_kind == "track" or parent_kind == nil or parent_kind == JSON_NULL then
     local track = e5_routing_track_from_request_refs(request) or e5_routing_resolve_track_token("track:index:0")
     if track then
