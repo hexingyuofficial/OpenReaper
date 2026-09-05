@@ -1,6 +1,6 @@
 <div align="center">
 
-# OpenReaper
+<h1><img src="assets/openreaper-logo.png" alt="OpenReaper" width="620"></h1>
 
 **让 Agent 安全地理解、操作并验证 REAPER 工程。**
 
