@@ -2346,10 +2346,9 @@ tell application "System Events"
       end try
       if studioFaceSafeTitles contains windowTitle then
         -- Skip unknown-dialog classification and keep scanning for real blockers.
+        -- AppleScript has no `next repeat` (osacompile error -2741 on macOS).
         set sawOpenReaperStudioDialog to true
-        next repeat
-      end if
-      if windowTitle is "Project Settings" or windowTitle is "Project Settings / Notes" then
+      else if windowTitle is "Project Settings" or windowTitle is "Project Settings / Notes" then
         -- REAPER's macOS AX tree does not consistently expose the selected
         -- Notes tab name. Inspect the exact safe markers in one tree pass.
         set isProjectNotesWindow to my isExactProjectNotesWindow(reaperWindow)
@@ -2357,47 +2356,48 @@ tell application "System Events"
           return "blocked_manual_dialog:title=Project Settings"
         end if
         return "project_settings_seen_but_not_notes"
-      end if
-      set windowSubrole to ""
-      try
-        set windowSubrole to subrole of reaperWindow as text
-      on error errorMessage
-        return "blocked_dialog_classification:title=" & windowTitle & ":error=" & errorMessage
-      end try
-      set isPotentialDialog to windowSubrole is "AXDialog" or windowSubrole is "AXSheet" or windowTitle is "Project Load Warning"
-      set isReaScriptRunStatusWindow to isPotentialDialog and my isExactReaScriptRunStatusWindow(reaperWindow, hasRunningReaScriptMainWindow)
-      if not isReaScriptRunStatusWindow then set isReaScriptRunStatusWindow to my isNamedReaScriptStatusWindow(reaperWindow, windowTitle)
-      if isReaScriptRunStatusWindow then
-        -- REAPER exposes its running ReaScript as a tiny AXDialog. It is a
-        -- status surface, not a user decision, and remains open and untouched.
-        set sawReaScriptRunStatusWindow to true
-        set isPotentialDialog to false
-      end if
-      if not isPotentialDialog and not isReaScriptRunStatusWindow then
-        if windowSubrole is not "AXWindow" and windowSubrole is not "AXStandardWindow" and windowSubrole is not "" then
-          return "blocked_unknown_dialog:title=" & windowTitle
-        end if
-      end if
-      if isPotentialDialog then
-        -- Normal REAPER windows are not startup dialogs. Avoid traversing the
-        -- full accessibility tree on every readiness tick.
-        set hasIgnoreMissingFiles to false
+      else
+        set windowSubrole to ""
         try
-          if my exactUiElementCount(reaperWindow, "Ignore all missing files", "AXButton") is 1 then set hasIgnoreMissingFiles to true
+          set windowSubrole to subrole of reaperWindow as text
+        on error errorMessage
+          return "blocked_dialog_classification:title=" & windowTitle & ":error=" & errorMessage
         end try
-        if hasIgnoreMissingFiles then
-          return "blocked_missing_media:choice=Ignore all missing files"
+        set isPotentialDialog to windowSubrole is "AXDialog" or windowSubrole is "AXSheet" or windowTitle is "Project Load Warning"
+        set isReaScriptRunStatusWindow to isPotentialDialog and my isExactReaScriptRunStatusWindow(reaperWindow, hasRunningReaScriptMainWindow)
+        if not isReaScriptRunStatusWindow then set isReaScriptRunStatusWindow to my isNamedReaScriptStatusWindow(reaperWindow, windowTitle)
+        if isReaScriptRunStatusWindow then
+          -- REAPER exposes its running ReaScript as a tiny AXDialog. It is a
+          -- status surface, not a user decision, and remains open and untouched.
+          set sawReaScriptRunStatusWindow to true
+          set isPotentialDialog to false
         end if
-        if windowTitle is "Project Load Warning" then
-          set isOfflineMediaWarning to my uiTextAreaContains(reaperWindow, "in an off-line state", "filenames should be preserved")
-          if isOfflineMediaWarning and my exactUiElementCount(reaperWindow, "OK", "AXButton") is 1 then return "blocked_missing_media_offline_warning:choice=OK"
-          return "blocked_user_decision:title=Project Load Warning"
-        end if
-        if windowSubrole is "AXDialog" or windowSubrole is "AXSheet" then
-          if windowTitle contains "Evaluation" or windowTitle contains "License" or windowTitle contains "Recovery" or windowTitle contains "missing effect" or windowTitle contains "New version" then
-            return "blocked_user_decision:title=" & windowTitle
+        if not isPotentialDialog and not isReaScriptRunStatusWindow then
+          if windowSubrole is not "AXWindow" and windowSubrole is not "AXStandardWindow" and windowSubrole is not "" then
+            return "blocked_unknown_dialog:title=" & windowTitle
           end if
-          return "blocked_unknown_dialog:title=" & windowTitle
+        end if
+        if isPotentialDialog then
+          -- Normal REAPER windows are not startup dialogs. Avoid traversing the
+          -- full accessibility tree on every readiness tick.
+          set hasIgnoreMissingFiles to false
+          try
+            if my exactUiElementCount(reaperWindow, "Ignore all missing files", "AXButton") is 1 then set hasIgnoreMissingFiles to true
+          end try
+          if hasIgnoreMissingFiles then
+            return "blocked_missing_media:choice=Ignore all missing files"
+          end if
+          if windowTitle is "Project Load Warning" then
+            set isOfflineMediaWarning to my uiTextAreaContains(reaperWindow, "in an off-line state", "filenames should be preserved")
+            if isOfflineMediaWarning and my exactUiElementCount(reaperWindow, "OK", "AXButton") is 1 then return "blocked_missing_media_offline_warning:choice=OK"
+            return "blocked_user_decision:title=Project Load Warning"
+          end if
+          if windowSubrole is "AXDialog" or windowSubrole is "AXSheet" then
+            if windowTitle contains "Evaluation" or windowTitle contains "License" or windowTitle contains "Recovery" or windowTitle contains "missing effect" or windowTitle contains "New version" then
+              return "blocked_user_decision:title=" & windowTitle
+            end if
+            return "blocked_unknown_dialog:title=" & windowTitle
+          end if
         end if
       end if
     end repeat

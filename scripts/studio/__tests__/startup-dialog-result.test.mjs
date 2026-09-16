@@ -50,6 +50,11 @@ function extractAppleScriptObserver(source) {
   return source.slice(start, end);
 }
 
+/** AppleScript `--` comments; used so `next repeat` in a warning comment is not a false positive. */
+function stripAppleScriptComments(text) {
+  return String(text ?? "").replace(/--[^\n]*/g, "");
+}
+
 function extractShellFunction(source, name) {
   const start = source.indexOf(`${name}() {`);
   if (start < 0) {
@@ -199,15 +204,22 @@ describe("packaged openreaper-start dialog observer", () => {
     const unknownAt = observer.indexOf('return "blocked_unknown_dialog:title="');
     expect(allowlistAt).toBeGreaterThanOrEqual(0);
     expect(unknownAt).toBeGreaterThan(allowlistAt);
+    expect(stripAppleScriptComments(observer)).not.toMatch(/\bnext repeat\b/);
     expect(observer).toMatch(/if studioFaceSafeTitles contains windowTitle then/);
     expect(observer).toMatch(/set sawOpenReaperStudioDialog to true/);
-    expect(observer).toMatch(/next repeat/);
+    expect(observer).toMatch(/else if windowTitle is "Project Settings"/);
+    const faceIfAt = observer.indexOf("if studioFaceSafeTitles contains windowTitle then");
+    const faceElseAt = observer.indexOf("\n      else\n", faceIfAt);
+    expect(faceIfAt).toBeGreaterThanOrEqual(0);
+    expect(faceElseAt).toBeGreaterThan(faceIfAt);
+    expect(unknownAt).toBeGreaterThan(faceElseAt);
     expect(observer).toMatch(/if sawOpenReaperStudioDialog then return "ignored_openreaper_studio_dialog"/);
     expect(classifier).toMatch(/ignored_openreaper_studio_dialog/);
     expect(classifier).toMatch(/blocked_unknown_dialog\)/);
     expect(classifier).toMatch(/"OpenReaper Studio"\)/);
     expect(classifier).not.toMatch(/\blocal status=/);
     expect(source).not.toMatch(/blocked_unknown_dialog:title=OpenReaper Studio/);
+    expect(stripAppleScriptComments(source)).not.toMatch(/\bnext repeat\b/);
     const face = readFileSync(
       path.join(repoRoot, "scripts/studio/reaper/dialog/ui_face.lua"),
       "utf8",
@@ -229,6 +241,27 @@ describe("packaged openreaper-start dialog observer", () => {
     expect(startupDialogResultIsSafe("blocked_unknown_dialog:title=OpenReaper Studio", "soft")).toBe(true);
     expect(runShellClassifier(classifier, "soft", "blocked_unknown_dialog:title=License")).toBe(1);
     expect(runShellClassifier(classifier, "soft", "blocked_unknown_dialog:title=Unexpected")).toBe(1);
+  });
+
+  it("skips Studio face classification with if/else so real blockers still fail closed", () => {
+    const observer = extractAppleScriptObserver(source);
+    expect(stripAppleScriptComments(observer)).not.toMatch(/\bnext repeat\b/);
+    const loopStart = observer.indexOf("repeat with reaperWindow in windows");
+    expect(loopStart).toBeGreaterThanOrEqual(0);
+    const loopEnd = observer.indexOf("end repeat", loopStart);
+    const loop = observer.slice(loopStart, loopEnd);
+    expect(loop).toMatch(/if studioFaceSafeTitles contains windowTitle then[\s\S]*set sawOpenReaperStudioDialog to true[\s\S]*else if windowTitle is "Project Settings"/);
+    expect(loop).toContain('return "blocked_manual_dialog:title=Project Settings"');
+    expect(loop).toContain('return "blocked_missing_media:choice=Ignore all missing files"');
+    expect(loop).toContain('return "blocked_missing_media_offline_warning:choice=OK"');
+    expect(loop).toContain('return "blocked_user_decision:title=Project Load Warning"');
+    expect(loop).toContain('return "blocked_unknown_dialog:title="');
+    const afterLoop = observer.slice(loopEnd);
+    expect(afterLoop).toMatch(/if sawOpenReaperStudioDialog then return "ignored_openreaper_studio_dialog"/);
+    expect(runShellClassifier(classifier, "soft", "ignored_openreaper_studio_dialog")).toBe(0);
+    expect(runShellClassifier(classifier, "strict", "ignored_openreaper_studio_dialog")).toBe(0);
+    expect(runShellClassifier(classifier, "soft", "blocked_missing_media:choice=Ignore all missing files")).toBe(1);
+    expect(runShellClassifier(classifier, "soft", "blocked_manual_dialog:title=Project Settings")).toBe(1);
   });
 
   it("maps AX failures to inspection_unavailable and logs once", () => {
