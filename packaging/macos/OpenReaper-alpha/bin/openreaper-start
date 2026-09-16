@@ -369,11 +369,14 @@ duplicate instance.
 OPENREAPER_STARTUP_DIALOG_POLICY=soft|strict controls inspection failures.
 Default is soft when OPENREAPER_STUDIO=1, otherwise strict. Soft treats
 Accessibility/osascript failures as inspection_unavailable (not exit 75).
-Real blocked_* window classifications still fail closed. Studio attaches to an
-existing REAPER when possible. It may relaunch once when Studio just installed
-the __startup.lua face hook (OPENREAPER_STUDIO_FACE_HOOK_INSTALLED=1) or when
-OPENREAPER_STUDIO_RELAUNCH_STALE=1. Orphan LaunchServices env locks from a dead
-openreaper-start owner are reclaimed automatically; see README recovery one-liner.
+A lone Project Settings window is a recoverable soft blocker (not exit 75);
+Start still does not click Cancel. The OpenReaper Studio face title stays
+allowlisted. Real blocked_* decision windows (missing media, license, etc.)
+still fail closed. Studio attaches to an existing REAPER when possible. It
+may relaunch once when Studio just installed the __startup.lua face hook
+(OPENREAPER_STUDIO_FACE_HOOK_INSTALLED=1) or when OPENREAPER_STUDIO_RELAUNCH_STALE=1.
+Orphan LaunchServices env locks from a dead openreaper-start owner are
+reclaimed automatically; see README recovery one-liner.
 After a LaunchServices launch, session env stays set until helper exit so a
 restored/replaced REAPER PID can still publish the startup hook.
 HELP
@@ -2547,26 +2550,6 @@ on exactUiElementCount(theWindow, targetName, targetRole)
   return matchCount
 end exactUiElementCount
 
-on isExactProjectNotesWindow(theWindow)
-  tell application "System Events"
-    set notesCheckboxCount to 0
-    set okButtonCount to 0
-    try
-      -- Query the two exact direct children instead of expanding any AX
-      -- subtree. REAPER's Project Settings window can make both `entire
-      -- contents` and `UI elements` block even after the bridge hook has
-      -- completed. Unknown/decision-bearing dialogs still go through the
-      -- fail-closed classifier below.
-      set matchingNotesCheckboxes to every checkbox of theWindow whose name is "Show notes on project load"
-      set matchingOkButtons to every button of theWindow whose name is "OK"
-      set notesCheckboxCount to count of matchingNotesCheckboxes
-      set okButtonCount to count of matchingOkButtons
-      return notesCheckboxCount is 1 and okButtonCount is 1
-    end try
-  end tell
-  return false
-end isExactProjectNotesWindow
-
 on uiTextAreaContains(theWindow, firstNeedle, secondNeedle)
   tell application "System Events"
     try
@@ -2621,6 +2604,7 @@ tell application "System Events"
     set hasRunningReaScriptMainWindow to false
     set sawReaScriptRunStatusWindow to false
     set sawOpenReaperStudioDialog to false
+    set sawProjectSettings to false
     repeat with candidateWindow in windows
       try
         if (subrole of candidateWindow as text) is "AXStandardWindow" and (name of candidateWindow as text) contains "[ReaScript: Run]" then
@@ -2638,13 +2622,11 @@ tell application "System Events"
       if windowTitle is "OpenReaper Studio" then
         set sawOpenReaperStudioDialog to true
       else if windowTitle is "Project Settings" or windowTitle is "Project Settings / Notes" then
-        -- REAPER's macOS AX tree does not consistently expose the selected
-        -- Notes tab name. Inspect the exact safe markers in one tree pass.
-        set isProjectNotesWindow to my isExactProjectNotesWindow(reaperWindow)
-        if isProjectNotesWindow then
-          return "blocked_manual_dialog:title=Project Settings"
-        end if
-        return "project_settings_seen_but_not_notes"
+        -- Title-only. Do not expand AX children: Project Settings can stall
+        -- `entire contents` / `UI elements` even after the bridge hook has
+        -- completed. Keep scanning so a real decision modal still fail-closes.
+        -- Soft/Studio policy treats a lone settings window as recoverable.
+        set sawProjectSettings to true
       else
         set windowSubrole to ""
         try
@@ -2690,6 +2672,7 @@ tell application "System Events"
         end if
       end if
     end repeat
+    if sawProjectSettings then return "blocked_manual_dialog:title=Project Settings"
     if sawReaScriptRunStatusWindow then return "ignored_reascript_run_status_window"
     if sawOpenReaperStudioDialog then return "ignored_openreaper_studio_dialog"
   end tell
@@ -2726,7 +2709,7 @@ startup_dialog_result_is_safe() {
     no_safe_dialog|ignored_reascript_run_status_window|ignored_openreaper_studio_dialog)
       return 0
       ;;
-    unavailable|inspection_unavailable)
+    unavailable|inspection_unavailable|project_settings_seen_but_not_notes)
       if [[ "${STARTUP_DIALOG_POLICY}" == "soft" ]]; then
         return 0
       fi
@@ -2745,6 +2728,19 @@ startup_dialog_result_is_safe() {
       fi
       return 1
       ;;
+    blocked_manual_dialog)
+      # Soft/Studio: a lone Project Settings window is recoverable. Never click
+      # Cancel here; strict policy still reports STARTUP_USER_ACTION_REQUIRED.
+      if [[ "${STARTUP_DIALOG_POLICY}" == "soft" && "${1}" == *:title=* ]]; then
+        dialog_title="${1#*:title=}"
+        case "${dialog_title}" in
+          "Project Settings"|"Project Settings / Notes")
+            return 0
+            ;;
+        esac
+      fi
+      return 1
+      ;;
   esac
   return 1
 }
@@ -2752,6 +2748,13 @@ startup_dialog_result_is_safe() {
 record_dialog_result() {
   local result="$1"
   echo "[OpenReaper] dialog-event timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ") project=${PROJECT_PATH:-none} result=${result}" >> "${START_LOG}"
+  if [[ "${STARTUP_DIALOG_POLICY}" == "soft" ]]; then
+    case "${result}" in
+      blocked_manual_dialog:title=Project\ Settings|blocked_manual_dialog:title=Project\ Settings\ /\ Notes|project_settings_seen_but_not_notes)
+        echo "[OpenReaper] startup-dialog-soft-ignore=${result}" >&2
+        ;;
+    esac
+  fi
 }
 
 report_startup_user_action_required() {

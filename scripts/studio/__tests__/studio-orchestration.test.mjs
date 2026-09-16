@@ -226,6 +226,8 @@ describe("face.prepare", () => {
       expect(synced).toContain("inspection_unavailable");
       expect(synced).toContain('OPENREAPER_STUDIO:-}" == "1"');
       expect(synced).toContain("else if windowTitle is \"Project Settings\"");
+      expect(synced).toContain("set sawProjectSettings to true");
+      expect(synced).toContain("startup-dialog-soft-ignore=");
       expect(synced).toContain("held_until_helper_exit");
       expect(synced).toContain("adopted_after_launchservices_restore");
       expect(synced).toContain('if windowTitle is "OpenReaper Studio" then');

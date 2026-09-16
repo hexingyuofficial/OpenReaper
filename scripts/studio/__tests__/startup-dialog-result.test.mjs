@@ -8,9 +8,11 @@ import {
   classifyDialogInspectionFailure,
   dialogResultTitle,
   isStudioFaceSafeWindowTitle,
+  isStudioSoftBlockerWindowTitle,
   resolveStartupDialogPolicy,
   startupDialogResultIsSafe,
   STUDIO_FACE_SAFE_WINDOW_TITLES,
+  STUDIO_SOFT_BLOCKER_WINDOW_TITLES,
 } from "../lib/contracts/startup-dialog-result.mjs";
 import { packagedMacosStartHelperPath } from "../lib/paths.mjs";
 
@@ -23,6 +25,11 @@ const ALWAYS_SAFE = [
   "ignored_openreaper_studio_dialog",
 ];
 const INSPECTION_SAFE = ["unavailable", "inspection_unavailable", "inspection_unavailable:status=142"];
+const SOFT_SAFE_BLOCKERS = [
+  "blocked_manual_dialog:title=Project Settings",
+  "blocked_manual_dialog:title=Project Settings / Notes",
+  "project_settings_seen_but_not_notes",
+];
 const UNSAFE = [
   "blocked_dialog_inspection_timeout:seconds=5",
   "blocked_dialog_inspection_failed:status=1",
@@ -31,11 +38,10 @@ const UNSAFE = [
   "blocked_user_decision:title=Project Load Warning",
   "blocked_unknown_dialog:title=Unexpected",
   "blocked_unknown_dialog:title=License",
-  "blocked_manual_dialog:title=Project Settings",
+  "blocked_manual_dialog:title=Unexpected",
   "blocked_reaper_identity:pid=123",
   "blocked_dialog_classification:title=Untitled:error=permission denied",
   "blocked_startup_budget_exhausted:stage=dialog_inspection",
-  "project_settings_seen_but_not_notes",
 ];
 
 function extractAppleScriptObserver(source) {
@@ -156,6 +162,23 @@ describe("startup dialog result classification", () => {
     }
   });
 
+  it("treats a lone Project Settings window as a recoverable soft blocker", () => {
+    expect(STUDIO_SOFT_BLOCKER_WINDOW_TITLES).toEqual(["Project Settings", "Project Settings / Notes"]);
+    expect(isStudioSoftBlockerWindowTitle("Project Settings")).toBe(true);
+    expect(isStudioSoftBlockerWindowTitle("Project Settings / Notes")).toBe(true);
+    expect(isStudioSoftBlockerWindowTitle("License")).toBe(false);
+    expect(dialogResultTitle("blocked_manual_dialog:title=Project Settings")).toBe("Project Settings");
+
+    const studioPolicy = resolveStartupDialogPolicy({ OPENREAPER_STUDIO: "1" });
+    expect(studioPolicy).toBe("soft");
+    for (const result of SOFT_SAFE_BLOCKERS) {
+      expect(startupDialogResultIsSafe(result, "soft"), result).toBe(true);
+      expect(startupDialogResultIsSafe(result, studioPolicy), result).toBe(true);
+      expect(startupDialogResultIsSafe(result, "strict"), result).toBe(false);
+    }
+    expect(startupDialogResultIsSafe("blocked_manual_dialog:title=Unexpected", "soft")).toBe(false);
+  });
+
   it("fails closed for real blocked_* dialog classifications", () => {
     for (const result of UNSAFE) {
       expect(startupDialogResultIsSafe(result, "soft"), result).toBe(false);
@@ -182,8 +205,9 @@ describe("startup dialog result classification", () => {
     }
     expect(startupDialogResultIsSafe("blocked_unknown_dialog:title=License", "soft")).toBe(false);
     expect(startupDialogResultIsSafe("blocked_unknown_dialog:title=Unexpected", "soft")).toBe(false);
-    expect(startupDialogResultIsSafe("blocked_manual_dialog:title=Project Settings", "soft")).toBe(false);
-    expect(startupDialogResultIsSafe("project_settings_seen_but_not_notes", "soft")).toBe(false);
+    expect(startupDialogResultIsSafe("blocked_manual_dialog:title=Project Settings", "soft")).toBe(true);
+    expect(startupDialogResultIsSafe("blocked_manual_dialog:title=Project Settings", "strict")).toBe(false);
+    expect(startupDialogResultIsSafe("project_settings_seen_but_not_notes", "soft")).toBe(true);
   });
 
   it("maps AX/osascript failures to inspection_unavailable", () => {
@@ -245,14 +269,20 @@ describe("packaged openreaper-start dialog observer", () => {
     expect(stripAppleScriptComments(body)).not.toMatch(/\bnext repeat\b/);
     expect(body).not.toMatch(/studioFaceSafeTitles/);
     expect(body).toMatch(/set sawOpenReaperStudioDialog to true/);
+    expect(body).toMatch(/set sawProjectSettings to false/);
     expect(body).toMatch(/else if windowTitle is "Project Settings"/);
+    expect(body).toMatch(/set sawProjectSettings to true/);
+    expect(body).not.toMatch(/isExactProjectNotesWindow/);
     const faceElseAt = body.indexOf("\n      else\n", faceAt);
     expect(faceElseAt).toBeGreaterThan(faceAt);
     expect(unknownAt).toBeGreaterThan(faceElseAt);
+    expect(body).toMatch(/if sawProjectSettings then return "blocked_manual_dialog:title=Project Settings"/);
     expect(body).toMatch(/if sawOpenReaperStudioDialog then return "ignored_openreaper_studio_dialog"/);
     expect(classifier).toMatch(/ignored_openreaper_studio_dialog/);
     expect(classifier).toMatch(/blocked_unknown_dialog\)/);
+    expect(classifier).toMatch(/blocked_manual_dialog\)/);
     expect(classifier).toMatch(/"OpenReaper Studio"\)/);
+    expect(classifier).toMatch(/"Project Settings"/);
     expect(classifier).not.toMatch(/\blocal status=/);
     expect(source).not.toMatch(/blocked_unknown_dialog:title=OpenReaper Studio/);
     expect(stripAppleScriptComments(source)).not.toMatch(/\bnext repeat\b/);
@@ -277,8 +307,9 @@ describe("packaged openreaper-start dialog observer", () => {
     expect(startupDialogResultIsSafe("blocked_unknown_dialog:title=OpenReaper Studio", "soft")).toBe(true);
     expect(runShellClassifier(classifier, "soft", "blocked_unknown_dialog:title=License")).toBe(1);
     expect(runShellClassifier(classifier, "soft", "blocked_unknown_dialog:title=Unexpected")).toBe(1);
-    expect(runShellClassifier(classifier, "soft", "blocked_manual_dialog:title=Project Settings")).toBe(1);
-    expect(runShellClassifier(classifier, "soft", "project_settings_seen_but_not_notes")).toBe(1);
+    expect(runShellClassifier(classifier, "soft", "blocked_manual_dialog:title=Project Settings")).toBe(0);
+    expect(runShellClassifier(classifier, "strict", "blocked_manual_dialog:title=Project Settings")).toBe(1);
+    expect(runShellClassifier(classifier, "soft", "project_settings_seen_but_not_notes")).toBe(0);
   });
 
   it("keeps the observer compile-safe in zsh: no brace lists and no HyperTalk next repeat", () => {
@@ -319,17 +350,27 @@ describe("packaged openreaper-start dialog observer", () => {
     const loopEnd = observer.indexOf("end repeat", loopStart);
     const loop = observer.slice(loopStart, loopEnd);
     expect(loop).toMatch(/if windowTitle is "OpenReaper Studio" then[\s\S]*set sawOpenReaperStudioDialog to true[\s\S]*else if windowTitle is "Project Settings"/);
-    expect(loop).toContain('return "blocked_manual_dialog:title=Project Settings"');
+    expect(loop).toMatch(/set sawProjectSettings to true/);
+    expect(loop).not.toContain('return "blocked_manual_dialog:title=Project Settings"');
     expect(loop).toContain('return "blocked_missing_media:choice=Ignore all missing files"');
     expect(loop).toContain('return "blocked_missing_media_offline_warning:choice=OK"');
     expect(loop).toContain('return "blocked_user_decision:title=Project Load Warning"');
     expect(loop).toContain('return "blocked_unknown_dialog:title="');
     const afterLoop = observer.slice(loopEnd);
-    expect(afterLoop).toMatch(/if sawOpenReaperStudioDialog then return "ignored_openreaper_studio_dialog"/);
+    const projectSettingsAt = afterLoop.indexOf(
+      'if sawProjectSettings then return "blocked_manual_dialog:title=Project Settings"',
+    );
+    const studioFaceAt = afterLoop.indexOf(
+      'if sawOpenReaperStudioDialog then return "ignored_openreaper_studio_dialog"',
+    );
+    expect(projectSettingsAt).toBeGreaterThanOrEqual(0);
+    expect(studioFaceAt).toBeGreaterThan(projectSettingsAt);
     expect(runShellClassifier(classifier, "soft", "ignored_openreaper_studio_dialog")).toBe(0);
     expect(runShellClassifier(classifier, "strict", "ignored_openreaper_studio_dialog")).toBe(0);
     expect(runShellClassifier(classifier, "soft", "blocked_missing_media:choice=Ignore all missing files")).toBe(1);
-    expect(runShellClassifier(classifier, "soft", "blocked_manual_dialog:title=Project Settings")).toBe(1);
+    expect(runShellClassifier(classifier, "soft", "blocked_manual_dialog:title=Project Settings")).toBe(0);
+    expect(runShellClassifier(classifier, "strict", "blocked_manual_dialog:title=Project Settings")).toBe(1);
+    expect(runShellClassifier(classifier, "soft", "blocked_manual_dialog:title=Unexpected")).toBe(1);
   });
 
   it("maps AX failures to inspection_unavailable and logs once", () => {
@@ -344,7 +385,9 @@ describe("packaged openreaper-start dialog observer", () => {
     expect(source).toMatch(/reclaim_orphan_launchservices_lock/);
     expect(source).toMatch(/acquire_openreaper_start_chain_lock/);
     expect(source).toMatch(/studio-relaunch=process_table_clear;ready_for_clean_launch/);
-    expect(classifier).toMatch(/unavailable\|inspection_unavailable/);
+    expect(source).toMatch(/unavailable\|inspection_unavailable\|project_settings_seen_but_not_notes/);
+    expect(source).toMatch(/startup-dialog-soft-ignore=/);
+    expect(source).toMatch(/A lone Project Settings window is a recoverable soft blocker/);
   });
 
   it("does not restore LaunchServices env until helper EXIT, and adopts a replacement PID", () => {
@@ -374,6 +417,10 @@ describe("packaged openreaper-start dialog observer", () => {
     }
     for (const result of UNSAFE) {
       expect(runShellClassifier(classifier, "soft", result), `${result} soft`).toBe(1);
+      expect(runShellClassifier(classifier, "strict", result), `${result} strict`).toBe(1);
+    }
+    for (const result of SOFT_SAFE_BLOCKERS) {
+      expect(runShellClassifier(classifier, "soft", result), `${result} soft`).toBe(0);
       expect(runShellClassifier(classifier, "strict", result), `${result} strict`).toBe(1);
     }
     for (const title of STUDIO_FACE_SAFE_WINDOW_TITLES) {

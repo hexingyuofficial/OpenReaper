@@ -28,8 +28,10 @@ rewiring Start/Stop.
 macOS **Accessibility** for Terminal/osascript is optional. Studio Start uses
 soft dialog *inspection* (`OPENREAPER_STUDIO=1`): AX/osascript failures
 (`-609`, `-2741` syntax, timeout, empty) become `inspection_unavailable` and do
-not exit 75. Real `blocked_*` REAPER windows still fail closed. Start never
-clicks dialogs. After LaunchServices launch, session env stays set until helper
+not exit 75. A lone **Project Settings** window is a recoverable soft blocker
+(not exit 75); Start still does not click or close it. The **OpenReaper Studio**
+face title is allowlisted. Real decision windows (missing media, license, etc.)
+still fail closed. After LaunchServices launch, session env stays set until helper
 exit so a restored/replaced REAPER PID can still publish the startup hook.
 
 Studio **does not** use the user's personal Pi (`~/.pi`, global `pi` login in Terminal). All agent
@@ -216,7 +218,7 @@ add the kind to `CONTEXT_CHIP_KINDS` in Node contracts.
 | Variable | Purpose |
 |----------|---------|
 | `OPENREAPER_INSTALL_ROOT` | Packaged install root (`~/.openreaper/current`; session/vendor stay there) |
-| `OPENREAPER_STARTUP_DIALOG_POLICY` | `soft` or `strict` dialog inspection; default `soft` when `OPENREAPER_STUDIO=1` |
+| `OPENREAPER_STARTUP_DIALOG_POLICY` | `soft` or `strict` dialog inspection; default `soft` when `OPENREAPER_STUDIO=1`. Soft ignores AX failures and a lone Project Settings window without clicking. |
 | `OPENREAPER_STUDIO_SKIP_PI` | Skip private Pi RPC step |
 | `OPENREAPER_STUDIO_STOP_REAPER` | Request REAPER quit on Stop |
 | `OPENREAPER_STUDIO_PI_ROOT` | Override private Pi tree root |

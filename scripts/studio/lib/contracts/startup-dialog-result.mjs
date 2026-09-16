@@ -12,10 +12,27 @@ export const STARTUP_DIALOG_INSPECTION_SAFE_RESULTS = Object.freeze([
 ]);
 
 /**
+ * Observer tokens that are recoverable Studio/soft blockers, not decision
+ * modals. Strict policy still fails closed.
+ */
+export const STARTUP_DIALOG_SOFT_SAFE_RESULTS = Object.freeze([
+  "project_settings_seen_but_not_notes",
+]);
+
+/**
  * Exact ImGui/AX titles for the Studio face. These are not REAPER decision
  * modals. Soft/Studio policy must not treat them as blocked_unknown_dialog.
  */
 export const STUDIO_FACE_SAFE_WINDOW_TITLES = Object.freeze(["OpenReaper Studio"]);
+
+/**
+ * A lone Project Settings window on cold Studio start. Soft policy ignores it
+ * without clicking Cancel. Strict policy still reports user action required.
+ */
+export const STUDIO_SOFT_BLOCKER_WINDOW_TITLES = Object.freeze([
+  "Project Settings",
+  "Project Settings / Notes",
+]);
 
 export function resolveStartupDialogPolicy(env = {}) {
   const explicit = String(env.OPENREAPER_STARTUP_DIALOG_POLICY ?? "").trim();
@@ -47,11 +64,18 @@ export function isStudioFaceSafeWindowTitle(title) {
   return STUDIO_FACE_SAFE_WINDOW_TITLES.includes(String(title ?? ""));
 }
 
+export function isStudioSoftBlockerWindowTitle(title) {
+  return STUDIO_SOFT_BLOCKER_WINDOW_TITLES.includes(String(title ?? ""));
+}
+
 /**
  * Fail-closed for real blocked_* classifications.
  * Soft policy: inspection_unavailable / unavailable do not block startup.
  * Soft/Studio policy: allowlisted Studio face titles are non-blocking even if
  * the observer still emits blocked_unknown_dialog:title=….
+ * Soft/Studio policy: a lone Project Settings window is a recoverable soft
+ * blocker (blocked_manual_dialog / project_settings_seen_but_not_notes).
+ * Start still never clicks or closes REAPER windows.
  */
 export function startupDialogResultIsSafe(result, policy = "strict") {
   const token = dialogResultToken(result);
@@ -61,11 +85,16 @@ export function startupDialogResultIsSafe(result, policy = "strict") {
   if (STARTUP_DIALOG_INSPECTION_SAFE_RESULTS.includes(token)) {
     return policy === "soft";
   }
-  if (
-    policy === "soft" &&
-    token === "blocked_unknown_dialog" &&
-    isStudioFaceSafeWindowTitle(dialogResultTitle(result))
-  ) {
+  if (policy !== "soft") {
+    return false;
+  }
+  if (STARTUP_DIALOG_SOFT_SAFE_RESULTS.includes(token)) {
+    return true;
+  }
+  if (token === "blocked_unknown_dialog" && isStudioFaceSafeWindowTitle(dialogResultTitle(result))) {
+    return true;
+  }
+  if (token === "blocked_manual_dialog" && isStudioSoftBlockerWindowTitle(dialogResultTitle(result))) {
     return true;
   }
   return false;
