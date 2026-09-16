@@ -11,6 +11,12 @@ export const STARTUP_DIALOG_INSPECTION_SAFE_RESULTS = Object.freeze([
   "inspection_unavailable",
 ]);
 
+/**
+ * Exact ImGui/AX titles for the Studio face. These are not REAPER decision
+ * modals. Soft/Studio policy must not treat them as blocked_unknown_dialog.
+ */
+export const STUDIO_FACE_SAFE_WINDOW_TITLES = Object.freeze(["OpenReaper Studio"]);
+
 export function resolveStartupDialogPolicy(env = {}) {
   const explicit = String(env.OPENREAPER_STARTUP_DIALOG_POLICY ?? "").trim();
   if (explicit === "soft" || explicit === "strict") {
@@ -26,9 +32,26 @@ export function dialogResultToken(result) {
   return String(result ?? "").split(":")[0];
 }
 
+/** Title payload from observer tokens such as blocked_unknown_dialog:title=…. */
+export function dialogResultTitle(result) {
+  const text = String(result ?? "");
+  const marker = ":title=";
+  const at = text.indexOf(marker);
+  if (at < 0) {
+    return "";
+  }
+  return text.slice(at + marker.length);
+}
+
+export function isStudioFaceSafeWindowTitle(title) {
+  return STUDIO_FACE_SAFE_WINDOW_TITLES.includes(String(title ?? ""));
+}
+
 /**
  * Fail-closed for real blocked_* classifications.
  * Soft policy: inspection_unavailable / unavailable do not block startup.
+ * Soft/Studio policy: allowlisted Studio face titles are non-blocking even if
+ * the observer still emits blocked_unknown_dialog:title=….
  */
 export function startupDialogResultIsSafe(result, policy = "strict") {
   const token = dialogResultToken(result);
@@ -37,6 +60,13 @@ export function startupDialogResultIsSafe(result, policy = "strict") {
   }
   if (STARTUP_DIALOG_INSPECTION_SAFE_RESULTS.includes(token)) {
     return policy === "soft";
+  }
+  if (
+    policy === "soft" &&
+    token === "blocked_unknown_dialog" &&
+    isStudioFaceSafeWindowTitle(dialogResultTitle(result))
+  ) {
+    return true;
   }
   return false;
 }

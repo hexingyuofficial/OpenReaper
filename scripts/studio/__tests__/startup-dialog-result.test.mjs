@@ -5,8 +5,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   classifyDialogInspectionFailure,
+  dialogResultTitle,
+  isStudioFaceSafeWindowTitle,
   resolveStartupDialogPolicy,
   startupDialogResultIsSafe,
+  STUDIO_FACE_SAFE_WINDOW_TITLES,
 } from "../lib/contracts/startup-dialog-result.mjs";
 import { packagedMacosStartHelperPath } from "../lib/paths.mjs";
 
@@ -131,6 +134,29 @@ describe("startup dialog result classification", () => {
     }
   });
 
+  it("does not classify the OpenReaper Studio face title as blocked under soft/Studio policy", () => {
+    expect(STUDIO_FACE_SAFE_WINDOW_TITLES).toEqual(["OpenReaper Studio"]);
+    expect(isStudioFaceSafeWindowTitle("OpenReaper Studio")).toBe(true);
+    expect(isStudioFaceSafeWindowTitle("License")).toBe(false);
+    expect(dialogResultTitle("blocked_unknown_dialog:title=OpenReaper Studio")).toBe("OpenReaper Studio");
+
+    const studioPolicy = resolveStartupDialogPolicy({ OPENREAPER_STUDIO: "1" });
+    expect(studioPolicy).toBe("soft");
+    for (const title of STUDIO_FACE_SAFE_WINDOW_TITLES) {
+      const unknown = `blocked_unknown_dialog:title=${title}`;
+      expect(startupDialogResultIsSafe(unknown, "soft"), unknown).toBe(true);
+      expect(startupDialogResultIsSafe(unknown, studioPolicy), unknown).toBe(true);
+      expect(startupDialogResultIsSafe(unknown, resolveStartupDialogPolicy({ OPENREAPER_STARTUP_DIALOG_POLICY: "soft" }))).toBe(
+        true,
+      );
+      expect(startupDialogResultIsSafe(unknown, "strict"), unknown).toBe(false);
+    }
+    expect(startupDialogResultIsSafe("blocked_unknown_dialog:title=License", "soft")).toBe(false);
+    expect(startupDialogResultIsSafe("blocked_unknown_dialog:title=Unexpected", "soft")).toBe(false);
+    expect(startupDialogResultIsSafe("blocked_manual_dialog:title=Project Settings", "soft")).toBe(false);
+    expect(startupDialogResultIsSafe("project_settings_seen_but_not_notes", "soft")).toBe(false);
+  });
+
   it("maps AX/osascript failures to inspection_unavailable", () => {
     expect(classifyDialogInspectionFailure({ status: 142, output: "" })).toBe("inspection_unavailable");
     expect(classifyDialogInspectionFailure({ status: 1, output: "" })).toBe("inspection_unavailable");
@@ -169,23 +195,35 @@ describe("packaged openreaper-start dialog observer", () => {
 
   it("allowlists the OpenReaper Studio ReaImGui face before unknown-dialog classification", () => {
     const observer = extractAppleScriptObserver(source);
-    const ignoreAt = observer.indexOf('if windowTitle is "OpenReaper Studio" then');
+    const allowlistAt = observer.indexOf('set studioFaceSafeTitles to {"OpenReaper Studio"}');
     const unknownAt = observer.indexOf('return "blocked_unknown_dialog:title="');
-    expect(ignoreAt).toBeGreaterThanOrEqual(0);
-    expect(unknownAt).toBeGreaterThan(ignoreAt);
-    expect(observer.slice(ignoreAt, ignoreAt + 400)).toMatch(/set sawOpenReaperStudioDialog to true/);
-    expect(observer.slice(ignoreAt, ignoreAt + 400)).toMatch(/next repeat/);
+    expect(allowlistAt).toBeGreaterThanOrEqual(0);
+    expect(unknownAt).toBeGreaterThan(allowlistAt);
+    expect(observer).toMatch(/if studioFaceSafeTitles contains windowTitle then/);
+    expect(observer).toMatch(/set sawOpenReaperStudioDialog to true/);
+    expect(observer).toMatch(/next repeat/);
     expect(observer).toMatch(/if sawOpenReaperStudioDialog then return "ignored_openreaper_studio_dialog"/);
     expect(classifier).toMatch(/ignored_openreaper_studio_dialog/);
+    expect(classifier).toMatch(/blocked_unknown_dialog\)/);
+    expect(classifier).toMatch(/"OpenReaper Studio"\)/);
+    expect(classifier).not.toMatch(/\blocal status=/);
     expect(source).not.toMatch(/blocked_unknown_dialog:title=OpenReaper Studio/);
     const face = readFileSync(
       path.join(repoRoot, "scripts/studio/reaper/dialog/ui_face.lua"),
       "utf8",
     );
     expect(face).toContain('ImGui_Begin(ctx, "OpenReaper Studio"');
+    for (const title of STUDIO_FACE_SAFE_WINDOW_TITLES) {
+      expect(observer).toContain(`"${title}"`);
+      expect(face).toContain(`ImGui_Begin(ctx, "${title}"`);
+      expect(runShellClassifier(classifier, "soft", `blocked_unknown_dialog:title=${title}`)).toBe(0);
+      expect(runShellClassifier(classifier, "strict", `blocked_unknown_dialog:title=${title}`)).toBe(1);
+    }
     expect(startupDialogResultIsSafe("ignored_openreaper_studio_dialog", "soft")).toBe(true);
     expect(startupDialogResultIsSafe("ignored_openreaper_studio_dialog", "strict")).toBe(true);
-    expect(startupDialogResultIsSafe("blocked_unknown_dialog:title=OpenReaper Studio", "soft")).toBe(false);
+    expect(startupDialogResultIsSafe("blocked_unknown_dialog:title=OpenReaper Studio", "soft")).toBe(true);
+    expect(runShellClassifier(classifier, "soft", "blocked_unknown_dialog:title=License")).toBe(1);
+    expect(runShellClassifier(classifier, "soft", "blocked_unknown_dialog:title=Unexpected")).toBe(1);
   });
 
   it("maps AX failures to inspection_unavailable and logs once", () => {
@@ -210,6 +248,11 @@ describe("packaged openreaper-start dialog observer", () => {
     for (const result of UNSAFE) {
       expect(runShellClassifier(classifier, "soft", result), `${result} soft`).toBe(1);
       expect(runShellClassifier(classifier, "strict", result), `${result} strict`).toBe(1);
+    }
+    for (const title of STUDIO_FACE_SAFE_WINDOW_TITLES) {
+      const unknown = `blocked_unknown_dialog:title=${title}`;
+      expect(runShellClassifier(classifier, "soft", unknown), `${unknown} soft`).toBe(0);
+      expect(runShellClassifier(classifier, "strict", unknown), `${unknown} strict`).toBe(1);
     }
   });
 

@@ -2329,6 +2329,8 @@ tell application "System Events"
     set hasRunningReaScriptMainWindow to false
     set sawReaScriptRunStatusWindow to false
     set sawOpenReaperStudioDialog to false
+    -- Exact ReaImGui face titles from ui_face.lua. Not REAPER decision modals.
+    set studioFaceSafeTitles to {"OpenReaper Studio"}
     repeat with candidateWindow in windows
       try
         if (subrole of candidateWindow as text) is "AXStandardWindow" and (name of candidateWindow as text) contains "[ReaScript: Run]" then
@@ -2342,9 +2344,8 @@ tell application "System Events"
       try
         set windowTitle to name of reaperWindow as text
       end try
-      if windowTitle is "OpenReaper Studio" then
-        -- ReaImGui Studio AI dialog face from face.prepare (open-face-on-load).
-        -- Exact title only: skip unknown-dialog classification and keep scanning.
+      if studioFaceSafeTitles contains windowTitle then
+        -- Skip unknown-dialog classification and keep scanning for real blockers.
         set sawOpenReaperStudioDialog to true
         next repeat
       end if
@@ -2429,6 +2430,7 @@ APPLESCRIPT
 
 startup_dialog_result_is_safe() {
   local token="${1%%:*}"
+  local dialog_title=""
   case "${token}" in
     no_safe_dialog|ignored_reascript_run_status_window|ignored_openreaper_studio_dialog)
       return 0
@@ -2436,6 +2438,19 @@ startup_dialog_result_is_safe() {
     unavailable|inspection_unavailable)
       if [[ "${STARTUP_DIALOG_POLICY}" == "soft" ]]; then
         return 0
+      fi
+      return 1
+      ;;
+    blocked_unknown_dialog)
+      # Soft/Studio: exact ImGui face titles are not blocking modals.
+      # Keep real unknown titles fail-closed.
+      if [[ "${STARTUP_DIALOG_POLICY}" == "soft" && "${1}" == *:title=* ]]; then
+        dialog_title="${1#*:title=}"
+        case "${dialog_title}" in
+          "OpenReaper Studio")
+            return 0
+            ;;
+        esac
       fi
       return 1
       ;;
