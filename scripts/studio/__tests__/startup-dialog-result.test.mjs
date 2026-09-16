@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -175,6 +176,18 @@ describe("startup dialog result classification", () => {
     ).toBe("inspection_unavailable");
     expect(
       classifyDialogInspectionFailure({
+        status: 1,
+        output: '42:73: syntax error: Expected end of line but found "repeat". (-2741)',
+      }),
+    ).toBe("inspection_unavailable");
+    expect(
+      classifyDialogInspectionFailure({
+        status: 0,
+        output: 'syntax error: Expected end of line but found "repeat". (-2741)',
+      }),
+    ).toBe("inspection_unavailable");
+    expect(
+      classifyDialogInspectionFailure({
         status: 0,
         output: "no_safe_dialog",
       }),
@@ -275,7 +288,24 @@ describe("packaged openreaper-start dialog observer", () => {
     expect(source).toMatch(/OPENREAPER_STUDIO_FACE_HOOK_INSTALLED/);
     expect(source).toMatch(/reclaim_orphan_launchservices_lock/);
     expect(source).toMatch(/acquire_openreaper_start_chain_lock/);
+    expect(source).toMatch(/studio-relaunch=process_table_clear;ready_for_clean_launch/);
     expect(classifier).toMatch(/unavailable\|inspection_unavailable/);
+  });
+
+  it("does not restore LaunchServices env until helper EXIT, and adopts a replacement PID", () => {
+    const hookWait = extractShellFunction(source, "wait_for_startup_hook");
+    expect(source).toMatch(/launchservices-env=held_until_helper_exit/);
+    const waitAt = source.indexOf('wait_for_startup_hook "${reaper_pid}"');
+    const heldAt = source.indexOf("launchservices-env=held_until_helper_exit");
+    expect(waitAt).toBeGreaterThanOrEqual(0);
+    expect(heldAt).toBeGreaterThan(waitAt);
+    expect(source.slice(waitAt, heldAt)).not.toMatch(/restore_launchservices_env/);
+    expect(source).toMatch(/STARTUP_LAUNCHED_REAPER_PID/);
+    expect(hookWait).toMatch(/adopt_startup_reaper_pid_after_launchservices_restore/);
+    expect(hookWait).toMatch(/waiting_for_launchservices_restore/);
+    expect(hookWait).toMatch(/STARTUP_REAPER_PID_REPLACE_GRACE_TICKS/);
+    expect(source).toMatch(/startup-reaper-pid=adopted_after_launchservices_restore/);
+    expect(source).toMatch(/select_startup_reaper_successor_pid\(\)/);
   });
 
   it("shell classifier matches the JS contract", () => {
@@ -303,6 +333,13 @@ describe("packaged openreaper-start dialog observer", () => {
     expect(runAxFailureCheck(axFailure, 1, "no_safe_dialog")).toBe(0);
     expect(runAxFailureCheck(axFailure, 0, "")).toBe(0);
     expect(runAxFailureCheck(axFailure, 0, "System Events got an error: invalid connection (-609)")).toBe(0);
+    expect(
+      runAxFailureCheck(
+        axFailure,
+        0,
+        '42:73: syntax error: Expected end of line but found "repeat". (-2741)',
+      ),
+    ).toBe(0);
     expect(runAxFailureCheck(axFailure, 0, "no_safe_dialog")).toBe(1);
     expect(runAxFailureCheck(axFailure, 0, "blocked_unknown_dialog:title=License")).toBe(1);
   });
@@ -314,5 +351,55 @@ describe("packaged openreaper-start dialog observer", () => {
       expect(runAxFailureCheck(axFailure, 1, "", "zsh")).toBe(0);
       expect(runAxFailureCheck(axFailure, 0, "no_safe_dialog", "zsh")).toBe(1);
     }
+  });
+});
+
+describe("packaged openreaper-start LaunchServices successor PID picker", () => {
+  const source = readFileSync(START_HELPER, "utf8");
+  const picker = extractShellFunction(source, "select_startup_reaper_successor_pid");
+
+  function runPicker(launchedPid, beforePids, candidates) {
+    const tmp = mkdtempSync(path.join(os.tmpdir(), "or-ls-successor-"));
+    const beforeFile = path.join(tmp, "before.pids");
+    writeFileSync(beforeFile, beforePids.map((pid) => `${pid}\n`).join(""), "utf8");
+    const spawned = spawnSync(
+      "zsh",
+      [
+        "-c",
+        `${picker}\nselect_startup_reaper_successor_pid "$@"`,
+        "successor-picker",
+        launchedPid,
+        beforeFile,
+        ...candidates,
+      ],
+      { encoding: "utf8" },
+    );
+    rmSync(tmp, { recursive: true, force: true });
+    return spawned;
+  }
+
+  it("adopts the unique new PID and fails closed on 0 or 2+ successors", () => {
+    const zshCheck = spawnSync("zsh", ["-c", "exit 0"], { encoding: "utf8" });
+    if (zshCheck.error?.code === "ENOENT") {
+      return;
+    }
+    const unique = runPicker("100", ["100", "200"], ["200", "300"]);
+    expect(unique.status, unique.stderr).toBe(0);
+    expect(unique.stdout.trim()).toBe("300");
+
+    const stillListed = runPicker("100", ["200"], ["100", "300"]);
+    expect(stillListed.status, stillListed.stderr).toBe(0);
+    expect(stillListed.stdout.trim()).toBe("300");
+
+    const none = runPicker("100", ["200"], ["100", "200"]);
+    expect(none.status).toBe(1);
+    expect(none.stdout.trim()).toBe("");
+
+    const multiple = runPicker("100", ["200"], ["300", "400"]);
+    expect(multiple.status).toBe(1);
+
+    const emptyBefore = runPicker("100", [], ["300"]);
+    expect(emptyBefore.status).toBe(0);
+    expect(emptyBefore.stdout.trim()).toBe("300");
   });
 });

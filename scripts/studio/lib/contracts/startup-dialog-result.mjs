@@ -87,9 +87,12 @@ export function classifyDialogInspectionFailure({
   }
   if (
     /-609\b/.test(combined) ||
+    /-2741\b/.test(combined) ||
     /invalid connection/i.test(combined) ||
     /not allowed assistive access/i.test(combined) ||
-    /System Events got an error/i.test(combined)
+    /System Events got an error/i.test(combined) ||
+    /syntax error/i.test(combined) ||
+    /expected end of line/i.test(combined)
   ) {
     return "inspection_unavailable";
   }

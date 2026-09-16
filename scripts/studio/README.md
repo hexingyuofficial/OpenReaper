@@ -27,8 +27,10 @@ rewiring Start/Stop.
 
 macOS **Accessibility** for Terminal/osascript is optional. Studio Start uses
 soft dialog *inspection* (`OPENREAPER_STUDIO=1`): AX/osascript failures
-(`-609`, timeout, empty) become `inspection_unavailable` and do not exit 75.
-Real `blocked_*` REAPER windows still fail closed. Start never clicks dialogs.
+(`-609`, `-2741` syntax, timeout, empty) become `inspection_unavailable` and do
+not exit 75. Real `blocked_*` REAPER windows still fail closed. Start never
+clicks dialogs. After LaunchServices launch, session env stays set until helper
+exit so a restored/replaced REAPER PID can still publish the startup hook.
 
 Studio **does not** use the user's personal Pi (`~/.pi`, global `pi` login in Terminal). All agent
 state is under OpenReaper Studio roots.

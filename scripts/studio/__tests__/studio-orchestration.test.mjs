@@ -225,6 +225,9 @@ describe("face.prepare", () => {
       expect(synced).toContain("startup_dialog_result_is_safe()");
       expect(synced).toContain("inspection_unavailable");
       expect(synced).toContain('OPENREAPER_STUDIO:-}" == "1"');
+      expect(synced).toContain("else if windowTitle is \"Project Settings\"");
+      expect(synced).toContain("held_until_helper_exit");
+      expect(synced).toContain("adopted_after_launchservices_restore");
     } finally {
       await rm(tmp, { recursive: true, force: true });
     }
@@ -247,6 +250,7 @@ describe("start helper sync + studio env", () => {
       expect(result.dest).toBe(path.join(installRoot, "bin", "openreaper-start"));
       const copied = await readFile(result.dest, "utf8");
       expect(copied).toContain("inspection_unavailable");
+      expect(copied).toContain("held_until_helper_exit");
       expect(copied).not.toContain("old\n");
     } finally {
       await rm(tmp, { recursive: true, force: true });

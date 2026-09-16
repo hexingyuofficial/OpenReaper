@@ -144,6 +144,9 @@ STARTUP_PROCESS_QUERY_TIMEOUT_MS=750
 STARTUP_LAUNCHCTL_TIMEOUT_MS=2000
 STARTUP_LAUNCHCTL_CLEANUP_TIMEOUT_MS=300
 STARTUP_LAUNCHSERVICES_TIMEOUT_MS=3000
+# Ticks of 0.25s to wait for a replacement REAPER PID after the LaunchServices
+# handoff process exits during macOS window restore.
+STARTUP_REAPER_PID_REPLACE_GRACE_TICKS=12
 LAUNCHSERVICES_LOCK_PATH="${INSTALL_ROOT}/session/.openreaper-launchservices-env.lock"
 LAUNCHSERVICES_LOCK_OWNED=false
 LAUNCHSERVICES_LOCK_TOKEN=""
@@ -371,6 +374,8 @@ existing REAPER when possible. It may relaunch once when Studio just installed
 the __startup.lua face hook (OPENREAPER_STUDIO_FACE_HOOK_INSTALLED=1) or when
 OPENREAPER_STUDIO_RELAUNCH_STALE=1. Orphan LaunchServices env locks from a dead
 openreaper-start owner are reclaimed automatically; see README recovery one-liner.
+After a LaunchServices launch, session env stays set until helper exit so a
+restored/replaced REAPER PID can still publish the startup hook.
 HELP
       exit 0
       ;;
@@ -1081,14 +1086,17 @@ JXA
     echo "${reaper_pid}" > "${PID_FILE}"
     startup_hook_status=0
     wait_for_startup_hook "${reaper_pid}" || startup_hook_status=$?
+    if [[ -n "${STARTUP_LAUNCHED_REAPER_PID}" ]]; then
+      reaper_pid="${STARTUP_LAUNCHED_REAPER_PID}"
+    fi
     if (( startup_hook_status != 0 )); then
       echo "[OpenReaper] REAPER startup hook did not publish a valid startup stage before LaunchServices restoration." >&2
       exit "${startup_hook_status}"
     fi
-    if ! restore_launchservices_env; then
-      echo "[OpenReaper] LaunchServices environment restoration failed; startup is not successful." >&2
-      exit 1
-    fi
+    # Keep launchctl session env until helper EXIT. Restoring here races macOS
+    # window restore: the NSWorkspace PID can exit and a replacement REAPER
+    # starts without OpenReaper keys, so the startup hook never publishes.
+    echo "[OpenReaper] launchservices-env=held_until_helper_exit"
   else
     if ! prepare_startup_status_for_new_launch; then
       echo "[OpenReaper] startup status preparation failed for direct launch." >&2
@@ -1107,6 +1115,9 @@ JXA
     echo "${reaper_pid}" > "${PID_FILE}"
     startup_hook_status=0
     wait_for_startup_hook "${reaper_pid}" || startup_hook_status=$?
+    if [[ -n "${STARTUP_LAUNCHED_REAPER_PID}" ]]; then
+      reaper_pid="${STARTUP_LAUNCHED_REAPER_PID}"
+    fi
     if (( startup_hook_status != 0 )); then
       echo "[OpenReaper] direct REAPER startup hook did not publish a valid startup stage." >&2
       exit "${startup_hook_status}"
@@ -1232,6 +1243,76 @@ capture_startup_reaper_identity() {
   else
     echo "[OpenReaper] startup-identity-stage=executable_or_fingerprint_not_matched" >&2
   fi
+  return 1
+}
+
+# Pure successor picker: unique live PID that is not the dead handoff PID and
+# was not already running before this launch. Fail closed on 0 or 2+ matches.
+select_startup_reaper_successor_pid() {
+  local launched_pid="$1"
+  local before_pids_file="$2"
+  shift 2
+  local candidate_pid
+  local -a successors=()
+  for candidate_pid in "$@"; do
+    [[ "${candidate_pid}" =~ '^[1-9][0-9]*$' ]] || continue
+    [[ "${candidate_pid}" != "${launched_pid}" ]] || continue
+    if [[ -n "${before_pids_file}" && -f "${before_pids_file}" ]] \
+        && command grep -Fxq -- "${candidate_pid}" "${before_pids_file}"; then
+      continue
+    fi
+    successors+=("${candidate_pid}")
+  done
+  if (( ${#successors[@]} == 1 )); then
+    print -r -- "${successors[1]}"
+    return 0
+  fi
+  return 1
+}
+
+discover_startup_reaper_successor() {
+  local launched_pid="$1"
+  local -a live_pids=()
+  local candidate_pid
+  while IFS= read -r candidate_pid; do
+    [[ -n "${candidate_pid}" ]] && live_pids+=("${candidate_pid}")
+  done < <(reaper_pids)
+  (( ${#live_pids[@]} > 0 )) || return 1
+  select_startup_reaper_successor_pid \
+    "${launched_pid}" \
+    "${STARTUP_REAPER_BEFORE_PIDS}" \
+    "${live_pids[@]}"
+}
+
+# NSWorkspace's handoff PID can exit while macOS restores a replacement REAPER.
+# Adopt that unique new PID so the startup hook can still publish.
+adopt_startup_reaper_pid_after_launchservices_restore() {
+  local current_pid="$1"
+  if [[ "${current_pid}" == <-> && "${current_pid}" != "0" ]] \
+      && kill -0 "${current_pid}" 2>/dev/null; then
+    print -r -- "${current_pid}"
+    return 0
+  fi
+  local successor identity
+  successor="$(discover_startup_reaper_successor "${current_pid}")" || return 1
+  identity="$(capture_startup_reaper_identity "${successor}" 8)" || return 1
+  STARTUP_LAUNCHED_REAPER_PID="${successor}"
+  STARTUP_LAUNCHED_REAPER_IDENTITY="${identity}"
+  echo "${successor}" > "${PID_FILE}"
+  echo "[OpenReaper] startup-reaper-pid=adopted_after_launchservices_restore from=${current_pid} to=${successor}" >&2
+  print -r -- "${successor}"
+}
+
+wait_for_reaper_process_table_clear() {
+  local -i attempt
+  for (( attempt = 1; attempt <= 40; attempt++ )); do
+    if [[ -z "$(reaper_pids)" ]]; then
+      # Brief LaunchServices settle so relaunch is not a restore of the dying instance.
+      sleep 0.2
+      return 0
+    fi
+    sleep 0.1
+  done
   return 1
 }
 
@@ -1989,15 +2070,18 @@ launchservices_cleanup_on_exit() {
 }
 
 assert_reaper_process_alive() {
-  local reaper_pid
+  local reaper_pid adopted_pid
   reaper_pid="$(cat "${PID_FILE}")"
-  if ! kill -0 "${reaper_pid}" 2>/dev/null; then
-    echo "[OpenReaper] REAPER exited before Bridge readiness. pid=${reaper_pid}" >&2
-    echo "[OpenReaper] REAPER log: ${START_LOG}" >&2
-    tail -80 "${START_LOG}" >&2 || true
-    return 1
+  if kill -0 "${reaper_pid}" 2>/dev/null; then
+    return 0
   fi
-  return 0
+  if adopted_pid="$(adopt_startup_reaper_pid_after_launchservices_restore "${reaper_pid}")"; then
+    return 0
+  fi
+  echo "[OpenReaper] REAPER exited before Bridge readiness. pid=${reaper_pid}" >&2
+  echo "[OpenReaper] REAPER log: ${START_LOG}" >&2
+  tail -80 "${START_LOG}" >&2 || true
+  return 1
 }
 
 bridge_heartbeat_ready() {
@@ -2083,6 +2167,8 @@ wait_for_startup_hook() {
   local reaper_pid="$1"
   local max_ticks=$(( START_WAIT_SECONDS * 4 ))
   local tick dialog_result pending_dialog_blocker="" last_dialog_result=""
+  local -i missed_alive_ticks=0
+  local adopted_pid=""
   for (( tick = 1; tick <= max_ticks; tick++ )); do
     if ! startup_budget_require_window "startup_hook" $(( STARTUP_CLEANUP_RESERVE_MS + 250 )); then
       if [[ -n "${pending_dialog_blocker}" ]]; then
@@ -2092,9 +2178,24 @@ wait_for_startup_hook() {
       return 1
     fi
     if ! kill -0 "${reaper_pid}" 2>/dev/null; then
-      echo "[OpenReaper] REAPER exited before its startup hook published a stage. pid=${reaper_pid}" >&2
-      return 1
+      adopted_pid=""
+      if adopted_pid="$(adopt_startup_reaper_pid_after_launchservices_restore "${reaper_pid}")"; then
+        reaper_pid="${adopted_pid}"
+        missed_alive_ticks=0
+        continue
+      fi
+      missed_alive_ticks=$(( missed_alive_ticks + 1 ))
+      if (( missed_alive_ticks >= STARTUP_REAPER_PID_REPLACE_GRACE_TICKS )); then
+        echo "[OpenReaper] REAPER exited before its startup hook published a stage. pid=${reaper_pid}" >&2
+        return 1
+      fi
+      if (( missed_alive_ticks == 1 )); then
+        echo "[OpenReaper] startup-hook-reaper-pid=waiting_for_launchservices_restore pid=${reaper_pid}" >&2
+      fi
+      sleep 0.25
+      continue
     fi
+    missed_alive_ticks=0
     if ! startup_budget_require_window "startup_hook_dialog_inspection" $(( STARTUP_CLEANUP_RESERVE_MS + 1000 )); then
       if [[ -n "${pending_dialog_blocker}" ]]; then
         report_startup_user_action_required "${pending_dialog_blocker}"
@@ -2395,7 +2496,7 @@ startup_dialog_observer_output_is_ax_failure() {
     return 0
   fi
   case "${result}" in
-    *"-609"*|*"invalid connection"*|*"not allowed assistive access"*|*"System Events got an error"*)
+    *"-609"*|*"invalid connection"*|*"not allowed assistive access"*|*"System Events got an error"*|*"-2741"*|*"syntax error"*|*"expected end of line"*)
       return 0
       ;;
   esac
@@ -2612,6 +2713,8 @@ APPLESCRIPT
       detail="empty"
     elif [[ "${assist_result}" == *"-609"* ]]; then
       detail="ax_-609"
+    elif [[ "${assist_result}" == *"-2741"* || "${assist_result}" == *"syntax error"* ]]; then
+      detail="applescript_-2741"
     fi
     startup_dialog_inspection_unavailable "${detail}"
     return 0
@@ -2778,7 +2881,23 @@ if [[ -n "${existing_session_mode}" ]]; then
       echo "[OpenReaper] studio-relaunch=stale_or_mismatched_bridge_heartbeat;mode=${existing_session_mode}"
       STUDIO_STALE_RELAUNCH_ATTEMPTED=true
       if terminate_existing_reaper_for_studio_relaunch; then
-        existing_session_mode=""
+        if wait_for_reaper_process_table_clear; then
+          echo "[OpenReaper] studio-relaunch=process_table_clear;ready_for_clean_launch"
+          existing_session_mode=""
+        else
+          echo "[OpenReaper] studio-relaunch=process_table_not_clear_after_stop;falling_back_to_attach" >&2
+          if leftover_reaper_pid="$(discover_single_running_reaper_pid)"; then
+            printf '%s\n' "${leftover_reaper_pid}" > "${PID_FILE}"
+            existing_session_mode="discovered"
+          else
+            leftover_status=$?
+            if (( leftover_status == 2 )); then
+              echo "[OpenReaper] studio-relaunch=multiple_reaper_processes_after_stop;refusing_guess" >&2
+              exit 1
+            fi
+            existing_session_mode=""
+          fi
+        fi
       else
         echo "[OpenReaper] studio-relaunch=aborted_could_not_stop_existing_reaper;falling_back_to_attach" >&2
       fi
