@@ -75,7 +75,7 @@ reaper.ExecProcess → studio-pi-send.mjs → agent-seam/send-prompt.mjs
 | `studio-pi-send.mjs` | Agent seam CLI (called from REAPER) |
 | `lib/orchestration/*` | Pipelines and `runProcess` helper |
 | `lib/face/hook.mjs` | Marked `__startup.lua` block |
-| `lib/face/install.mjs` | Copy face bundle into REAPER resource path |
+| `lib/face/install.mjs` | Copy face bundle into REAPER resource path. Sources are always `reaper/` in this package, whether Start passes the git repo root, this directory, or omits the root. |
 | `lib/face/runtime-config.mjs` | `~/.openreaper/studio/*` paths + face JSON |
 | `lib/contracts/context-chip.mjs` | Chip kinds + normalization |
 | `lib/contracts/prompt.mjs` | Prompt request/response contracts |

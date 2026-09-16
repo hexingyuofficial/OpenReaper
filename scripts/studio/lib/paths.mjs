@@ -97,16 +97,46 @@ export function studioDialogEntryFileName() {
   return "openreaper_studio_dialog.lua";
 }
 
+function isBlankRoot(root) {
+  return root == null || String(root).trim() === "";
+}
+
+function dialogEntryExistsUnder(studioRoot) {
+  return existsSync(path.join(studioRoot, "reaper", studioDialogEntryFileName()));
+}
+
+/**
+ * Normalize a caller-supplied root to the Studio package directory
+ * (`scripts/studio`). Accepts git repo root, that package root, or omit.
+ * Dialog Lua always lives under `scripts/studio/reaper/`, not repo `reaper/`.
+ */
+export function resolveStudioPackageRoot(root = studioPackageRoot()) {
+  const fallback = studioPackageRoot();
+  if (isBlankRoot(root)) {
+    return fallback;
+  }
+  const resolved = path.resolve(root);
+  const nestedStudio = path.join(resolved, "scripts", "studio");
+  if (dialogEntryExistsUnder(nestedStudio)) {
+    return nestedStudio;
+  }
+  if (dialogEntryExistsUnder(resolved)) {
+    return resolved;
+  }
+  return fallback;
+}
+
 /** REAPER dialog sources always live under the Studio package (`scripts/studio/reaper/`). */
-export function studioDialogEntrySourcePath(studioRoot = studioPackageRoot()) {
-  return path.join(studioRoot, "reaper", studioDialogEntryFileName());
+export function studioDialogEntrySourcePath(root = studioPackageRoot()) {
+  return path.join(resolveStudioPackageRoot(root), "reaper", studioDialogEntryFileName());
 }
 
-export function studioDialogModuleSourceDir(studioRoot = studioPackageRoot()) {
-  return path.join(studioRoot, "reaper", "dialog");
+export function studioDialogModuleSourceDir(root = studioPackageRoot()) {
+  return path.join(resolveStudioPackageRoot(root), "reaper", "dialog");
 }
 
-export function resolveStudioDialogSources(studioRoot = studioPackageRoot()) {
+export function resolveStudioDialogSources(root = studioPackageRoot()) {
+  const studioRoot = resolveStudioPackageRoot(root);
   return {
     studioRoot,
     entrySource: studioDialogEntrySourcePath(studioRoot),
