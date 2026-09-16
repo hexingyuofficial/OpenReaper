@@ -14,6 +14,7 @@ import {
   resolvePiExecutable,
 } from "../lib/pi.mjs";
 import { parseCli } from "../studio-orchestrate.mjs";
+import { studioStatePath } from "../lib/state.mjs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -45,6 +46,12 @@ describe("paths", () => {
 
   it("default install root matches alpha layout", () => {
     expect(defaultInstallRoot("/Users/test")).toBe("/Users/test/.openreaper/current");
+  });
+
+  it("re-exports studioStatePath from state.mjs", () => {
+    expect(studioStatePath("/Users/test")).toBe(
+      "/Users/test/.openreaper/studio/session-v1.json",
+    );
   });
 });
 

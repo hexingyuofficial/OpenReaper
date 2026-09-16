@@ -1,6 +1,8 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+export { studioStatePath } from "./paths.mjs";
+
 export const STUDIO_STATE_CONTRACT = "openreaper.studio.session.v1";
 
 export function emptyStudioState() {
