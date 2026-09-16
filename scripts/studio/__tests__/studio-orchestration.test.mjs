@@ -112,6 +112,12 @@ describe("paths", () => {
     expect(studioDialogEntrySourcePath(gitRoot)).not.toBe(
       path.join(gitRoot, "reaper", studioDialogEntryFileName()),
     );
+
+    const fakeRepoRoot = path.join("/tmp", "fake-openreaper-repo-root");
+    expect(resolveStudioPackageRoot(fakeRepoRoot)).toBe(pkg);
+    expect(studioDialogEntrySourcePath(fakeRepoRoot)).toBe(expectedEntry);
+    expect(studioDialogModuleSourceDir(fakeRepoRoot)).toBe(expectedModules);
+    expect(existsSync(studioDialogEntrySourcePath(fakeRepoRoot))).toBe(true);
   });
 });
 
@@ -148,6 +154,10 @@ describe("face install", () => {
         { reaperResourceRoot: path.join(tmp, "from-repo"), repoRoot: gitRoot },
         { reaperResourceRoot: path.join(tmp, "from-studio"), repoRoot: pkg },
         { reaperResourceRoot: path.join(tmp, "omitted") },
+        {
+          reaperResourceRoot: path.join(tmp, "from-fake-repo"),
+          repoRoot: path.join(tmp, "not-a-git-checkout"),
+        },
       ];
       for (const args of cases) {
         const result = await installFaceBundle(args);
