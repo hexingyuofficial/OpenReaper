@@ -26,6 +26,7 @@ describe("engine bundle manifest", () => {
       expect(parsed.contract).toBe(ENGINE_BUNDLE_CONTRACT);
       expect(parsed.installRoot).toBe(installRoot);
       expect(parsed.bundledLayout).toBe("openreaper-alpha");
+      expect(parsed.startHelperRev).toBeNull();
     } finally {
       await rm(tmp, { recursive: true, force: true });
     }

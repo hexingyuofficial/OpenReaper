@@ -423,11 +423,13 @@ describe("packaged openreaper-start dialog observer", () => {
     expect(source).toMatch(/STARTUP_REAPER_PID_REPLACE_GRACE_TICKS=32/);
     expect(hookWait).toMatch(/startup_wait_accept_published_stage/);
     expect(hookWait).toMatch(/startup_dialog_inspect_due/);
-    expect(hookWait).toMatch(/startup_last_chance_accept_live_bridge/);
+    expect(hookWait).toMatch(/STARTUP_HOOK_FAIL_REMAINING_MS/);
+    expect(hookWait).toMatch(/startup_last_chance_accept_published_stage/);
+    expect(hookWait).toMatch(/startup-hook=leftover_budget_accept/);
     expect(hookWait).not.toMatch(
       /startup_budget_require_window "startup_hook" \$\(\( STARTUP_CLEANUP_RESERVE_MS \+ 250 \)\)/,
     );
-    expect(hookWait).toMatch(/remaining_ms < STARTUP_CLEANUP_RESERVE_MS/);
+    expect(hookWait).toMatch(/remaining_ms < STARTUP_HOOK_FAIL_REMAINING_MS/);
     const firstAccept = hookWait.indexOf("startup_wait_accept_published_stage");
     const firstObserver = hookWait.indexOf("run_startup_dialog_observer");
     expect(firstAccept).toBeGreaterThanOrEqual(0);
@@ -437,6 +439,13 @@ describe("packaged openreaper-start dialog observer", () => {
   it("throttles AX inspection after a stable safe result and caps repeat timeouts", () => {
     expect(source).toMatch(/STARTUP_DIALOG_REPEAT_TIMEOUT_SECONDS=2/);
     expect(source).toMatch(/STARTUP_DIALOG_INSPECT_EVERY_TICKS=8/);
+    expect(source).toMatch(/STARTUP_DIALOG_SOFT_BLOCKER_INSPECT_EVERY_TICKS=24/);
+    expect(source).toMatch(/OPENREAPER_START_HELPER_REV="studio-hook-budget-v3"/);
+    expect(source).toMatch(/start-helper-rev=/);
+    expect(source).toMatch(/STARTUP_AX_SKIP_REMAINING_MS=10000/);
+    expect(source).toMatch(/STARTUP_HOOK_FAIL_REMAINING_MS=7500/);
+    expect(source).toMatch(/startup-last-chance=published_stage/);
+    expect(source).toMatch(/startup-hook=leftover_budget_accept/);
     expect(source).toMatch(/STARTUP_DIALOG_REPEAT_INSPECT/);
     const inspectDue = extractShellFunction(source, "startup_dialog_inspect_due");
     expect(inspectDue).toMatch(/STARTUP_DIALOG_INSPECT_EVERY_TICKS/);
@@ -508,6 +517,21 @@ describe("packaged openreaper-start dialog observer", () => {
     );
     expect(unpublished.status).toBe(1);
 
+    const lastChance = extractShellFunction(source, "startup_last_chance_accept_published_stage");
+    const leftoverLastChance = spawnSync(
+      "zsh",
+      [
+        "-c",
+        `${lastChance}\nSTARTUP_CLEANUP_RESERVE_MS=6000\nstartup_remaining_budget_ms() { print -r -- 6069; }\nstartup_wait_accept_published_stage() { return 0; }\nstartup_last_chance_accept_published_stage "$1" leftover_6069`,
+        "last-chance-stage",
+        "blocked_manual_dialog:title=Project Settings",
+      ],
+      { encoding: "utf8" },
+    );
+    expect(leftoverLastChance.status, leftoverLastChance.stderr).toBe(0);
+    expect(leftoverLastChance.stderr).toMatch(/startup-last-chance=published_stage/);
+    expect(leftoverLastChance.stderr).toMatch(/leftover_budget_accept remaining_ms=6069/);
+
     const dueFirst = spawnSync(
       "zsh",
       [
@@ -542,7 +566,22 @@ describe("packaged openreaper-start dialog observer", () => {
       "zsh",
       [
         "-c",
-        `STARTUP_DIALOG_INSPECT_EVERY_TICKS=8\n${inspectDue}\nstartup_dialog_inspect_due "$1" "$2" "$3" "$4"`,
+        `STARTUP_DIALOG_INSPECT_EVERY_TICKS=8\nSTARTUP_DIALOG_SOFT_BLOCKER_INSPECT_EVERY_TICKS=24\n${inspectDue}\nstartup_dialog_inspect_due "$1" "$2" "$3" "$4"`,
+        "inspect-due",
+        "9",
+        "1",
+        "",
+        "no_safe_dialog",
+      ],
+      { encoding: "utf8" },
+    );
+    expect(dueEvery.status).toBe(0);
+
+    const dueSettingsStillThrottled = spawnSync(
+      "zsh",
+      [
+        "-c",
+        `STARTUP_DIALOG_INSPECT_EVERY_TICKS=8\nSTARTUP_DIALOG_SOFT_BLOCKER_INSPECT_EVERY_TICKS=24\n${inspectDue}\nstartup_dialog_inspect_due "$1" "$2" "$3" "$4"`,
         "inspect-due",
         "9",
         "1",
@@ -551,7 +590,22 @@ describe("packaged openreaper-start dialog observer", () => {
       ],
       { encoding: "utf8" },
     );
-    expect(dueEvery.status).toBe(0);
+    expect(dueSettingsStillThrottled.status).toBe(1);
+
+    const dueSettingsCadence = spawnSync(
+      "zsh",
+      [
+        "-c",
+        `STARTUP_DIALOG_INSPECT_EVERY_TICKS=8\nSTARTUP_DIALOG_SOFT_BLOCKER_INSPECT_EVERY_TICKS=24\n${inspectDue}\nstartup_dialog_inspect_due "$1" "$2" "$3" "$4"`,
+        "inspect-due",
+        "25",
+        "1",
+        "",
+        "blocked_manual_dialog:title=Project Settings",
+      ],
+      { encoding: "utf8" },
+    );
+    expect(dueSettingsCadence.status).toBe(0);
 
     const duePending = spawnSync(
       "zsh",

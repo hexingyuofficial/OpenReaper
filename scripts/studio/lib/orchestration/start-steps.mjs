@@ -10,7 +10,11 @@ import {
 } from "../face/runtime-config.mjs";
 import { writeEngineBundleManifest } from "../face/bundle-engine.mjs";
 import { installFaceBundle } from "../face/install.mjs";
-import { syncPackagedStartHelper } from "../face/start-helper.mjs";
+import {
+  assertRunnableStartHelper,
+  syncPackagedStartHelper,
+  START_HELPER_REV,
+} from "../face/start-helper.mjs";
 import {
   defaultReaperResourceRoot,
   repoRootFromStudio,
@@ -55,9 +59,22 @@ export const START_STEPS = [
         platform,
       });
       ctx.startHelperSync = helperSync;
-      if (helperSync.synced && helperSync.dest) {
-        ctx.log(`Synced start helper → ${helperSync.dest}`);
-        ctx.startCmd = resolveOpenReaperStartCommand(installRoot, platform) ?? startCmd;
+      if (platform !== "win32") {
+        if (!helperSync.synced || !helperSync.dest) {
+          throw new Error(
+            `Could not sync openreaper-start into ${installRoot}/bin (${helperSync.reason ?? "unknown"}).`,
+          );
+        }
+        ctx.startCmd = {
+          command: helperSync.dest,
+          args: [],
+          cwd: installRoot,
+        };
+        ctx.log(
+          `Synced start helper → ${helperSync.dest} rev=${helperSync.rev ?? START_HELPER_REV}` +
+            (helperSync.sha256 ? ` sha256=${helperSync.sha256.slice(0, 12)}` : "") +
+            (helperSync.overwrittenStaleSh ? " (replaced stale openreaper-start.sh)" : ""),
+        );
       }
       const piBridgeScript = resolvePiBridgeScript(repoRoot);
       if (!existsSync(piBridgeScript)) {
@@ -72,6 +89,13 @@ export const START_STEPS = [
         homeDir,
         installRoot,
         repoRoot,
+        startHelper: helperSync.synced
+          ? {
+              path: helperSync.dest,
+              rev: helperSync.rev ?? START_HELPER_REV,
+              sha256: helperSync.sha256,
+            }
+          : undefined,
       });
       ctx.log(
         `Bundled engine slot: ${installRoot} (manifest ${ctx.engineBundle.path})`,
@@ -132,6 +156,20 @@ export const START_STEPS = [
       const startArgs = [...ctx.startCmd.args];
       if (ctx.options.projectPath) {
         startArgs.push("--project-path", ctx.options.projectPath);
+      }
+      if (ctx.startHelperSync?.dest) {
+        const dest = path.resolve(ctx.startHelperSync.dest);
+        const command = path.resolve(ctx.startCmd.command);
+        if (command !== dest) {
+          throw new Error(
+            `startCmd ${ctx.startCmd.command} is not the synced helper ${ctx.startHelperSync.dest}`,
+          );
+        }
+        const fp = await assertRunnableStartHelper(ctx.startCmd.command);
+        ctx.log(
+          `Running start helper ${ctx.startCmd.command} rev=${fp.rev}` +
+            (fp.sha256 ? ` sha256=${fp.sha256.slice(0, 12)}` : ""),
+        );
       }
       const openreaperEnv = { ...ctx.env, OPENREAPER_STUDIO: "1" };
       if (ctx.faceInstall?.hookInstalled) {

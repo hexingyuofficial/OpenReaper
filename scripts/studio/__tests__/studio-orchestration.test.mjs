@@ -238,8 +238,14 @@ describe("face.prepare", () => {
       expect(synced).toContain("startup_hook_pid_gap_keep_adopting");
       expect(synced).toContain("startup_wait_accept_published_stage");
       expect(synced).toContain("STARTUP_DIALOG_INSPECT_EVERY_TICKS");
+      expect(synced).toContain("STARTUP_DIALOG_SOFT_BLOCKER_INSPECT_EVERY_TICKS");
+      expect(synced).toContain('OPENREAPER_START_HELPER_REV="studio-hook-budget-v3"');
+      expect(synced).toContain("start-helper-rev=");
       expect(synced).toContain('if windowTitle is "OpenReaper Studio" then');
+      expect(synced).toContain("startup-last-chance=published_stage");
       expect(synced).toContain("startup-last-chance=bridge_liveness");
+      expect(synced).toContain("startup-hook=leftover_budget_accept");
+      expect(synced).toContain("STARTUP_AX_SKIP_REMAINING_MS");
       expect(synced).toContain("budget_remaining_ms=");
       expect(synced).toContain("startup-reaper-preserve=soft_policy");
       expect(synced).not.toContain("next repeat");
@@ -262,8 +268,10 @@ describe("start helper sync + studio env", () => {
         repoRoot: repoRootFromStudio(),
         platform: "darwin",
       });
-      expect(result.synced).toBe(true);
-      expect(result.dest).toBe(path.join(installRoot, "bin", "openreaper-start"));
+    expect(result.synced).toBe(true);
+    expect(result.dest).toBe(path.join(installRoot, "bin", "openreaper-start"));
+    expect(result.rev).toBe("studio-hook-budget-v3");
+    expect(result.sha256).toMatch(/^[a-f0-9]{64}$/);
       const copied = await readFile(result.dest, "utf8");
       expect(copied).toContain("inspection_unavailable");
       expect(copied).toContain("held_until_helper_exit");
@@ -271,12 +279,76 @@ describe("start helper sync + studio env", () => {
       expect(copied).toContain("held_for_successor_publish");
       expect(copied).toContain("successor_identity_pending");
       expect(copied).toContain("startup_wait_accept_published_stage");
+      expect(copied).toContain('OPENREAPER_START_HELPER_REV="studio-hook-budget-v3"');
+      expect(copied).toContain("startup-last-chance=published_stage");
+      expect(copied).toContain("startup-hook=leftover_budget_accept");
       expect(copied).toContain('if windowTitle is "OpenReaper Studio" then');
       expect(copied).toContain("startup-last-chance=bridge_liveness");
       expect(copied).toContain("startup-reaper-preserve=soft_policy");
       expect(copied).not.toContain("next repeat");
       expect(copied).not.toContain("studioFaceSafeTitles");
       expect(copied).not.toContain("old\n");
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("overwrites a stale openreaper-start.sh so it cannot win over the synced helper", async () => {
+    const tmp = await mkdtemp(path.join(os.tmpdir(), "or-stale-sh-"));
+    try {
+      const installRoot = path.join(tmp, "current");
+      const bin = path.join(installRoot, "bin");
+      await mkdir(bin, { recursive: true });
+      await writeFile(path.join(bin, "openreaper-start.sh"), "#!/bin/sh\nold-sh\n", {
+        encoding: "utf8",
+        mode: 0o755,
+      });
+      const result = await syncPackagedStartHelper({
+        installRoot,
+        repoRoot: repoRootFromStudio(),
+        platform: "darwin",
+      });
+      expect(result.synced).toBe(true);
+      expect(result.overwrittenStaleSh).toBe(true);
+      expect(result.dest).toBe(path.join(bin, "openreaper-start"));
+      const dest = await readFile(result.dest, "utf8");
+      const sh = await readFile(path.join(bin, "openreaper-start.sh"), "utf8");
+      expect(dest).toContain('OPENREAPER_START_HELPER_REV="studio-hook-budget-v3"');
+      expect(sh).toContain('OPENREAPER_START_HELPER_REV="studio-hook-budget-v3"');
+      expect(sh).not.toContain("old-sh");
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("pins face.prepare startCmd to the synced dest even when only a stale .sh existed", async () => {
+    const tmp = await mkdtemp(path.join(os.tmpdir(), "or-pin-helper-"));
+    const homeDir = path.join(tmp, "home");
+    const installRoot = path.join(tmp, "install");
+    try {
+      await mkdir(path.join(installRoot, "bin"), { recursive: true });
+      await writeFile(path.join(installRoot, "bin", "openreaper-start.sh"), "#!/bin/sh\nold-only-sh\n", {
+        encoding: "utf8",
+        mode: 0o755,
+      });
+      const ctx = {
+        homeDir,
+        platform: "darwin",
+        env: {
+          OPENREAPER_INSTALL_ROOT: installRoot,
+          OPENREAPER_STUDIO_SKIP_PI: "1",
+          PATH: "/nonexistent",
+        },
+        options: {},
+        log() {},
+      };
+      const facePrepare = START_STEPS.find((step) => step.id === "face.prepare");
+      await expect(facePrepare.run(ctx)).resolves.toBeUndefined();
+      expect(ctx.startCmd?.command).toBe(path.join(installRoot, "bin", "openreaper-start"));
+      expect(ctx.startHelperSync?.rev).toBe("studio-hook-budget-v3");
+      const synced = await readFile(ctx.startCmd.command, "utf8");
+      expect(synced).toContain('OPENREAPER_START_HELPER_REV="studio-hook-budget-v3"');
+      expect(synced).not.toContain("old-only-sh");
     } finally {
       await rm(tmp, { recursive: true, force: true });
     }
@@ -289,14 +361,48 @@ describe("start helper sync + studio env", () => {
     );
     expect(source).toMatch(/OPENREAPER_STUDIO:\s*"1"/);
     expect(source).toMatch(/OPENREAPER_STUDIO_FACE_HOOK_INSTALLED/);
+    expect(source).toMatch(/helperSync\.dest/);
+    expect(source).toMatch(/START_HELPER_REV/);
     expect(source).toMatch(/probeOpenReaperEngine/);
     expect(source).toMatch(/openreaperStartSoftContinued/);
     expect(source).toMatch(/engineDegraded/);
     expect(source).toMatch(/exitCodeFromChild/);
+    expect(source).toMatch(/assertRunnableStartHelper/);
+    expect(source).toMatch(/is not the synced helper/);
     const engine = START_STEPS.find((step) => step.id === "engine.openreaper_start");
     expect(engine?.label).toMatch(/openreaper-start/);
     const finalize = START_STEPS.find((step) => step.id === "face.finalize");
     expect(finalize?.alwaysRun).toBe(true);
+  });
+
+  it("refuses to spawn a stale dest even when startHelperSync claims it is current", async () => {
+    const tmp = await mkdtemp(path.join(os.tmpdir(), "or-stale-spawn-"));
+    try {
+      const dest = path.join(tmp, "openreaper-start");
+      await writeFile(dest, "#!/bin/sh\nold-helper\n", { encoding: "utf8", mode: 0o755 });
+      const engine = START_STEPS.find((step) => step.id === "engine.openreaper_start");
+      const ctx = {
+        startCmd: { command: dest, args: [], cwd: tmp },
+        startHelperSync: {
+          synced: true,
+          dest,
+          rev: "studio-hook-budget-v3",
+        },
+        options: {},
+        env: { OPENREAPER_STUDIO: "1" },
+        faceInstall: {},
+        homeDir: tmp,
+        installRoot: tmp,
+        state: { openreaperStartExitCode: null },
+        log() {},
+        runProcess: async () => {
+          throw new Error("stale helper must not spawn");
+        },
+      };
+      await expect(engine.run(ctx)).rejects.toThrow(/stale openreaper-start|missing/);
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
   });
 
   it("soft-continues when openreaper-start is non-zero but Bridge is live", async () => {
@@ -349,7 +455,7 @@ describe("start helper sync + studio env", () => {
         log(message) {
           logs.push(message);
         },
-        runProcess: async () => ({ code: 124 }),
+        runProcess: async () => ({ code: 1 }),
         probeOpenReaperEngine: async () => ({
           usable: false,
           stage: null,
@@ -359,7 +465,7 @@ describe("start helper sync + studio env", () => {
       };
       const engine = START_STEPS.find((step) => step.id === "engine.openreaper_start");
       await expect(engine.run(ctx)).resolves.toBeUndefined();
-      expect(ctx.state.openreaperStartExitCode).toBe(124);
+      expect(ctx.state.openreaperStartExitCode).toBe(1);
       expect(ctx.state.openreaperStartSoftContinued).toBe(true);
       expect(ctx.state.engineDegraded).toBe(true);
       expect(logs.join("\n")).toMatch(/engineDegraded=true/);
@@ -411,7 +517,7 @@ describe("start helper sync + studio env", () => {
 });
 
 describe("openreaper-start exit propagation", () => {
-  it("maps missing child codes to non-zero so 124 cannot become 0", () => {
+  it("maps missing child codes to non-zero so 124 cannot become 0", async () => {
     expect(exitCodeFromChild(0, null)).toBe(0);
     expect(exitCodeFromChild(124, null)).toBe(124);
     expect(exitCodeFromChild(null, "SIGTERM")).toBe(1);
@@ -429,6 +535,12 @@ describe("openreaper-start exit propagation", () => {
     expect(recordedStudioStartExitCode({ openreaperStartExitCode: 1, engineDegraded: false })).toBe(0);
     expect(recordedStudioStartExitCode({ openreaperStartExitCode: 0, engineDegraded: false })).toBe(0);
     expect(parseCli(["start"]).command).toBe("start");
+    const orchestrate = await readFile(
+      path.join(studioPackageRoot(), "studio-orchestrate.mjs"),
+      "utf8",
+    );
+    expect(orchestrate).toMatch(/recordedStudioStartExitCode/);
+    expect(orchestrate).toMatch(/code === 124/);
   });
 
   it("propagates helper exit 124 through runProcess and engine.openreaper_start", async () => {
@@ -463,6 +575,12 @@ describe("openreaper-start exit propagation", () => {
       expect(ctx.state.openreaperStartExitCode).toBe(124);
       expect(ctx.state.openreaperStartSoftContinued).toBe(true);
       expect(ctx.state.engineDegraded).toBe(false);
+      expect(
+        recordedStudioStartExitCode({
+          openreaperStartExitCode: ctx.state.openreaperStartExitCode,
+          engineDegraded: ctx.state.engineDegraded,
+        }),
+      ).toBe(124);
       const saved = await studioState.readStudioState(studioStatePath(tmp));
       expect(saved?.openreaperStartExitCode).toBe(124);
     } finally {

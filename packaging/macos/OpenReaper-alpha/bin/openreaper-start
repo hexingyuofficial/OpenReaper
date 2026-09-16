@@ -132,12 +132,22 @@ STARTUP_DOCTOR_SMOKE_MAX_MS=22000
 STARTUP_DOCTOR_READ_MAX_MS=15000
 STARTUP_DOCTOR_OVERHEAD_MS=1000
 STARTUP_DIALOG_TIMEOUT_SECONDS="${OPENREAPER_STARTUP_DIALOG_TIMEOUT_SECONDS:-15}"
+# Identity of this wait-loop contract. Studio Start refuses a synced helper
+# that does not contain this exact rev (older ~/.openreaper/current copies).
+OPENREAPER_START_HELPER_REV="studio-hook-budget-v3"
 # Repeat AX passes after a stable safe classification (Project Settings
 # soft-ignore, empty, Studio face). Hammering System Events every 0.25s with a
 # 15s osascript budget can stall REAPER's main thread so __startup.lua never
 # publishes a stage before the 60s supervisor deadline.
 STARTUP_DIALOG_REPEAT_TIMEOUT_SECONDS=2
 STARTUP_DIALOG_INSPECT_EVERY_TICKS=8
+# After a lone Project Settings window, inspect even less often. Fail-closed
+# license / missing-media scans still run on this slower cadence.
+STARTUP_DIALOG_SOFT_BLOCKER_INSPECT_EVERY_TICKS=24
+# Supervisor kills at budget-6000ms. Stop AX and finish last-chance while
+# leftover is still above that, or last-chance races the process-group kill.
+STARTUP_AX_SKIP_REMAINING_MS=10000
+STARTUP_HOOK_FAIL_REMAINING_MS=7500
 STARTUP_DIALOG_REPEAT_INSPECT=0
 STARTUP_DIALOG_POLICY="${OPENREAPER_STARTUP_DIALOG_POLICY:-}"
 STARTUP_DIALOG_INSPECTION_UNAVAILABLE=false
@@ -957,6 +967,7 @@ echo "[OpenReaper] startup-dialog-policy=user_mediated_read_only"
 echo "[OpenReaper] startup-dialog-inspection-policy=${STARTUP_DIALOG_POLICY}"
 echo "[OpenReaper] startup-dialog-timeout-seconds=${STARTUP_DIALOG_TIMEOUT_SECONDS}"
 echo "[OpenReaper] startup-budget-ms=${STARTUP_BUDGET_MS}"
+echo "[OpenReaper] start-helper-rev=${OPENREAPER_START_HELPER_REV}"
 
 startup_remaining_budget_ms() {
   local -i remaining_ms
@@ -2229,17 +2240,8 @@ startup_status_stage_ready() {
   if [[ ! -f "${status_path}" || -L "${status_path}" ]]; then
     return 1
   fi
-  node --input-type=module - "${status_path}" <<'NODE'
-import { readFile } from "node:fs/promises";
-const [statusPath] = process.argv.slice(2);
-try {
-  const status = JSON.parse(await readFile(statusPath, "utf8"));
-  const stages = new Set(["hook_seen", "environment_missing", "bridge_dofile_succeeded", "bridge_dofile_failed"]);
-  process.exit(status?.contract === "openreaper.startup_status.v1" && stages.has(status?.stage) ? 0 : 1);
-} catch {
-  process.exit(1);
-}
-NODE
+  grep -F -q 'openreaper.startup_status.v1' "${status_path}" 2>/dev/null || return 1
+  grep -E -q '"stage"[[:space:]]*:[[:space:]]*"(hook_seen|environment_missing|bridge_dofile_succeeded|bridge_dofile_failed)"' "${status_path}" 2>/dev/null
 }
 
 prepare_startup_status_for_new_launch() {
@@ -2264,10 +2266,16 @@ startup_dialog_inspect_due() {
   local -i last_inspect_tick="$2"
   local pending="$3"
   local last_result="$4"
+  local -i every="${STARTUP_DIALOG_INSPECT_EVERY_TICKS:-8}"
   if [[ -n "${pending}" || -z "${last_result}" ]]; then
     return 0
   fi
-  if (( last_inspect_tick <= 0 || tick - last_inspect_tick >= STARTUP_DIALOG_INSPECT_EVERY_TICKS )); then
+  case "${last_result}" in
+    blocked_manual_dialog:title=Project\ Settings|blocked_manual_dialog:title=Project\ Settings\ /\ Notes|project_settings_seen_but_not_notes)
+      every="${STARTUP_DIALOG_SOFT_BLOCKER_INSPECT_EVERY_TICKS:-24}"
+      ;;
+  esac
+  if (( last_inspect_tick <= 0 || tick - last_inspect_tick >= every )); then
     return 0
   fi
   return 1
@@ -2301,18 +2309,26 @@ wait_for_startup_hook() {
       return 0
     fi
     remaining_ms="$(startup_remaining_budget_ms)"
-    if (( remaining_ms < STARTUP_CLEANUP_RESERVE_MS )); then
+    if (( remaining_ms < STARTUP_HOOK_FAIL_REMAINING_MS )); then
       if startup_wait_accept_published_stage "${last_dialog_result}"; then
+        echo "[OpenReaper] startup-hook=leftover_budget_accept remaining_ms=${remaining_ms}" >&2
         return 0
       fi
       if startup_pending_dialog_is_hard_blocker "${pending_dialog_blocker}"; then
         report_startup_user_action_required "${pending_dialog_blocker}"
         return 75
       fi
+      if startup_last_chance_accept_published_stage "${last_dialog_result}" "startup_hook"; then
+        return 0
+      fi
       if startup_last_chance_accept_live_bridge "startup_hook"; then
         return 0
       fi
-      startup_budget_require_window "startup_hook" "${STARTUP_CLEANUP_RESERVE_MS}" || true
+      if startup_wait_accept_published_stage "${last_dialog_result}"; then
+        echo "[OpenReaper] startup-hook=leftover_budget_accept remaining_ms=${remaining_ms}" >&2
+        return 0
+      fi
+      startup_budget_require_window "startup_hook" "${STARTUP_HOOK_FAIL_REMAINING_MS}" || true
       return 1
     fi
     if ! kill -0 "${reaper_pid}" 2>/dev/null; then
@@ -2353,7 +2369,7 @@ wait_for_startup_hook() {
     # not starve __startup.lua. Tight remaining budget also skips inspection
     # instead of aborting the wait.
     if startup_dialog_inspect_due "${tick}" "${last_inspect_tick}" "${pending_dialog_blocker}" "${last_dialog_result}"; then
-      if (( remaining_ms >= STARTUP_CLEANUP_RESERVE_MS + 1000 )); then
+      if (( remaining_ms >= STARTUP_AX_SKIP_REMAINING_MS )); then
         if [[ -n "${last_dialog_result}" ]]; then
           STARTUP_DIALOG_REPEAT_INSPECT=1
         else
@@ -2394,6 +2410,9 @@ wait_for_startup_hook() {
   if startup_pending_dialog_is_hard_blocker "${pending_dialog_blocker}"; then
     report_startup_user_action_required "${pending_dialog_blocker}"
     return 75
+  fi
+  if startup_last_chance_accept_published_stage "${last_dialog_result}" "startup_hook_loop_exhausted"; then
+    return 0
   fi
   if startup_last_chance_accept_live_bridge "startup_hook_loop_exhausted"; then
     return 0
@@ -2998,20 +3017,56 @@ startup_wait_accept_ready_bridge() {
   accept_ready_bridge
 }
 
+startup_last_chance_accept_published_stage() {
+  local last_result="$1"
+  local reason="${2:-startup_hook}"
+  local extra_tick
+  echo "[OpenReaper] startup-last-chance=published_stage reason=${reason}" >&2
+  # Check the status file before any leftover-ms floor. Zhuanz1 remaining_ms=6069
+  # is below cleanup+250 (6250) and is the supervisor race; accepting a published
+  # hook is a cheap grep and must still return 0.
+  for extra_tick in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    if startup_wait_accept_published_stage "${last_result}"; then
+      remaining_ms="$(startup_remaining_budget_ms)"
+      echo "[OpenReaper] startup-hook=published_after_last_chance tick=${extra_tick} reason=${reason} remaining_ms=${remaining_ms}" >&2
+      if (( remaining_ms < STARTUP_CLEANUP_RESERVE_MS + 250 )); then
+        echo "[OpenReaper] startup-hook=leftover_budget_accept remaining_ms=${remaining_ms}" >&2
+      fi
+      return 0
+    fi
+    remaining_ms="$(startup_remaining_budget_ms)"
+    # Stop sleeping ~150ms before the supervisor kill (leftover=6000), but do not
+    # treat leftover below 6250 as a failed accept.
+    if (( remaining_ms <= STARTUP_CLEANUP_RESERVE_MS + 150 )); then
+      if startup_wait_accept_published_stage "${last_result}"; then
+        echo "[OpenReaper] startup-hook=leftover_budget_accept remaining_ms=${remaining_ms} reason=${reason}" >&2
+        return 0
+      fi
+      break
+    fi
+    sleep 0.2
+  done
+  return 1
+}
+
 startup_last_chance_accept_live_bridge() {
   local reason="$1"
   local extra_tick
   echo "[OpenReaper] startup-last-chance=bridge_liveness reason=${reason}" >&2
-  for extra_tick in 1 2 3 4 5 6 7 8 9 10 11 12; do
+  for extra_tick in 1 2 3 4 5 6 7 8; do
+    remaining_ms="$(startup_remaining_budget_ms)"
     if accept_ready_bridge; then
-      echo "[OpenReaper] startup-status=ready_after_budget_last_chance tick=${extra_tick} reason=${reason}"
+      echo "[OpenReaper] startup-status=ready_after_budget_last_chance tick=${extra_tick} reason=${reason} remaining_ms=${remaining_ms}"
       return 0
     fi
     if [[ "${STARTUP_DIALOG_POLICY}" == "soft" ]] && startup_status_bridge_loaded; then
-      echo "[OpenReaper] startup-status=ready_after_budget_last_chance stage=bridge_dofile_succeeded reason=${reason}"
+      echo "[OpenReaper] startup-status=ready_after_budget_last_chance stage=bridge_dofile_succeeded reason=${reason} remaining_ms=${remaining_ms}"
       return 0
     fi
-    sleep 0.25
+    if (( remaining_ms <= STARTUP_CLEANUP_RESERVE_MS + 150 )); then
+      break
+    fi
+    sleep 0.2
   done
   return 1
 }
@@ -3043,7 +3098,7 @@ wait_for_startup_readiness() {
   fi
   for (( tick = 1; tick <= max_ticks; tick++ )); do
     remaining_ms="$(startup_remaining_budget_ms)"
-    if (( remaining_ms < STARTUP_CLEANUP_RESERVE_MS )); then
+    if (( remaining_ms < STARTUP_HOOK_FAIL_REMAINING_MS )); then
       if startup_wait_accept_ready_bridge "${last_dialog_result}"; then
         return 0
       fi
@@ -3076,7 +3131,7 @@ wait_for_startup_readiness() {
       missed_alive_ticks=0
     fi
     if startup_dialog_inspect_due "${tick}" "${last_inspect_tick}" "${pending_dialog_blocker}" "${last_dialog_result}"; then
-      if (( remaining_ms >= STARTUP_CLEANUP_RESERVE_MS + 1000 )); then
+      if (( remaining_ms >= STARTUP_AX_SKIP_REMAINING_MS )); then
         if [[ -n "${last_dialog_result}" ]]; then
           STARTUP_DIALOG_REPEAT_INSPECT=1
         else

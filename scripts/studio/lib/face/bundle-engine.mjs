@@ -13,17 +13,24 @@ export function studioEngineBundleManifestPath(homeDir) {
 /**
  * Record the packaged OpenReaper engine slot Studio Start uses (not a DIY PATH assemble).
  */
-export async function writeEngineBundleManifest({ homeDir, installRoot, repoRoot }) {
+export async function writeEngineBundleManifest({
+  homeDir,
+  installRoot,
+  repoRoot,
+  startHelper,
+} = {}) {
   const alphaRoot = path.join(repoRoot ?? repoRootFromStudio(), "packaging", "macos", "OpenReaper-alpha");
   const payload = {
     contract: ENGINE_BUNDLE_CONTRACT,
     installRoot,
-    startHelperPath: path.join(installRoot, "bin", "openreaper-start"),
+    startHelperPath: startHelper?.path ?? path.join(installRoot, "bin", "openreaper-start"),
+    startHelperRev: startHelper?.rev ?? null,
+    startHelperSha256: startHelper?.sha256 ?? null,
     packagingSource: alphaRoot,
     packagingStartHelper: packagedMacosStartHelperPath(repoRoot),
     bundledLayout: "openreaper-alpha",
     note:
-      "Studio Start always runs INSTALL_ROOT/bin/openreaper-start. Future installer copies the full alpha tree to ~/.openreaper/current.",
+      "Studio Start always copies packaging/macos/.../openreaper-start into INSTALL_ROOT/bin/openreaper-start and runs that dest. Future installer copies the full alpha tree to ~/.openreaper/current.",
   };
   const target = studioEngineBundleManifestPath(homeDir);
   await mkdir(path.dirname(target), { recursive: true });
