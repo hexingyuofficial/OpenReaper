@@ -34,7 +34,7 @@ import {
   resolvePiExecutable,
 } from "../lib/pi.mjs";
 import * as studioState from "../lib/state.mjs";
-import { parseCli, studioFailureExitCode, recordedStudioStartExitCode } from "../studio-orchestrate.mjs";
+import { parseCli, studioFailureExitCode, recordedStudioStartExitCode, studioStartProcessExitCode, applySuccessfulStartGateProcessExit } from "../studio-orchestrate.mjs";
 import { exitCodeFromChild, runProcess } from "../lib/orchestration/process.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -239,6 +239,8 @@ describe("face.prepare", () => {
       expect(synced).toContain("startup_wait_accept_published_stage");
       expect(synced).toContain("STARTUP_DIALOG_INSPECT_EVERY_TICKS");
       expect(synced).toContain("STARTUP_DIALOG_SOFT_BLOCKER_INSPECT_EVERY_TICKS");
+      expect(synced).toContain("STARTUP_DIALOG_FIRST_TIMEOUT_SECONDS");
+      expect(synced).toContain("startup_wait_poll_ticks");
       expect(synced).toContain('OPENREAPER_START_HELPER_REV="studio-hook-budget-v4"');
       expect(synced).toContain("start-helper-rev=");
       expect(synced).toContain('if windowTitle is "OpenReaper Studio" then');
@@ -281,6 +283,8 @@ describe("start helper sync + studio env", () => {
       expect(copied).toContain("successor_identity_pending");
       expect(copied).toContain("startup_wait_accept_published_stage");
       expect(copied).toContain('OPENREAPER_START_HELPER_REV="studio-hook-budget-v4"');
+      expect(copied).toContain("STARTUP_DIALOG_FIRST_TIMEOUT_SECONDS");
+      expect(copied).toContain("startup_wait_poll_ticks");
       expect(copied).toContain("startup-last-chance=published_stage");
       expect(copied).toContain("startup-hook=leftover_budget_accept");
       expect(copied).toContain('if windowTitle is "OpenReaper Studio" then');
@@ -527,14 +531,10 @@ describe("openreaper-start exit propagation", () => {
     expect(exitCodeFromChild(undefined, undefined)).toBe(1);
     expect(studioFailureExitCode({ exitCode: 124 })).toBe(124);
     expect(studioFailureExitCode(new Error("no code"))).toBe(1);
-    expect(recordedStudioStartExitCode({ openreaperStartExitCode: 124, engineDegraded: false })).toBe(
-      124,
-    );
     expect(recordedStudioStartExitCode({ openreaperStartExitCode: 124, engineDegraded: true })).toBe(
       124,
     );
     expect(recordedStudioStartExitCode({ openreaperStartExitCode: 1, engineDegraded: true })).toBe(1);
-    expect(recordedStudioStartExitCode({ openreaperStartExitCode: 1, engineDegraded: false })).toBe(0);
     expect(recordedStudioStartExitCode({ openreaperStartExitCode: 0, engineDegraded: false })).toBe(0);
     expect(parseCli(["start"]).command).toBe("start");
     const orchestrate = await readFile(
@@ -542,7 +542,68 @@ describe("openreaper-start exit propagation", () => {
       "utf8",
     );
     expect(orchestrate).toMatch(/recordedStudioStartExitCode/);
-    expect(orchestrate).toMatch(/code === 124/);
+    expect(orchestrate).toMatch(/studioStartProcessExitCode/);
+    expect(orchestrate).toMatch(/applySuccessfulStartGateProcessExit/);
+    expect(orchestrate).not.toMatch(/process\.exitCode = recorded/);
+  });
+
+  it("Start exits 0 when Pi gate is ok even if helper was 124 / engineDegraded", () => {
+    expect(
+      studioStartProcessExitCode({
+        gateOk: true,
+        openreaperStartExitCode: 124,
+        engineDegraded: true,
+      }),
+    ).toBe(0);
+    expect(
+      studioStartProcessExitCode({
+        gateOk: true,
+        openreaperStartExitCode: 1,
+        engineDegraded: true,
+      }),
+    ).toBe(0);
+    expect(
+      studioStartProcessExitCode({
+        gateOk: true,
+        openreaperStartExitCode: 0,
+        engineDegraded: false,
+      }),
+    ).toBe(0);
+  });
+
+  it("Start stays non-zero when Pi gate fails", () => {
+    expect(
+      studioStartProcessExitCode({
+        gateOk: false,
+        openreaperStartExitCode: 124,
+        engineDegraded: true,
+      }),
+    ).toBe(1);
+    expect(studioFailureExitCode(new Error("Studio Start gate failed (pi_rpc_unhealthy)"))).toBe(1);
+    expect(
+      studioFailureExitCode({
+        message: "Studio Start gate failed (piMode_pending)",
+        exitCode: 1,
+      }),
+    ).toBe(1);
+  });
+
+  it("does not copy helper 124 onto process.exitCode after a successful Pi gate", () => {
+    const previousExitCode = process.exitCode;
+    const logs = [];
+    try {
+      process.exitCode = 124;
+      applySuccessfulStartGateProcessExit({
+        state: { openreaperStartExitCode: 124, engineDegraded: true },
+        log(message) {
+          logs.push(message);
+        },
+      });
+      expect(process.exitCode).toBe(0);
+      expect(logs.join("\n")).toMatch(/STARTUP_BUDGET_EXHAUSTED \(124\) recorded in state\/face-config/);
+    } finally {
+      process.exitCode = previousExitCode;
+    }
   });
 
   it("propagates helper exit 124 through runProcess and engine.openreaper_start", async () => {

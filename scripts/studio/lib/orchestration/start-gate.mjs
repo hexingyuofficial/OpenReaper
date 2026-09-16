@@ -57,7 +57,8 @@ export async function finishStudioStartGate(ctx) {
   const faceConfig = await readFaceConfig(ctx.homeDir);
   let piHealthy = false;
   if (ctx.state?.pi?.rpcHealthUrl) {
-    piHealthy = await probePiRpcHealth(ctx.state.pi.rpcHealthUrl);
+    const probe = ctx.probePiRpcHealth ?? probePiRpcHealth;
+    piHealthy = await probe(ctx.state.pi.rpcHealthUrl);
   }
   let commandsCount = Number(ctx.state?.pi?.commandsCount) || 0;
   if (commandsCount < 1) {

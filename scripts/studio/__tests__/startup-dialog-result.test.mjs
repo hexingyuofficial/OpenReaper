@@ -415,7 +415,11 @@ describe("packaged openreaper-start dialog observer", () => {
     expect(hookWait).toMatch(/startup_hook_pid_gap_keep_adopting/);
     expect(hookWait).toMatch(/adopt_window_after_soft_safe/);
     expect(hookWait).toMatch(/held_for_successor_publish/);
+    expect(hookWait).toMatch(/startup_wait_poll_ticks/);
     expect(hookWait).toMatch(/startup_adopt_live_launchservices_successor_if_unique/);
+    expect(hookWait).not.toMatch(
+      /\[\[ -n "\$\{last_dialog_result\}" \]\] && startup_dialog_result_is_safe "\$\{last_dialog_result\}"/,
+    );
     expect(source).toMatch(/startup-reaper-pid=adopted_after_launchservices_restore/);
     expect(source).toMatch(/select_startup_reaper_successor_pid\(\)/);
     expect(source).toMatch(/adopt_startup_reaper_successor_pid\(\)/);
@@ -440,6 +444,7 @@ describe("packaged openreaper-start dialog observer", () => {
     expect(source).toMatch(/STARTUP_DIALOG_REPEAT_TIMEOUT_SECONDS=2/);
     expect(source).toMatch(/STARTUP_DIALOG_INSPECT_EVERY_TICKS=8/);
     expect(source).toMatch(/STARTUP_DIALOG_SOFT_BLOCKER_INSPECT_EVERY_TICKS=0/);
+    expect(source).toMatch(/STARTUP_DIALOG_FIRST_TIMEOUT_SECONDS=4/);
     expect(source).toMatch(/OPENREAPER_START_HELPER_REV="studio-hook-budget-v4"/);
     expect(source).toMatch(/start-helper-rev=/);
     expect(source).toMatch(/STARTUP_AX_SKIP_REMAINING_MS=10000/);
@@ -450,15 +455,18 @@ describe("packaged openreaper-start dialog observer", () => {
     expect(source).toMatch(/START_WAIT_SECONDS="\$\{OPENREAPER_START_WAIT_SECONDS:-52\}"/);
     expect(source).toMatch(/STARTUP_DIALOG_REPEAT_INSPECT/);
     const inspectDue = extractShellFunction(source, "startup_dialog_inspect_due");
-    expect(inspectDue).toMatch(/STARTUP_DIALOG_INSPECT_EVERY_TICKS/);
+    expect(inspectDue).toMatch(/STARTUP_DIALOG_SOFT_BLOCKER_INSPECT_EVERY_TICKS/);
     const observer = extractShellFunction(source, "run_startup_dialog_observer");
     expect(observer).toMatch(/STARTUP_DIALOG_REPEAT_INSPECT/);
     expect(observer).toMatch(/STARTUP_DIALOG_REPEAT_TIMEOUT_SECONDS/);
+    expect(observer).toMatch(/STARTUP_DIALOG_FIRST_TIMEOUT_SECONDS/);
     const readiness = extractShellFunction(source, "wait_for_startup_readiness");
     expect(readiness).toMatch(/startup_dialog_inspect_due/);
     expect(readiness).toMatch(/startup_wait_accept_ready_bridge/);
     expect(readiness).toMatch(/startup_hook_pid_gap_keep_adopting/);
     expect(readiness).toMatch(/adopt_window_after_soft_safe/);
+    expect(readiness).toMatch(/startup_wait_poll_ticks/);
+    expect(readiness).toMatch(/startup_adopt_live_launchservices_successor_if_unique/);
     expect(readiness).not.toMatch(
       /startup_budget_require_window "bridge_readiness" \$\(\( STARTUP_CLEANUP_RESERVE_MS \+ 250 \)\)/,
     );
@@ -494,6 +502,18 @@ describe("packaged openreaper-start dialog observer", () => {
       { encoding: "utf8" },
     );
     expect(empty.status).toBe(1);
+
+    const emptySoft = spawnSync(
+      "zsh",
+      [
+        "-c",
+        `STARTUP_DIALOG_POLICY=soft\n${accept}\nstartup_status_stage_ready() { return 0; }\nstartup_dialog_result_is_safe() { return 0; }\nstartup_wait_accept_published_stage "$1"`,
+        "accept-stage",
+        "",
+      ],
+      { encoding: "utf8" },
+    );
+    expect(emptySoft.status, emptySoft.stderr).toBe(0);
 
     const unsafe = spawnSync(
       "zsh",
@@ -728,7 +748,7 @@ describe("packaged openreaper-start LaunchServices successor PID picker", () => 
 describe("packaged openreaper-start LaunchServices adopt-window", () => {
   const source = readFileSync(START_HELPER, "utf8");
 
-  function runKeepAdopting(lastResult, missed, remainingMs) {
+  function runKeepAdopting(lastResult, missed, remainingMs, policy = "") {
     const keep = extractShellFunction(source, "startup_hook_pid_gap_keep_adopting");
     return spawnSync(
       "zsh",
@@ -737,6 +757,7 @@ describe("packaged openreaper-start LaunchServices adopt-window", () => {
         [
           "STARTUP_REAPER_PID_REPLACE_GRACE_TICKS=32",
           "STARTUP_CLEANUP_RESERVE_MS=6000",
+          `STARTUP_DIALOG_POLICY=${JSON.stringify(policy)}`,
           'startup_dialog_result_is_safe() {',
           '  [[ "$1" == *Project\\ Settings* ]] && return 0',
           "  return 1",
@@ -763,6 +784,9 @@ describe("packaged openreaper-start LaunchServices adopt-window", () => {
     const graceWithoutSafe = runKeepAdopting("", 32, 20_000);
     expect(graceWithoutSafe.status).toBe(1);
 
+    const graceSoftBeforeAx = runKeepAdopting("", 40, 20_000, "soft");
+    expect(graceSoftBeforeAx.status, graceSoftBeforeAx.stderr).toBe(0);
+
     const afterSoftIgnore = runKeepAdopting(
       "blocked_manual_dialog:title=Project Settings",
       40,
@@ -783,6 +807,14 @@ describe("packaged openreaper-start LaunchServices adopt-window", () => {
       20_000,
     );
     expect(unsafeDialog.status).toBe(1);
+
+    const unsafeSoft = runKeepAdopting(
+      "blocked_unknown_dialog:title=License",
+      40,
+      20_000,
+      "soft",
+    );
+    expect(unsafeSoft.status).toBe(1);
   });
 
   it("adopts a unique successor even when identity fingerprint is still pending", () => {

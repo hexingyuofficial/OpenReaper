@@ -35,26 +35,30 @@ Project Settings soft-ignore, AX inspection **stops** (first inspect capped at
 heartbeat inside the 60s budget (a published stage is accepted even when leftover
 time is below `cleanup_reserve+250ms`). After a
 soft-safe classification, a LaunchServices PID gap is an **adopt-window**
-(`adopt_window_after_soft_safe`) until the successor publishes — helper must
-not hard-fail at ~3s with `REAPER exited before its startup hook published a
-stage`. Session env stays set (`held_until_helper_exit` /
-`held_for_successor_publish`) so the restored PID still sees OpenReaper keys.
-If Bridge heartbeat or `bridge_dofile_succeeded` is already live, the helper last-chance
-accepts that instead of failing `STARTUP_BUDGET_EXHAUSTED`. Soft policy **does
-not kill REAPER** on helper failure (`startup-reaper-preserve=soft_policy`). A
-lone **Project Settings** window is a recoverable soft blocker (not exit 75);
-Start still does not click or close it. The **OpenReaper Studio** face title is
-allowlisted. Real decision windows (missing media, license, etc.) still fail
-closed. After LaunchServices launch, session env stays set until helper exit so
-a restored/replaced REAPER PID can still publish the startup hook.
+(`adopt_window_after_soft_safe`) until the successor publishes — including
+before the first AX pass. Helper must not hard-fail at ~3s with `REAPER exited
+before its startup hook published a stage`. Session env stays set
+(`held_until_helper_exit` / `held_for_successor_publish`) so the restored PID
+still sees OpenReaper keys. Wait loops poll until the cleanup reserve. If
+Bridge heartbeat or `bridge_dofile_succeeded` is already live, the helper
+last-chance accepts that instead of failing `STARTUP_BUDGET_EXHAUSTED`. Soft
+policy **does not kill REAPER** on helper failure
+(`startup-reaper-preserve=soft_policy`). A lone **Project Settings** window is
+a recoverable soft blocker (not exit 75); Start still does not click or close
+it. The **OpenReaper Studio** face title is allowlisted. Real decision windows
+(missing media, license, etc.) still fail closed. After LaunchServices launch,
+session env stays set until helper exit so a restored/replaced REAPER PID can
+still publish the startup hook.
 `face.prepare` copies the tracked packaging helper into
 `INSTALL_ROOT/bin/openreaper-start`, overwrites a stale companion
 `openreaper-start.sh`, and pins Start to that dest. The helper logs
 `start-helper-rev=studio-hook-budget-v4`; Start refuses to spawn a dest
 missing that rev. If `openreaper-start` exits **124** /
 `STARTUP_BUDGET_EXHAUSTED`, Studio still finishes the Pi RPC + face-config
-gate and records helper **124** after that wire is live (never mask 124 as 0,
-even if a leftover Bridge probe looks live).
+gate (`engineDegraded=true`). Helper **124** is persisted in session state +
+face-config and logged as WARN. After `finishStudioStartGate` succeeds,
+**Start exits 0** so NAS `trial-open.sh` can write READY. Do not copy helper
+124 onto `process.exitCode`. A failed Pi gate still exits non-zero.
 
 Studio **does not** use the user's personal Pi (`~/.pi`, global `pi` login in Terminal). All agent
 state is under OpenReaper Studio roots.
@@ -84,13 +88,16 @@ logs say the lock was retained.
 ### How to re-trial (macOS cold Start)
 
 After `face.prepare` syncs the helper, grep `INSTALL_ROOT/bin/openreaper-start` for
-`adopt_window_after_soft_safe`, `held_for_successor_publish`,
-`successor_identity_pending`, `held_until_helper_exit`, and
-`startup-dialog-soft-ignore=`. Cold Start with a lone Project Settings window
+`OPENREAPER_START_HELPER_REV="studio-hook-budget-v4"`, `adopt_window_after_soft_safe`,
+`held_for_successor_publish`, `successor_identity_pending`, `held_until_helper_exit`,
+`startup-dialog-soft-ignore=`, `STARTUP_DIALOG_FIRST_TIMEOUT_SECONDS`, and
+`startup_wait_poll_ticks`. Cold Start with a lone Project Settings window
 must soft-ignore (no exit 75), adopt the LaunchServices successor, publish a
-startup stage, and leave `openreaper-start` at **exit 0** with Bridge usable.
-Helper **124** must still appear as Start exit 124 (not masked as 0). Never
-click/close REAPER windows.
+startup stage, and leave `openreaper-start` at **exit 0** with Bridge usable
+when the hook publishes in time. If the helper still exits **124**, Start
+records it in state/`engineDegraded` and **exits 0** after the Pi gate
+succeeds (READY). A failed Pi gate is still non-zero. Never click/close
+REAPER windows.
 
 ## Private Pi (isolated from ~/.pi)
 
@@ -115,14 +122,15 @@ is active.
 → private Pi RPC → session finalize (`face.finalize` always runs). The **Start
 gate** is dialog face ↔ private Pi: `face-config-v1.json` with
 `piMode: rpc_background` + RPC URLs, healthy `/health`, and a non-empty
-`/commands` palette (builtin hints if Pi returns []). If `openreaper-start`
-exits **124** / `STARTUP_BUDGET_EXHAUSTED`, Start still finishes that Pi wire
-then records **124** (never masked as 0, even if a leftover Bridge probe looks
-live). Other non-zero helper exits probe Bridge heartbeat: live heartbeat is a
-soft-continue; if Bridge is **not** live, Start still continues with
-`engineDegraded=true` / WARN so the Pi wire is not stranded on `pending`. Soft
-policy never kills REAPER on helper failure. If Pi RPC itself cannot start,
-Start fails after still publishing face-config (not `pending`).
+`/commands` palette (builtin hints if Pi returns []). Engine/Bridge is not the
+gate. If `openreaper-start` exits non-zero, Start probes Bridge heartbeat: live
+heartbeat is a soft-continue; if Bridge is **not** live (budget kill, attach
+miss), Start still continues with `engineDegraded=true` / WARN so the Pi wire
+is not stranded on `pending`. After the Pi gate succeeds, Start **exits 0**
+even if the helper was 124; helper codes stay in state + face-config only.
+Soft policy never kills REAPER on helper failure.
+If Pi RPC itself cannot start, Start fails after still publishing face-config
+(not `pending`).
 
 ## Architecture (runnable spine)
 
@@ -156,7 +164,7 @@ reaper.ExecProcess → studio-pi-send.mjs → agent-seam/send-prompt.mjs
 | Step id | What it does |
 |---------|----------------|
 | `face.prepare` | Copy dialog entry + `studio/dialog/` modules; sync tracked `openreaper-start` into `INSTALL_ROOT/bin` (fingerprint + dest pin; overwrite stale `.sh`); write `face-config-v1.json`; set `open-face-on-load` |
-| `engine.openreaper_start` | Run the synced `INSTALL_ROOT/bin/openreaper-start` with `OPENREAPER_STUDIO=1` (refuses a dest missing `studio-hook-budget-v4`). Non-zero exit probes Bridge; live heartbeat is ok-ish, otherwise `engineDegraded` WARN. Helper **124** is recorded after the Pi wire (never masked as 0). |
+| `engine.openreaper_start` | Run the synced `INSTALL_ROOT/bin/openreaper-start` with `OPENREAPER_STUDIO=1` (refuses a dest missing `studio-hook-budget-v4`). Non-zero exit probes Bridge; live heartbeat is ok-ish, otherwise `engineDegraded` WARN. **Never aborts the Pi/face wire.** After the Pi gate succeeds, Start **exits 0**; helper 124 stays in state + face-config. |
 | `agent.pi_rpc` | Detached `studio-pi-rpc-host.mjs` → `pi --mode rpc` on private dirs; reuses a healthy host; warms `/commands`. |
 | `face.finalize` | Always runs. Publishes `face-config-v1.json` (`rpc_background` + URLs when Pi started). |
 

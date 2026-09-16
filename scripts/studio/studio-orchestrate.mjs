@@ -62,18 +62,7 @@ async function startStudio(options, env = process.env) {
 
   await runPipeline({ steps: START_STEPS, ctx });
   await finishStudioStartGate(ctx);
-  const recorded = recordedStudioStartExitCode({
-    openreaperStartExitCode: ctx.state?.openreaperStartExitCode,
-    engineDegraded: ctx.state?.engineDegraded,
-  });
-  if (recorded > 0) {
-    process.exitCode = recorded;
-    ctx.log(
-      recorded === 124
-        ? `WARN helper STARTUP_BUDGET_EXHAUSTED (124) recorded after Pi wire completed.`
-        : `WARN engineDegraded: helper exit ${recorded} recorded after Pi wire completed.`,
-    );
-  }
+  applySuccessfulStartGateProcessExit(ctx);
   process.stdout.write("[OpenReaper Studio] Start chain complete.\n");
 }
 
@@ -127,22 +116,44 @@ export function studioFailureExitCode(error) {
 }
 
 /**
- * Helper 124 / STARTUP_BUDGET_EXHAUSTED must remain 124 after Pi wire.
- * Soft-continue must not mask it as Studio success (exit 0). Other helper
- * failures only surface when the engine is degraded.
+ * Helper exit persisted in session state / face-config. Not the Start process
+ * exit code — a successful Pi gate is always process 0.
  */
 export function recordedStudioStartExitCode({
   openreaperStartExitCode,
-  engineDegraded,
 } = {}) {
   const code = Number(openreaperStartExitCode);
-  if (code === 124) {
-    return 124;
-  }
-  if (engineDegraded && Number.isInteger(code) && code > 0) {
+  if (Number.isInteger(code) && code > 0) {
     return code;
   }
   return 0;
+}
+
+/**
+ * Product gate is face↔Pi. After `finishStudioStartGate` succeeds, Start exits
+ * 0 even when openreaper-start was 124 / engineDegraded. Helper codes stay in
+ * state + face-config and are WARN'd so NAS trial-open.sh can write READY.
+ */
+export function studioStartProcessExitCode({ gateOk } = {}) {
+  return gateOk ? 0 : 1;
+}
+
+/**
+ * Apply process exit 0 after a successful Pi gate. Never copy helper 124 onto
+ * `process.exitCode` — that leftover handoff made Start look failed.
+ */
+export function applySuccessfulStartGateProcessExit(ctx) {
+  const helperCode = recordedStudioStartExitCode({
+    openreaperStartExitCode: ctx?.state?.openreaperStartExitCode,
+  });
+  if (ctx?.state?.engineDegraded || helperCode > 0) {
+    ctx.log?.(
+      helperCode === 124
+        ? "WARN helper STARTUP_BUDGET_EXHAUSTED (124) recorded in state/face-config after Pi gate ok."
+        : `WARN engineDegraded: helper exit ${helperCode || "unknown"} recorded in state/face-config after Pi gate ok.`,
+    );
+  }
+  process.exitCode = studioStartProcessExitCode({ gateOk: true });
 }
 
 async function main() {

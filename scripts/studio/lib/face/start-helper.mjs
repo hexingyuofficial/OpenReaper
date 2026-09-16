@@ -11,8 +11,10 @@ export const START_HELPER_REQUIRED_MARKERS = Object.freeze([
   `OPENREAPER_START_HELPER_REV="${START_HELPER_REV}"`,
   "STARTUP_DIALOG_INSPECT_EVERY_TICKS",
   "STARTUP_DIALOG_SOFT_BLOCKER_INSPECT_EVERY_TICKS",
+  "STARTUP_DIALOG_FIRST_TIMEOUT_SECONDS",
   "STARTUP_AX_SKIP_REMAINING_MS",
   "startup_wait_accept_published_stage",
+  "startup_wait_poll_ticks",
   "startup-last-chance=published_stage",
   "startup-ax=stopped_after_soft_blocker",
 ]);

@@ -142,6 +142,9 @@ OPENREAPER_START_HELPER_REV="studio-hook-budget-v4"
 # Hammering System Events every 0.25s with a 15s osascript budget can stall
 # REAPER's main thread so __startup.lua never publishes a stage.
 STARTUP_DIALOG_REPEAT_TIMEOUT_SECONDS=2
+# First AX pass under soft/Studio: a 15s osascript can freeze REAPER long enough
+# that the startup hook never publishes before the supervisor deadline (124).
+STARTUP_DIALOG_FIRST_TIMEOUT_SECONDS=4
 STARTUP_DIALOG_INSPECT_EVERY_TICKS=8
 # After a lone Project Settings window, STOP AX. Zhuanz1 30efebb still burned
 # the 54s supervisor: first 15s inspect + 2s inspects every 24 ticks, and the
@@ -402,12 +405,15 @@ Orphan LaunchServices env locks from a dead openreaper-start owner are
 reclaimed automatically; see README recovery one-liner.
 After a LaunchServices launch, session env stays set until helper exit so a
 restored/replaced REAPER PID can still publish the startup hook. After a
-soft-safe window (lone Project Settings), a brief PID gap is an adopt-window
-until the successor publishes — not a hard fail that restores env too early.
-After a stable safe window classification, AX inspection is throttled so the
-startup hook and Bridge heartbeat can publish inside the 60s budget. The helper
-accepts a published stage without requiring cleanup_reserve+250ms leftover, and
-still never clicks or closes REAPER windows.
+soft-safe window (lone Project Settings), a PID gap is an adopt-window until
+the successor publishes — including before the first AX pass under soft policy.
+Adopt a unique live successor even while the handoff PID is still alive.
+Soft/Studio caps the first AX pass at 4s and slows Project Settings re-inspect
+so __startup.lua can publish inside the 60s budget. Wait loops poll until the
+cleanup reserve rather than giving up at START_WAIT_SECONDS while supervisor
+time remains. A published stage is accepted under soft even before AX returns,
+without requiring cleanup_reserve+250ms leftover. Still never clicks or closes
+REAPER windows. License / missing-media still fail closed.
 HELP
       exit 0
       ;;
@@ -1390,9 +1396,10 @@ startup_adopt_live_launchservices_successor_if_unique() {
   adopt_startup_reaper_successor_pid "${current_pid}" "${successor}"
 }
 
-# After GRACE ticks, a PID gap is fatal unless a stable safe dialog result
-# already landed (Project Settings soft-ignore). Then keep adopting until the
-# budget so we do not restore LaunchServices env before the successor publishes.
+# After GRACE ticks, a PID gap is fatal unless we can still adopt a successor.
+# Soft/Studio: the gap can happen before the first AX pass, so do not require
+# a Project Settings classification. Keep adopting until the budget so we do
+# not restore LaunchServices env before the successor publishes.
 startup_hook_pid_gap_keep_adopting() {
   local last_result="$1"
   local -i missed="$2"
@@ -1403,10 +1410,30 @@ startup_hook_pid_gap_keep_adopting() {
   if (( missed < STARTUP_REAPER_PID_REPLACE_GRACE_TICKS )); then
     return 0
   fi
-  if [[ -n "${last_result}" ]] && startup_dialog_result_is_safe "${last_result}"; then
+  if [[ -n "${last_result}" ]]; then
+    if startup_dialog_result_is_safe "${last_result}"; then
+      return 0
+    fi
+    return 1
+  fi
+  # Soft/Studio: PID gap can happen before the first AX pass.
+  if [[ "${STARTUP_DIALOG_POLICY}" == "soft" ]]; then
     return 0
   fi
   return 1
+}
+
+# Poll until cleanup reserve rather than a shorter START_WAIT_SECONDS wall.
+# AX time is included in SECONDS, so a 45s tick cap can expire while supervisor
+# budget remains — or overrun into STARTUP_BUDGET_EXHAUSTED (124).
+startup_wait_poll_ticks() {
+  local -i remaining_ms ticks
+  remaining_ms="$(startup_remaining_budget_ms)"
+  ticks=$(( (remaining_ms - STARTUP_CLEANUP_RESERVE_MS) / 250 ))
+  if (( ticks < 8 )); then
+    ticks=8
+  fi
+  print -r -- "${ticks}"
 }
 
 wait_for_reaper_process_table_clear() {
@@ -2276,7 +2303,7 @@ startup_dialog_inspect_due() {
     return 0
   fi
   case "${last_result}" in
-    blocked_manual_dialog:title=Project\ Settings|blocked_manual_dialog:title=Project\ Settings\ /\ Notes|project_settings_seen_but_not_notes)
+    blocked_manual_dialog:title=Project\ Settings|blocked_manual_dialog:title=Project\ Settings\ /\ Notes|project_settings_seen_but_not_notes|ignored_openreaper_studio_dialog)
       every="${STARTUP_DIALOG_SOFT_BLOCKER_INSPECT_EVERY_TICKS:-0}"
       if (( every <= 0 )); then
         return 1
@@ -2291,10 +2318,10 @@ startup_dialog_inspect_due() {
 
 startup_wait_accept_published_stage() {
   local last_result="$1"
-  if [[ -z "${last_result}" ]]; then
+  if [[ -n "${last_result}" ]] && ! startup_dialog_result_is_safe "${last_result}"; then
     return 1
   fi
-  if ! startup_dialog_result_is_safe "${last_result}"; then
+  if [[ -z "${last_result}" && "${STARTUP_DIALOG_POLICY}" != "soft" ]]; then
     return 1
   fi
   startup_status_stage_ready
@@ -2302,7 +2329,8 @@ startup_wait_accept_published_stage() {
 
 wait_for_startup_hook() {
   local reaper_pid="$1"
-  local max_ticks=$(( START_WAIT_SECONDS * 4 ))
+  local max_ticks
+  max_ticks="$(startup_wait_poll_ticks)"
   local tick dialog_result pending_dialog_blocker="" last_dialog_result=""
   local -i missed_alive_ticks=0
   local adopted_pid=""
@@ -2362,11 +2390,11 @@ wait_for_startup_hook() {
     fi
     missed_alive_ticks=0
     # Handoff PID still alive, but LaunchServices may already have a unique
-    # successor. Probe every 4 ticks so pgrep does not starve the startup hook.
+    # successor (Project Settings can sit on the successor before first AX).
+    # Probe every 4 ticks so pgrep does not starve the startup hook.
     # After Project Settings was classified on this PID, it is the UI process;
     # further successor scans (lsof/ps) only steal the budget Lua needs.
-    if [[ -n "${last_dialog_result}" ]] && startup_dialog_result_is_safe "${last_dialog_result}" \
-        && ! startup_status_stage_ready && (( tick % 4 == 0 )); then
+    if ! startup_status_stage_ready && (( tick % 4 == 0 )); then
       case "${last_dialog_result}" in
         blocked_manual_dialog:title=Project\ Settings|blocked_manual_dialog:title=Project\ Settings\ /\ Notes|project_settings_seen_but_not_notes)
           ;;
@@ -2722,6 +2750,9 @@ run_startup_dialog_observer() {
   elif [[ "${STARTUP_DIALOG_REPEAT_INSPECT:-}" == "1" ]] \
       && (( STARTUP_DIALOG_REPEAT_TIMEOUT_SECONDS > 0 && timeout_cap > STARTUP_DIALOG_REPEAT_TIMEOUT_SECONDS )); then
     timeout_cap=${STARTUP_DIALOG_REPEAT_TIMEOUT_SECONDS}
+  elif [[ "${STARTUP_DIALOG_POLICY}" == "soft" ]] \
+      && (( STARTUP_DIALOG_FIRST_TIMEOUT_SECONDS > 0 && timeout_cap > STARTUP_DIALOG_FIRST_TIMEOUT_SECONDS )); then
+    timeout_cap=${STARTUP_DIALOG_FIRST_TIMEOUT_SECONDS}
   fi
   if (( dialog_timeout_seconds > timeout_cap )); then
     dialog_timeout_seconds=${timeout_cap}
@@ -3030,10 +3061,10 @@ accept_ready_bridge() {
 
 startup_wait_accept_ready_bridge() {
   local last_result="$1"
-  if [[ -z "${last_result}" ]]; then
+  if [[ -n "${last_result}" ]] && ! startup_dialog_result_is_safe "${last_result}"; then
     return 1
   fi
-  if ! startup_dialog_result_is_safe "${last_result}"; then
+  if [[ -z "${last_result}" && "${STARTUP_DIALOG_POLICY}" != "soft" ]]; then
     return 1
   fi
   accept_ready_bridge
@@ -3116,7 +3147,8 @@ startup_fail_or_last_chance_live_bridge() {
 }
 
 wait_for_startup_readiness() {
-  local max_ticks=$(( START_WAIT_SECONDS * 4 ))
+  local max_ticks
+  max_ticks="$(startup_wait_poll_ticks)"
   local tick dialog_result pending_dialog_blocker="" last_dialog_result=""
   local reaper_pid adopted_pid
   local -i missed_alive_ticks=0
@@ -3124,7 +3156,7 @@ wait_for_startup_readiness() {
   local -i remaining_ms
   local -i logged_inspect_skip=0
   if (( max_ticks < 1 )); then
-    echo "[OpenReaper] OPENREAPER_START_WAIT_SECONDS must be at least 1 for verified startup." >&2
+    echo "[OpenReaper] startup wait budget is too small for verified startup." >&2
     return 1
   fi
   for (( tick = 1; tick <= max_ticks; tick++ )); do
@@ -3160,6 +3192,9 @@ wait_for_startup_readiness() {
       fi
     else
       missed_alive_ticks=0
+      if ! startup_status_bridge_loaded && ! bridge_heartbeat_ready && (( tick % 4 == 0 )); then
+        startup_adopt_live_launchservices_successor_if_unique "${reaper_pid}" >/dev/null || true
+      fi
     fi
     if startup_dialog_inspect_due "${tick}" "${last_inspect_tick}" "${pending_dialog_blocker}" "${last_dialog_result}"; then
       if (( remaining_ms >= STARTUP_AX_SKIP_REMAINING_MS )); then
