@@ -1,4 +1,4 @@
--- Agent seam from REAPER face → Node CLI (studio-pi-send.mjs).
+-- Agent seam from REAPER face → Node CLI (studio-pi-send / studio-pi-commands).
 
 local function module_paths()
   local entry = debug.getinfo(1, "S").source:match("^@(.+)$")
@@ -48,6 +48,39 @@ function M.parse_response_text(output)
   return output
 end
 
+function M.parse_commands_payload(output)
+  if not output or output == "" then
+    return false, "Empty commands response."
+  end
+  local commands = {}
+  for name, description in output:gmatch('"name"%s*:%s*"([^"]+)"[^}]*"description"%s*:%s*"([^"]*)"') do
+    table.insert(commands, { name = name, description = description })
+  end
+  local message = output:match('"message"%s*:%s*"([^"]*)"')
+  return true, { commands = commands, message = message }
+end
+
+function M.resolve_commands_cli(config)
+  if config.piCommandsScript and config.piCommandsScript ~= "" then
+    return config.piCommandsScript
+  end
+  if config.piBridgeScript and config.piBridgeScript ~= "" then
+    return (config.piBridgeScript:gsub("studio%-pi%-send%.mjs$", "studio-pi-commands.mjs"))
+  end
+  return nil
+end
+
+function M.fetch_commands(config)
+  local node = config.nodeCommand
+  local commands_cli = M.resolve_commands_cli(config)
+  if not node or not commands_cli then
+    return false, "Agent seam not configured. Run studio-start."
+  end
+  local cmd = string.format("%q %q", node, commands_cli)
+  local output = reaper.ExecProcess(cmd, 15000) or ""
+  return M.parse_commands_payload(output)
+end
+
 function M.send_prompt(config, message, chips)
   local node = config.nodeCommand
   local bridge = config.piBridgeScript
@@ -66,7 +99,7 @@ function M.send_prompt(config, message, chips)
   file:close()
 
   local cmd = string.format("%q %q %q", node, bridge, req)
-  local output = reaper.ExecProcess(cmd, 30000) or ""
+  local output = reaper.ExecProcess(cmd, 120000) or ""
   local reply = M.parse_response_text(output)
   if reply then
     return true, reply

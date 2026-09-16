@@ -79,6 +79,10 @@ export function resolveAgentSeamCli(repoRoot) {
   return path.join(repoRoot, "scripts", "studio", "studio-pi-send.mjs");
 }
 
+export function resolvePiCommandsCli(repoRoot) {
+  return path.join(repoRoot, "scripts", "studio", "studio-pi-commands.mjs");
+}
+
 /** @deprecated use resolveAgentSeamCli */
 export function resolvePiBridgeScript(repoRoot) {
   return resolveAgentSeamCli(repoRoot);

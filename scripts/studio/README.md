@@ -7,6 +7,16 @@ This folder is a **small framework**, not a pile of one-off scripts: orchestrati
 modules, contracts, and agent transports are separated so UI and Pi wiring can evolve without
 rewiring Start/Stop.
 
+## Step 1 (this slice)
+
+| Capability | What you get |
+|------------|----------------|
+| **Private Pi** | Stock `pi --mode rpc` on `~/.openreaper/studio/pi/*` (or `vendor/pi` when bundled). Personal `~/.pi` is unused. |
+| **Coupled lifecycle** | Start: face → bundled `openreaper-start` (REAPER + bridge) → private Pi RPC host → session. Stop: Pi host + face hooks. If Pi was required and fails after REAPER is up, coupled rollback quits REAPER (unless `OPENREAPER_STUDIO_LOOSE_COUPLING=1`). |
+| **Bundled OpenReaper** | Start always uses `INSTALL_ROOT/bin/openreaper-start` (`~/.openreaper/current` by default). `engine-bundle-v1.json` records the packaged engine slot. |
+| **Terminal-like dialog** | Send routes prompts/`/commands` through private Pi RPC (not a gutted mock). Typing `/` shows a slash palette with Pi `get_commands` names + descriptions. |
+| **Rough skin** | Floating ReaImGui bar (`studio_skin.lua`): neutral dark minimal AI-DAW look. Theme embed is a follow-up. |
+
 ## Prerequisites
 
 - REAPER (macOS primary)
@@ -105,7 +115,9 @@ reaper.ExecProcess → studio-pi-send.mjs → agent-seam/send-prompt.mjs
 |------|------|
 | `studio-orchestrate.mjs` | CLI: start / stop / status |
 | `studio-pi-send.mjs` | Agent seam CLI (called from REAPER) |
-| `studio-pi-rpc-host.mjs` | Long-lived private `pi --mode rpc` + loopback HTTP |
+| `studio-pi-commands.mjs` | Pi slash command list for the dialog palette |
+| `studio-pi-rpc-host.mjs` | Long-lived private `pi --mode rpc` + loopback HTTP (`/prompt`, `/commands`, `/health`) |
+| `reaper/dialog/studio_skin.lua` | Step 1 default float skin |
 | `lib/pi/private-layout.mjs` | Studio Pi roots (never `~/.pi`) |
 | `lib/orchestration/pi-rpc-lifecycle.mjs` | Start host, health probe |
 | `lib/orchestration/*` | Pipelines and `runProcess` helper |
@@ -197,6 +209,7 @@ add the kind to `CONTEXT_CHIP_KINDS` in Node contracts.
 | `OPENREAPER_STUDIO_PI_BIN` | Override `pi` executable path |
 | `OPENREAPER_STUDIO_PI_ARGS` | Extra args after `pi --mode rpc` |
 | `OPENREAPER_STUDIO_PI_RPC_URL` | Force HTTP agent transport (usually set via face config) |
+| `OPENREAPER_STUDIO_LOOSE_COUPLING` | `1` = do not quit REAPER when private Pi fails mid-Start |
 | `OPENREAPER_STUDIO_NODE` | Node binary for ExecProcess |
 
 ## Windows

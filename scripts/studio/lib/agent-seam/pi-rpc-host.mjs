@@ -35,11 +35,46 @@ export async function startPiRpcHost({
   });
 
   let promptChain = Promise.resolve();
+  let commandsCache = { at: 0, commands: [] };
+  const commandsTtlMs = 30_000;
+
+  async function loadPiCommands() {
+    const now = Date.now();
+    if (now - commandsCache.at < commandsTtlMs && commandsCache.commands.length) {
+      return { commands: commandsCache.commands, cached: true };
+    }
+    const response = await client.sendCommand({ type: "get_commands" });
+    if (!response?.success) {
+      throw new Error(`get_commands failed: ${JSON.stringify(response)}`);
+    }
+    const commands = Array.isArray(response?.data?.commands) ? response.data.commands : [];
+    commandsCache = { at: now, commands };
+    return { commands, cached: false };
+  }
 
   const server = createServer(async (req, res) => {
     if (req.method === "GET" && req.url === "/health") {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ ok: true, piPid: piChild.pid }));
+      return;
+    }
+
+    if (req.method === "GET" && req.url === "/commands") {
+      try {
+        const { commands, cached } = await loadPiCommands();
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ ok: true, mode: "pi_rpc", commands, cached }));
+      } catch (error) {
+        res.writeHead(502, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            ok: false,
+            mode: "pi_rpc_error",
+            commands: [],
+            message: error?.message ?? String(error),
+          }),
+        );
+      }
       return;
     }
 
@@ -112,7 +147,9 @@ export async function startPiRpcHost({
 
   const address = server.address();
   const port = typeof address === "object" && address ? address.port : null;
-  const promptUrl = `http://${listenHost}:${port}/prompt`;
+  const baseUrl = `http://${listenHost}:${port}`;
+  const promptUrl = `${baseUrl}/prompt`;
+  const commandsUrl = `${baseUrl}/commands`;
 
   if (endpointFile) {
     await writeFile(
@@ -121,7 +158,8 @@ export async function startPiRpcHost({
         {
           contract: "openreaper.studio.pi_rpc_endpoint.v1",
           promptUrl,
-          healthUrl: `http://${listenHost}:${port}/health`,
+          commandsUrl,
+          healthUrl: `${baseUrl}/health`,
           hostPid: process.pid,
           piPid: piChild.pid,
           startedAt: new Date().toISOString(),
@@ -151,5 +189,5 @@ export async function startPiRpcHost({
   });
 
   log?.(`Private Pi RPC host listening ${promptUrl} (pi pid=${piChild.pid})`);
-  return { server, piChild, promptUrl, shutdown };
+  return { server, piChild, promptUrl, commandsUrl, shutdown };
 }

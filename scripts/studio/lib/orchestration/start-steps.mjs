@@ -5,8 +5,10 @@ import {
   markOpenFaceOnLoad,
   resolveNodeCommand,
   resolvePiBridgeScript,
+  resolvePiCommandsCli,
   writeFaceConfig,
 } from "../face/runtime-config.mjs";
+import { writeEngineBundleManifest } from "../face/bundle-engine.mjs";
 import { installFaceBundle } from "../face/install.mjs";
 import { syncPackagedStartHelper } from "../face/start-helper.mjs";
 import {
@@ -18,6 +20,7 @@ import {
 } from "../paths.mjs";
 import { readPiMcpConfig, resolveStudioPiForStart } from "../pi.mjs";
 import { emptyStudioState, writeStudioState } from "../state.mjs";
+import { coupledRollbackOnPiFailure } from "./coupled-rollback.mjs";
 import { launchPrivatePiRpcHost } from "./pi-rpc-lifecycle.mjs";
 import { runProcess } from "./process.mjs";
 
@@ -60,7 +63,17 @@ export const START_STEPS = [
       }
       ctx.repoRoot = repoRoot;
       ctx.piBridgeScript = piBridgeScript;
+      ctx.piCommandsScript = resolvePiCommandsCli(repoRoot);
       ctx.reaperResourceRoot = reaperResourceRoot;
+
+      ctx.engineBundle = await writeEngineBundleManifest({
+        homeDir,
+        installRoot,
+        repoRoot,
+      });
+      ctx.log(
+        `Bundled engine slot: ${installRoot} (manifest ${ctx.engineBundle.path})`,
+      );
 
       const faceInstall = await installFaceBundle({ reaperResourceRoot, repoRoot });
       ctx.faceInstall = faceInstall;
@@ -103,6 +116,7 @@ export const START_STEPS = [
       await writeFaceConfig(homeDir, {
         nodeCommand: resolveNodeCommand(env),
         piBridgeScript,
+        piCommandsScript: ctx.piCommandsScript,
         piMode: piPlan.mode === "start" ? "pending" : piPlan.mode,
         repoRoot,
       });
@@ -166,13 +180,19 @@ export const START_STEPS = [
       }
 
       const nodeCommand = resolveNodeCommand(env);
-      const rpc = await launchPrivatePiRpcHost({
-        nodeCommand,
-        repoRoot,
-        env: piPlan.processEnv ?? { ...env, OPENREAPER_STUDIO: "1" },
-        homeDir,
-        log: ctx.log,
-      });
+      let rpc;
+      try {
+        rpc = await launchPrivatePiRpcHost({
+          nodeCommand,
+          repoRoot,
+          env: piPlan.processEnv ?? { ...env, OPENREAPER_STUDIO: "1" },
+          homeDir,
+          log: ctx.log,
+        });
+      } catch (error) {
+        await coupledRollbackOnPiFailure(ctx);
+        throw error;
+      }
 
       ctx.state.pi = {
         mode: "started",
@@ -182,6 +202,7 @@ export const START_STEPS = [
         hostPid: rpc.hostPid,
         pid: rpc.piPid,
         rpcPromptUrl: rpc.promptUrl,
+        rpcCommandsUrl: rpc.commandsUrl,
         rpcHealthUrl: rpc.healthUrl,
         endpointFile: rpc.endpointFile,
         command: piPlan.command,
@@ -206,6 +227,8 @@ export const START_STEPS = [
         repoRoot: ctx.repoRoot,
         piPid: ctx.state.pi?.pid ?? null,
         piRpcUrl: ctx.state.pi?.rpcPromptUrl ?? null,
+        piCommandsUrl: ctx.state.pi?.rpcCommandsUrl ?? null,
+        piCommandsScript: ctx.piCommandsScript,
         piPrivateAgentDir: ctx.state.piPrivate?.agentDir ?? null,
       });
       await writeStudioState(studioStatePath(ctx.homeDir), ctx.state);

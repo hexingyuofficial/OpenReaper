@@ -32,6 +32,8 @@ function M.start()
     chips = {},
     status = "",
     last_reply = "",
+    commands = {},
+    commands_status = "",
     config = runtime_config.read_face_config(),
   }
 

@@ -53,6 +53,7 @@ export async function launchPrivatePiRpcHost({
               hostPid: parsed.hostPid ?? child.pid,
               piPid: parsed.piPid ?? null,
               promptUrl: parsed.promptUrl,
+              commandsUrl: parsed.commandsUrl ?? null,
               healthUrl,
               endpointFile,
               logPath,

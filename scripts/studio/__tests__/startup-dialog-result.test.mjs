@@ -212,10 +212,15 @@ describe("packaged openreaper-start dialog observer", () => {
       path.join(repoRoot, "scripts/studio/reaper/dialog/ui_face.lua"),
       "utf8",
     );
-    expect(face).toContain('ImGui_Begin(ctx, "OpenReaper Studio"');
+    const skin = readFileSync(
+      path.join(repoRoot, "scripts/studio/reaper/dialog/studio_skin.lua"),
+      "utf8",
+    );
+    expect(face).toContain("skin.layout.title");
+    expect(face).toContain('ImGui_Begin(ctx, skin.layout.title');
     for (const title of STUDIO_FACE_SAFE_WINDOW_TITLES) {
       expect(observer).toContain(`"${title}"`);
-      expect(face).toContain(`ImGui_Begin(ctx, "${title}"`);
+      expect(skin).toContain(`title = "${title}"`);
       expect(runShellClassifier(classifier, "soft", `blocked_unknown_dialog:title=${title}`)).toBe(0);
       expect(runShellClassifier(classifier, "strict", `blocked_unknown_dialog:title=${title}`)).toBe(1);
     }

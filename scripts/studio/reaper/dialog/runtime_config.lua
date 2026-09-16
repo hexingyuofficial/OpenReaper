@@ -19,7 +19,10 @@ function M.read_face_config()
   return {
     nodeCommand = content:match('"nodeCommand"%s*:%s*"([^"]+)"'),
     piBridgeScript = content:match('"piBridgeScript"%s*:%s*"([^"]+)"'),
+    piCommandsScript = content:match('"piCommandsScript"%s*:%s*"([^"]+)"'),
     piMode = content:match('"piMode"%s*:%s*"([^"]+)"'),
+    piRpcUrl = content:match('"piRpcUrl"%s*:%s*"([^"]+)"'),
+    piCommandsUrl = content:match('"piCommandsUrl"%s*:%s*"([^"]+)"'),
   }
 end
 
