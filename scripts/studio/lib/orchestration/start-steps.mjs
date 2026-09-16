@@ -172,8 +172,11 @@ export const START_STEPS = [
         );
       }
       const openreaperEnv = { ...ctx.env, OPENREAPER_STUDIO: "1" };
-      if (ctx.faceInstall?.hookInstalled) {
+      if (ctx.faceInstall?.hookInstalled && !ctx.faceInstall?.alreadyPresent) {
         openreaperEnv.OPENREAPER_STUDIO_FACE_HOOK_INSTALLED = "1";
+      }
+      if (ctx.faceInstall?.entryScriptPath) {
+        openreaperEnv.OPENREAPER_STUDIO_FACE_SCRIPT = ctx.faceInstall.entryScriptPath;
       }
       const run = ctx.runProcess ?? runProcess;
       const result = await run(ctx.startCmd.command, startArgs, {

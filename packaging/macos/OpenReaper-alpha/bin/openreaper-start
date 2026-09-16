@@ -137,7 +137,7 @@ STARTUP_DOCTOR_OVERHEAD_MS=1000
 STARTUP_DIALOG_TIMEOUT_SECONDS="${OPENREAPER_STARTUP_DIALOG_TIMEOUT_SECONDS:-15}"
 # Identity of this wait-loop contract. Studio Start refuses a synced helper
 # that does not contain this exact rev (older ~/.openreaper/current copies).
-OPENREAPER_START_HELPER_REV="studio-hook-publish-v5"
+OPENREAPER_START_HELPER_REV="studio-hook-publish-v6"
 # Repeat AX passes after a stable safe classification (empty, Studio face).
 # Hammering System Events every 0.25s with a 15s osascript budget can stall
 # REAPER's main thread so __startup.lua never publishes a stage.
@@ -161,6 +161,7 @@ STARTUP_HOOK_FAIL_REMAINING_MS=7500
 # after System Events starved its one-shot window.
 STARTUP_HOOK_QUIET_TICKS="${OPENREAPER_STARTUP_HOOK_QUIET_TICKS:-40}"
 STARTUP_LAUNCHER_POKE_ATTEMPTED=false
+STARTUP_FACE_POKE_ATTEMPTED=false
 STARTUP_DIALOG_REPEAT_INSPECT=0
 STARTUP_DIALOG_POLICY="${OPENREAPER_STARTUP_DIALOG_POLICY:-}"
 STARTUP_DIALOG_INSPECTION_UNAVAILABLE=false
@@ -2456,6 +2457,56 @@ startup_poke_trusted_launcher_if_unpublished() {
   return 0
 }
 
+startup_trusted_lua_is_runnable() {
+  local script="$1"
+  [[ -n "${script}" ]] || return 1
+  [[ -f "${script}" && ! -L "${script}" && -r "${script}" ]] || return 1
+  case "${script:l}" in
+    *.lua) return 0 ;;
+  esac
+  return 1
+}
+
+# Same nonewinst path for the Studio face entry. Kernel poke starts the Bridge;
+# this is how the dialog can appear if __startup.lua's defer hook missed its
+# one-shot window while Project Settings stayed open. Never clicks.
+startup_poke_studio_face_if_needed() {
+  local face_script poke_status=0
+  if [[ "${OPENREAPER_STUDIO:-}" != "1" ]]; then
+    return 1
+  fi
+  if [[ "${STARTUP_FACE_POKE_ATTEMPTED}" == "true" ]]; then
+    return 1
+  fi
+  if [[ "${STARTUP_DIALOG_POLICY}" != "soft" ]]; then
+    return 1
+  fi
+  face_script="${OPENREAPER_STUDIO_FACE_SCRIPT:-}"
+  case "${face_script:t:l}" in
+    openreaper_studio_dialog.lua) ;;
+    *)
+      return 1
+      ;;
+  esac
+  if ! startup_trusted_lua_is_runnable "${face_script}"; then
+    echo "[OpenReaper] startup-hook-poke=studio_face_skipped untrusted_lua" >&2
+    return 1
+  fi
+  STARTUP_FACE_POKE_ATTEMPTED=true
+  echo "[OpenReaper] startup-hook-poke=studio_face remaining_ms=$(startup_remaining_budget_ms)" >&2
+  if [[ -n "${REAPER_APP:-}" && -d "${REAPER_APP}" && -x "/usr/bin/open" ]]; then
+    startup_run_bounded_external 2500 /usr/bin/open -a "${REAPER_APP}" --args -nonewinst "${face_script}" >> "${START_LOG}" 2>&1 || poke_status=$?
+  else
+    startup_run_bounded_external 2500 "${REAPER_BIN}" -nonewinst "${face_script}" >> "${START_LOG}" 2>&1 || poke_status=$?
+  fi
+  if (( poke_status != 0 )); then
+    echo "[OpenReaper] startup-hook-poke=studio_face_exec_failed status=${poke_status}" >&2
+    return 1
+  fi
+  echo "[OpenReaper] startup-hook-poke=studio_face_submitted" >&2
+  return 0
+}
+
 # AX inspection is due on the first tick, whenever no classification exists,
 # when a blocker is still stabilizing, and every N ticks after a safe result.
 # A lone Project Settings result stops AX for the rest of the wait.
@@ -2617,6 +2668,7 @@ wait_for_startup_hook() {
     fi
     if startup_should_poke_trusted_launcher "${last_dialog_result}"; then
       startup_poke_trusted_launcher_if_unpublished || true
+      startup_poke_studio_face_if_needed || true
     fi
     if startup_wait_accept_published_stage "${last_dialog_result}"; then
       return 0
@@ -3256,6 +3308,7 @@ startup_last_chance_accept_published_stage() {
     echo "[OpenReaper] startup-last-chance=published_stage status_file=missing reason=${reason}" >&2
     if startup_should_poke_trusted_launcher "${last_result}"; then
       startup_poke_trusted_launcher_if_unpublished || true
+      startup_poke_studio_face_if_needed || true
     fi
   fi
   # Check the status file before any leftover-ms floor. Zhuanz1 remaining_ms=6069
