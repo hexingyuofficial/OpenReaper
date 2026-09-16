@@ -152,8 +152,10 @@ STARTUP_LAUNCHCTL_TIMEOUT_MS=2000
 STARTUP_LAUNCHCTL_CLEANUP_TIMEOUT_MS=300
 STARTUP_LAUNCHSERVICES_TIMEOUT_MS=3000
 # Ticks of 0.25s to wait for a replacement REAPER PID after the LaunchServices
-# handoff process exits during macOS window restore.
-STARTUP_REAPER_PID_REPLACE_GRACE_TICKS=12
+# handoff process exits during macOS window restore. After a stable soft-safe
+# classification (lone Project Settings), a longer adopt-window lasts until
+# the startup budget instead of hard-failing at this floor.
+STARTUP_REAPER_PID_REPLACE_GRACE_TICKS=32
 LAUNCHSERVICES_LOCK_PATH="${INSTALL_ROOT}/session/.openreaper-launchservices-env.lock"
 LAUNCHSERVICES_LOCK_OWNED=false
 LAUNCHSERVICES_LOCK_TOKEN=""
@@ -385,7 +387,9 @@ may relaunch once when Studio just installed the __startup.lua face hook
 Orphan LaunchServices env locks from a dead openreaper-start owner are
 reclaimed automatically; see README recovery one-liner.
 After a LaunchServices launch, session env stays set until helper exit so a
-restored/replaced REAPER PID can still publish the startup hook.
+restored/replaced REAPER PID can still publish the startup hook. After a
+soft-safe window (lone Project Settings), a brief PID gap is an adopt-window
+until the successor publishes — not a hard fail that restores env too early.
 After a stable safe window classification, AX inspection is throttled so the
 startup hook and Bridge heartbeat can publish inside the 60s budget. The helper
 accepts a published stage without requiring cleanup_reserve+250ms leftover, and
@@ -1110,7 +1114,7 @@ JXA
       reaper_pid="${STARTUP_LAUNCHED_REAPER_PID}"
     fi
     if (( startup_hook_status != 0 )); then
-      echo "[OpenReaper] REAPER startup hook did not publish a valid startup stage before LaunchServices restoration." >&2
+      echo "[OpenReaper] REAPER startup hook did not publish a valid startup stage while LaunchServices session env was still held." >&2
       exit "${startup_hook_status}"
     fi
     # Keep launchctl session env until helper EXIT. Restoring here races macOS
@@ -1293,15 +1297,57 @@ select_startup_reaper_successor_pid() {
 discover_startup_reaper_successor() {
   local launched_pid="$1"
   local -a live_pids=()
-  local candidate_pid
+  local candidate_pid unique
   while IFS= read -r candidate_pid; do
     [[ -n "${candidate_pid}" ]] && live_pids+=("${candidate_pid}")
   done < <(reaper_pids)
   (( ${#live_pids[@]} > 0 )) || return 1
+  if unique="$(select_startup_reaper_successor_pid \
+      "${launched_pid}" \
+      "${STARTUP_REAPER_BEFORE_PIDS}" \
+      "${live_pids[@]}")"; then
+    print -r -- "${unique}"
+    return 0
+  fi
+  # Overlap during restore: pgrep can briefly show 2+ matches (dying handoff
+  # plus successor, or a helper). Prefer the unique identity-verified PID.
+  local -a verified=()
+  local identity
+  for candidate_pid in "${live_pids[@]}"; do
+    [[ "${candidate_pid}" =~ '^[1-9][0-9]*$' ]] || continue
+    [[ "${candidate_pid}" != "${launched_pid}" ]] || continue
+    if [[ -n "${STARTUP_REAPER_BEFORE_PIDS}" && -f "${STARTUP_REAPER_BEFORE_PIDS}" ]] \
+        && command grep -Fxq -- "${candidate_pid}" "${STARTUP_REAPER_BEFORE_PIDS}"; then
+      continue
+    fi
+    if identity="$(capture_startup_reaper_identity "${candidate_pid}" 1)"; then
+      verified+=("${candidate_pid}")
+    fi
+  done
+  (( ${#verified[@]} > 0 )) || return 1
   select_startup_reaper_successor_pid \
     "${launched_pid}" \
     "${STARTUP_REAPER_BEFORE_PIDS}" \
-    "${live_pids[@]}"
+    "${verified[@]}"
+}
+
+# Switch tracking to a replacement REAPER PID. Identity fingerprint may still
+# be pending (process not fully exec'd); keep the session env and PID file.
+adopt_startup_reaper_successor_pid() {
+  local from_pid="$1"
+  local successor="$2"
+  local identity=""
+  [[ "${successor}" =~ '^[1-9][0-9]*$' ]] || return 1
+  [[ "${successor}" != "0" ]] || return 1
+  if identity="$(capture_startup_reaper_identity "${successor}" 8)"; then
+    STARTUP_LAUNCHED_REAPER_IDENTITY="${identity}"
+  else
+    echo "[OpenReaper] startup-reaper-pid=successor_identity_pending from=${from_pid} to=${successor}" >&2
+  fi
+  STARTUP_LAUNCHED_REAPER_PID="${successor}"
+  echo "${successor}" > "${PID_FILE}"
+  echo "[OpenReaper] startup-reaper-pid=adopted_after_launchservices_restore from=${from_pid} to=${successor}" >&2
+  print -r -- "${successor}"
 }
 
 # NSWorkspace's handoff PID can exit while macOS restores a replacement REAPER.
@@ -1313,14 +1359,39 @@ adopt_startup_reaper_pid_after_launchservices_restore() {
     print -r -- "${current_pid}"
     return 0
   fi
-  local successor identity
+  local successor
   successor="$(discover_startup_reaper_successor "${current_pid}")" || return 1
-  identity="$(capture_startup_reaper_identity "${successor}" 8)" || return 1
-  STARTUP_LAUNCHED_REAPER_PID="${successor}"
-  STARTUP_LAUNCHED_REAPER_IDENTITY="${identity}"
-  echo "${successor}" > "${PID_FILE}"
-  echo "[OpenReaper] startup-reaper-pid=adopted_after_launchservices_restore from=${current_pid} to=${successor}" >&2
-  print -r -- "${successor}"
+  adopt_startup_reaper_successor_pid "${current_pid}" "${successor}"
+}
+
+# While the handoff PID is still alive, a unique successor may already exist
+# (LaunchServices overlap). Switch tracking so the hook publishes on the live
+# instance before the stub exits.
+startup_adopt_live_launchservices_successor_if_unique() {
+  local current_pid="$1"
+  local successor
+  successor="$(discover_startup_reaper_successor "${current_pid}")" || return 1
+  [[ "${successor}" != "${current_pid}" ]] || return 1
+  adopt_startup_reaper_successor_pid "${current_pid}" "${successor}"
+}
+
+# After GRACE ticks, a PID gap is fatal unless a stable safe dialog result
+# already landed (Project Settings soft-ignore). Then keep adopting until the
+# budget so we do not restore LaunchServices env before the successor publishes.
+startup_hook_pid_gap_keep_adopting() {
+  local last_result="$1"
+  local -i missed="$2"
+  local -i remaining_ms="$3"
+  if (( remaining_ms < STARTUP_CLEANUP_RESERVE_MS )); then
+    return 1
+  fi
+  if (( missed < STARTUP_REAPER_PID_REPLACE_GRACE_TICKS )); then
+    return 0
+  fi
+  if [[ -n "${last_result}" ]] && startup_dialog_result_is_safe "${last_result}"; then
+    return 0
+  fi
+  return 1
 }
 
 wait_for_reaper_process_table_clear() {
@@ -2252,17 +2323,29 @@ wait_for_startup_hook() {
         continue
       fi
       missed_alive_ticks=$(( missed_alive_ticks + 1 ))
-      if (( missed_alive_ticks >= STARTUP_REAPER_PID_REPLACE_GRACE_TICKS )); then
+      if ! startup_hook_pid_gap_keep_adopting "${last_dialog_result}" "${missed_alive_ticks}" "${remaining_ms}"; then
         echo "[OpenReaper] REAPER exited before its startup hook published a stage. pid=${reaper_pid}" >&2
         return 1
       fi
       if (( missed_alive_ticks == 1 )); then
         echo "[OpenReaper] startup-hook-reaper-pid=waiting_for_launchservices_restore pid=${reaper_pid}" >&2
+      elif (( missed_alive_ticks == STARTUP_REAPER_PID_REPLACE_GRACE_TICKS )); then
+        echo "[OpenReaper] startup-hook-reaper-pid=adopt_window_after_soft_safe pid=${reaper_pid} missed=${missed_alive_ticks} remaining_ms=${remaining_ms}" >&2
+        echo "[OpenReaper] launchservices-env=held_for_successor_publish" >&2
       fi
       sleep 0.25
       continue
     fi
     missed_alive_ticks=0
+    # Handoff PID still alive, but LaunchServices may already have a unique
+    # successor. Probe every 4 ticks so pgrep does not starve the startup hook.
+    if [[ -n "${last_dialog_result}" ]] && startup_dialog_result_is_safe "${last_dialog_result}" \
+        && ! startup_status_stage_ready && (( tick % 4 == 0 )); then
+      adopted_pid=""
+      if adopted_pid="$(startup_adopt_live_launchservices_successor_if_unique "${reaper_pid}")"; then
+        reaper_pid="${adopted_pid}"
+      fi
+    fi
     # A project-load dialog can prevent REAPER from reaching the package launcher.
     # Reuse the exact safe classifier while LaunchServices still carries the
     # session environment; unknown and decision-bearing dialogs stay blocked.
@@ -2949,6 +3032,8 @@ startup_fail_or_last_chance_live_bridge() {
 wait_for_startup_readiness() {
   local max_ticks=$(( START_WAIT_SECONDS * 4 ))
   local tick dialog_result pending_dialog_blocker="" last_dialog_result=""
+  local reaper_pid adopted_pid
+  local -i missed_alive_ticks=0
   local -i last_inspect_tick=0
   local -i remaining_ms
   local -i logged_inspect_skip=0
@@ -2965,7 +3050,31 @@ wait_for_startup_readiness() {
       startup_fail_or_last_chance_live_bridge "bridge_readiness" "${pending_dialog_blocker}" || return $?
       return 0
     fi
-    assert_reaper_process_alive || return 1
+    reaper_pid="$(cat "${PID_FILE}" 2>/dev/null || true)"
+    if [[ "${reaper_pid}" != <-> || "${reaper_pid}" == "0" ]] || ! kill -0 "${reaper_pid}" 2>/dev/null; then
+      adopted_pid=""
+      if adopted_pid="$(adopt_startup_reaper_pid_after_launchservices_restore "${reaper_pid}")"; then
+        missed_alive_ticks=0
+      else
+        missed_alive_ticks=$(( missed_alive_ticks + 1 ))
+        if ! startup_hook_pid_gap_keep_adopting "${last_dialog_result}" "${missed_alive_ticks}" "${remaining_ms}"; then
+          echo "[OpenReaper] REAPER exited before Bridge readiness. pid=${reaper_pid}" >&2
+          echo "[OpenReaper] REAPER log: ${START_LOG}" >&2
+          tail -80 "${START_LOG}" >&2 || true
+          return 1
+        fi
+        if (( missed_alive_ticks == 1 )); then
+          echo "[OpenReaper] bridge-readiness-reaper-pid=waiting_for_launchservices_restore pid=${reaper_pid}" >&2
+        elif (( missed_alive_ticks == STARTUP_REAPER_PID_REPLACE_GRACE_TICKS )); then
+          echo "[OpenReaper] bridge-readiness-reaper-pid=adopt_window_after_soft_safe pid=${reaper_pid}" >&2
+          echo "[OpenReaper] launchservices-env=held_for_successor_publish" >&2
+        fi
+        sleep 0.25
+        continue
+      fi
+    else
+      missed_alive_ticks=0
+    fi
     if startup_dialog_inspect_due "${tick}" "${last_inspect_tick}" "${pending_dialog_blocker}" "${last_dialog_result}"; then
       if (( remaining_ms >= STARTUP_CLEANUP_RESERVE_MS + 1000 )); then
         if [[ -n "${last_dialog_result}" ]]; then

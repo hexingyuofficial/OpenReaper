@@ -34,7 +34,7 @@ import {
   resolvePiExecutable,
 } from "../lib/pi.mjs";
 import * as studioState from "../lib/state.mjs";
-import { parseCli, studioFailureExitCode } from "../studio-orchestrate.mjs";
+import { parseCli, studioFailureExitCode, recordedStudioStartExitCode } from "../studio-orchestrate.mjs";
 import { exitCodeFromChild, runProcess } from "../lib/orchestration/process.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -232,6 +232,10 @@ describe("face.prepare", () => {
       expect(synced).toContain("startup-dialog-soft-ignore=");
       expect(synced).toContain("held_until_helper_exit");
       expect(synced).toContain("adopted_after_launchservices_restore");
+      expect(synced).toContain("adopt_window_after_soft_safe");
+      expect(synced).toContain("held_for_successor_publish");
+      expect(synced).toContain("successor_identity_pending");
+      expect(synced).toContain("startup_hook_pid_gap_keep_adopting");
       expect(synced).toContain("startup_wait_accept_published_stage");
       expect(synced).toContain("STARTUP_DIALOG_INSPECT_EVERY_TICKS");
       expect(synced).toContain('if windowTitle is "OpenReaper Studio" then');
@@ -263,6 +267,9 @@ describe("start helper sync + studio env", () => {
       const copied = await readFile(result.dest, "utf8");
       expect(copied).toContain("inspection_unavailable");
       expect(copied).toContain("held_until_helper_exit");
+      expect(copied).toContain("adopt_window_after_soft_safe");
+      expect(copied).toContain("held_for_successor_publish");
+      expect(copied).toContain("successor_identity_pending");
       expect(copied).toContain("startup_wait_accept_published_stage");
       expect(copied).toContain('if windowTitle is "OpenReaper Studio" then');
       expect(copied).toContain("startup-last-chance=bridge_liveness");
@@ -412,6 +419,15 @@ describe("openreaper-start exit propagation", () => {
     expect(exitCodeFromChild(undefined, undefined)).toBe(1);
     expect(studioFailureExitCode({ exitCode: 124 })).toBe(124);
     expect(studioFailureExitCode(new Error("no code"))).toBe(1);
+    expect(recordedStudioStartExitCode({ openreaperStartExitCode: 124, engineDegraded: false })).toBe(
+      124,
+    );
+    expect(recordedStudioStartExitCode({ openreaperStartExitCode: 124, engineDegraded: true })).toBe(
+      124,
+    );
+    expect(recordedStudioStartExitCode({ openreaperStartExitCode: 1, engineDegraded: true })).toBe(1);
+    expect(recordedStudioStartExitCode({ openreaperStartExitCode: 1, engineDegraded: false })).toBe(0);
+    expect(recordedStudioStartExitCode({ openreaperStartExitCode: 0, engineDegraded: false })).toBe(0);
     expect(parseCli(["start"]).command).toBe("start");
   });
 

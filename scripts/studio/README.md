@@ -32,8 +32,13 @@ not exit 75. Running out of attach/startup budget during dialog inspection is
 also treated as `inspection_unavailable` under soft policy. After a stable
 Project Settings soft-ignore, AX inspection is throttled so REAPER can publish
 the startup hook and Bridge heartbeat inside the 60s budget (a published stage
-is accepted even when leftover time is below `cleanup_reserve+250ms`). If Bridge
-heartbeat or `bridge_dofile_succeeded` is already live, the helper last-chance
+is accepted even when leftover time is below `cleanup_reserve+250ms`). After a
+soft-safe classification, a LaunchServices PID gap is an **adopt-window**
+(`adopt_window_after_soft_safe`) until the successor publishes — helper must
+not hard-fail at ~3s with `REAPER exited before its startup hook published a
+stage`. Session env stays set (`held_until_helper_exit` /
+`held_for_successor_publish`) so the restored PID still sees OpenReaper keys.
+If Bridge heartbeat or `bridge_dofile_succeeded` is already live, the helper last-chance
 accepts that instead of failing `STARTUP_BUDGET_EXHAUSTED`. Soft policy **does
 not kill REAPER** on helper failure (`startup-reaper-preserve=soft_policy`), so
 a budget miss cannot wipe the session before Pi RPC is published. A lone
@@ -43,8 +48,8 @@ allowlisted. Real decision windows (missing media, license, etc.) still fail
 closed. After LaunchServices launch, session env stays set until helper exit so
 a restored/replaced REAPER PID can still publish the startup hook.
 If `openreaper-start` exits **124** / `STARTUP_BUDGET_EXHAUSTED`, Studio still
-finishes the Pi RPC + face-config gate (`engineDegraded=true`) and may record
-the helper exit code after that wire is live.
+finishes the Pi RPC + face-config gate (`engineDegraded=true`) and records
+the helper **124** after that wire is live (never mask 124 as success).
 
 Studio **does not** use the user's personal Pi (`~/.pi`, global `pi` login in Terminal). All agent
 state is under OpenReaper Studio roots.
@@ -70,6 +75,17 @@ rm -rf ~/.openreaper/current/session/.openreaper-launchservices-env.lock
 
 Fresh installs normally reclaim dead-owner locks automatically; use the one-liner only when recovery
 logs say the lock was retained.
+
+### How to re-trial (macOS cold Start)
+
+After `face.prepare` syncs the helper, grep `INSTALL_ROOT/bin/openreaper-start` for
+`adopt_window_after_soft_safe`, `held_for_successor_publish`,
+`successor_identity_pending`, `held_until_helper_exit`, and
+`startup-dialog-soft-ignore=`. Cold Start with a lone Project Settings window
+must soft-ignore (no exit 75), adopt the LaunchServices successor, publish a
+startup stage, and leave `openreaper-start` at **exit 0** with Bridge usable.
+Helper **124** must still appear as Start exit 124 (not masked as 0). Never
+click/close REAPER windows.
 
 ## Private Pi (isolated from ~/.pi)
 

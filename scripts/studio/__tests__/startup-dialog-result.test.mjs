@@ -412,8 +412,15 @@ describe("packaged openreaper-start dialog observer", () => {
     expect(hookWait).toMatch(/adopt_startup_reaper_pid_after_launchservices_restore/);
     expect(hookWait).toMatch(/waiting_for_launchservices_restore/);
     expect(hookWait).toMatch(/STARTUP_REAPER_PID_REPLACE_GRACE_TICKS/);
+    expect(hookWait).toMatch(/startup_hook_pid_gap_keep_adopting/);
+    expect(hookWait).toMatch(/adopt_window_after_soft_safe/);
+    expect(hookWait).toMatch(/held_for_successor_publish/);
+    expect(hookWait).toMatch(/startup_adopt_live_launchservices_successor_if_unique/);
     expect(source).toMatch(/startup-reaper-pid=adopted_after_launchservices_restore/);
     expect(source).toMatch(/select_startup_reaper_successor_pid\(\)/);
+    expect(source).toMatch(/adopt_startup_reaper_successor_pid\(\)/);
+    expect(source).toMatch(/successor_identity_pending/);
+    expect(source).toMatch(/STARTUP_REAPER_PID_REPLACE_GRACE_TICKS=32/);
     expect(hookWait).toMatch(/startup_wait_accept_published_stage/);
     expect(hookWait).toMatch(/startup_dialog_inspect_due/);
     expect(hookWait).toMatch(/startup_last_chance_accept_live_bridge/);
@@ -439,6 +446,8 @@ describe("packaged openreaper-start dialog observer", () => {
     const readiness = extractShellFunction(source, "wait_for_startup_readiness");
     expect(readiness).toMatch(/startup_dialog_inspect_due/);
     expect(readiness).toMatch(/startup_wait_accept_ready_bridge/);
+    expect(readiness).toMatch(/startup_hook_pid_gap_keep_adopting/);
+    expect(readiness).toMatch(/adopt_window_after_soft_safe/);
     expect(readiness).not.toMatch(
       /startup_budget_require_window "bridge_readiness" \$\(\( STARTUP_CLEANUP_RESERVE_MS \+ 250 \)\)/,
     );
@@ -657,5 +666,101 @@ describe("packaged openreaper-start LaunchServices successor PID picker", () => 
     const emptyBefore = runPicker("100", [], ["300"]);
     expect(emptyBefore.status).toBe(0);
     expect(emptyBefore.stdout.trim()).toBe("300");
+  });
+});
+
+describe("packaged openreaper-start LaunchServices adopt-window", () => {
+  const source = readFileSync(START_HELPER, "utf8");
+
+  function runKeepAdopting(lastResult, missed, remainingMs) {
+    const keep = extractShellFunction(source, "startup_hook_pid_gap_keep_adopting");
+    return spawnSync(
+      "zsh",
+      [
+        "-c",
+        [
+          "STARTUP_REAPER_PID_REPLACE_GRACE_TICKS=32",
+          "STARTUP_CLEANUP_RESERVE_MS=6000",
+          'startup_dialog_result_is_safe() {',
+          '  [[ "$1" == *Project\\ Settings* ]] && return 0',
+          "  return 1",
+          "}",
+          keep,
+          'startup_hook_pid_gap_keep_adopting "$1" "$2" "$3"',
+        ].join("\n"),
+        "pid-gap",
+        lastResult,
+        String(missed),
+        String(remainingMs),
+      ],
+      { encoding: "utf8" },
+    );
+  }
+
+  it("keeps adopting after soft-safe PID gap instead of hard-failing at grace ticks", () => {
+    if (!zshAvailable()) {
+      return;
+    }
+    const withinGrace = runKeepAdopting("", 12, 20_000);
+    expect(withinGrace.status, withinGrace.stderr).toBe(0);
+
+    const graceWithoutSafe = runKeepAdopting("", 32, 20_000);
+    expect(graceWithoutSafe.status).toBe(1);
+
+    const afterSoftIgnore = runKeepAdopting(
+      "blocked_manual_dialog:title=Project Settings",
+      40,
+      20_000,
+    );
+    expect(afterSoftIgnore.status, afterSoftIgnore.stderr).toBe(0);
+
+    const budgetGone = runKeepAdopting(
+      "blocked_manual_dialog:title=Project Settings",
+      40,
+      100,
+    );
+    expect(budgetGone.status).toBe(1);
+
+    const unsafeDialog = runKeepAdopting(
+      "blocked_unknown_dialog:title=License",
+      40,
+      20_000,
+    );
+    expect(unsafeDialog.status).toBe(1);
+  });
+
+  it("adopts a unique successor even when identity fingerprint is still pending", () => {
+    if (!zshAvailable()) {
+      return;
+    }
+    const adopt = extractShellFunction(source, "adopt_startup_reaper_successor_pid");
+    const tmp = mkdtempSync(path.join(os.tmpdir(), "or-ls-adopt-"));
+    const pidFile = path.join(tmp, "reaper.pid");
+    writeFileSync(pidFile, "100\n", "utf8");
+    const spawned = spawnSync(
+      "zsh",
+      [
+        "-c",
+        [
+          `PID_FILE=${JSON.stringify(pidFile)}`,
+          "STARTUP_LAUNCHED_REAPER_PID=100",
+          "STARTUP_LAUNCHED_REAPER_IDENTITY=",
+          "capture_startup_reaper_identity() { return 1; }",
+          adopt,
+          'adopt_startup_reaper_successor_pid "$1" "$2"',
+        ].join("\n"),
+        "adopt-pending",
+        "100",
+        "200",
+      ],
+      { encoding: "utf8" },
+    );
+    const pidWritten = readFileSync(pidFile, "utf8").trim();
+    rmSync(tmp, { recursive: true, force: true });
+    expect(spawned.status, spawned.stderr).toBe(0);
+    expect(spawned.stdout.trim()).toBe("200");
+    expect(pidWritten).toBe("200");
+    expect(spawned.stderr).toMatch(/successor_identity_pending/);
+    expect(spawned.stderr).toMatch(/adopted_after_launchservices_restore from=100 to=200/);
   });
 });

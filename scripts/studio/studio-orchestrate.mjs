@@ -62,14 +62,17 @@ async function startStudio(options, env = process.env) {
 
   await runPipeline({ steps: START_STEPS, ctx });
   await finishStudioStartGate(ctx);
-  if (ctx.state?.engineDegraded) {
-    const helperCode = Number(ctx.state.openreaperStartExitCode);
-    if (Number.isInteger(helperCode) && helperCode > 0) {
-      process.exitCode = helperCode;
-      ctx.log(
-        `WARN engineDegraded: helper exit ${helperCode} recorded after Pi wire completed.`,
-      );
-    }
+  const recorded = recordedStudioStartExitCode({
+    openreaperStartExitCode: ctx.state?.openreaperStartExitCode,
+    engineDegraded: ctx.state?.engineDegraded,
+  });
+  if (recorded > 0) {
+    process.exitCode = recorded;
+    ctx.log(
+      recorded === 124
+        ? `WARN helper STARTUP_BUDGET_EXHAUSTED (124) recorded after Pi wire completed.`
+        : `WARN engineDegraded: helper exit ${recorded} recorded after Pi wire completed.`,
+    );
   }
   process.stdout.write("[OpenReaper Studio] Start chain complete.\n");
 }
@@ -121,6 +124,25 @@ export function studioFailureExitCode(error) {
     return code;
   }
   return 1;
+}
+
+/**
+ * Helper 124 / STARTUP_BUDGET_EXHAUSTED must remain 124 after Pi wire.
+ * Soft-continue must not mask it as Studio success (exit 0). Other helper
+ * failures only surface when the engine is degraded.
+ */
+export function recordedStudioStartExitCode({
+  openreaperStartExitCode,
+  engineDegraded,
+} = {}) {
+  const code = Number(openreaperStartExitCode);
+  if (code === 124) {
+    return 124;
+  }
+  if (engineDegraded && Number.isInteger(code) && code > 0) {
+    return code;
+  }
+  return 0;
 }
 
 async function main() {
