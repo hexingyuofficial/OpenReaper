@@ -65,6 +65,37 @@ export function nextRpcRequestId(prefix = "or-studio") {
   return `${prefix}-${Date.now()}-${requestCounter}`;
 }
 
+/** Dialog methods that block Pi until the RPC client replies. */
+export const EXTENSION_UI_DIALOG_METHODS = Object.freeze([
+  "select",
+  "confirm",
+  "input",
+  "editor",
+]);
+
+/**
+ * Pi 0.79.x emits `agent_end` (willRetry=false) and never `agent_settled`.
+ * Newer Pi emits `agent_settled` after the full run. Both mean Send can return.
+ */
+export function isAgentSettledEvent(parsed) {
+  if (!parsed || typeof parsed !== "object") {
+    return false;
+  }
+  if (parsed.type === "agent_settled") {
+    return true;
+  }
+  return parsed.type === "agent_end" && parsed.willRetry !== true;
+}
+
+export function isExtensionUiDialogRequest(parsed) {
+  return (
+    parsed?.type === "extension_ui_request" &&
+    typeof parsed.id === "string" &&
+    parsed.id.length > 0 &&
+    EXTENSION_UI_DIALOG_METHODS.includes(parsed.method)
+  );
+}
+
 /**
  * Minimal Pi RPC client over piped stdin/stdout (one in-flight command).
  */
@@ -76,11 +107,36 @@ export class PiJsonlRpcClient {
     this.settledResolvers = [];
   }
 
+  flushSettled() {
+    for (const entry of this.settledResolvers.splice(0)) {
+      entry.resolve();
+    }
+    this.pendingSettled();
+  }
+
+  cancelSettledWaiters() {
+    for (const entry of this.settledResolvers.splice(0)) {
+      entry.resolve();
+    }
+  }
+
   handleLine(line) {
     let parsed;
     try {
       parsed = JSON.parse(line);
     } catch {
+      return;
+    }
+    if (isExtensionUiDialogRequest(parsed)) {
+      try {
+        this.writeCommand({
+          type: "extension_ui_response",
+          id: parsed.id,
+          cancelled: true,
+        });
+      } catch {
+        /* stdin closed */
+      }
       return;
     }
     if (parsed?.type === "response" && parsed.id && this.waiters.has(parsed.id)) {
@@ -89,11 +145,8 @@ export class PiJsonlRpcClient {
       resolve(parsed);
       return;
     }
-    if (parsed?.type === "agent_settled") {
-      for (const resolve of this.settledResolvers.splice(0)) {
-        resolve();
-      }
-      this.pendingSettled();
+    if (isAgentSettledEvent(parsed)) {
+      this.flushSettled();
     }
   }
 
@@ -126,18 +179,56 @@ export class PiJsonlRpcClient {
 
   waitForAgentSettled(timeoutMs = 300_000) {
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        const index = this.settledResolvers.indexOf(resolve);
+      const entry = {
+        resolve() {
+          if (entry.done) {
+            return;
+          }
+          entry.done = true;
+          clearTimeout(entry.timer);
+          resolve();
+        },
+        reject(error) {
+          if (entry.done) {
+            return;
+          }
+          entry.done = true;
+          clearTimeout(entry.timer);
+          reject(error);
+        },
+      };
+      entry.timer = setTimeout(() => {
+        const index = this.settledResolvers.indexOf(entry);
         if (index >= 0) {
           this.settledResolvers.splice(index, 1);
         }
-        reject(new Error("Timed out waiting for Pi agent_settled"));
+        entry.reject(new Error("Timed out waiting for Pi agent_settled/agent_end"));
       }, timeoutMs);
-      this.settledResolvers.push(() => {
-        clearTimeout(timer);
-        resolve();
-      });
+      this.settledResolvers.push(entry);
     });
+  }
+
+  /**
+   * Arm the settle waiter before sending `prompt` so a fast `agent_end`
+   * (Pi 0.79) cannot arrive between the prompt response and waitForAgentSettled.
+   */
+  async promptAndWait(message, { timeoutMs = 120_000, settleTimeoutMs = 300_000 } = {}) {
+    const settled = this.waitForAgentSettled(settleTimeoutMs);
+    try {
+      const promptResponse = await this.sendCommand(
+        { type: "prompt", message },
+        { timeoutMs },
+      );
+      if (!promptResponse?.success) {
+        this.cancelSettledWaiters();
+        return { promptResponse };
+      }
+      await settled;
+      return { promptResponse };
+    } catch (error) {
+      this.cancelSettledWaiters();
+      throw error;
+    }
   }
 }
 

@@ -132,11 +132,8 @@ export async function startPiRpcHost({
           const chips = Array.isArray(body?.chips) ? body.chips : [];
           const promptText = formatStudioPromptMessage(message, chips);
           try {
-            const promptResponse = await client.sendCommand({
-              type: "prompt",
-              message: promptText,
-            });
-            if (!promptResponse.success) {
+            const { promptResponse } = await client.promptAndWait(promptText);
+            if (!promptResponse?.success) {
               res.writeHead(502, { "content-type": "application/json" });
               res.end(
                 JSON.stringify({
@@ -146,7 +143,6 @@ export async function startPiRpcHost({
               );
               return;
             }
-            await client.waitForAgentSettled();
             const lastText = await client.sendCommand({ type: "get_last_assistant_text" });
             const text =
               lastText?.success && lastText?.data?.text != null
