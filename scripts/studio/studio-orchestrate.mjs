@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { runPipeline, createStudioLog } from "./lib/orchestration/run-pipeline.mjs";
 import { START_STEPS } from "./lib/orchestration/start-steps.mjs";
+import { finishStudioStartGate } from "./lib/orchestration/start-gate.mjs";
 import { STOP_STEPS, loadStopContext } from "./lib/orchestration/stop-steps.mjs";
 import { studioStatePath } from "./lib/paths.mjs";
 import { probePiRpcHealth } from "./lib/orchestration/pi-rpc-lifecycle.mjs";
@@ -60,6 +61,16 @@ async function startStudio(options, env = process.env) {
   };
 
   await runPipeline({ steps: START_STEPS, ctx });
+  await finishStudioStartGate(ctx);
+  if (ctx.state?.engineDegraded) {
+    const helperCode = Number(ctx.state.openreaperStartExitCode);
+    if (Number.isInteger(helperCode) && helperCode > 0) {
+      process.exitCode = helperCode;
+      ctx.log(
+        `WARN engineDegraded: helper exit ${helperCode} recorded after Pi wire completed.`,
+      );
+    }
+  }
   process.stdout.write("[OpenReaper Studio] Start chain complete.\n");
 }
 
@@ -91,6 +102,14 @@ async function statusStudio() {
     const healthy = await probePiRpcHealth(state.pi.rpcHealthUrl);
     process.stdout.write(
       `[OpenReaper Studio] private_pi_rpc_health=${healthy ? "ok" : "down"}\n`,
+    );
+  }
+  if (state.engineDegraded) {
+    process.stdout.write("[OpenReaper Studio] engineDegraded=true\n");
+  }
+  if (state.startGate) {
+    process.stdout.write(
+      `[OpenReaper Studio] startGate=${state.startGate.ok ? "ok" : "failed"} reason=${state.startGate.reason}\n`,
     );
   }
   process.stdout.write(`${JSON.stringify(state, null, 2)}\n`);

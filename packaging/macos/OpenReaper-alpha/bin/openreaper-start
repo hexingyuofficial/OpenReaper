@@ -432,6 +432,12 @@ if [[ "${STARTUP_DIALOG_POLICY}" != "soft" && "${STARTUP_DIALOG_POLICY}" != "str
   echo "[OpenReaper] OPENREAPER_STARTUP_DIALOG_POLICY must be soft or strict" >&2
   exit 2
 fi
+if [[ "${STARTUP_DIALOG_POLICY}" == "soft" ]]; then
+  # Studio Start must not kill REAPER on attach/budget races. The dialog↔Pi
+  # wire still has to come up; a terminated REAPER leaves the face stranded.
+  STARTUP_PRESERVE_REAPER=true
+  echo "[OpenReaper] startup-reaper-preserve=soft_policy"
+fi
 if [[ ! "${START_WAIT_SECONDS}" =~ '^[1-9][0-9]*$' ]] || (( START_WAIT_SECONDS > 120 )); then
   echo "[OpenReaper] OPENREAPER_START_WAIT_SECONDS must be an integer from 1 to 120" >&2
   exit 2

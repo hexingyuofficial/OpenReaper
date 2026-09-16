@@ -10,6 +10,7 @@ export function emptyStudioState() {
     installRoot: null,
     openreaperStartExitCode: null,
     openreaperStartSoftContinued: false,
+    engineDegraded: false,
     pi: { mode: "unknown" },
     face: { installed: false, hookInstalled: false, scriptPath: null },
     reaper: { stopPolicy: "preserve" },

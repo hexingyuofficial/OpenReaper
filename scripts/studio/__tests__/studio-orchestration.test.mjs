@@ -12,6 +12,7 @@ import { existsSync } from "node:fs";
 import { installFaceBundle } from "../lib/face/install.mjs";
 import { syncPackagedStartHelper } from "../lib/face/start-helper.mjs";
 import { START_STEPS } from "../lib/orchestration/start-steps.mjs";
+import { runPipeline } from "../lib/orchestration/run-pipeline.mjs";
 import {
   defaultInstallRoot,
   repoRootFromStudio,
@@ -236,6 +237,7 @@ describe("face.prepare", () => {
       expect(synced).toContain('if windowTitle is "OpenReaper Studio" then');
       expect(synced).toContain("startup-last-chance=bridge_liveness");
       expect(synced).toContain("budget_remaining_ms=");
+      expect(synced).toContain("startup-reaper-preserve=soft_policy");
       expect(synced).not.toContain("next repeat");
       expect(synced).not.toContain("studioFaceSafeTitles");
     } finally {
@@ -264,6 +266,7 @@ describe("start helper sync + studio env", () => {
       expect(copied).toContain("startup_wait_accept_published_stage");
       expect(copied).toContain('if windowTitle is "OpenReaper Studio" then');
       expect(copied).toContain("startup-last-chance=bridge_liveness");
+      expect(copied).toContain("startup-reaper-preserve=soft_policy");
       expect(copied).not.toContain("next repeat");
       expect(copied).not.toContain("studioFaceSafeTitles");
       expect(copied).not.toContain("old\n");
@@ -281,10 +284,12 @@ describe("start helper sync + studio env", () => {
     expect(source).toMatch(/OPENREAPER_STUDIO_FACE_HOOK_INSTALLED/);
     expect(source).toMatch(/probeOpenReaperEngine/);
     expect(source).toMatch(/openreaperStartSoftContinued/);
-    expect(source).toMatch(/error\.exitCode = 124/);
-    expect(source).toMatch(/process\.exitCode = 124/);
+    expect(source).toMatch(/engineDegraded/);
+    expect(source).toMatch(/exitCodeFromChild/);
     const engine = START_STEPS.find((step) => step.id === "engine.openreaper_start");
     expect(engine?.label).toMatch(/openreaper-start/);
+    const finalize = START_STEPS.find((step) => step.id === "face.finalize");
+    expect(finalize?.alwaysRun).toBe(true);
   });
 
   it("soft-continues when openreaper-start is non-zero but Bridge is live", async () => {
@@ -314,15 +319,17 @@ describe("start helper sync + studio env", () => {
       await expect(engine.run(ctx)).resolves.toBeUndefined();
       expect(ctx.state.openreaperStartExitCode).toBe(1);
       expect(ctx.state.openreaperStartSoftContinued).toBe(true);
-      expect(ctx.state.engineProbe.stage).toBe("bridge_dofile_succeeded");
+      expect(ctx.state.engineDegraded).toBe(false);
+      expect(ctx.state.engineProbe.heartbeatReady).toBe(true);
     } finally {
       await rm(tmp, { recursive: true, force: true });
     }
   });
 
-  it("hard-fails engine.openreaper_start when Bridge is not usable", async () => {
-    const tmp = await mkdtemp(path.join(os.tmpdir(), "or-engine-hard-"));
+  it("still continues to Pi when Bridge is not live, with engineDegraded", async () => {
+    const tmp = await mkdtemp(path.join(os.tmpdir(), "or-engine-degraded-"));
     const homeDir = path.join(tmp, "home");
+    const logs = [];
     try {
       const ctx = {
         homeDir,
@@ -332,8 +339,10 @@ describe("start helper sync + studio env", () => {
         startCmd: { command: "false", args: [], cwd: tmp },
         state: { openreaperStartExitCode: null },
         engineProbeGraceMs: 0,
-        log() {},
-        runProcess: async () => ({ code: 1 }),
+        log(message) {
+          logs.push(message);
+        },
+        runProcess: async () => ({ code: 124 }),
         probeOpenReaperEngine: async () => ({
           usable: false,
           stage: null,
@@ -342,9 +351,52 @@ describe("start helper sync + studio env", () => {
         }),
       };
       const engine = START_STEPS.find((step) => step.id === "engine.openreaper_start");
-      await expect(engine.run(ctx)).rejects.toThrow(/openreaper-start exited with code 1/);
-      expect(ctx.state.openreaperStartExitCode).toBe(1);
-      expect(ctx.state.openreaperStartSoftContinued).toBe(false);
+      await expect(engine.run(ctx)).resolves.toBeUndefined();
+      expect(ctx.state.openreaperStartExitCode).toBe(124);
+      expect(ctx.state.openreaperStartSoftContinued).toBe(true);
+      expect(ctx.state.engineDegraded).toBe(true);
+      expect(logs.join("\n")).toMatch(/engineDegraded=true/);
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("face.finalize publishes rpc_background URLs even when engineDegraded", async () => {
+    const tmp = await mkdtemp(path.join(os.tmpdir(), "or-face-finalize-"));
+    const homeDir = path.join(tmp, "home");
+    try {
+      const ctx = {
+        homeDir,
+        env: {},
+        piBridgeScript: "/tmp/studio-pi-send.mjs",
+        piCommandsScript: "/tmp/studio-pi-commands.mjs",
+        repoRoot: "/tmp/repo",
+        piLayout: { agentDir: path.join(homeDir, ".openreaper", "studio", "pi", "agent") },
+        state: {
+          engineDegraded: true,
+          openreaperStartExitCode: 124,
+          pi: {
+            mode: "started",
+            rpcPromptUrl: "http://127.0.0.1:9/prompt",
+            rpcCommandsUrl: "http://127.0.0.1:9/commands",
+            pid: 42,
+          },
+          piPrivate: { agentDir: path.join(homeDir, ".openreaper", "studio", "pi", "agent") },
+        },
+        log() {},
+      };
+      const finalize = START_STEPS.find((step) => step.id === "face.finalize");
+      await finalize.run(ctx);
+      const raw = await readFile(
+        path.join(homeDir, ".openreaper", "studio", "face-config-v1.json"),
+        "utf8",
+      );
+      const parsed = JSON.parse(raw);
+      expect(parsed.piMode).toBe("rpc_background");
+      expect(parsed.piRpcUrl).toBe("http://127.0.0.1:9/prompt");
+      expect(parsed.piCommandsUrl).toBe("http://127.0.0.1:9/commands");
+      expect(parsed.engineDegraded).toBe(true);
+      expect(parsed.piPrivateAgentDir).toContain(path.join(".openreaper", "studio", "pi"));
     } finally {
       await rm(tmp, { recursive: true, force: true });
     }
@@ -391,16 +443,10 @@ describe("openreaper-start exit propagation", () => {
           reason: "heartbeat_live",
         }),
       };
-      let thrown;
-      try {
-        await engine.run(ctx);
-      } catch (error) {
-        thrown = error;
-      }
-      expect(thrown?.exitCode).toBe(124);
-      expect(String(thrown?.message)).toMatch(/exited with code 124/);
+      await expect(engine.run(ctx)).resolves.toBeUndefined();
       expect(ctx.state.openreaperStartExitCode).toBe(124);
-      expect(process.exitCode).toBe(124);
+      expect(ctx.state.openreaperStartSoftContinued).toBe(true);
+      expect(ctx.state.engineDegraded).toBe(false);
       const saved = await studioState.readStudioState(studioStatePath(tmp));
       expect(saved?.openreaperStartExitCode).toBe(124);
     } finally {
@@ -448,6 +494,32 @@ describe("pi", () => {
 
   it("resolvePiExecutable returns null in empty PATH", () => {
     expect(resolvePiExecutable({ PATH: "/nonexistent" })).toBeNull();
+  });
+});
+
+describe("runPipeline alwaysRun", () => {
+  it("still runs face.finalize after an earlier step fails", async () => {
+    const ran = [];
+    const steps = [
+      {
+        id: "agent.pi_rpc",
+        label: "fail",
+        async run() {
+          ran.push("pi");
+          throw new Error("pi down");
+        },
+      },
+      {
+        id: "face.finalize",
+        label: "finalize",
+        alwaysRun: true,
+        async run() {
+          ran.push("finalize");
+        },
+      },
+    ];
+    await expect(runPipeline({ steps, ctx: { log() {} } })).rejects.toThrow(/pi down/);
+    expect(ran).toEqual(["pi", "finalize"]);
   });
 });
 

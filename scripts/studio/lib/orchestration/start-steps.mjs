@@ -20,9 +20,10 @@ import {
 } from "../paths.mjs";
 import { readPiMcpConfig, resolveStudioPiForStart } from "../pi.mjs";
 import { emptyStudioState, writeStudioState } from "../state.mjs";
+import { fetchPiCommands } from "../agent-seam/fetch-pi-commands.mjs";
 import { probeOpenReaperEngine } from "../engine/bridge-liveness.mjs";
 import { coupledRollbackOnPiFailure } from "./coupled-rollback.mjs";
-import { launchPrivatePiRpcHost } from "./pi-rpc-lifecycle.mjs";
+import { launchPrivatePiRpcHost, probePiRpcHealth } from "./pi-rpc-lifecycle.mjs";
 import { runProcess, exitCodeFromChild } from "./process.mjs";
 
 /**
@@ -145,6 +146,7 @@ export const START_STEPS = [
       ctx.state.openreaperStartExitCode = exitCode;
       if (exitCode === 0) {
         ctx.state.openreaperStartSoftContinued = false;
+        ctx.state.engineDegraded = false;
         return;
       }
 
@@ -154,41 +156,28 @@ export const START_STEPS = [
         log: ctx.log,
         graceMs: ctx.engineProbeGraceMs,
       });
+      const bridgeLive = Boolean(probe?.heartbeatReady);
       ctx.state.engineProbe = {
         usable: Boolean(probe?.usable),
         stage: probe?.stage ?? null,
-        heartbeatReady: Boolean(probe?.heartbeatReady),
+        heartbeatReady: bridgeLive,
         reason: probe?.reason ?? null,
       };
-      ctx.state.openreaperStartSoftContinued = false;
+      ctx.state.openreaperStartSoftContinued = true;
+      ctx.state.engineDegraded = !bridgeLive;
       await writeStudioState(studioStatePath(ctx.homeDir), ctx.state);
-      // Supervisor 124 / STARTUP_BUDGET_EXHAUSTED must not be masked as Studio success.
-      if (exitCode === 124) {
-        process.exitCode = 124;
-        const error = new Error(
-          `openreaper-start exited with code ${exitCode}` +
-            (probe?.reason ? ` (${probe.reason})` : ""),
-        );
-        error.exitCode = 124;
-        throw error;
-      }
-      if (probe?.usable) {
-        ctx.state.openreaperStartSoftContinued = true;
-        await writeStudioState(studioStatePath(ctx.homeDir), ctx.state);
+      if (bridgeLive) {
         ctx.log(
-          `openreaper-start exited ${exitCode} but REAPER+Bridge are usable ` +
-            `(stage=${probe.stage ?? "unknown"} heartbeat=${probe.heartbeatReady ? "live" : "no"}). ` +
-            "Soft-continuing to private Pi RPC so face-config is not left pending.",
+          `openreaper-start exited ${exitCode} but Bridge heartbeat is live ` +
+            `(stage=${probe.stage ?? "unknown"}). Soft-continuing to private Pi RPC + face.finalize.`,
         );
         return;
       }
-      process.exitCode = exitCode;
-      const error = new Error(
-        `openreaper-start exited with code ${exitCode}` +
-          (probe?.reason ? ` (${probe.reason})` : ""),
+      ctx.log(
+        `WARN engineDegraded=true: openreaper-start exited ${exitCode} ` +
+          `(${probe?.reason ?? "bridge_not_live"}). Not treating REAPER/Bridge as ready, ` +
+          "but still continuing to private Pi RPC + face.finalize so face-config is not left pending.",
       );
-      error.exitCode = exitCode;
-      throw error;
     },
   },
   {
@@ -239,10 +228,28 @@ export const START_STEPS = [
           log: ctx.log,
         });
       } catch (error) {
+        ctx.state.pi = {
+          mode: "error",
+          mcp: piMcp,
+          privateRoot: piLayout.piRoot,
+          agentDir: piLayout.agentDir,
+          message: error?.message ?? String(error),
+        };
         await coupledRollbackOnPiFailure(ctx);
         throw error;
       }
 
+      const healthy = await probePiRpcHealth(rpc.healthUrl);
+      const commands = await fetchPiCommands({
+        env,
+        faceConfig: {
+          piRpcUrl: rpc.promptUrl,
+          piCommandsUrl: rpc.commandsUrl,
+        },
+        studioState: {
+          pi: { rpcPromptUrl: rpc.promptUrl, rpcCommandsUrl: rpc.commandsUrl },
+        },
+      });
       ctx.state.pi = {
         mode: "started",
         mcp: piMcp,
@@ -256,19 +263,32 @@ export const START_STEPS = [
         endpointFile: rpc.endpointFile,
         command: piPlan.command,
         args: piPlan.args,
+        healthy,
+        commandsCount: commands.commands?.length ?? 0,
+        reused: Boolean(rpc.reused),
       };
       ctx.piRpc = rpc;
-      ctx.log(`Private Pi RPC ready promptUrl=${rpc.promptUrl} hostPid=${rpc.hostPid}`);
+      ctx.log(
+        `Private Pi RPC ready promptUrl=${rpc.promptUrl} hostPid=${rpc.hostPid} ` +
+          `health=${healthy ? "ok" : "down"} commands=${ctx.state.pi.commandsCount}` +
+          (rpc.reused ? " reused=1" : ""),
+      );
     },
   },
   {
     id: "face.finalize",
     label: "Finalize face runtime config + session state",
+    alwaysRun: true,
     async run(ctx) {
-      const piMode =
-        ctx.state.pi?.mode === "started"
-          ? "rpc_background"
-          : ctx.state.pi?.mode ?? "absent";
+      if (!ctx.state) {
+        return;
+      }
+      const started = ctx.state.pi?.mode === "started" && Boolean(ctx.state.pi?.rpcPromptUrl);
+      const piMode = started
+        ? "rpc_background"
+        : ctx.state.pi?.mode && ctx.state.pi.mode !== "unknown"
+          ? ctx.state.pi.mode
+          : "absent";
       await writeFaceConfig(ctx.homeDir, {
         nodeCommand: resolveNodeCommand(ctx.env),
         piBridgeScript: ctx.piBridgeScript,
@@ -278,9 +298,17 @@ export const START_STEPS = [
         piRpcUrl: ctx.state.pi?.rpcPromptUrl ?? null,
         piCommandsUrl: ctx.state.pi?.rpcCommandsUrl ?? null,
         piCommandsScript: ctx.piCommandsScript,
-        piPrivateAgentDir: ctx.state.piPrivate?.agentDir ?? null,
+        piPrivateAgentDir: ctx.state.piPrivate?.agentDir ?? ctx.piLayout?.agentDir ?? null,
+        engineDegraded: Boolean(ctx.state.engineDegraded),
+        openreaperStartExitCode: ctx.state.openreaperStartExitCode ?? null,
       });
       await writeStudioState(studioStatePath(ctx.homeDir), ctx.state);
+      ctx.log(
+        started
+          ? `Face config published piMode=${piMode} promptUrl=${ctx.state.pi.rpcPromptUrl}` +
+            (ctx.state.engineDegraded ? " engineDegraded=true" : "")
+          : `Face config published piMode=${piMode} (private Pi did not start).`,
+      );
       ctx.log(
         "If REAPER was already running, restart once so __startup.lua loads the face hook.",
       );

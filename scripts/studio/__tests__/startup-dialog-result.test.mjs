@@ -393,6 +393,7 @@ describe("packaged openreaper-start dialog observer", () => {
     expect(source).toMatch(/startup-dialog-soft-ignore=/);
     expect(source).toMatch(/A lone Project Settings window is a recoverable soft blocker/);
     expect(source).toMatch(/startup-last-chance=bridge_liveness/);
+    expect(source).toMatch(/startup-reaper-preserve=soft_policy/);
     expect(source).toMatch(/budget_remaining_ms=/);
     expect(source).toMatch(/startup_status_bridge_loaded/);
     expect(source).toMatch(/bridge-read-probe=skipped_budget_exhausted_soft_policy/);
