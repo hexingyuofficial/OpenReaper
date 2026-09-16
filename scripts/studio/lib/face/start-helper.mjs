@@ -4,8 +4,8 @@ import { chmod, copyFile, mkdir, readFile, rename, unlink } from "node:fs/promis
 import path from "node:path";
 import { resolvePackagedStartHelper } from "../paths.mjs";
 
-/** Bumped when the wait-loop / AX-throttle / Project Settings dismiss contract changes. Synced dest must match. */
-export const START_HELPER_REV = "studio-hook-budget-v5";
+/** Bumped when the wait-loop / AX-throttle / startup-hook publish contract changes. Synced dest must match. */
+export const START_HELPER_REV = "studio-hook-publish-v5";
 
 export const START_HELPER_REQUIRED_MARKERS = Object.freeze([
   `OPENREAPER_START_HELPER_REV="${START_HELPER_REV}"`,
@@ -13,12 +13,13 @@ export const START_HELPER_REQUIRED_MARKERS = Object.freeze([
   "STARTUP_DIALOG_SOFT_BLOCKER_INSPECT_EVERY_TICKS",
   "STARTUP_DIALOG_FIRST_TIMEOUT_SECONDS",
   "STARTUP_AX_SKIP_REMAINING_MS",
+  "STARTUP_HOOK_QUIET_TICKS",
   "startup_wait_accept_published_stage",
   "startup_wait_poll_ticks",
   "startup-last-chance=published_stage",
   "startup-ax=stopped_after_soft_blocker",
-  "startup-dialog-dismiss=project_settings_cancel",
-  "startup-dialog-project-settings-dismiss=title_only_unique_cancel_soft",
+  "startup-hook-poke=trusted_launcher",
+  "ensure_openreaper_startup_hook",
 ]);
 
 export function startHelperMissingMarkers(sourceText) {
