@@ -8,12 +8,12 @@ export function buildFaceStartupHookBlock(faceScriptPath) {
   const escaped = faceScriptPath.replace(/\\/g, "/");
   return `${FACE_HOOK_BEGIN}
 if reaper and reaper.defer then
-  local stub = [[${escaped}]]
+  local face = [[${escaped}]]
   reaper.defer(function()
-    if reaper.file_exists(stub) then
-      local ok, err = pcall(dofile, stub)
+    if reaper.file_exists(face) then
+      local ok, err = pcall(dofile, face)
       if not ok and reaper.ShowConsoleMsg then
-        reaper.ShowConsoleMsg("[OpenReaper Studio] dialog stub failed: " .. tostring(err) .. "\\n")
+        reaper.ShowConsoleMsg("[OpenReaper Studio] dialog failed: " .. tostring(err) .. "\\n")
       end
     end
   end)

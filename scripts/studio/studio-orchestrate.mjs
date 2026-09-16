@@ -8,12 +8,20 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   defaultReaperResourceRoot,
+  repoRootFromStudio,
   resolveInstallRoot,
   resolveOpenReaperStartCommand,
   studioFaceInstallPath,
   studioFaceSourcePath,
   studioStatePath,
 } from "./lib/paths.mjs";
+import {
+  markOpenFaceOnLoad,
+  clearOpenFaceOnLoad,
+  resolveNodeCommand,
+  resolvePiBridgeScript,
+  writeFaceConfig,
+} from "./lib/face-config.mjs";
 import {
   ensureFaceStartupHook,
   installFaceScript,
@@ -33,7 +41,7 @@ import {
 } from "./lib/state.mjs";
 
 function printHelp() {
-  process.stdout.write(`OpenReaper Studio orchestration (Day 2–3)
+  process.stdout.write(`OpenReaper Studio orchestration
 
 Usage:
   node scripts/studio/studio-orchestrate.mjs start [--project-path /path/to.rpp]
@@ -122,7 +130,7 @@ async function startStudio(options, env = process.env) {
   const faceTarget = studioFaceInstallPath(reaperResourceRoot);
   const faceSource = studioFaceSourcePath();
   if (!existsSync(faceSource)) {
-    throw new Error(`Studio dialog stub source is missing: ${faceSource}`);
+    throw new Error(`Studio dialog source is missing: ${faceSource}`);
   }
   await installFaceScript({ sourcePath: faceSource, targetPath: faceTarget });
   const startupLuaPath = path.join(reaperResourceRoot, "Scripts", "__startup.lua");
@@ -134,6 +142,11 @@ async function startStudio(options, env = process.env) {
   const piExecutable = resolvePiExecutable(env);
   const piMcp = await readPiMcpConfig(defaultPiMcpJsonPath(homeDir));
   const piPlan = buildPiStartPlan({ piExecutable, env });
+  const repoRoot = repoRootFromStudio();
+  const piBridgeScript = resolvePiBridgeScript(repoRoot);
+  if (!existsSync(piBridgeScript)) {
+    throw new Error(`Studio Pi bridge script is missing: ${piBridgeScript}`);
+  }
 
   const state = emptyStudioState();
   state.startedAt = new Date().toISOString();
@@ -143,6 +156,7 @@ async function startStudio(options, env = process.env) {
     hookInstalled: hookResult.hookInstalled,
     scriptPath: faceTarget,
     startupLuaPath,
+    piBridgeScript,
   };
   state.reaper.stopPolicy =
     env.OPENREAPER_STUDIO_STOP_REAPER === "1" ? "stop_on_studio_stop" : "preserve";
@@ -150,7 +164,15 @@ async function startStudio(options, env = process.env) {
   const sessionLogDir = path.join(installRoot, "session", "logs");
   await mkdir(sessionLogDir, { recursive: true });
 
-  process.stdout.write("[OpenReaper Studio] Step 1/3: REAPER + MCP bridge (openreaper-start)…\n");
+  await writeFaceConfig(homeDir, {
+    nodeCommand: resolveNodeCommand(env),
+    piBridgeScript,
+    piMode: piPlan.mode === "start" ? "pending" : piPlan.mode,
+    repoRoot,
+  });
+  await markOpenFaceOnLoad(homeDir);
+
+  process.stdout.write("[OpenReaper Studio] Step 1/4: REAPER + MCP bridge (openreaper-start)…\n");
   const startArgs = [...startCmd.args];
   if (options.projectPath) {
     startArgs.push("--project-path", options.projectPath);
@@ -165,7 +187,7 @@ async function startStudio(options, env = process.env) {
     throw new Error(`openreaper-start exited with code ${startResult.code}`);
   }
 
-  process.stdout.write("[OpenReaper Studio] Step 2/3: Pi agent…\n");
+  process.stdout.write("[OpenReaper Studio] Step 2/4: Pi agent…\n");
   if (piPlan.mode === "absent") {
     state.pi = { mode: "absent", mcp: piMcp };
     process.stdout.write(`[OpenReaper Studio] ${piPlan.message}\n`);
@@ -210,13 +232,27 @@ async function startStudio(options, env = process.env) {
     );
   }
 
+  const piMode =
+    state.pi?.mode === "started"
+      ? "rpc_background"
+      : state.pi?.mode ?? "absent";
+  await writeFaceConfig(homeDir, {
+    nodeCommand: resolveNodeCommand(env),
+    piBridgeScript,
+    piMode,
+    repoRoot,
+    piPid: state.pi?.pid ?? null,
+  });
+
   process.stdout.write(
-    "[OpenReaper Studio] Step 3/3: AI dialog placeholder installed " +
+    "[OpenReaper Studio] Step 3/4: AI dialog installed " +
       `(hook ${hookResult.hookInstalled ? "added" : "already present"}).\n`,
   );
   process.stdout.write(
-    "[OpenReaper Studio] Restart REAPER once if it was already running before this start " +
-      "so __startup.lua loads the face slot.\n",
+    "[OpenReaper Studio] Step 4/4: Open dialog flag set — REAPER loads the floating face on this boot.\n",
+  );
+  process.stdout.write(
+    "[OpenReaper Studio] If REAPER was already running, restart once so __startup.lua runs.\n",
   );
 
   await writeStudioState(studioStatePath(homeDir), state);
@@ -269,6 +305,7 @@ async function stopStudio(env = process.env) {
     );
   }
 
+  await clearOpenFaceOnLoad(homeDir);
   await clearStudioState(statePath);
   process.stdout.write("[OpenReaper Studio] Stop complete.\n");
 }

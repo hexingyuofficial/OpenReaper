@@ -86,7 +86,7 @@ export function studioStatePath(homeDir = os.homedir()) {
 }
 
 export function studioFaceScriptName() {
-  return "openreaper_studio_dialog_stub.lua";
+  return "openreaper_studio_dialog.lua";
 }
 
 export function studioFaceInstallPath(reaperResourceRoot) {
