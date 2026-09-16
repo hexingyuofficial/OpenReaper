@@ -10,7 +10,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readPromptPayload } from "./lib/agent-seam/read-payload.mjs";
 import { sendStudioPrompt } from "./lib/agent-seam/send-prompt.mjs";
-import { readStudioState, studioStatePath } from "./lib/state.mjs";
+import { studioStatePath } from "./lib/paths.mjs";
+import { readStudioState } from "./lib/state.mjs";
 
 async function main() {
   const requestPath = process.argv[2];

@@ -6,7 +6,8 @@ import { fileURLToPath } from "node:url";
 import { runPipeline, createStudioLog } from "./lib/orchestration/run-pipeline.mjs";
 import { START_STEPS } from "./lib/orchestration/start-steps.mjs";
 import { STOP_STEPS, loadStopContext } from "./lib/orchestration/stop-steps.mjs";
-import { readStudioState, studioStatePath } from "./lib/state.mjs";
+import { studioStatePath } from "./lib/paths.mjs";
+import { readStudioState } from "./lib/state.mjs";
 
 function printHelp() {
   process.stdout.write(`OpenReaper Studio orchestration
