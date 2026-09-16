@@ -124,7 +124,10 @@ BRIDGE_GENERATION_EXPLICIT=false
 # project, media peaks, and plugin state before __startup.lua can run. Keep
 # startup independently bounded while leaving the <30000ms complete-operation
 # gate unchanged.
-START_WAIT_SECONDS="${OPENREAPER_START_WAIT_SECONDS:-45}"
+# Cheap ticks after AX stop need to fill the supervisor window. 45s of
+# 0.25s ticks plus a 15s first osascript overshoots the 54s kill; 52s of
+# AX-free ticks still finishes leftover-budget accept before that kill.
+START_WAIT_SECONDS="${OPENREAPER_START_WAIT_SECONDS:-52}"
 STARTUP_BUDGET_MS="${OPENREAPER_STARTUP_BUDGET_MS:-60000}"
 STARTUP_BUDGET_MAX_MS=60000
 STARTUP_CLEANUP_RESERVE_MS=6000
@@ -134,16 +137,17 @@ STARTUP_DOCTOR_OVERHEAD_MS=1000
 STARTUP_DIALOG_TIMEOUT_SECONDS="${OPENREAPER_STARTUP_DIALOG_TIMEOUT_SECONDS:-15}"
 # Identity of this wait-loop contract. Studio Start refuses a synced helper
 # that does not contain this exact rev (older ~/.openreaper/current copies).
-OPENREAPER_START_HELPER_REV="studio-hook-budget-v3"
-# Repeat AX passes after a stable safe classification (Project Settings
-# soft-ignore, empty, Studio face). Hammering System Events every 0.25s with a
-# 15s osascript budget can stall REAPER's main thread so __startup.lua never
-# publishes a stage before the 60s supervisor deadline.
+OPENREAPER_START_HELPER_REV="studio-hook-budget-v4"
+# Repeat AX passes after a stable safe classification (empty, Studio face).
+# Hammering System Events every 0.25s with a 15s osascript budget can stall
+# REAPER's main thread so __startup.lua never publishes a stage.
 STARTUP_DIALOG_REPEAT_TIMEOUT_SECONDS=2
 STARTUP_DIALOG_INSPECT_EVERY_TICKS=8
-# After a lone Project Settings window, inspect even less often. Fail-closed
-# license / missing-media scans still run on this slower cadence.
-STARTUP_DIALOG_SOFT_BLOCKER_INSPECT_EVERY_TICKS=24
+# After a lone Project Settings window, STOP AX. Zhuanz1 30efebb still burned
+# the 54s supervisor: first 15s inspect + 2s inspects every 24 ticks, and the
+# status file never appeared (Lua never ran). License/missing-media on that
+# first pass still fail-closed; later AX would only restall the main thread.
+STARTUP_DIALOG_SOFT_BLOCKER_INSPECT_EVERY_TICKS=0
 # Supervisor kills at budget-6000ms. Stop AX and finish last-chance while
 # leftover is still above that, or last-chance races the process-group kill.
 STARTUP_AX_SKIP_REMAINING_MS=10000
@@ -2261,6 +2265,7 @@ prepare_startup_status_for_new_launch() {
 
 # AX inspection is due on the first tick, whenever no classification exists,
 # when a blocker is still stabilizing, and every N ticks after a safe result.
+# A lone Project Settings result stops AX for the rest of the wait.
 startup_dialog_inspect_due() {
   local -i tick="$1"
   local -i last_inspect_tick="$2"
@@ -2272,7 +2277,10 @@ startup_dialog_inspect_due() {
   fi
   case "${last_result}" in
     blocked_manual_dialog:title=Project\ Settings|blocked_manual_dialog:title=Project\ Settings\ /\ Notes|project_settings_seen_but_not_notes)
-      every="${STARTUP_DIALOG_SOFT_BLOCKER_INSPECT_EVERY_TICKS:-24}"
+      every="${STARTUP_DIALOG_SOFT_BLOCKER_INSPECT_EVERY_TICKS:-0}"
+      if (( every <= 0 )); then
+        return 1
+      fi
       ;;
   esac
   if (( last_inspect_tick <= 0 || tick - last_inspect_tick >= every )); then
@@ -2355,12 +2363,20 @@ wait_for_startup_hook() {
     missed_alive_ticks=0
     # Handoff PID still alive, but LaunchServices may already have a unique
     # successor. Probe every 4 ticks so pgrep does not starve the startup hook.
+    # After Project Settings was classified on this PID, it is the UI process;
+    # further successor scans (lsof/ps) only steal the budget Lua needs.
     if [[ -n "${last_dialog_result}" ]] && startup_dialog_result_is_safe "${last_dialog_result}" \
         && ! startup_status_stage_ready && (( tick % 4 == 0 )); then
-      adopted_pid=""
-      if adopted_pid="$(startup_adopt_live_launchservices_successor_if_unique "${reaper_pid}")"; then
-        reaper_pid="${adopted_pid}"
-      fi
+      case "${last_dialog_result}" in
+        blocked_manual_dialog:title=Project\ Settings|blocked_manual_dialog:title=Project\ Settings\ /\ Notes|project_settings_seen_but_not_notes)
+          ;;
+        *)
+          adopted_pid=""
+          if adopted_pid="$(startup_adopt_live_launchservices_successor_if_unique "${reaper_pid}")"; then
+            reaper_pid="${adopted_pid}"
+          fi
+          ;;
+      esac
     fi
     # A project-load dialog can prevent REAPER from reaching the package launcher.
     # Reuse the exact safe classifier while LaunchServices still carries the
@@ -2698,7 +2714,12 @@ run_startup_dialog_observer() {
   dialog_timeout_seconds=$(( (remaining_ms - STARTUP_CLEANUP_RESERVE_MS) / 1000 ))
   local -i timeout_cap
   timeout_cap=${STARTUP_DIALOG_TIMEOUT_SECONDS}
-  if [[ "${STARTUP_DIALOG_REPEAT_INSPECT:-}" == "1" ]] \
+  # Soft/Studio: even the first inspect must not take the 15s cap. Zhuanz1
+  # 30efebb spent that budget on System Events while __startup.lua never ran.
+  if [[ "${STARTUP_DIALOG_POLICY}" == "soft" ]] \
+      && (( STARTUP_DIALOG_REPEAT_TIMEOUT_SECONDS > 0 && timeout_cap > STARTUP_DIALOG_REPEAT_TIMEOUT_SECONDS )); then
+    timeout_cap=${STARTUP_DIALOG_REPEAT_TIMEOUT_SECONDS}
+  elif [[ "${STARTUP_DIALOG_REPEAT_INSPECT:-}" == "1" ]] \
       && (( STARTUP_DIALOG_REPEAT_TIMEOUT_SECONDS > 0 && timeout_cap > STARTUP_DIALOG_REPEAT_TIMEOUT_SECONDS )); then
     timeout_cap=${STARTUP_DIALOG_REPEAT_TIMEOUT_SECONDS}
   fi
@@ -2938,6 +2959,7 @@ record_dialog_result() {
     case "${result}" in
       blocked_manual_dialog:title=Project\ Settings|blocked_manual_dialog:title=Project\ Settings\ /\ Notes|project_settings_seen_but_not_notes)
         echo "[OpenReaper] startup-dialog-soft-ignore=${result}" >&2
+        echo "[OpenReaper] startup-ax=stopped_after_soft_blocker remaining_ms=$(startup_remaining_budget_ms)" >&2
         ;;
     esac
   fi
@@ -3021,11 +3043,20 @@ startup_last_chance_accept_published_stage() {
   local last_result="$1"
   local reason="${2:-startup_hook}"
   local extra_tick
+  local status_path="${TRANSPORT_DIR}/openreaper-startup-status-v1.json"
   echo "[OpenReaper] startup-last-chance=published_stage reason=${reason}" >&2
+  if [[ ! -f "${status_path}" || -L "${status_path}" ]]; then
+    echo "[OpenReaper] startup-last-chance=published_stage status_file=missing reason=${reason}" >&2
+  fi
   # Check the status file before any leftover-ms floor. Zhuanz1 remaining_ms=6069
   # is below cleanup+250 (6250) and is the supervisor race; accepting a published
-  # hook is a cheap grep and must still return 0.
-  for extra_tick in 1 2 3 4 5 6 7 8 9 10 11 12; do
+  # hook is a cheap grep and must still return 0. If the file is still missing,
+  # do not sleep 12 ticks into the supervisor kill.
+  set -- 1 2 3 4 5 6 7 8 9 10 11 12
+  if [[ ! -f "${status_path}" || -L "${status_path}" ]]; then
+    set -- 1 2 3
+  fi
+  for extra_tick in "$@"; do
     if startup_wait_accept_published_stage "${last_result}"; then
       remaining_ms="$(startup_remaining_budget_ms)"
       echo "[OpenReaper] startup-hook=published_after_last_chance tick=${extra_tick} reason=${reason} remaining_ms=${remaining_ms}" >&2

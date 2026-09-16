@@ -439,13 +439,15 @@ describe("packaged openreaper-start dialog observer", () => {
   it("throttles AX inspection after a stable safe result and caps repeat timeouts", () => {
     expect(source).toMatch(/STARTUP_DIALOG_REPEAT_TIMEOUT_SECONDS=2/);
     expect(source).toMatch(/STARTUP_DIALOG_INSPECT_EVERY_TICKS=8/);
-    expect(source).toMatch(/STARTUP_DIALOG_SOFT_BLOCKER_INSPECT_EVERY_TICKS=24/);
-    expect(source).toMatch(/OPENREAPER_START_HELPER_REV="studio-hook-budget-v3"/);
+    expect(source).toMatch(/STARTUP_DIALOG_SOFT_BLOCKER_INSPECT_EVERY_TICKS=0/);
+    expect(source).toMatch(/OPENREAPER_START_HELPER_REV="studio-hook-budget-v4"/);
     expect(source).toMatch(/start-helper-rev=/);
     expect(source).toMatch(/STARTUP_AX_SKIP_REMAINING_MS=10000/);
     expect(source).toMatch(/STARTUP_HOOK_FAIL_REMAINING_MS=7500/);
     expect(source).toMatch(/startup-last-chance=published_stage/);
     expect(source).toMatch(/startup-hook=leftover_budget_accept/);
+    expect(source).toMatch(/startup-ax=stopped_after_soft_blocker/);
+    expect(source).toMatch(/START_WAIT_SECONDS="\$\{OPENREAPER_START_WAIT_SECONDS:-52\}"/);
     expect(source).toMatch(/STARTUP_DIALOG_REPEAT_INSPECT/);
     const inspectDue = extractShellFunction(source, "startup_dialog_inspect_due");
     expect(inspectDue).toMatch(/STARTUP_DIALOG_INSPECT_EVERY_TICKS/);
@@ -592,11 +594,11 @@ describe("packaged openreaper-start dialog observer", () => {
     );
     expect(dueSettingsStillThrottled.status).toBe(1);
 
-    const dueSettingsCadence = spawnSync(
+    const dueSettingsStopped = spawnSync(
       "zsh",
       [
         "-c",
-        `STARTUP_DIALOG_INSPECT_EVERY_TICKS=8\nSTARTUP_DIALOG_SOFT_BLOCKER_INSPECT_EVERY_TICKS=24\n${inspectDue}\nstartup_dialog_inspect_due "$1" "$2" "$3" "$4"`,
+        `STARTUP_DIALOG_INSPECT_EVERY_TICKS=8\nSTARTUP_DIALOG_SOFT_BLOCKER_INSPECT_EVERY_TICKS=0\n${inspectDue}\nstartup_dialog_inspect_due "$1" "$2" "$3" "$4"`,
         "inspect-due",
         "25",
         "1",
@@ -605,7 +607,7 @@ describe("packaged openreaper-start dialog observer", () => {
       ],
       { encoding: "utf8" },
     );
-    expect(dueSettingsCadence.status).toBe(0);
+    expect(dueSettingsStopped.status).toBe(1);
 
     const duePending = spawnSync(
       "zsh",
