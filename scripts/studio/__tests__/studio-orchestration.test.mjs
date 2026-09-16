@@ -242,7 +242,7 @@ describe("face.prepare", () => {
       expect(synced).toContain("STARTUP_DIALOG_SOFT_BLOCKER_INSPECT_EVERY_TICKS");
       expect(synced).toContain("STARTUP_DIALOG_FIRST_TIMEOUT_SECONDS");
       expect(synced).toContain("startup_wait_poll_ticks");
-      expect(synced).toContain('OPENREAPER_START_HELPER_REV="studio-hook-publish-v6"');
+      expect(synced).toContain('OPENREAPER_START_HELPER_REV="studio-hook-publish-v7"');
       expect(synced).toContain("start-helper-rev=");
       expect(synced).toContain("STARTUP_HOOK_QUIET_TICKS");
       expect(synced).toContain("startup-hook-poke=trusted_launcher");
@@ -281,7 +281,7 @@ describe("start helper sync + studio env", () => {
       });
     expect(result.synced).toBe(true);
     expect(result.dest).toBe(path.join(installRoot, "bin", "openreaper-start"));
-    expect(result.rev).toBe("studio-hook-publish-v6");
+    expect(result.rev).toBe("studio-hook-publish-v7");
     expect(result.sha256).toMatch(/^[a-f0-9]{64}$/);
       const copied = await readFile(result.dest, "utf8");
       expect(copied).toContain("inspection_unavailable");
@@ -290,7 +290,7 @@ describe("start helper sync + studio env", () => {
       expect(copied).toContain("held_for_successor_publish");
       expect(copied).toContain("successor_identity_pending");
       expect(copied).toContain("startup_wait_accept_published_stage");
-      expect(copied).toContain('OPENREAPER_START_HELPER_REV="studio-hook-publish-v6"');
+      expect(copied).toContain('OPENREAPER_START_HELPER_REV="studio-hook-publish-v7"');
       expect(copied).toContain("STARTUP_DIALOG_FIRST_TIMEOUT_SECONDS");
       expect(copied).toContain("STARTUP_HOOK_QUIET_TICKS");
       expect(copied).toContain("startup-hook-poke=trusted_launcher");
@@ -333,8 +333,8 @@ describe("start helper sync + studio env", () => {
       expect(result.dest).toBe(path.join(bin, "openreaper-start"));
       const dest = await readFile(result.dest, "utf8");
       const sh = await readFile(path.join(bin, "openreaper-start.sh"), "utf8");
-      expect(dest).toContain('OPENREAPER_START_HELPER_REV="studio-hook-publish-v6"');
-      expect(sh).toContain('OPENREAPER_START_HELPER_REV="studio-hook-publish-v6"');
+      expect(dest).toContain('OPENREAPER_START_HELPER_REV="studio-hook-publish-v7"');
+      expect(sh).toContain('OPENREAPER_START_HELPER_REV="studio-hook-publish-v7"');
       expect(sh).not.toContain("old-sh");
     } finally {
       await rm(tmp, { recursive: true, force: true });
@@ -365,9 +365,9 @@ describe("start helper sync + studio env", () => {
       const facePrepare = START_STEPS.find((step) => step.id === "face.prepare");
       await expect(facePrepare.run(ctx)).resolves.toBeUndefined();
       expect(ctx.startCmd?.command).toBe(path.join(installRoot, "bin", "openreaper-start"));
-      expect(ctx.startHelperSync?.rev).toBe("studio-hook-publish-v6");
+      expect(ctx.startHelperSync?.rev).toBe("studio-hook-publish-v7");
       const synced = await readFile(ctx.startCmd.command, "utf8");
-      expect(synced).toContain('OPENREAPER_START_HELPER_REV="studio-hook-publish-v6"');
+      expect(synced).toContain('OPENREAPER_START_HELPER_REV="studio-hook-publish-v7"');
       expect(synced).not.toContain("old-only-sh");
     } finally {
       await rm(tmp, { recursive: true, force: true });
@@ -407,7 +407,7 @@ describe("start helper sync + studio env", () => {
         startHelperSync: {
           synced: true,
           dest,
-          rev: "studio-hook-publish-v6",
+          rev: "studio-hook-publish-v7",
         },
         options: {},
         env: { OPENREAPER_STUDIO: "1" },

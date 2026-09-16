@@ -54,7 +54,7 @@ helper exit so a restored/replaced REAPER PID can still publish the startup hook
 `face.prepare` copies the tracked packaging helper into
 `INSTALL_ROOT/bin/openreaper-start`, overwrites a stale companion
 `openreaper-start.sh`, and pins Start to that dest. The helper logs
-`start-helper-rev=studio-hook-publish-v6`; Start refuses to spawn a dest
+`start-helper-rev=studio-hook-publish-v7`; Start refuses to spawn a dest
 missing that rev. If `openreaper-start` exits **124** /
 `STARTUP_BUDGET_EXHAUSTED`, Studio still finishes the Pi RPC + face-config
 gate (`engineDegraded=true`). Helper **124** is persisted in session state +
@@ -90,7 +90,7 @@ logs say the lock was retained.
 ### How to re-trial (macOS cold Start)
 
 After `face.prepare` syncs the helper, grep `INSTALL_ROOT/bin/openreaper-start` for
-`OPENREAPER_START_HELPER_REV="studio-hook-publish-v6"`, `adopt_window_after_soft_safe`,
+`OPENREAPER_START_HELPER_REV="studio-hook-publish-v7"`, `adopt_window_after_soft_safe`,
 `held_for_successor_publish`, `successor_identity_pending`, `held_until_helper_exit`,
 `startup-dialog-soft-ignore=`, `STARTUP_HOOK_QUIET_TICKS`,
 `startup-hook-poke=trusted_launcher`, `startup-hook-poke=studio_face`,
@@ -171,7 +171,7 @@ reaper.ExecProcess → studio-pi-send.mjs → agent-seam/send-prompt.mjs
 | Step id | What it does |
 |---------|----------------|
 | `face.prepare` | Copy dialog entry + `studio/dialog/` modules; sync tracked `openreaper-start` into `INSTALL_ROOT/bin` (fingerprint + dest pin; overwrite stale `.sh`); write `face-config-v1.json`; set `open-face-on-load` |
-| `engine.openreaper_start` | Run the synced `INSTALL_ROOT/bin/openreaper-start` with `OPENREAPER_STUDIO=1` (refuses a dest missing `studio-hook-publish-v6`). Non-zero exit probes Bridge; live heartbeat is ok-ish, otherwise `engineDegraded` WARN. **Never aborts the Pi/face wire.** After the Pi gate succeeds, Start **exits 0**; helper 124 stays in state + face-config. |
+| `engine.openreaper_start` | Run the synced `INSTALL_ROOT/bin/openreaper-start` with `OPENREAPER_STUDIO=1` (refuses a dest missing `studio-hook-publish-v7`). Non-zero exit probes Bridge; live heartbeat is ok-ish, otherwise `engineDegraded` WARN. **Never aborts the Pi/face wire.** After the Pi gate succeeds, Start **exits 0**; helper 124 stays in state + face-config. |
 | `agent.pi_rpc` | Detached `studio-pi-rpc-host.mjs` → `pi --mode rpc` on private dirs; reuses a healthy host; warms `/commands`. |
 | `face.finalize` | Always runs. Publishes `face-config-v1.json` (`rpc_background` + URLs when Pi started). |
 

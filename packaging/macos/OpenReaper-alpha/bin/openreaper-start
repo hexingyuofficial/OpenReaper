@@ -137,7 +137,7 @@ STARTUP_DOCTOR_OVERHEAD_MS=1000
 STARTUP_DIALOG_TIMEOUT_SECONDS="${OPENREAPER_STARTUP_DIALOG_TIMEOUT_SECONDS:-15}"
 # Identity of this wait-loop contract. Studio Start refuses a synced helper
 # that does not contain this exact rev (older ~/.openreaper/current copies).
-OPENREAPER_START_HELPER_REV="studio-hook-publish-v6"
+OPENREAPER_START_HELPER_REV="studio-hook-publish-v7"
 # Repeat AX passes after a stable safe classification (empty, Studio face).
 # Hammering System Events every 0.25s with a 15s osascript budget can stall
 # REAPER's main thread so __startup.lua never publishes a stage.
@@ -2329,7 +2329,7 @@ ensure_openreaper_startup_hook() {
     return 1
   fi
   mkdir -p "${resource_root}/Scripts" || return 1
-  if ! node --input-type=module - \
+  if node --input-type=module - \
       "${startup_lua}" \
       "${status_path}" \
       "${BRIDGE_LAUNCHER_SCRIPT}" <<'NODE'

@@ -110,6 +110,43 @@ function extractShellFunction(source, name) {
   throw new Error(`unclosed ${name}()`);
 }
 
+/** Brace-match a function while skipping quoted heredocs (the node installer has `{` / `}`). */
+function extractShellFunctionSkippingQuotedHeredocs(source, name) {
+  const start = source.indexOf(`${name}() {`);
+  if (start < 0) {
+    throw new Error(`missing ${name}()`);
+  }
+  let depth = 0;
+  let i = source.indexOf("{", start);
+  while (i < source.length) {
+    if (source.startsWith("<<'", i)) {
+      const quoteEnd = source.indexOf("'", i + 3);
+      if (quoteEnd < 0) {
+        throw new Error(`unclosed heredoc tag in ${name}()`);
+      }
+      const delim = source.slice(i + 3, quoteEnd);
+      const endMarker = `\n${delim}\n`;
+      const endAt = source.indexOf(endMarker, quoteEnd);
+      if (endAt < 0) {
+        throw new Error(`unclosed heredoc ${delim} in ${name}()`);
+      }
+      i = endAt + endMarker.length;
+      continue;
+    }
+    const ch = source[i];
+    if (ch === "{") {
+      depth += 1;
+    } else if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return source.slice(start, i + 1);
+      }
+    }
+    i += 1;
+  }
+  throw new Error(`unclosed ${name}()`);
+}
+
 function runShellClassifier(classifier, policy, result) {
   const spawned = spawnSync(
     "bash",
@@ -453,7 +490,7 @@ describe("packaged openreaper-start dialog observer", () => {
     expect(source).toMatch(/STARTUP_DIALOG_INSPECT_EVERY_TICKS=8/);
     expect(source).toMatch(/STARTUP_DIALOG_SOFT_BLOCKER_INSPECT_EVERY_TICKS=0/);
     expect(source).toMatch(/STARTUP_DIALOG_FIRST_TIMEOUT_SECONDS=4/);
-    expect(source).toMatch(/OPENREAPER_START_HELPER_REV="studio-hook-publish-v6"/);
+    expect(source).toMatch(/OPENREAPER_START_HELPER_REV="studio-hook-publish-v7"/);
     expect(source).toMatch(/start-helper-rev=/);
     expect(source).toMatch(/STARTUP_AX_SKIP_REMAINING_MS=10000/);
     expect(source).toMatch(/STARTUP_HOOK_FAIL_REMAINING_MS=7500/);
@@ -929,6 +966,92 @@ describe("packaged openreaper-start kernel hook install + launcher poke", () => 
     }
     return source.slice(start, end);
   }
+
+  function runEnsureStartupHook({ resourceRoot, transportDir, launcherPath }) {
+    const fn = extractShellFunctionSkippingQuotedHeredocs(source, "ensure_openreaper_startup_hook");
+    return spawnSync(
+      "zsh",
+      [
+        "-c",
+        [
+          "set -euo pipefail",
+          `startup_reaper_resource_root() { print -r -- ${JSON.stringify(resourceRoot)}; }`,
+          `TRANSPORT_DIR=${JSON.stringify(transportDir)}`,
+          `BRIDGE_LAUNCHER_SCRIPT=${JSON.stringify(launcherPath)}`,
+          fn,
+          "ensure_openreaper_startup_hook",
+        ].join("\n"),
+        "ensure-hook",
+      ],
+      { encoding: "utf8" },
+    );
+  }
+
+  it("treats node hook install success as return 0 (not the inverted if ! node path)", () => {
+    const fn = extractShellFunctionSkippingQuotedHeredocs(source, "ensure_openreaper_startup_hook");
+    expect(fn).toMatch(/if node --input-type=module -/);
+    expect(fn).not.toMatch(/if ! node --input-type=module -/);
+    expect(fn).toMatch(/startup-hook=installed path=/);
+    expect(fn).toMatch(/return 0/);
+    expect(fn).toMatch(/return 1/);
+    const thenAt = fn.indexOf("then\n    echo \"[OpenReaper] startup-hook=installed");
+    const return0At = fn.indexOf("return 0", thenAt);
+    const fiAt = fn.indexOf("\n  fi\n  return 1", return0At);
+    expect(thenAt).toBeGreaterThan(fn.indexOf("if node --input-type=module -"));
+    expect(return0At).toBeGreaterThan(thenAt);
+    expect(fiAt).toBeGreaterThan(return0At);
+  });
+
+  it("returns 0 when the kernel hook node install succeeds and non-zero when it fails", () => {
+    if (!zshAvailable()) {
+      return;
+    }
+    const tmp = mkdtempSync(path.join(os.tmpdir(), "or-ensure-hook-rc-"));
+    const resourceRoot = path.join(tmp, "resource");
+    const transportDir = path.join(tmp, "transport");
+    const launcherPath = path.join(tmp, "openreaper-start-mcp-bridge.lua");
+    try {
+      mkdirSync(path.join(resourceRoot, "Scripts"), { recursive: true });
+      mkdirSync(transportDir, { recursive: true });
+      writeFileSync(launcherPath, "-- launcher\n", "utf8");
+      writeFileSync(
+        path.join(resourceRoot, "Scripts", "__startup.lua"),
+        "-- BEGIN openreaper-studio-face (managed by OpenReaper Studio)\nreaper.defer(function() end)\n-- END openreaper-studio-face\n",
+        "utf8",
+      );
+
+      const ok = runEnsureStartupHook({ resourceRoot, transportDir, launcherPath });
+      expect(ok.status, ok.stderr).toBe(0);
+      expect(ok.stderr).toMatch(/startup-hook=installed path=/);
+      expect(ok.stderr).toContain(path.join(resourceRoot, "Scripts", "__startup.lua"));
+      expect(ok.stderr).toContain(path.join(transportDir, "openreaper-startup-status-v1.json"));
+      const installed = readFileSync(path.join(resourceRoot, "Scripts", "__startup.lua"), "utf8");
+      expect(installed).toMatch(/BEGIN openreaper-kernel-startup/);
+      expect(installed).toContain(path.join(transportDir, "openreaper-startup-status-v1.json"));
+
+      const missingLauncher = runEnsureStartupHook({
+        resourceRoot,
+        transportDir,
+        launcherPath: path.join(tmp, "missing-launcher.lua"),
+      });
+      expect(missingLauncher.status).not.toBe(0);
+      expect(missingLauncher.stderr).toMatch(/trusted Bridge launcher is missing/);
+      expect(missingLauncher.stderr).not.toMatch(/startup-hook=installed path=/);
+
+      const unsafeTransport = path.join(tmp, "bad]]status");
+      mkdirSync(unsafeTransport, { recursive: true });
+      const nodeFailed = runEnsureStartupHook({
+        resourceRoot,
+        transportDir: unsafeTransport,
+        launcherPath,
+      });
+      expect(nodeFailed.status).not.toBe(0);
+      expect(nodeFailed.stderr).toMatch(/startup hook install failed/);
+      expect(nodeFailed.stderr).not.toMatch(/startup-hook=installed path=/);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
 
   it("installs a kernel __startup.lua block with this run's status path before the face hook", () => {
     const tmp = mkdtempSync(path.join(os.tmpdir(), "or-kernel-hook-"));
