@@ -2621,8 +2621,6 @@ tell application "System Events"
     set hasRunningReaScriptMainWindow to false
     set sawReaScriptRunStatusWindow to false
     set sawOpenReaperStudioDialog to false
-    -- Exact ReaImGui face titles from ui_face.lua. Not REAPER decision modals.
-    set studioFaceSafeTitles to {"OpenReaper Studio"}
     repeat with candidateWindow in windows
       try
         if (subrole of candidateWindow as text) is "AXStandardWindow" and (name of candidateWindow as text) contains "[ReaScript: Run]" then
@@ -2636,9 +2634,8 @@ tell application "System Events"
       try
         set windowTitle to name of reaperWindow as text
       end try
-      if studioFaceSafeTitles contains windowTitle then
-        -- Skip unknown-dialog classification and keep scanning for real blockers.
-        -- AppleScript has no `next repeat` (osacompile error -2741 on macOS).
+      -- Exact ReaImGui face title from ui_face.lua. Not a REAPER decision modal.
+      if windowTitle is "OpenReaper Studio" then
         set sawOpenReaperStudioDialog to true
       else if windowTitle is "Project Settings" or windowTitle is "Project Settings / Notes" then
         -- REAPER's macOS AX tree does not consistently expose the selected

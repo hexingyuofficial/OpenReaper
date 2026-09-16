@@ -228,6 +228,9 @@ describe("face.prepare", () => {
       expect(synced).toContain("else if windowTitle is \"Project Settings\"");
       expect(synced).toContain("held_until_helper_exit");
       expect(synced).toContain("adopted_after_launchservices_restore");
+      expect(synced).toContain('if windowTitle is "OpenReaper Studio" then');
+      expect(synced).not.toContain("next repeat");
+      expect(synced).not.toContain("studioFaceSafeTitles");
     } finally {
       await rm(tmp, { recursive: true, force: true });
     }
@@ -251,6 +254,9 @@ describe("start helper sync + studio env", () => {
       const copied = await readFile(result.dest, "utf8");
       expect(copied).toContain("inspection_unavailable");
       expect(copied).toContain("held_until_helper_exit");
+      expect(copied).toContain('if windowTitle is "OpenReaper Studio" then');
+      expect(copied).not.toContain("next repeat");
+      expect(copied).not.toContain("studioFaceSafeTitles");
       expect(copied).not.toContain("old\n");
     } finally {
       await rm(tmp, { recursive: true, force: true });

@@ -56,6 +56,29 @@ function stripAppleScriptComments(text) {
   return String(text ?? "").replace(/--[^\n]*/g, "");
 }
 
+function extractAppleScriptObserverBody(source) {
+  const observer = extractAppleScriptObserver(source);
+  const newline = observer.indexOf("\n");
+  if (newline < 0) {
+    throw new Error("AppleScript observer has no body");
+  }
+  return observer.slice(newline + 1);
+}
+
+function runZshHeredoc(body, { quoted } = { quoted: true }) {
+  const delimiter = quoted ? "<<'APPLESCRIPT'" : "<<APPLESCRIPT";
+  return spawnSync(
+    "zsh",
+    ["-c", `cat ${delimiter}\n${body}\nAPPLESCRIPT\n`],
+    { encoding: "utf8" },
+  );
+}
+
+function zshAvailable() {
+  const check = spawnSync("zsh", ["-c", "exit 0"], { encoding: "utf8" });
+  return check.error?.code !== "ENOENT";
+}
+
 function extractShellFunction(source, name) {
   const start = source.indexOf(`${name}() {`);
   if (start < 0) {
@@ -213,20 +236,20 @@ describe("packaged openreaper-start dialog observer", () => {
 
   it("allowlists the OpenReaper Studio ReaImGui face before unknown-dialog classification", () => {
     const observer = extractAppleScriptObserver(source);
-    const allowlistAt = observer.indexOf('set studioFaceSafeTitles to {"OpenReaper Studio"}');
-    const unknownAt = observer.indexOf('return "blocked_unknown_dialog:title="');
-    expect(allowlistAt).toBeGreaterThanOrEqual(0);
-    expect(unknownAt).toBeGreaterThan(allowlistAt);
-    expect(stripAppleScriptComments(observer)).not.toMatch(/\bnext repeat\b/);
-    expect(observer).toMatch(/if studioFaceSafeTitles contains windowTitle then/);
-    expect(observer).toMatch(/set sawOpenReaperStudioDialog to true/);
-    expect(observer).toMatch(/else if windowTitle is "Project Settings"/);
-    const faceIfAt = observer.indexOf("if studioFaceSafeTitles contains windowTitle then");
-    const faceElseAt = observer.indexOf("\n      else\n", faceIfAt);
-    expect(faceIfAt).toBeGreaterThanOrEqual(0);
-    expect(faceElseAt).toBeGreaterThan(faceIfAt);
+    const body = extractAppleScriptObserverBody(source);
+    const faceAt = body.indexOf('if windowTitle is "OpenReaper Studio" then');
+    const unknownAt = body.indexOf('return "blocked_unknown_dialog:title="');
+    expect(observer.startsWith("<<'APPLESCRIPT'")).toBe(true);
+    expect(faceAt).toBeGreaterThanOrEqual(0);
+    expect(unknownAt).toBeGreaterThan(faceAt);
+    expect(stripAppleScriptComments(body)).not.toMatch(/\bnext repeat\b/);
+    expect(body).not.toMatch(/studioFaceSafeTitles/);
+    expect(body).toMatch(/set sawOpenReaperStudioDialog to true/);
+    expect(body).toMatch(/else if windowTitle is "Project Settings"/);
+    const faceElseAt = body.indexOf("\n      else\n", faceAt);
+    expect(faceElseAt).toBeGreaterThan(faceAt);
     expect(unknownAt).toBeGreaterThan(faceElseAt);
-    expect(observer).toMatch(/if sawOpenReaperStudioDialog then return "ignored_openreaper_studio_dialog"/);
+    expect(body).toMatch(/if sawOpenReaperStudioDialog then return "ignored_openreaper_studio_dialog"/);
     expect(classifier).toMatch(/ignored_openreaper_studio_dialog/);
     expect(classifier).toMatch(/blocked_unknown_dialog\)/);
     expect(classifier).toMatch(/"OpenReaper Studio"\)/);
@@ -244,7 +267,7 @@ describe("packaged openreaper-start dialog observer", () => {
     expect(face).toContain("skin.layout.title");
     expect(face).toContain('ImGui_Begin(ctx, skin.layout.title');
     for (const title of STUDIO_FACE_SAFE_WINDOW_TITLES) {
-      expect(observer).toContain(`"${title}"`);
+      expect(body).toContain(`if windowTitle is "${title}" then`);
       expect(skin).toContain(`title = "${title}"`);
       expect(runShellClassifier(classifier, "soft", `blocked_unknown_dialog:title=${title}`)).toBe(0);
       expect(runShellClassifier(classifier, "strict", `blocked_unknown_dialog:title=${title}`)).toBe(1);
@@ -254,6 +277,38 @@ describe("packaged openreaper-start dialog observer", () => {
     expect(startupDialogResultIsSafe("blocked_unknown_dialog:title=OpenReaper Studio", "soft")).toBe(true);
     expect(runShellClassifier(classifier, "soft", "blocked_unknown_dialog:title=License")).toBe(1);
     expect(runShellClassifier(classifier, "soft", "blocked_unknown_dialog:title=Unexpected")).toBe(1);
+    expect(runShellClassifier(classifier, "soft", "blocked_manual_dialog:title=Project Settings")).toBe(1);
+    expect(runShellClassifier(classifier, "soft", "project_settings_seen_but_not_notes")).toBe(1);
+  });
+
+  it("keeps the observer compile-safe in zsh: no brace lists and no HyperTalk next repeat", () => {
+    const observer = extractAppleScriptObserver(source);
+    const body = extractAppleScriptObserverBody(source);
+    expect(observer.startsWith("<<'APPLESCRIPT'")).toBe(true);
+    // `next repeat` is HyperTalk. osascript -2741 is "expected end of line, found repeat".
+    expect(body).not.toMatch(/\bnext repeat\b/);
+    expect(body).not.toMatch(/studioFaceSafeTitles/);
+    // Unquoted `{...}` is zsh brace expansion in word context. Do not embed AppleScript lists.
+    expect(body).not.toMatch(/\{[^{}\n]*\}/);
+    expect(body).toMatch(/if windowTitle is "OpenReaper Studio" then/);
+    expect(body).toMatch(/set sawOpenReaperStudioDialog to true/);
+
+    const fragileList = 'set studioFaceSafeTitles to {"OpenReaper Studio"}';
+    if (zshAvailable()) {
+      const quoted = runZshHeredoc(body, { quoted: true });
+      expect(quoted.error?.code).not.toBe("ENOENT");
+      expect(quoted.status, quoted.stderr).toBe(0);
+      expect(quoted.stdout).toBe(`${body}\n`);
+      expect(quoted.stdout).toContain('if windowTitle is "OpenReaper Studio" then');
+      expect(quoted.stdout).not.toMatch(/\bnext repeat\b/);
+      expect(quoted.stdout).not.toMatch(/\{[^{}\n]*\}/);
+
+      // Word-context expansion strips quotes inside `{...}` even for a one-item list.
+      const asWords = spawnSync("zsh", ["-c", `print -r -- ${fragileList}`], { encoding: "utf8" });
+      expect(asWords.status, asWords.stderr).toBe(0);
+      expect(asWords.stdout.trim()).not.toBe(fragileList);
+      expect(asWords.stdout).not.toMatch(/\{"OpenReaper Studio"\}/);
+    }
   });
 
   it("skips Studio face classification with if/else so real blockers still fail closed", () => {
@@ -263,7 +318,7 @@ describe("packaged openreaper-start dialog observer", () => {
     expect(loopStart).toBeGreaterThanOrEqual(0);
     const loopEnd = observer.indexOf("end repeat", loopStart);
     const loop = observer.slice(loopStart, loopEnd);
-    expect(loop).toMatch(/if studioFaceSafeTitles contains windowTitle then[\s\S]*set sawOpenReaperStudioDialog to true[\s\S]*else if windowTitle is "Project Settings"/);
+    expect(loop).toMatch(/if windowTitle is "OpenReaper Studio" then[\s\S]*set sawOpenReaperStudioDialog to true[\s\S]*else if windowTitle is "Project Settings"/);
     expect(loop).toContain('return "blocked_manual_dialog:title=Project Settings"');
     expect(loop).toContain('return "blocked_missing_media:choice=Ignore all missing files"');
     expect(loop).toContain('return "blocked_missing_media_offline_warning:choice=OK"');
