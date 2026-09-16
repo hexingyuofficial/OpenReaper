@@ -35,8 +35,11 @@ Project Settings soft-ignore, AX inspection **stops**. Soft/Studio also keeps a
 **quiet window** (`STARTUP_HOOK_QUIET_TICKS`) before the first inspect so
 `__startup.lua` can publish before System Events touches the PID. The helper
 installs a kernel startup hook on the cold path with this run's absolute
-status-file path, then unique-Cancels a lone Project Settings window (once)
-and **pokes** the trusted Bridge launcher into the live instance. A published
+status-file path and **pokes** the trusted Bridge launcher into the live
+instance. A lone Project Settings window is **user-mediated**: soft-ignore
+(not exit 75); the user closes it. Unique-Cancel is leftover opt-in
+(`OPENREAPER_STARTUP_DISMISS_PROJECT_SETTINGS=1`), **not** required for
+acceptance. Do not expand AX click paths. A published
 stage is accepted even when leftover time is below `cleanup_reserve+250ms`.
 After a soft-safe classification, a LaunchServices PID gap is an **adopt-window**
 (`adopt_window_after_soft_safe`) until the successor publishes — including
@@ -48,8 +51,8 @@ Bridge heartbeat or `bridge_dofile_succeeded` is already live, the helper
 last-chance accepts that instead of failing `STARTUP_BUDGET_EXHAUSTED`. Soft
 policy **does not kill REAPER** on helper failure
 (`startup-reaper-preserve=soft_policy`). A lone **Project Settings** window is
-a recoverable soft blocker (not exit 75); soft Start unique-Cancels that
-exact title once (never OK/Apply/license/missing-media). The **OpenReaper Studio**
+a recoverable soft blocker (not exit 75); the user closes it. Unique-Cancel
+is leftover opt-in, never required. The **OpenReaper Studio**
 face title is allowlisted. Real decision windows
 (missing media, license, etc.) still fail closed. After LaunchServices launch, session env stays set until
 helper exit so a restored/replaced REAPER PID can still publish the startup hook.
@@ -96,18 +99,20 @@ After `face.prepare` syncs the helper, grep `INSTALL_ROOT/bin/openreaper-start` 
 `held_for_successor_publish`, `successor_identity_pending`, `held_until_helper_exit`,
 `startup-dialog-soft-ignore=`, `STARTUP_HOOK_QUIET_TICKS`,
 `startup-hook-poke=trusted_launcher`, `startup-hook-poke=studio_face`,
-`ensure_openreaper_startup_hook`, `startup_maybe_dismiss_project_settings`,
+`ensure_openreaper_startup_hook`,
 `STARTUP_DIALOG_FIRST_TIMEOUT_SECONDS`, and
 `startup_wait_poll_ticks`. Cold Start with a lone Project Settings window
-must soft-ignore (no exit 75), unique-Cancel the Project Settings title once,
-give `__startup.lua` a quiet window, poke the
+must **soft-ignore** (no exit 75). The user closes the window; after they
+close it, Studio (face/Pi/steward) should work. Unique-Cancel is leftover
+opt-in (`OPENREAPER_STARTUP_DISMISS_PROJECT_SETTINGS=1`) and is **not**
+required for acceptance. Give `__startup.lua` a quiet window, poke the
 trusted launcher if the status file is still missing, poke the Studio face
 script when `OPENREAPER_STUDIO_FACE_SCRIPT` is set, publish a
 startup stage, and leave `openreaper-start` at **exit 0** with Bridge usable
 when the hook publishes in time. If the helper still exits **124**, Start
 records it in state/`engineDegraded` and **exits 0** after the Pi gate
-succeeds (READY). A failed Pi gate is still non-zero. Unique-Cancel is only
-for a lone Project Settings title (never OK/Apply/license/missing-media).
+succeeds (READY). A failed Pi gate is still non-zero. Do not expand AX click
+paths (never OK/Apply/license/missing-media).
 
 ## Private Pi (isolated from ~/.pi)
 
@@ -263,6 +268,7 @@ A future one-click Studio installer should ship:
 
 - **P1 leftover:** Bundle a specialized Pi binary (not `~/.pi`); in-app login.
 - **P2 leftover:** More audio-specific tools; sweep leftover `mcp.json` on trial machines if present.
+- **Not a product dependency:** AX unique-Cancel / window auto-dismiss. User closes blocking REAPER windows.
 
 Dev machines can use global `pi` on PATH; `PI_CODING_AGENT_DIR` still isolates config from `~/.pi`.
 
@@ -295,7 +301,8 @@ add the kind to `CONTEXT_CHIP_KINDS` in Node contracts.
 | Variable | Purpose |
 |----------|---------|
 | `OPENREAPER_INSTALL_ROOT` | Packaged install root (`~/.openreaper/current`; session/vendor stay there) |
-| `OPENREAPER_STARTUP_DIALOG_POLICY` | `soft` or `strict` dialog inspection; default `soft` when `OPENREAPER_STUDIO=1`. Soft ignores AX failures and unique-Cancels a lone Project Settings window. License/missing-media/unknown stay fail-closed. |
+| `OPENREAPER_STARTUP_DIALOG_POLICY` | `soft` or `strict` dialog inspection; default `soft` when `OPENREAPER_STUDIO=1`. Soft ignores AX failures and a lone Project Settings window (user closes it). License/missing-media/unknown stay fail-closed. |
+| `OPENREAPER_STARTUP_DISMISS_PROJECT_SETTINGS` | `1` = leftover opt-in unique-Cancel of a lone Project Settings title. Default off. Not required for acceptance. |
 | `OPENREAPER_STUDIO_SKIP_PI` | Skip private Pi RPC step |
 | `OPENREAPER_STUDIO_STOP_REAPER` | Request REAPER quit on Stop |
 | `OPENREAPER_STUDIO_PI_ROOT` | Override private Pi tree root |

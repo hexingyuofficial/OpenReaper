@@ -257,6 +257,8 @@ describe("face.prepare", () => {
       expect(synced).toContain("budget_remaining_ms=");
       expect(synced).toContain("startup-ax=stopped_after_soft_blocker");
       expect(synced).toContain("startup-dialog-dismiss=project_settings_cancel");
+      expect(synced).toContain("startup-dialog-project-settings-dismiss=user_mediated");
+      expect(synced).toContain("OPENREAPER_STARTUP_DISMISS_PROJECT_SETTINGS");
       expect(synced).toContain("click theCancelButton");
       expect(synced).toContain("startup_maybe_dismiss_project_settings");
       expect(synced).toContain("startup-reaper-preserve=soft_policy");
@@ -303,6 +305,8 @@ describe("start helper sync + studio env", () => {
       expect(copied).toContain('if windowTitle is "OpenReaper Studio" then');
       expect(copied).toContain("startup-ax=stopped_after_soft_blocker");
       expect(copied).toContain("startup-dialog-dismiss=project_settings_cancel");
+      expect(copied).toContain("startup-dialog-project-settings-dismiss=user_mediated");
+      expect(copied).toContain("OPENREAPER_STARTUP_DISMISS_PROJECT_SETTINGS");
       expect(copied).toContain("click theCancelButton");
       expect(copied).toContain("startup-last-chance=bridge_liveness");
       expect(copied).toContain("startup-reaper-preserve=soft_policy");

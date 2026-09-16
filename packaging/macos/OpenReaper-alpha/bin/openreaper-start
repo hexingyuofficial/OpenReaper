@@ -398,20 +398,23 @@ instance has no OpenReaper Bridge, the helper reports a recovery instruction
 for that same instance instead of changing user configuration.
 
 OpenReaper does not click generic REAPER dialogs (OK/Apply/license/missing
-media). Soft/Studio may unique-Cancel a lone title-only Project Settings
-window so __startup.lua can run. Other visible blockers report
-STARTUP_USER_ACTION_REQUIRED and preserve the exact REAPER PID and generation
-so the user can resolve it and the agent can reconnect without starting a
-duplicate instance.
+media). Blocking windows are OK: the user closes them; Studio continues
+(face/Pi/steward) and should work after the modal is gone. Soft/Studio
+soft-ignores a lone Project Settings window (not exit 75). Unique-Cancel of
+that title is leftover opt-in only
+(OPENREAPER_STARTUP_DISMISS_PROJECT_SETTINGS=1), never required. Other
+visible blockers report STARTUP_USER_ACTION_REQUIRED and preserve the exact
+REAPER PID and generation so the user can resolve it and the agent can
+reconnect without starting a duplicate instance.
 
 OPENREAPER_STARTUP_DIALOG_POLICY=soft|strict controls inspection failures.
 Default is soft when OPENREAPER_STUDIO=1, otherwise strict. Soft treats
 Accessibility/osascript failures as inspection_unavailable (not exit 75).
 A lone Project Settings window is a recoverable soft blocker (not exit 75);
-soft Start unique-Cancels that exact title once (never OK/Apply/license/
-missing-media/unknown) so the startup hook can publish. The OpenReaper Studio
-face title stays allowlisted. Real blocked_* decision windows (missing media,
-license, etc.) still fail closed. Studio attaches to an existing REAPER when possible. It
+the user dismisses it. Unique-Cancel is not the product path. The OpenReaper
+Studio face title stays allowlisted. Real blocked_* decision windows (missing
+media, license, etc.) still fail closed. Studio attaches to an existing
+REAPER when possible. It
 may relaunch once when Studio just installed the __startup.lua face hook
 (OPENREAPER_STUDIO_FACE_HOOK_INSTALLED=1) or when OPENREAPER_STUDIO_RELAUNCH_STALE=1.
 Orphan LaunchServices env locks from a dead openreaper-start owner are
@@ -423,13 +426,14 @@ the successor publishes — including before the first AX pass under soft policy
 Adopt a unique live successor even while the handoff PID is still alive.
 Soft/Studio keeps a quiet window (no AX) so __startup.lua can publish, then
 caps the first inspect at 4s. After a lone Project Settings window, AX stops
-and the helper unique-Cancels that exact Project Settings title (once), then
-pokes the trusted Bridge launcher into the live instance. The kernel startup
+(user may close that title). Then the helper pokes the trusted Bridge
+launcher into the live instance. The kernel startup
 hook is installed on the cold path with this run's status-file path so Lua
 does not depend on getenv. Wait loops poll until the cleanup reserve. A
 published stage is accepted under soft even before AX returns, without
 requiring cleanup_reserve+250ms leftover. License / missing-media still fail
-closed. Generic dialog click automation is not used.
+closed. Generic dialog click automation is not used. Do not expand AX click
+paths.
 HELP
       exit 0
       ;;
@@ -990,7 +994,11 @@ fi
 echo "[OpenReaper] bridge-action-fallback=OpenReaper: Start MCP bridge"
 echo "[OpenReaper] bridge-status=starting_automatically"
 echo "[OpenReaper] startup-dialog-policy=user_mediated_read_only"
-echo "[OpenReaper] startup-dialog-project-settings-dismiss=title_only_unique_cancel_soft"
+if [[ "${OPENREAPER_STARTUP_DISMISS_PROJECT_SETTINGS:-}" == "1" ]]; then
+  echo "[OpenReaper] startup-dialog-project-settings-dismiss=opt_in_unique_cancel_soft"
+else
+  echo "[OpenReaper] startup-dialog-project-settings-dismiss=user_mediated"
+fi
 echo "[OpenReaper] startup-dialog-inspection-policy=${STARTUP_DIALOG_POLICY}"
 echo "[OpenReaper] startup-dialog-timeout-seconds=${STARTUP_DIALOG_TIMEOUT_SECONDS}"
 echo "[OpenReaper] startup-budget-ms=${STARTUP_BUDGET_MS}"
@@ -2668,8 +2676,8 @@ wait_for_startup_hook() {
           return 75
         fi
         pending_dialog_blocker=""
-        # Lone Project Settings blocks __startup.lua until dismissed. Soft
-        # policy unique-Cancels that exact title once, then AX stays stopped.
+        # Lone Project Settings is a soft-ignore. User closes it. Unique-Cancel
+        # is leftover opt-in (OPENREAPER_STARTUP_DISMISS_PROJECT_SETTINGS=1).
         startup_maybe_dismiss_project_settings "${dialog_result}" || true
       elif (( logged_inspect_skip == 0 )); then
         echo "[OpenReaper] startup-hook-poll=skip_dialog_inspect;reason=budget_reserve remaining_ms=${remaining_ms}" >&2
@@ -3205,8 +3213,8 @@ startup_dialog_result_is_safe() {
       return 1
       ;;
     blocked_manual_dialog)
-      # Soft/Studio: a lone Project Settings window is recoverable. Soft Start
-      # unique-Cancels that exact title after this classification; strict
+      # Soft/Studio: a lone Project Settings window is recoverable. The user
+      # closes it; unique-Cancel is leftover opt-in, not required. Strict
       # policy still reports STARTUP_USER_ACTION_REQUIRED.
       if [[ "${STARTUP_DIALOG_POLICY}" == "soft" && "${1}" == *:title=* ]]; then
         dialog_title="${1#*:title=}"
@@ -3222,11 +3230,15 @@ startup_dialog_result_is_safe() {
   return 1
 }
 
-# Soft/Studio only: unique Cancel on the exact Project Settings title so
-# __startup.lua can run. License/missing-media/unknown stay unread and
-# unclicked. One attempt per helper run.
+# Leftover opt-in unique-Cancel. Product default: user closes REAPER windows;
+# this must not be required for acceptance. Set
+# OPENREAPER_STARTUP_DISMISS_PROJECT_SETTINGS=1 to enable. License/missing-media
+# /unknown stay unread and unclicked. One attempt per helper run.
 startup_project_settings_dismiss_is_allowed() {
   local classified="$1"
+  if [[ "${OPENREAPER_STARTUP_DISMISS_PROJECT_SETTINGS:-}" != "1" ]]; then
+    return 1
+  fi
   if [[ "${STARTUP_DIALOG_POLICY}" != "soft" ]]; then
     return 1
   fi
@@ -3593,6 +3605,7 @@ wait_for_startup_readiness() {
           return 75
         fi
         pending_dialog_blocker=""
+        # Opt-in unique-Cancel leftover; default is user-mediated dismiss.
         startup_maybe_dismiss_project_settings "${dialog_result}" || true
       elif (( logged_inspect_skip == 0 )); then
         echo "[OpenReaper] bridge-readiness-poll=skip_dialog_inspect;reason=budget_reserve remaining_ms=${remaining_ms}" >&2

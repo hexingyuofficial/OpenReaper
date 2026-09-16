@@ -294,15 +294,19 @@ describe("packaged openreaper-start dialog observer", () => {
   const classifier = extractShellFunction(source, "startup_dialog_result_is_safe");
   const axFailure = extractShellFunction(source, "startup_dialog_observer_output_is_ax_failure");
 
-  it("unique-Cancels lone Project Settings without generic dialog clicks", () => {
+  it("does not auto-dismiss Project Settings; unique-Cancel is leftover opt-in", () => {
     expect(source).not.toMatch(/clickUniqueExactButton|click matchingElement|perform action "click"/);
     expect(source).not.toMatch(/whose name is "OK"/);
     expect(source).not.toMatch(/whose name is "Apply"/);
     expect(source).not.toMatch(/Ignore all missing files" then click/);
-    expect(source).toMatch(/click theCancelButton/);
+    expect(source).toMatch(/OPENREAPER_STARTUP_DISMISS_PROJECT_SETTINGS/);
+    expect(source).toMatch(/startup-dialog-project-settings-dismiss=user_mediated/);
+    const dismissAllowed = extractShellFunction(source, "startup_project_settings_dismiss_is_allowed");
+    expect(dismissAllowed).toMatch(/OPENREAPER_STARTUP_DISMISS_PROJECT_SETTINGS/);
+    expect(dismissAllowed.indexOf('OPENREAPER_STARTUP_DISMISS_PROJECT_SETTINGS')).toBeGreaterThanOrEqual(0);
+    expect(dismissAllowed).toMatch(/!= "1"/);
     expect(source).toMatch(/startup_maybe_dismiss_project_settings/);
-    expect(source).toMatch(/title_only_unique_cancel_soft/);
-    expect(source).toMatch(/unique-Cancel/);
+    expect(source).toMatch(/unique-Cancel is leftover opt-in/);
   });
 
   it("allowlists the OpenReaper Studio ReaImGui face before unknown-dialog classification", () => {
