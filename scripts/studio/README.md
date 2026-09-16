@@ -206,7 +206,7 @@ reaper.ExecProcess → studio-pi-send.mjs → agent-seam/send-prompt.mjs
 | `studio-orchestrate.mjs` | CLI: start / stop / status |
 | `studio-pi-send.mjs` | Agent seam CLI (called from REAPER) |
 | `studio-pi-commands.mjs` | Pi slash command list for the dialog palette |
-| `studio-pi-rpc-host.mjs` | Steward: private `pi --mode rpc` + loopback HTTP (`/prompt`, `/commands`, `/health`); stops when REAPER exits |
+| `studio-pi-rpc-host.mjs` | Steward: private `pi --mode rpc` + loopback HTTP (`/prompt`, `/commands`, `/health`); stops when REAPER exits. POST `/prompt` uses `promptAndWait`: settle on `agent_settled` **or** `agent_end` with `willRetry !== true` (Pi 0.79 never emits `agent_settled`). Dialog `extension_ui_request` is auto-cancelled. |
 | `packages/pi-extension-openreaper/` | Native Pi tools (`openreaper_ping` stub now; file-queue ping/get_state/call_* in P2) |
 | `reaper/dialog/studio_skin.lua` | Step 1 default float skin |
 | `lib/pi/private-layout.mjs` | Studio Pi roots (never `~/.pi`) |
