@@ -31,6 +31,18 @@ describe("paths", () => {
     await rm(tmp, { recursive: true, force: true });
   });
 
+  it("accepts packaged bin/openreaper-start without .sh extension", async () => {
+    const tmp = await mkdtemp(path.join(os.tmpdir(), "or-studio-bare-"));
+    const bin = path.join(tmp, "bin");
+    await mkdir(bin, { recursive: true });
+    await writeFile(path.join(bin, "openreaper-start"), "#!/bin/sh\n", "utf8");
+    const root = resolveInstallRoot({ OPENREAPER_INSTALL_ROOT: tmp }, os.homedir());
+    expect(root).toBe(tmp);
+    const cmd = resolveOpenReaperStartCommand(root, "darwin");
+    expect(cmd?.command).toBe(path.join(bin, "openreaper-start"));
+    await rm(tmp, { recursive: true, force: true });
+  });
+
   it("default install root matches alpha layout", () => {
     expect(defaultInstallRoot("/Users/test")).toBe("/Users/test/.openreaper/current");
   });

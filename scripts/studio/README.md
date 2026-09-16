@@ -10,7 +10,7 @@ rewiring Start/Stop.
 ## Prerequisites
 
 - REAPER (macOS primary)
-- OpenReaper release install at `~/.openreaper/current`
+- OpenReaper release install at `~/.openreaper/current` (`bin/openreaper-start` or `openreaper-start.sh`)
 - Node.js 20+
 - **ReaImGui** (ReaPack) for the dialog MVP
 

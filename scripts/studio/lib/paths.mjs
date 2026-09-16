@@ -21,7 +21,7 @@ export function defaultInstallRoot(homeDir = os.homedir()) {
 }
 
 /**
- * Resolve the directory that contains openreaper-start.{sh,ps1}.
+ * Resolve the directory that contains openreaper-start (bare), .sh, or .ps1.
  * Order: OPENREAPER_INSTALL_ROOT, ~/.openreaper/current, repo dev package.
  */
 export function resolveInstallRoot(env = process.env, homeDir = os.homedir()) {
@@ -41,14 +41,21 @@ export function resolveInstallRoot(env = process.env, homeDir = os.homedir()) {
   return null;
 }
 
+function unixStartHelperPaths(installRoot) {
+  const binDir = path.join(installRoot, "bin");
+  return [
+    path.join(binDir, "openreaper-start"),
+    path.join(binDir, "openreaper-start.sh"),
+    path.join(installRoot, "openreaper-start.sh"),
+  ];
+}
+
 function installRootHasStartHelper(installRoot, platform) {
   const binDir = path.join(installRoot, "bin");
   if (platform === "win32") {
     return existsSync(path.join(binDir, "openreaper-start.ps1"));
   }
-  const sh = path.join(binDir, "openreaper-start.sh");
-  const devSh = path.join(installRoot, "openreaper-start.sh");
-  return existsSync(sh) || existsSync(devSh);
+  return unixStartHelperPaths(installRoot).some((candidate) => existsSync(candidate));
 }
 
 export function resolveOpenReaperStartCommand(installRoot, platform = process.platform) {
@@ -74,13 +81,10 @@ export function resolveOpenReaperStartCommand(installRoot, platform = process.pl
       cwd: installRoot,
     };
   }
-  const packaged = path.join(installRoot, "bin", "openreaper-start.sh");
-  if (existsSync(packaged)) {
-    return { command: packaged, args: [], cwd: installRoot };
-  }
-  const dev = path.join(installRoot, "openreaper-start.sh");
-  if (existsSync(dev)) {
-    return { command: dev, args: [], cwd: installRoot };
+  for (const command of unixStartHelperPaths(installRoot)) {
+    if (existsSync(command)) {
+      return { command, args: [], cwd: installRoot };
+    }
   }
   return null;
 }
