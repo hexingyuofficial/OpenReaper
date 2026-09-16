@@ -9,6 +9,7 @@ export function emptyStudioState() {
     startedAt: null,
     installRoot: null,
     openreaperStartExitCode: null,
+    openreaperStartSoftContinued: false,
     pi: { mode: "unknown" },
     face: { installed: false, hookInstalled: false, scriptPath: null },
     reaper: { stopPolicy: "preserve" },

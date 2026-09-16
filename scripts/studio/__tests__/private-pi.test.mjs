@@ -115,6 +115,62 @@ describe("start-steps private Pi wiring", () => {
   });
 });
 
+describe("private Pi RPC host reuse", () => {
+  it("adopts a live endpoint instead of spawning a duplicate host", async () => {
+    const { createServer } = await import("node:http");
+    const { mkdir, writeFile } = await import("node:fs/promises");
+    const {
+      adoptLivePiRpcEndpoint,
+      launchPrivatePiRpcHost,
+      studioPiRpcEndpointPath,
+    } = await import("../lib/orchestration/pi-rpc-lifecycle.mjs");
+    const { repoRootFromStudio } = await import("../lib/paths.mjs");
+
+    const tmp = await mkdtemp(path.join(os.tmpdir(), "or-pi-rpc-reuse-"));
+    const homeDir = path.join(tmp, "home");
+    const endpointFile = studioPiRpcEndpointPath(homeDir);
+    await mkdir(path.dirname(endpointFile), { recursive: true });
+    const server = createServer((req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address();
+    const base = `http://127.0.0.1:${port}`;
+    await writeFile(
+      endpointFile,
+      `${JSON.stringify({
+        contract: "openreaper.studio.pi_rpc_endpoint.v1",
+        promptUrl: `${base}/prompt`,
+        commandsUrl: `${base}/commands`,
+        healthUrl: `${base}/health`,
+        hostPid: 4242,
+        piPid: 4243,
+      })}\n`,
+      "utf8",
+    );
+    try {
+      const adopted = await adoptLivePiRpcEndpoint(endpointFile);
+      expect(adopted?.reused).toBe(true);
+      expect(adopted?.hostPid).toBe(4242);
+
+      const launched = await launchPrivatePiRpcHost({
+        nodeCommand: process.execPath,
+        repoRoot: repoRootFromStudio(),
+        env: {},
+        homeDir,
+        log() {},
+      });
+      expect(launched.reused).toBe(true);
+      expect(launched.hostPid).toBe(4242);
+      expect(launched.promptUrl).toBe(`${base}/prompt`);
+    } finally {
+      server.close();
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("formatStudioPromptMessage", () => {
   it("prefixes chip context for Pi RPC", () => {
     const text = formatStudioPromptMessage("mix vocals", [

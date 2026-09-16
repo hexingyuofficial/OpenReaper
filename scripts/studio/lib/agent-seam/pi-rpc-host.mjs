@@ -6,6 +6,7 @@ import {
   attachJsonlReader,
   formatStudioPromptMessage,
 } from "./pi-jsonl.mjs";
+import { withBuiltinCommandFallback } from "./pi-command-hints.mjs";
 
 /**
  * Start a loopback HTTP shim in front of `pi --mode rpc` (stdio JSONL).
@@ -62,15 +63,29 @@ export async function startPiRpcHost({
     if (req.method === "GET" && req.url === "/commands") {
       try {
         const { commands, cached } = await loadPiCommands();
+        const resolved = withBuiltinCommandFallback(commands);
+        const fallback = resolved !== commands && commands.length === 0;
         res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ ok: true, mode: "pi_rpc", commands, cached }));
-      } catch (error) {
-        res.writeHead(502, { "content-type": "application/json" });
         res.end(
           JSON.stringify({
-            ok: false,
-            mode: "pi_rpc_error",
-            commands: [],
+            ok: true,
+            mode: "pi_rpc",
+            commands: resolved,
+            cached,
+            fallback,
+            message: fallback
+              ? "Pi get_commands returned no entries; showing Studio builtin hints."
+              : undefined,
+          }),
+        );
+      } catch (error) {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            ok: true,
+            mode: "pi_rpc_fallback",
+            commands: withBuiltinCommandFallback([]),
+            fallback: true,
             message: error?.message ?? String(error),
           }),
         );

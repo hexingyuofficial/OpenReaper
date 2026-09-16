@@ -1,11 +1,11 @@
 import { resolveStudioPiCommandsUrl } from "./pi-rpc-urls.mjs";
+import { BUILTIN_HINTS, withBuiltinCommandFallback } from "./pi-command-hints.mjs";
 
-const BUILTIN_HINTS = Object.freeze([
-  { name: "help", description: "Pi help (requires live RPC)", source: "studio_hint" },
-]);
+export { BUILTIN_HINTS, withBuiltinCommandFallback } from "./pi-command-hints.mjs";
 
 /**
  * Fetch Pi slash commands via Studio RPC host GET /commands (Pi get_commands).
+ * Empty success and fetch errors fall back to Studio builtin hints so `/` is never empty.
  */
 export async function fetchPiCommands({ env = process.env, faceConfig, studioState } = {}) {
   const commandsUrl = resolveStudioPiCommandsUrl({ env, faceConfig, studioState });
@@ -13,7 +13,8 @@ export async function fetchPiCommands({ env = process.env, faceConfig, studioSta
     return {
       ok: true,
       mode: "unavailable",
-      commands: [],
+      commands: withBuiltinCommandFallback([]),
+      fallback: true,
       message: "Private Pi RPC is not running. Run Studio Start (slash palette needs Pi RPC).",
     };
   }
@@ -23,18 +24,25 @@ export async function fetchPiCommands({ env = process.env, faceConfig, studioSta
       throw new Error(`HTTP ${response.status}`);
     }
     const body = await response.json();
-    const commands = Array.isArray(body?.commands) ? body.commands : [];
+    const raw = Array.isArray(body?.commands) ? body.commands : [];
+    const commands = withBuiltinCommandFallback(raw);
+    const fallback = raw.length === 0;
     return {
       ok: true,
       mode: body?.mode ?? "pi_rpc",
       commands,
       cached: Boolean(body?.cached),
+      fallback,
+      message: fallback
+        ? (body?.message ?? "Pi returned no slash commands; showing Studio builtin hints.")
+        : body?.message,
     };
   } catch (error) {
     return {
       ok: false,
       mode: "error",
-      commands: BUILTIN_HINTS,
+      commands: withBuiltinCommandFallback([]),
+      fallback: true,
       message: `Could not load Pi commands (${error?.message ?? error}).`,
     };
   }

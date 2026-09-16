@@ -24,7 +24,12 @@ const ALWAYS_SAFE = [
   "ignored_reascript_run_status_window",
   "ignored_openreaper_studio_dialog",
 ];
-const INSPECTION_SAFE = ["unavailable", "inspection_unavailable", "inspection_unavailable:status=142"];
+const INSPECTION_SAFE = [
+  "unavailable",
+  "inspection_unavailable",
+  "inspection_unavailable:status=142",
+  "blocked_startup_budget_exhausted:stage=dialog_inspection",
+];
 const SOFT_SAFE_BLOCKERS = [
   "blocked_manual_dialog:title=Project Settings",
   "blocked_manual_dialog:title=Project Settings / Notes",
@@ -41,7 +46,6 @@ const UNSAFE = [
   "blocked_manual_dialog:title=Unexpected",
   "blocked_reaper_identity:pid=123",
   "blocked_dialog_classification:title=Untitled:error=permission denied",
-  "blocked_startup_budget_exhausted:stage=dialog_inspection",
 ];
 
 function extractAppleScriptObserver(source) {
@@ -385,9 +389,14 @@ describe("packaged openreaper-start dialog observer", () => {
     expect(source).toMatch(/reclaim_orphan_launchservices_lock/);
     expect(source).toMatch(/acquire_openreaper_start_chain_lock/);
     expect(source).toMatch(/studio-relaunch=process_table_clear;ready_for_clean_launch/);
-    expect(source).toMatch(/unavailable\|inspection_unavailable\|project_settings_seen_but_not_notes/);
+    expect(source).toMatch(/unavailable\|inspection_unavailable\|project_settings_seen_but_not_notes\|blocked_startup_budget_exhausted/);
     expect(source).toMatch(/startup-dialog-soft-ignore=/);
     expect(source).toMatch(/A lone Project Settings window is a recoverable soft blocker/);
+    expect(source).toMatch(/startup-last-chance=bridge_liveness/);
+    expect(source).toMatch(/budget_remaining_ms=/);
+    expect(source).toMatch(/startup_status_bridge_loaded/);
+    expect(source).toMatch(/bridge-read-probe=skipped_budget_exhausted_soft_policy/);
+    expect(source).toMatch(/ready_after_budget_last_chance/);
   });
 
   it("does not restore LaunchServices env until helper EXIT, and adopts a replacement PID", () => {

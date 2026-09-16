@@ -20,6 +20,7 @@ import {
 } from "../paths.mjs";
 import { readPiMcpConfig, resolveStudioPiForStart } from "../pi.mjs";
 import { emptyStudioState, writeStudioState } from "../state.mjs";
+import { probeOpenReaperEngine } from "../engine/bridge-liveness.mjs";
 import { coupledRollbackOnPiFailure } from "./coupled-rollback.mjs";
 import { launchPrivatePiRpcHost } from "./pi-rpc-lifecycle.mjs";
 import { runProcess } from "./process.mjs";
@@ -135,15 +136,43 @@ export const START_STEPS = [
       if (ctx.faceInstall?.hookInstalled) {
         openreaperEnv.OPENREAPER_STUDIO_FACE_HOOK_INSTALLED = "1";
       }
-      const result = await runProcess(ctx.startCmd.command, startArgs, {
+      const run = ctx.runProcess ?? runProcess;
+      const result = await run(ctx.startCmd.command, startArgs, {
         cwd: ctx.startCmd.cwd,
         env: openreaperEnv,
       });
       ctx.state.openreaperStartExitCode = result.code;
-      if (result.code !== 0) {
-        await writeStudioState(studioStatePath(ctx.homeDir), ctx.state);
-        throw new Error(`openreaper-start exited with code ${result.code}`);
+      if (result.code === 0) {
+        ctx.state.openreaperStartSoftContinued = false;
+        return;
       }
+
+      const probeFn = ctx.probeOpenReaperEngine ?? probeOpenReaperEngine;
+      const probe = await probeFn({
+        installRoot: ctx.installRoot,
+        log: ctx.log,
+        graceMs: ctx.engineProbeGraceMs,
+      });
+      ctx.state.engineProbe = {
+        usable: Boolean(probe?.usable),
+        stage: probe?.stage ?? null,
+        heartbeatReady: Boolean(probe?.heartbeatReady),
+        reason: probe?.reason ?? null,
+      };
+      ctx.state.openreaperStartSoftContinued = Boolean(probe?.usable);
+      await writeStudioState(studioStatePath(ctx.homeDir), ctx.state);
+      if (probe?.usable) {
+        ctx.log(
+          `openreaper-start exited ${result.code} but REAPER+Bridge are usable ` +
+            `(stage=${probe.stage ?? "unknown"} heartbeat=${probe.heartbeatReady ? "live" : "no"}). ` +
+            "Soft-continuing to private Pi RPC so face-config is not left pending.",
+        );
+        return;
+      }
+      throw new Error(
+        `openreaper-start exited with code ${result.code}` +
+          (probe?.reason ? ` (${probe.reason})` : ""),
+      );
     },
   },
   {

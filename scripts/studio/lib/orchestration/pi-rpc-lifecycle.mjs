@@ -12,8 +12,73 @@ export function resolvePiRpcHostScript(repoRoot) {
   return path.join(repoRoot, "scripts", "studio", "studio-pi-rpc-host.mjs");
 }
 
+async function readEndpointFile(endpointFile) {
+  if (!existsSync(endpointFile)) {
+    return null;
+  }
+  try {
+    return JSON.parse(await readFile(endpointFile, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function endpointSnapshot(parsed, endpointFile, { reused = false, logPath = null } = {}) {
+  return {
+    hostPid: parsed?.hostPid ?? null,
+    piPid: parsed?.piPid ?? null,
+    promptUrl: parsed?.promptUrl ?? null,
+    commandsUrl: parsed?.commandsUrl ?? null,
+    healthUrl: parsed?.healthUrl ?? null,
+    endpointFile,
+    logPath,
+    reused,
+  };
+}
+
+/**
+ * Reuse a healthy studio-pi-rpc-host already bound to the endpoint file.
+ * Prevents a second orphan host from fighting one URL.
+ */
+export async function adoptLivePiRpcEndpoint(endpointFile, { logPath = null } = {}) {
+  const parsed = await readEndpointFile(endpointFile);
+  if (!parsed?.healthUrl) {
+    return null;
+  }
+  if (!(await probePiRpcHealth(parsed.healthUrl))) {
+    return null;
+  }
+  return endpointSnapshot(parsed, endpointFile, { reused: true, logPath });
+}
+
+/**
+ * SIGTERM a recorded host that is alive but no longer healthy so Start can
+ * bind a single new host to the endpoint file.
+ */
+export async function stopStalePiRpcHost(endpointFile, log) {
+  const parsed = await readEndpointFile(endpointFile);
+  const pid = parsed?.hostPid;
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return { stopped: false, reason: "no_host_pid" };
+  }
+  try {
+    process.kill(pid, 0);
+  } catch {
+    return { stopped: false, reason: "host_not_running" };
+  }
+  log?.(`Stopping stale private Pi RPC host pid=${pid} (endpoint health failed).`);
+  try {
+    process.kill(pid, "SIGTERM");
+  } catch (error) {
+    log?.(`Could not signal stale RPC host pid=${pid} (${error?.message ?? error}).`);
+    return { stopped: false, reason: "signal_failed" };
+  }
+  return { stopped: true, hostPid: pid };
+}
+
 /**
  * Detach studio-pi-rpc-host.mjs and poll until the endpoint file is written + /health OK.
+ * Reuses a live host on the same endpoint file instead of spawning a duplicate.
  */
 export async function launchPrivatePiRpcHost({
   nodeCommand,
@@ -29,6 +94,15 @@ export async function launchPrivatePiRpcHost({
   }
   const endpointFile = studioPiRpcEndpointPath(homeDir);
   const logPath = path.join(studioDir(homeDir), "logs", "studio-pi-rpc-host.log");
+
+  const existing = await adoptLivePiRpcEndpoint(endpointFile, { logPath });
+  if (existing) {
+    log?.(
+      `Reusing private Pi RPC host pid=${existing.hostPid} promptUrl=${existing.promptUrl} (no duplicate spawn).`,
+    );
+    return existing;
+  }
+  await stopStalePiRpcHost(endpointFile, log);
 
   const child = spawn(nodeCommand, [hostScript, "--endpoint-file", endpointFile], {
     detached: true,
@@ -57,6 +131,7 @@ export async function launchPrivatePiRpcHost({
               healthUrl,
               endpointFile,
               logPath,
+              reused: false,
             };
           }
         }

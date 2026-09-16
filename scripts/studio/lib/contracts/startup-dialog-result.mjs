@@ -9,6 +9,7 @@ export const STARTUP_DIALOG_SAFE_RESULTS = Object.freeze([
 export const STARTUP_DIALOG_INSPECTION_SAFE_RESULTS = Object.freeze([
   "unavailable",
   "inspection_unavailable",
+  "blocked_startup_budget_exhausted",
 ]);
 
 /**
@@ -70,7 +71,8 @@ export function isStudioSoftBlockerWindowTitle(title) {
 
 /**
  * Fail-closed for real blocked_* classifications.
- * Soft policy: inspection_unavailable / unavailable do not block startup.
+ * Soft policy: inspection_unavailable / unavailable / budget-exhausted
+ * dialog inspection do not block startup.
  * Soft/Studio policy: allowlisted Studio face titles are non-blocking even if
  * the observer still emits blocked_unknown_dialog:title=….
  * Soft/Studio policy: a lone Project Settings window is a recoverable soft

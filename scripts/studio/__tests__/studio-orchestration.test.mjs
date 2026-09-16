@@ -231,6 +231,8 @@ describe("face.prepare", () => {
       expect(synced).toContain("held_until_helper_exit");
       expect(synced).toContain("adopted_after_launchservices_restore");
       expect(synced).toContain('if windowTitle is "OpenReaper Studio" then');
+      expect(synced).toContain("startup-last-chance=bridge_liveness");
+      expect(synced).toContain("budget_remaining_ms=");
       expect(synced).not.toContain("next repeat");
       expect(synced).not.toContain("studioFaceSafeTitles");
     } finally {
@@ -257,6 +259,7 @@ describe("start helper sync + studio env", () => {
       expect(copied).toContain("inspection_unavailable");
       expect(copied).toContain("held_until_helper_exit");
       expect(copied).toContain('if windowTitle is "OpenReaper Studio" then');
+      expect(copied).toContain("startup-last-chance=bridge_liveness");
       expect(copied).not.toContain("next repeat");
       expect(copied).not.toContain("studioFaceSafeTitles");
       expect(copied).not.toContain("old\n");
@@ -272,8 +275,73 @@ describe("start helper sync + studio env", () => {
     );
     expect(source).toMatch(/OPENREAPER_STUDIO:\s*"1"/);
     expect(source).toMatch(/OPENREAPER_STUDIO_FACE_HOOK_INSTALLED/);
+    expect(source).toMatch(/probeOpenReaperEngine/);
+    expect(source).toMatch(/openreaperStartSoftContinued/);
     const engine = START_STEPS.find((step) => step.id === "engine.openreaper_start");
     expect(engine?.label).toMatch(/openreaper-start/);
+  });
+
+  it("soft-continues when openreaper-start is non-zero but Bridge is live", async () => {
+    const tmp = await mkdtemp(path.join(os.tmpdir(), "or-engine-soft-"));
+    const homeDir = path.join(tmp, "home");
+    const installRoot = path.join(tmp, "install");
+    try {
+      const ctx = {
+        homeDir,
+        installRoot,
+        env: { OPENREAPER_STUDIO: "1" },
+        options: {},
+        startCmd: { command: "true", args: [], cwd: installRoot },
+        faceInstall: { hookInstalled: true },
+        state: { openreaperStartExitCode: null },
+        engineProbeGraceMs: 0,
+        log() {},
+        runProcess: async () => ({ code: 124 }),
+        probeOpenReaperEngine: async () => ({
+          usable: true,
+          stage: "bridge_dofile_succeeded",
+          heartbeatReady: true,
+          reason: "heartbeat_live",
+        }),
+      };
+      const engine = START_STEPS.find((step) => step.id === "engine.openreaper_start");
+      await expect(engine.run(ctx)).resolves.toBeUndefined();
+      expect(ctx.state.openreaperStartExitCode).toBe(124);
+      expect(ctx.state.openreaperStartSoftContinued).toBe(true);
+      expect(ctx.state.engineProbe.stage).toBe("bridge_dofile_succeeded");
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("hard-fails engine.openreaper_start when Bridge is not usable", async () => {
+    const tmp = await mkdtemp(path.join(os.tmpdir(), "or-engine-hard-"));
+    const homeDir = path.join(tmp, "home");
+    try {
+      const ctx = {
+        homeDir,
+        installRoot: path.join(tmp, "install"),
+        env: {},
+        options: {},
+        startCmd: { command: "false", args: [], cwd: tmp },
+        state: { openreaperStartExitCode: null },
+        engineProbeGraceMs: 0,
+        log() {},
+        runProcess: async () => ({ code: 1 }),
+        probeOpenReaperEngine: async () => ({
+          usable: false,
+          stage: null,
+          heartbeatReady: false,
+          reason: "no_transport_dir",
+        }),
+      };
+      const engine = START_STEPS.find((step) => step.id === "engine.openreaper_start");
+      await expect(engine.run(ctx)).rejects.toThrow(/openreaper-start exited with code 1/);
+      expect(ctx.state.openreaperStartExitCode).toBe(1);
+      expect(ctx.state.openreaperStartSoftContinued).toBe(false);
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
   });
 });
 

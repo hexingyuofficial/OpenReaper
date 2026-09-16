@@ -2174,9 +2174,12 @@ wait_for_startup_hook() {
   local adopted_pid=""
   for (( tick = 1; tick <= max_ticks; tick++ )); do
     if ! startup_budget_require_window "startup_hook" $(( STARTUP_CLEANUP_RESERVE_MS + 250 )); then
-      if [[ -n "${pending_dialog_blocker}" ]]; then
+      if startup_pending_dialog_is_hard_blocker "${pending_dialog_blocker}"; then
         report_startup_user_action_required "${pending_dialog_blocker}"
         return 75
+      fi
+      if startup_last_chance_accept_live_bridge "startup_hook"; then
+        return 0
       fi
       return 1
     fi
@@ -2200,9 +2203,12 @@ wait_for_startup_hook() {
     fi
     missed_alive_ticks=0
     if ! startup_budget_require_window "startup_hook_dialog_inspection" $(( STARTUP_CLEANUP_RESERVE_MS + 1000 )); then
-      if [[ -n "${pending_dialog_blocker}" ]]; then
+      if startup_pending_dialog_is_hard_blocker "${pending_dialog_blocker}"; then
         report_startup_user_action_required "${pending_dialog_blocker}"
         return 75
+      fi
+      if startup_last_chance_accept_live_bridge "startup_hook_dialog_inspection"; then
+        return 0
       fi
       return 1
     fi
@@ -2524,7 +2530,11 @@ run_startup_dialog_observer() {
     dialog_timeout_seconds=${STARTUP_DIALOG_TIMEOUT_SECONDS}
   fi
   if (( dialog_timeout_seconds < 1 )); then
-    printf '%s\n' "blocked_startup_budget_exhausted:stage=dialog_inspection"
+    # Soft/Studio: running out of inspection budget is not a decision dialog.
+    # Returning blocked_startup_budget_exhausted here used to fail-close Start
+    # while the allowlisted Studio face (or Project Settings) was the only
+    # window and Bridge was already coming up.
+    startup_dialog_inspection_unavailable "budget_remaining_ms=${remaining_ms}"
     return 0
   fi
   if assist_result="$(/usr/bin/perl -e 'my $seconds = shift @ARGV; alarm $seconds; exec @ARGV or die "exec failed: $!"' \
@@ -2709,7 +2719,7 @@ startup_dialog_result_is_safe() {
     no_safe_dialog|ignored_reascript_run_status_window|ignored_openreaper_studio_dialog)
       return 0
       ;;
-    unavailable|inspection_unavailable|project_settings_seen_but_not_notes)
+    unavailable|inspection_unavailable|project_settings_seen_but_not_notes|blocked_startup_budget_exhausted)
       if [[ "${STARTUP_DIALOG_POLICY}" == "soft" ]]; then
         return 0
       fi
@@ -2766,6 +2776,88 @@ report_startup_user_action_required() {
   echo "[OpenReaper] recovery=Resolve the visible REAPER window, then rerun openreaper-start --recover-existing. The current REAPER PID and Bridge generation were preserved." >&2
 }
 
+startup_pending_dialog_is_hard_blocker() {
+  local result="$1"
+  if [[ -z "${result}" ]]; then
+    return 1
+  fi
+  if startup_dialog_result_is_safe "${result}"; then
+    return 1
+  fi
+  return 0
+}
+
+startup_status_bridge_loaded() {
+  local status_path="${TRANSPORT_DIR}/openreaper-startup-status-v1.json"
+  node --input-type=module - "${status_path}" <<'NODE'
+import { readFile } from "node:fs/promises";
+const [statusPath] = process.argv.slice(2);
+try {
+  const status = JSON.parse(await readFile(statusPath, "utf8"));
+  process.exit(status?.contract === "openreaper.startup_status.v1" && status?.stage === "bridge_dofile_succeeded" ? 0 : 1);
+} catch {
+  process.exit(1);
+}
+NODE
+}
+
+accept_ready_bridge() {
+  if ! bridge_heartbeat_ready; then
+    return 1
+  fi
+  local -i remaining_ms
+  remaining_ms="$(startup_remaining_budget_ms)"
+  if (( remaining_ms >= STARTUP_CLEANUP_RESERVE_MS + STARTUP_DOCTOR_OVERHEAD_MS + 250 )); then
+    if verify_public_bridge_read; then
+      echo "[OpenReaper] bridge-heartbeat=ready owner=${BRIDGE_OWNER} generation=${BRIDGE_GENERATION}"
+      return 0
+    fi
+    if [[ "${STARTUP_DIALOG_POLICY}" == "soft" ]]; then
+      echo "[OpenReaper] bridge-read-probe=skipped_heartbeat_ready_soft_policy" >&2
+      echo "[OpenReaper] bridge-heartbeat=ready owner=${BRIDGE_OWNER} generation=${BRIDGE_GENERATION}"
+      return 0
+    fi
+    return 1
+  fi
+  if [[ "${STARTUP_DIALOG_POLICY}" == "soft" ]]; then
+    echo "[OpenReaper] bridge-read-probe=skipped_budget_exhausted_soft_policy remaining_ms=${remaining_ms}" >&2
+    echo "[OpenReaper] bridge-heartbeat=ready owner=${BRIDGE_OWNER} generation=${BRIDGE_GENERATION}"
+    return 0
+  fi
+  return 1
+}
+
+startup_last_chance_accept_live_bridge() {
+  local reason="$1"
+  local extra_tick
+  echo "[OpenReaper] startup-last-chance=bridge_liveness reason=${reason}" >&2
+  for extra_tick in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    if accept_ready_bridge; then
+      echo "[OpenReaper] startup-status=ready_after_budget_last_chance tick=${extra_tick} reason=${reason}"
+      return 0
+    fi
+    if [[ "${STARTUP_DIALOG_POLICY}" == "soft" ]] && startup_status_bridge_loaded; then
+      echo "[OpenReaper] startup-status=ready_after_budget_last_chance stage=bridge_dofile_succeeded reason=${reason}"
+      return 0
+    fi
+    sleep 0.25
+  done
+  return 1
+}
+
+startup_fail_or_last_chance_live_bridge() {
+  local stage="$1"
+  local pending="$2"
+  if startup_pending_dialog_is_hard_blocker "${pending}"; then
+    report_startup_user_action_required "${pending}"
+    return 75
+  fi
+  if startup_last_chance_accept_live_bridge "${stage}"; then
+    return 0
+  fi
+  return 1
+}
+
 wait_for_startup_readiness() {
   local max_ticks=$(( START_WAIT_SECONDS * 4 ))
   local tick dialog_result pending_dialog_blocker="" last_dialog_result=""
@@ -2775,19 +2867,13 @@ wait_for_startup_readiness() {
   fi
   for (( tick = 1; tick <= max_ticks; tick++ )); do
     if ! startup_budget_require_window "bridge_readiness" $(( STARTUP_CLEANUP_RESERVE_MS + 250 )); then
-      if [[ -n "${pending_dialog_blocker}" ]]; then
-        report_startup_user_action_required "${pending_dialog_blocker}"
-        return 75
-      fi
-      return 1
+      startup_fail_or_last_chance_live_bridge "bridge_readiness" "${pending_dialog_blocker}" || return $?
+      return 0
     fi
     assert_reaper_process_alive || return 1
     if ! startup_budget_require_window "bridge_readiness_dialog_inspection" $(( STARTUP_CLEANUP_RESERVE_MS + 1000 )); then
-      if [[ -n "${pending_dialog_blocker}" ]]; then
-        report_startup_user_action_required "${pending_dialog_blocker}"
-        return 75
-      fi
-      return 1
+      startup_fail_or_last_chance_live_bridge "bridge_readiness_dialog_inspection" "${pending_dialog_blocker}" || return $?
+      return 0
     fi
     dialog_result="$(run_startup_dialog_observer)"
     if [[ "${dialog_result}" != "${last_dialog_result}" ]]; then
@@ -2796,6 +2882,8 @@ wait_for_startup_readiness() {
     fi
     # A live Bridge cannot override a decision dialog.  Inspect first on every
     # tick, then accept the heartbeat only after this process has no blocker.
+    # Soft/Studio: budget-exhausted inspection and the allowlisted face are
+    # not blockers; last-chance still accepts a live Bridge.
     if ! startup_dialog_result_is_safe "${dialog_result}"; then
       if [[ "${pending_dialog_blocker}" != "${dialog_result}" ]]; then
         pending_dialog_blocker="${dialog_result}"
@@ -2806,17 +2894,18 @@ wait_for_startup_readiness() {
       return 75
     fi
     pending_dialog_blocker=""
-    if bridge_heartbeat_ready; then
-      verify_public_bridge_read || return 1
-      echo "[OpenReaper] bridge-heartbeat=ready owner=${BRIDGE_OWNER} generation=${BRIDGE_GENERATION}"
+    if accept_ready_bridge; then
       return 0
     fi
     sleep 0.25
   done
   startup_status_summary
-  if [[ -n "${pending_dialog_blocker}" ]]; then
+  if startup_pending_dialog_is_hard_blocker "${pending_dialog_blocker}"; then
     report_startup_user_action_required "${pending_dialog_blocker}"
     return 75
+  fi
+  if startup_last_chance_accept_live_bridge "readiness_loop_exhausted"; then
+    return 0
   fi
   if [[ "${RECOVER_EXISTING}" == "true" ]]; then
     echo "[OpenReaper] startup-status=blocked_same_instance_bridge_not_ready" >&2
