@@ -5,6 +5,10 @@ import { fileURLToPath } from "node:url";
 
 const STUDIO_DIR = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
+export function studioPackageRoot() {
+  return STUDIO_DIR;
+}
+
 export function repoRootFromStudio() {
   return path.resolve(STUDIO_DIR, "..", "..");
 }
@@ -85,8 +89,21 @@ export function studioStatePath(homeDir = os.homedir()) {
   return path.join(homeDir, ".openreaper", "studio", "session-v1.json");
 }
 
-export function studioFaceScriptName() {
+export function studioDialogEntryFileName() {
   return "openreaper_studio_dialog.lua";
+}
+
+export function studioDialogEntrySourcePath(repoRoot = STUDIO_DIR) {
+  return path.join(repoRoot, "reaper", studioDialogEntryFileName());
+}
+
+export function studioDialogModuleSourceDir(repoRoot = STUDIO_DIR) {
+  return path.join(repoRoot, "reaper", "dialog");
+}
+
+/** @deprecated use studioDialogEntrySourcePath */
+export function studioFaceSourcePath() {
+  return studioDialogEntrySourcePath();
 }
 
 export function studioFaceInstallPath(reaperResourceRoot) {
@@ -94,12 +111,8 @@ export function studioFaceInstallPath(reaperResourceRoot) {
     reaperResourceRoot,
     "Scripts",
     "OpenReaper",
-    studioFaceScriptName(),
+    studioDialogEntryFileName(),
   );
-}
-
-export function studioFaceSourcePath() {
-  return path.join(STUDIO_DIR, "reaper", studioFaceScriptName());
 }
 
 export function defaultReaperResourceRoot(platform, homeDir = os.homedir(), env = process.env) {

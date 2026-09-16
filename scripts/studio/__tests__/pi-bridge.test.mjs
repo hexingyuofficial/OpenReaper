@@ -24,6 +24,6 @@ describe("sendStudioPrompt", () => {
       { pi: { mode: "started", pid: 4242 } },
     );
     expect(result.mode).toBe("mock_pi_running");
-    expect(result.text).toContain("TODO");
+    expect(result.text).toContain("pi-stdio-rpc");
   });
 });

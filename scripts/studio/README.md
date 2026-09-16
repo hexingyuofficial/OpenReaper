@@ -1,115 +1,162 @@
-# OpenReaper Studio — Start / Stop + AI dialog
+# OpenReaper Studio
 
-One **Start** brings up the Studio chain; one **Stop** tears down what Studio started.
-This layer wraps the packaged `openreaper-start` helper (REAPER + MCP bridge), optional
-background Pi RPC, and a floating **ReaImGui** AI dialog (Day 4–5 MVP).
+One **Start** brings up REAPER + MCP bridge, optional Pi RPC, and the AI dialog face.  
+One **Stop** tears down Studio-owned processes and hooks (REAPER stays running by default).
+
+This folder is a **small framework**, not a pile of one-off scripts: orchestration steps, face
+modules, contracts, and agent transports are separated so UI and Pi wiring can evolve without
+rewiring Start/Stop.
 
 ## Prerequisites
 
-- REAPER installed (macOS primary)
-- OpenReaper installed from a release into `~/.openreaper/current` (see root README)
+- REAPER (macOS primary)
+- OpenReaper release install at `~/.openreaper/current`
 - Node.js 20+
+- **ReaImGui** (ReaPack) for the dialog MVP
 
-Optional: [Pi](https://pi.dev) on `PATH` with `~/.pi/agent/mcp.json` already configured.
+Optional: [Pi](https://pi.dev) on `PATH` with existing `~/.pi/agent/mcp.json`.
 
-**ReaImGui** (via ReaPack) is required for the dialog UI. There is no `openreaper_dialog_sample.lua`
-in this repo yet; the face lives at `scripts/studio/reaper/openreaper_studio_dialog.lua` and follows
-current ReaImGui APIs (default font; no custom `ImGui_PushFont` in this MVP).
-
-## Run (macOS)
-
-From the repo:
+## Run
 
 ```bash
-chmod +x scripts/studio/studio-start.sh scripts/studio/studio-stop.sh
 ./scripts/studio/studio-start.sh
 ./scripts/studio/studio-stop.sh
+# or: npm run studio:start | studio:stop | studio:status
 ```
 
-Or via npm:
+`OPENREAPER_INSTALL_ROOT` overrides the packaged install root.
 
-```bash
-npm run studio:start
-npm run studio:stop
+## Architecture (runnable spine)
+
+```text
+studio-start.sh / studio-stop.sh
+        │
+        ▼
+studio-orchestrate.mjs          ← CLI only
+        │
+        ├── lib/orchestration/   ← Start/Stop pipelines (ordered steps)
+        ├── lib/face/            ← Install hook + runtime config on disk
+        ├── lib/agent-seam/      ← Face → Pi/MCP transports
+        └── lib/contracts/       ← Chips + prompt JSON shapes
+
+REAPER __startup.lua (Studio hook)
+        │
+        ▼
+Scripts/OpenReaper/openreaper_studio_dialog.lua   ← entry
+Scripts/OpenReaper/studio/dialog/*.lua            ← face modules
+        │
+        ▼
+reaper.ExecProcess → studio-pi-send.mjs → agent-seam/send-prompt.mjs
 ```
 
-Installed copy (after packaging includes `scripts/studio/`):
+### Start pipeline (`lib/orchestration/start-steps.mjs`)
 
-```bash
-~/.openreaper/current/scripts/studio/studio-start.sh
-```
+| Step id | What it does |
+|---------|----------------|
+| `face.prepare` | Copy dialog entry + `studio/dialog/` modules; write `face-config-v1.json`; set `open-face-on-load` |
+| `engine.openreaper_start` | Run packaged `openreaper-start` (REAPER + MCP bridge) |
+| `agent.pi_rpc` | Optional background `pi --mode rpc` (read-only `mcp.json` check) |
+| `face.finalize` | Update face config + `session-v1.json` |
 
-Override install location:
+### Stop pipeline (`lib/orchestration/stop-steps.mjs`)
 
-```bash
-export OPENREAPER_INSTALL_ROOT="$HOME/.openreaper/current"
-```
+| Step id | What it does |
+|---------|----------------|
+| `agent.pi_rpc` | SIGTERM Pi if Studio started it |
+| `face.hook` | Remove Studio-owned `__startup.lua` block if Studio added it |
+| `engine.reaper_policy` | Preserve REAPER unless `OPENREAPER_STUDIO_STOP_REAPER=1` |
+| `session.clear` | Clear open-face flag + session file |
 
-## Start chain (order)
+## Module map
 
-| Step | Component | Behavior |
-|------|-----------|----------|
-| 1 | Face install + flag | Copies `openreaper_studio_dialog.lua`, writes `~/.openreaper/studio/face-config-v1.json`, sets `open-face-on-load`. |
-| 2 | REAPER + MCP bridge | Calls `bin/openreaper-start` in the install root (same as alpha package). |
-| 3 | Pi agent | If `pi` is on PATH and `OPENREAPER_STUDIO_SKIP_PI` is unset, starts `pi --mode rpc` in the background and logs to `session/logs/studio-pi-rpc.log`. |
-| 4 | AI dialog | On REAPER boot, `__startup.lua` loads the face script; the open flag shows a bottom-centered floating bar. |
+| Path | Role |
+|------|------|
+| `studio-orchestrate.mjs` | CLI: start / stop / status |
+| `studio-pi-send.mjs` | Agent seam CLI (called from REAPER) |
+| `lib/orchestration/*` | Pipelines and `runProcess` helper |
+| `lib/face/hook.mjs` | Marked `__startup.lua` block |
+| `lib/face/install.mjs` | Copy face bundle into REAPER resource path |
+| `lib/face/runtime-config.mjs` | `~/.openreaper/studio/*` paths + face JSON |
+| `lib/contracts/context-chip.mjs` | Chip kinds + normalization |
+| `lib/contracts/prompt.mjs` | Prompt request/response contracts |
+| `lib/agent-seam/send-prompt.mjs` | Transport router |
+| `lib/agent-seam/transports/http-rpc.mjs` | `OPENREAPER_STUDIO_PI_RPC_URL` |
+| `lib/agent-seam/transports/mock.mjs` | Default mock replies |
+| `reaper/openreaper_studio_dialog.lua` | Installed entry script |
+| `reaper/dialog/context_chip.lua` | Chip providers (+ menu) |
+| `reaper/dialog/ui_face.lua` | ReaImGui layout (swap for WebView later) |
+| `reaper/dialog/agent_bridge.lua` | ExecProcess → Node seam |
+| `reaper/dialog/bootstrap.lua` | Single-instance defer loop |
 
-If REAPER was already running before Start, restart REAPER once so `__startup.lua` loads the face hook.
+Legacy re-exports (avoid in new code): `lib/face.mjs`, `lib/face-config.mjs`, `lib/pi-bridge.mjs`.
 
 ## AI dialog (try it)
 
-After `./scripts/studio/studio-start.sh`:
+After Start:
 
-1. REAPER should open (or attach) and show the **OpenReaper Studio** floating bar near the bottom.
-2. With nothing selected, **no context chips** are shown.
-3. Click **+** to attach context: time selection, track, item, region at playhead, or marker near playhead.
-4. Each chip has **x** to dismiss.
-5. Type a prompt and **Send** — the face calls `studio-pi-send.mjs` via `reaper.ExecProcess`:
-   - If Studio started Pi RPC: **mock_pi_running** reply plus a TODO seam for real RPC attach.
-   - If Pi is absent/skipped: **mock** reply (does not touch `~/.pi` or `mcp.json`).
-   - Optional: set `OPENREAPER_STUDIO_PI_RPC_URL` to POST JSON `{ message, chips }` for HTTP bridge experiments.
+1. Floating **OpenReaper Studio** bar near the bottom (empty chips until you attach).
+2. **+** → time selection, track, item, region, marker providers (`context_chip.lua`).
+3. **x** on a chip dismisses it.
+4. **Send** → `studio-pi-send.mjs` with `openreaper.studio.prompt_request.v1` JSON.
 
-Re-open the face manually: **Actions → ReaScript: Load** →
-`~/Library/Application Support/REAPER/Scripts/OpenReaper/openreaper_studio_dialog.lua` → **Run**.
+Manual reopen: Actions → ReaScript: Load →  
+`~/Library/Application Support/REAPER/Scripts/OpenReaper/openreaper_studio_dialog.lua` → Run.
 
-## Stop behavior
+If REAPER was already running before Start, restart once so `__startup.lua` runs.
 
-| Component | Default |
-|-----------|---------|
-| Pi RPC started by Studio | Sent `SIGTERM` |
-| Studio `__startup.lua` face hook | Removed only if Studio added it this session |
-| REAPER | **Left running** (unsaved projects stay safe) |
-| MCP bridge | Stops when you quit REAPER |
+## Agent seam (Pi / MCP)
 
-Force REAPER quit on stop (use with care):
+Transport order (`lib/agent-seam/send-prompt.mjs`):
 
-```bash
-OPENREAPER_STUDIO_STOP_REAPER=1 ./scripts/studio/studio-stop.sh
-```
+1. **http_rpc** — set `OPENREAPER_STUDIO_PI_RPC_URL` (POST `{ message, chips }`)
+2. **mock** — always available; explains Pi state from `session-v1.json`
 
-## Pi: present vs absent
+**Extension point:** add `lib/agent-seam/transports/pi-stdio-rpc.mjs` and register it in
+`TRANSPORT_ORDER` before `mock` when the owned `pi --mode rpc` client is implemented.
 
-| Situation | Studio behavior |
-|-----------|-----------------|
-| `pi` not on PATH | Start continues; message points to Pi install docs. **Does not** create `~/.pi`. |
-| `~/.pi/agent/mcp.json` missing | Start continues; configure Pi yourself. **Does not** write `mcp.json`. |
-| `mcp.json` present, no `openreaper` entry | Warns; **does not** merge or overwrite your file. |
-| `mcp.json` present with openreaper | Reuses existing auth/config (read-only check). |
-| `OPENREAPER_STUDIO_SKIP_PI=1` | Skips background Pi RPC entirely. |
+Studio **never** writes `~/.pi` or `mcp.json`.
 
-Session metadata is stored at `~/.openreaper/studio/session-v1.json` (mode `0600`).
+## Context chip model
+
+Contract: `openreaper.studio.context_chip.v1` (see `lib/contracts/context-chip.mjs`).
+
+| Kind | Attach rule |
+|------|-------------|
+| `time` | Current loop/time selection |
+| `track` | First selected track |
+| `item` | First selected media item |
+| `region` | Region under playhead |
+| `marker` | Nearest marker to playhead |
+
+**Extension point:** add a provider in `reaper/dialog/context_chip.lua` (`PROVIDERS` table) and
+add the kind to `CONTEXT_CHIP_KINDS` in Node contracts.
+
+## On-disk Studio files
+
+| File | Purpose |
+|------|---------|
+| `~/.openreaper/studio/session-v1.json` | Last Start session (Pi pid, hook ownership) |
+| `~/.openreaper/studio/face-config-v1.json` | Node path + agent seam CLI for REAPER |
+| `~/.openreaper/studio/open-face-on-load` | One-shot flag consumed by dialog bootstrap |
+| `~/.openreaper/studio/prompts/*.request.json` | Send audit trail |
 
 ## Environment variables
 
 | Variable | Purpose |
 |----------|---------|
-| `OPENREAPER_INSTALL_ROOT` | Packaged install root (default `~/.openreaper/current`) |
-| `OPENREAPER_STUDIO_SKIP_PI` | `1` to skip Pi RPC |
-| `OPENREAPER_STUDIO_STOP_REAPER` | `1` to ask REAPER to quit on Stop |
-| `OPENREAPER_STUDIO_PI_ARGS` | Extra args appended after `pi --mode rpc` |
-| `OPENREAPER_STUDIO_PI_RPC_URL` | Optional HTTP endpoint for Send (JSON body) |
-| `OPENREAPER_STUDIO_NODE` | Node binary for `ExecProcess` bridge (default: current Node) |
+| `OPENREAPER_INSTALL_ROOT` | Packaged install root |
+| `OPENREAPER_STUDIO_SKIP_PI` | Skip Pi RPC step |
+| `OPENREAPER_STUDIO_STOP_REAPER` | Request REAPER quit on Stop |
+| `OPENREAPER_STUDIO_PI_ARGS` | Extra args after `pi --mode rpc` |
+| `OPENREAPER_STUDIO_PI_RPC_URL` | HTTP agent transport |
+| `OPENREAPER_STUDIO_NODE` | Node binary for ExecProcess |
 
 ## Windows
 
-Experimental wrappers: `studio-start.ps1` / `studio-stop.ps1` (same Node orchestrator).
+Experimental: `studio-start.ps1` / `studio-stop.ps1` (same orchestrator).
+
+## Tests
+
+```bash
+npm test -- scripts/studio/__tests__/
+```

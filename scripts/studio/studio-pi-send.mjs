@@ -1,10 +1,15 @@
 #!/usr/bin/env node
+/**
+ * Agent seam CLI — invoked from REAPER (ExecProcess) with a prompt request JSON file.
+ * Keep this thin; logic lives in lib/agent-seam/ and lib/contracts/.
+ */
 
 import { writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { readPromptPayload, sendStudioPrompt } from "./lib/pi-bridge.mjs";
+import { readPromptPayload } from "./lib/agent-seam/read-payload.mjs";
+import { sendStudioPrompt } from "./lib/agent-seam/send-prompt.mjs";
 import { readStudioState, studioStatePath } from "./lib/state.mjs";
 
 async function main() {
@@ -18,9 +23,7 @@ async function main() {
   const result = await sendStudioPrompt(payload, state);
   const responsePath = requestPath.replace(/\.request\.json$/, ".response.json");
   const outPath =
-    responsePath === requestPath
-      ? `${requestPath}.response.json`
-      : responsePath;
+    responsePath === requestPath ? `${requestPath}.response.json` : responsePath;
   await writeFile(outPath, `${JSON.stringify(result)}\n`, "utf8");
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }
