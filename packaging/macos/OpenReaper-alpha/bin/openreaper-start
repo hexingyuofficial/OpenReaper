@@ -155,6 +155,8 @@ LAUNCHSERVICES_LOCK_METADATA_WRITTEN=false
 LAUNCHSERVICES_SNAPSHOT_CREATED=false
 LAUNCHSERVICES_PID_HANDOFF=""
 LAUNCHSERVICES_MUTATED_KEYS=()
+START_CHAIN_LOCK_PATH=""
+START_CHAIN_LOCK_OWNED=false
 STARTUP_LAUNCH_ATTEMPTED=false
 STARTUP_LAUNCH_ACCEPTED=false
 STARTUP_LAUNCHED_REAPER_PID=""
@@ -364,9 +366,11 @@ duplicate instance.
 OPENREAPER_STARTUP_DIALOG_POLICY=soft|strict controls inspection failures.
 Default is soft when OPENREAPER_STUDIO=1, otherwise strict. Soft treats
 Accessibility/osascript failures as inspection_unavailable (not exit 75).
-Real blocked_* window classifications still fail closed. Studio also prefers
-one clean relaunch when attach would wait on a stale or mismatched Bridge
-heartbeat, so __startup.lua can start Bridge.
+Real blocked_* window classifications still fail closed. Studio attaches to an
+existing REAPER when possible. It may relaunch once when Studio just installed
+the __startup.lua face hook (OPENREAPER_STUDIO_FACE_HOOK_INSTALLED=1) or when
+OPENREAPER_STUDIO_RELAUNCH_STALE=1. Orphan LaunchServices env locks from a dead
+openreaper-start owner are reclaimed automatically; see README recovery one-liner.
 HELP
       exit 0
       ;;
@@ -1481,19 +1485,204 @@ fail_launchservices_lock_setup() {
   return 1
 }
 
+read_launchservices_lock_owner_pid() {
+  local metadata_path="${LAUNCHSERVICES_LOCK_PATH}/owner.meta"
+  if [[ ! -f "${metadata_path}" || -L "${metadata_path}" ]]; then
+    return 1
+  fi
+  local line owner_pid
+  while IFS= read -r line; do
+    if [[ "${line}" == pid=* ]]; then
+      owner_pid="${line#pid=}"
+      owner_pid="${owner_pid//[[:space:]]/}"
+      if [[ "${owner_pid}" == <-> && "${owner_pid}" != "0" ]]; then
+        print -r -- "${owner_pid}"
+        return 0
+      fi
+      return 1
+    fi
+  done < "${metadata_path}"
+  return 1
+}
+
+launchservices_lock_holder_process_alive() {
+  local owner_pid
+  if ! owner_pid="$(read_launchservices_lock_owner_pid)"; then
+    return 1
+  fi
+  kill -0 "${owner_pid}" 2>/dev/null
+}
+
+restore_launchservices_env_from_snapshot_dir() {
+  local snapshot_dir="$1"
+  local failed=0
+  local key presence previous
+  if [[ -z "${snapshot_dir}" || ! -d "${snapshot_dir}" || -L "${snapshot_dir}" ]]; then
+    return 0
+  fi
+  if ! launchservices_snapshot_has_only_known_entries "${snapshot_dir}"; then
+    return 1
+  fi
+  for key in "${LAUNCHSERVICES_ENV_KEYS[@]}"; do
+    local presence_path="${snapshot_dir}/${key}.presence"
+    local value_path="${snapshot_dir}/${key}.value"
+    if [[ ! -f "${presence_path}" || -L "${presence_path}" || ! -f "${value_path}" || -L "${value_path}" ]]; then
+      continue
+    fi
+    presence="$(<"${presence_path}")"
+    previous="$(<"${value_path}")"
+    if [[ "${presence}" == "set" ]]; then
+      if ! startup_run_bounded_external "${STARTUP_LAUNCHCTL_CLEANUP_TIMEOUT_MS}" \
+          "${LAUNCHCTL_BIN}" setenv "${key}" "${previous}"; then
+        echo "[OpenReaper] failed to restore LaunchServices env ${key} during orphan lock recovery" >&2
+        failed=1
+      fi
+    elif [[ "${presence}" == "unset" ]]; then
+      if ! startup_run_bounded_external "${STARTUP_LAUNCHCTL_CLEANUP_TIMEOUT_MS}" \
+          "${LAUNCHCTL_BIN}" unsetenv "${key}"; then
+        echo "[OpenReaper] failed to unset LaunchServices env ${key} during orphan lock recovery" >&2
+        failed=1
+      fi
+    else
+      failed=1
+    fi
+  done
+  (( failed == 0 ))
+}
+
+reclaim_orphan_launchservices_lock() {
+  if [[ ! -e "${LAUNCHSERVICES_LOCK_PATH}" && ! -L "${LAUNCHSERVICES_LOCK_PATH}" ]]; then
+    return 0
+  fi
+  if [[ ! -d "${LAUNCHSERVICES_LOCK_PATH}" || -L "${LAUNCHSERVICES_LOCK_PATH}" ]]; then
+    return 1
+  fi
+  local owner_pid=""
+  if owner_pid="$(read_launchservices_lock_owner_pid)"; then
+    if kill -0 "${owner_pid}" 2>/dev/null; then
+      return 1
+    fi
+    echo "[OpenReaper] launchservices-lock=recovering_orphan;previous_owner_pid=${owner_pid}" >&2
+  else
+    local -a empty_entries
+    empty_entries=("${LAUNCHSERVICES_LOCK_PATH}"/*(DN))
+    if (( ${#empty_entries[@]} != 0 )); then
+      return 1
+    fi
+    if rmdir "${LAUNCHSERVICES_LOCK_PATH}" 2>/dev/null; then
+      echo "[OpenReaper] launchservices-lock=reclaimed_empty;path=${LAUNCHSERVICES_LOCK_PATH}"
+      return 0
+    fi
+    return 1
+  fi
+  local snapshot_dir="${LAUNCHSERVICES_LOCK_PATH}/snapshot"
+  if [[ -d "${snapshot_dir}" && ! -L "${snapshot_dir}" ]]; then
+    restore_launchservices_env_from_snapshot_dir "${snapshot_dir}" || true
+  fi
+  if ! launchservices_lock_has_only_known_entries; then
+    echo "[OpenReaper] LaunchServices orphan lock has unexpected entries; not reclaiming: ${LAUNCHSERVICES_LOCK_PATH}" >&2
+    return 1
+  fi
+  rm -f -- "${LAUNCHSERVICES_LOCK_PATH}/owner.meta" \
+      "${LAUNCHSERVICES_LOCK_PATH}/.owner-token" \
+      "${LAUNCHSERVICES_LOCK_PATH}/launched-reaper.pid" 2>/dev/null || true
+  cleanup_known_launchservices_snapshot "${snapshot_dir}" || true
+  rmdir "${snapshot_dir}" 2>/dev/null || true
+  if ! rmdir "${LAUNCHSERVICES_LOCK_PATH}" 2>/dev/null; then
+    return 1
+  fi
+  echo "[OpenReaper] launchservices-lock=orphan_reclaimed;path=${LAUNCHSERVICES_LOCK_PATH}"
+  return 0
+}
+
+acquire_openreaper_start_chain_lock() {
+  START_CHAIN_LOCK_PATH="${SESSION_ROOT}/.openreaper-start-chain.lock"
+  if ! mkdir -p "${SESSION_ROOT}"; then
+    echo "[OpenReaper] Could not prepare the start-chain lock parent: ${SESSION_ROOT}" >&2
+    return 1
+  fi
+  local attempt owner_pid
+  for attempt in {1..40}; do
+    if mkdir -m 700 "${START_CHAIN_LOCK_PATH}" 2>/dev/null; then
+      if ! {
+        print -r -- "$$"
+        print -r -- "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      } > "${START_CHAIN_LOCK_PATH}/owner.meta" \
+          || ! chmod 600 "${START_CHAIN_LOCK_PATH}/owner.meta"; then
+        rm -rf -- "${START_CHAIN_LOCK_PATH}" 2>/dev/null || true
+        return 1
+      fi
+      START_CHAIN_LOCK_OWNED=true
+      return 0
+    fi
+    if [[ ! -d "${START_CHAIN_LOCK_PATH}" || -L "${START_CHAIN_LOCK_PATH}" ]]; then
+      echo "[OpenReaper] Could not acquire the openreaper-start chain lock: ${START_CHAIN_LOCK_PATH}" >&2
+      return 1
+    fi
+    owner_pid=""
+    if [[ -f "${START_CHAIN_LOCK_PATH}/owner.meta" && ! -L "${START_CHAIN_LOCK_PATH}/owner.meta" ]]; then
+      while IFS= read -r line; do
+        if [[ "${line}" == <-> ]]; then
+          owner_pid="${line}"
+          break
+        fi
+      done < "${START_CHAIN_LOCK_PATH}/owner.meta"
+    fi
+    if [[ "${owner_pid}" == <-> && "${owner_pid}" != "0" ]] && kill -0 "${owner_pid}" 2>/dev/null; then
+      sleep 0.25
+      continue
+    fi
+    rm -rf -- "${START_CHAIN_LOCK_PATH}" 2>/dev/null || true
+  done
+  echo "[OpenReaper] another openreaper-start is still in progress: ${START_CHAIN_LOCK_PATH}" >&2
+  echo "[OpenReaper] Wait for it to finish or remove the lock when its owner pid is gone." >&2
+  return 1
+}
+
+release_openreaper_start_chain_lock() {
+  if [[ "${START_CHAIN_LOCK_OWNED}" != "true" ]]; then
+    return 0
+  fi
+  rm -rf -- "${START_CHAIN_LOCK_PATH}" 2>/dev/null || true
+  START_CHAIN_LOCK_OWNED=false
+  START_CHAIN_LOCK_PATH=""
+  return 0
+}
+
 acquire_launchservices_lock() {
   local lock_parent="${INSTALL_ROOT}/session"
+  local attempt lock_acquired=false
   if ! mkdir -p "${lock_parent}"; then
     echo "[OpenReaper] Could not prepare the stable LaunchServices lock parent: ${lock_parent}" >&2
     return 1
   fi
-  if ! mkdir -m 700 "${LAUNCHSERVICES_LOCK_PATH}" 2>/dev/null; then
+  for attempt in {1..8}; do
+    if mkdir -m 700 "${LAUNCHSERVICES_LOCK_PATH}" 2>/dev/null; then
+      lock_acquired=true
+      break
+    fi
     if [[ -e "${LAUNCHSERVICES_LOCK_PATH}" || -L "${LAUNCHSERVICES_LOCK_PATH}" ]]; then
-      echo "[OpenReaper] LaunchServices environment lock is already held: ${LAUNCHSERVICES_LOCK_PATH}" >&2
-      echo "[OpenReaper] Resolve or recover the existing lock before retrying; it will not be auto-broken." >&2
+      if reclaim_orphan_launchservices_lock; then
+        continue
+      fi
+      if launchservices_lock_holder_process_alive; then
+        if (( attempt < 8 )); then
+          sleep 0.5
+          continue
+        fi
+        echo "[OpenReaper] LaunchServices environment lock is already held: ${LAUNCHSERVICES_LOCK_PATH}" >&2
+        echo "[OpenReaper] Another openreaper-start is mutating LaunchServices env; retry when it finishes." >&2
+      else
+        echo "[OpenReaper] LaunchServices environment lock is already held: ${LAUNCHSERVICES_LOCK_PATH}" >&2
+        echo "[OpenReaper] recovery=If no openreaper-start is running, remove ${LAUNCHSERVICES_LOCK_PATH} after verifying owner.meta pid is dead." >&2
+      fi
+      return 1
     else
       echo "[OpenReaper] Could not acquire the stable LaunchServices environment lock: ${LAUNCHSERVICES_LOCK_PATH}" >&2
+      return 1
     fi
+  done
+  if [[ "${lock_acquired}" != "true" ]]; then
     return 1
   fi
   LAUNCHSERVICES_LOCK_OWNED=true
@@ -1764,6 +1953,7 @@ terminate_existing_reaper_for_studio_relaunch() {
     return 1
   fi
   rm -f -- "${PID_FILE}" || true
+  reclaim_orphan_launchservices_lock || true
   echo "[OpenReaper] studio-relaunch=stale_session_stopped;reaper_pid=${reaper_pid}"
   return 0
 }
@@ -1777,6 +1967,7 @@ launchservices_cleanup_on_exit() {
   if (( original_status != 0 )); then
     cleanup_failed_startup_reaper || true
   fi
+  release_openreaper_start_chain_lock || true
   if [[ "${LAUNCHSERVICES_RECOVERY_RETAINED}" == "true" ]]; then
     if (( original_status == 0 )); then
       original_status=1
@@ -2540,6 +2731,10 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+if ! acquire_openreaper_start_chain_lock; then
+  exit 1
+fi
+
 existing_session_mode=""
 if existing_reaper_pid="$(verified_existing_reaper_pid)"; then
   existing_session_mode="managed"
@@ -2578,12 +2773,18 @@ if [[ -n "${existing_session_mode}" ]]; then
   fi
   if [[ "${OPENREAPER_STUDIO:-}" == "1" && "${STUDIO_STALE_RELAUNCH_ATTEMPTED}" != "true" ]] \
       && ! bridge_heartbeat_ready; then
-    echo "[OpenReaper] studio-relaunch=stale_or_mismatched_bridge_heartbeat;mode=${existing_session_mode}"
-    STUDIO_STALE_RELAUNCH_ATTEMPTED=true
-    if terminate_existing_reaper_for_studio_relaunch; then
-      existing_session_mode=""
+    if [[ "${OPENREAPER_STUDIO_RELAUNCH_STALE:-}" == "1" \
+        || "${OPENREAPER_STUDIO_FACE_HOOK_INSTALLED:-}" == "1" ]]; then
+      echo "[OpenReaper] studio-relaunch=stale_or_mismatched_bridge_heartbeat;mode=${existing_session_mode}"
+      STUDIO_STALE_RELAUNCH_ATTEMPTED=true
+      if terminate_existing_reaper_for_studio_relaunch; then
+        existing_session_mode=""
+      else
+        echo "[OpenReaper] studio-relaunch=aborted_could_not_stop_existing_reaper;falling_back_to_attach" >&2
+      fi
     else
-      echo "[OpenReaper] studio-relaunch=aborted_could_not_stop_existing_reaper;falling_back_to_attach" >&2
+      echo "[OpenReaper] studio-relaunch=skipped_prefer_attach;mode=${existing_session_mode}"
+      echo "[OpenReaper] recovery=Attach waits for Bridge on the running REAPER. Restart REAPER once if __startup.lua changed, or set OPENREAPER_STUDIO_RELAUNCH_STALE=1 for one automated relaunch." >&2
     fi
   fi
 fi

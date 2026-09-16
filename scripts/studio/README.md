@@ -12,7 +12,7 @@ rewiring Start/Stop.
 | Capability | What you get |
 |------------|----------------|
 | **Private Pi** | Stock `pi --mode rpc` on `~/.openreaper/studio/pi/*` (or `vendor/pi` when bundled). Personal `~/.pi` is unused. |
-| **Coupled lifecycle** | Start: face → bundled `openreaper-start` (REAPER + bridge) → private Pi RPC host → session. Stop: Pi host + face hooks. If Pi was required and fails after REAPER is up, coupled rollback quits REAPER (unless `OPENREAPER_STUDIO_LOOSE_COUPLING=1`). |
+| **Coupled lifecycle** | Start: face → bundled `openreaper-start` (REAPER + bridge) → private Pi RPC host → session. Stop: Pi host + face hooks. If Pi fails after REAPER is up, Start fails with logs; REAPER stays running unless `OPENREAPER_STUDIO_STRICT_COUPLING=1`. |
 | **Bundled OpenReaper** | Start always uses `INSTALL_ROOT/bin/openreaper-start` (`~/.openreaper/current` by default). `engine-bundle-v1.json` records the packaged engine slot. |
 | **Terminal-like dialog** | Send routes prompts/`/commands` through private Pi RPC (not a gutted mock). Typing `/` shows a slash palette with Pi `get_commands` names + descriptions. |
 | **Rough skin** | Floating ReaImGui bar (`studio_skin.lua`): neutral dark minimal AI-DAW look. Theme embed is a follow-up. |
@@ -42,6 +42,18 @@ state is under OpenReaper Studio roots.
 ```
 
 `OPENREAPER_INSTALL_ROOT` overrides the packaged install root.
+
+### macOS Start recovery
+
+If Step 2 (`openreaper-start`) fails with **LaunchServices environment lock is already held** and no
+`openreaper-start` is running, clear the orphan lock for your install root (default `~/.openreaper/current`):
+
+```bash
+rm -rf ~/.openreaper/current/session/.openreaper-launchservices-env.lock
+```
+
+Fresh installs normally reclaim dead-owner locks automatically; use the one-liner only when recovery
+logs say the lock was retained.
 
 ## Private Pi (isolated from ~/.pi)
 
@@ -209,7 +221,9 @@ add the kind to `CONTEXT_CHIP_KINDS` in Node contracts.
 | `OPENREAPER_STUDIO_PI_BIN` | Override `pi` executable path |
 | `OPENREAPER_STUDIO_PI_ARGS` | Extra args after `pi --mode rpc` |
 | `OPENREAPER_STUDIO_PI_RPC_URL` | Force HTTP agent transport (usually set via face config) |
-| `OPENREAPER_STUDIO_LOOSE_COUPLING` | `1` = do not quit REAPER when private Pi fails mid-Start |
+| `OPENREAPER_STUDIO_STRICT_COUPLING` | `1` = quit REAPER when private Pi fails mid-Start (legacy coupled rollback) |
+| `OPENREAPER_STUDIO_LOOSE_COUPLING` | `1` = same as default (do not quit REAPER on Pi failure) |
+| `OPENREAPER_STUDIO_RELAUNCH_STALE` | `1` = force one automated REAPER relaunch when attach sees a stale bridge heartbeat |
 | `OPENREAPER_STUDIO_NODE` | Node binary for ExecProcess |
 
 ## Windows

@@ -271,6 +271,10 @@ describe("packaged openreaper-start dialog observer", () => {
     expect(source).toMatch(/OPENREAPER_STARTUP_DIALOG_POLICY/);
     expect(source).toMatch(/OPENREAPER_STUDIO:-\}" == "1"/);
     expect(source).toMatch(/studio-relaunch=stale_or_mismatched_bridge_heartbeat/);
+    expect(source).toMatch(/studio-relaunch=skipped_prefer_attach/);
+    expect(source).toMatch(/OPENREAPER_STUDIO_FACE_HOOK_INSTALLED/);
+    expect(source).toMatch(/reclaim_orphan_launchservices_lock/);
+    expect(source).toMatch(/acquire_openreaper_start_chain_lock/);
     expect(classifier).toMatch(/unavailable\|inspection_unavailable/);
   });
 

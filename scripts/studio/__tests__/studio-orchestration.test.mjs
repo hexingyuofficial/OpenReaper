@@ -258,7 +258,8 @@ describe("start helper sync + studio env", () => {
       path.join(studioPackageRoot(), "lib", "orchestration", "start-steps.mjs"),
       "utf8",
     );
-    expect(source).toMatch(/env:\s*\{\s*\.\.\.ctx\.env,\s*OPENREAPER_STUDIO:\s*"1"\s*\}/);
+    expect(source).toMatch(/OPENREAPER_STUDIO:\s*"1"/);
+    expect(source).toMatch(/OPENREAPER_STUDIO_FACE_HOOK_INSTALLED/);
     const engine = START_STEPS.find((step) => step.id === "engine.openreaper_start");
     expect(engine?.label).toMatch(/openreaper-start/);
   });

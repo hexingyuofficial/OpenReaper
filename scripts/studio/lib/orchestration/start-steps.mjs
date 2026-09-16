@@ -131,9 +131,13 @@ export const START_STEPS = [
       if (ctx.options.projectPath) {
         startArgs.push("--project-path", ctx.options.projectPath);
       }
+      const openreaperEnv = { ...ctx.env, OPENREAPER_STUDIO: "1" };
+      if (ctx.faceInstall?.hookInstalled) {
+        openreaperEnv.OPENREAPER_STUDIO_FACE_HOOK_INSTALLED = "1";
+      }
       const result = await runProcess(ctx.startCmd.command, startArgs, {
         cwd: ctx.startCmd.cwd,
-        env: { ...ctx.env, OPENREAPER_STUDIO: "1" },
+        env: openreaperEnv,
       });
       ctx.state.openreaperStartExitCode = result.code;
       if (result.code !== 0) {
