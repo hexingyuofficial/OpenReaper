@@ -436,6 +436,7 @@ describe("packaged openreaper-start dialog observer", () => {
     expect(hookWait).toMatch(/startup_last_chance_accept_published_stage/);
     expect(hookWait).toMatch(/startup-hook=leftover_budget_accept/);
     expect(hookWait).toMatch(/startup_poke_trusted_launcher_if_unpublished/);
+    expect(hookWait).toMatch(/startup_poke_studio_face_if_needed/);
     expect(hookWait).toMatch(/startup_should_poke_trusted_launcher/);
     expect(hookWait).not.toMatch(
       /startup_budget_require_window "startup_hook" \$\(\( STARTUP_CLEANUP_RESERVE_MS \+ 250 \)\)/,
@@ -452,7 +453,7 @@ describe("packaged openreaper-start dialog observer", () => {
     expect(source).toMatch(/STARTUP_DIALOG_INSPECT_EVERY_TICKS=8/);
     expect(source).toMatch(/STARTUP_DIALOG_SOFT_BLOCKER_INSPECT_EVERY_TICKS=0/);
     expect(source).toMatch(/STARTUP_DIALOG_FIRST_TIMEOUT_SECONDS=4/);
-    expect(source).toMatch(/OPENREAPER_START_HELPER_REV="studio-hook-publish-v5"/);
+    expect(source).toMatch(/OPENREAPER_START_HELPER_REV="studio-hook-publish-v6"/);
     expect(source).toMatch(/start-helper-rev=/);
     expect(source).toMatch(/STARTUP_AX_SKIP_REMAINING_MS=10000/);
     expect(source).toMatch(/STARTUP_HOOK_FAIL_REMAINING_MS=7500/);
@@ -1065,6 +1066,74 @@ describe("packaged openreaper-start kernel hook install + launcher poke", () => 
       );
       expect(skipped.status, skipped.stderr).toBe(0);
       expect(skipped.stderr).not.toMatch(/startup-hook-poke=trusted_launcher/);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("pokes the Studio face script once under OPENREAPER_STUDIO=1", () => {
+    if (!zshAvailable()) {
+      return;
+    }
+    const pokeFace = extractShellFunction(source, "startup_poke_studio_face_if_needed");
+    const trusted = extractShellFunction(source, "startup_trusted_lua_is_runnable");
+    const tmp = mkdtempSync(path.join(os.tmpdir(), "or-face-poke-"));
+    const face = path.join(tmp, "openreaper_studio_dialog.lua");
+    const logFile = path.join(tmp, "start.log");
+    writeFileSync(face, "-- face\n", "utf8");
+    writeFileSync(logFile, "", "utf8");
+    try {
+      const poked = spawnSync(
+        "zsh",
+        [
+          "-c",
+          [
+            "OPENREAPER_STUDIO=1",
+            "STARTUP_DIALOG_POLICY=soft",
+            `OPENREAPER_STUDIO_FACE_SCRIPT=${JSON.stringify(face)}`,
+            `START_LOG=${JSON.stringify(logFile)}`,
+            "STARTUP_FACE_POKE_ATTEMPTED=false",
+            "REAPER_BIN=/usr/bin/true",
+            "REAPER_APP=",
+            "startup_remaining_budget_ms() { print -r -- 50000; }",
+            "startup_run_bounded_external() { shift; printf 'poked %s\\n' \"$*\"; return 0; }",
+            trusted,
+            pokeFace,
+            "startup_poke_studio_face_if_needed",
+            "first=$?",
+            "startup_poke_studio_face_if_needed",
+            "second=$?",
+            'print -r -- "first=$first second=$second attempted=$STARTUP_FACE_POKE_ATTEMPTED"',
+            "exit $first",
+          ].join("\n"),
+          "poke-face",
+        ],
+        { encoding: "utf8" },
+      );
+      expect(poked.status, poked.stderr).toBe(0);
+      expect(poked.stderr).toMatch(/startup-hook-poke=studio_face remaining_ms=50000/);
+      expect(poked.stderr).toMatch(/startup-hook-poke=studio_face_submitted/);
+      expect(poked.stdout).toMatch(/first=0 second=1 attempted=true/);
+
+      const skipped = spawnSync(
+        "zsh",
+        [
+          "-c",
+          [
+            "OPENREAPER_STUDIO=1",
+            "STARTUP_DIALOG_POLICY=soft",
+            `OPENREAPER_STUDIO_FACE_SCRIPT=${JSON.stringify(path.join(tmp, "not-the-face.lua"))}`,
+            "STARTUP_FACE_POKE_ATTEMPTED=false",
+            trusted,
+            pokeFace,
+            "startup_poke_studio_face_if_needed",
+          ].join("\n"),
+          "poke-face-skip",
+        ],
+        { encoding: "utf8" },
+      );
+      expect(skipped.status).toBe(1);
+      expect(skipped.stderr).not.toMatch(/startup-hook-poke=studio_face remaining_ms=/);
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }

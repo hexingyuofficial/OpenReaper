@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   buildFaceStartupHookBlock,
+  ensureFaceStartupHook,
   startupLuaHasFaceHook,
 } from "../lib/face.mjs";
 import { existsSync } from "node:fs";
@@ -241,10 +242,11 @@ describe("face.prepare", () => {
       expect(synced).toContain("STARTUP_DIALOG_SOFT_BLOCKER_INSPECT_EVERY_TICKS");
       expect(synced).toContain("STARTUP_DIALOG_FIRST_TIMEOUT_SECONDS");
       expect(synced).toContain("startup_wait_poll_ticks");
-      expect(synced).toContain('OPENREAPER_START_HELPER_REV="studio-hook-publish-v5"');
+      expect(synced).toContain('OPENREAPER_START_HELPER_REV="studio-hook-publish-v6"');
       expect(synced).toContain("start-helper-rev=");
       expect(synced).toContain("STARTUP_HOOK_QUIET_TICKS");
       expect(synced).toContain("startup-hook-poke=trusted_launcher");
+      expect(synced).toContain("startup-hook-poke=studio_face");
       expect(synced).toContain("ensure_openreaper_startup_hook");
       expect(synced).toContain("BEGIN openreaper-kernel-startup");
       expect(synced).toContain('if windowTitle is "OpenReaper Studio" then');
@@ -279,7 +281,7 @@ describe("start helper sync + studio env", () => {
       });
     expect(result.synced).toBe(true);
     expect(result.dest).toBe(path.join(installRoot, "bin", "openreaper-start"));
-    expect(result.rev).toBe("studio-hook-publish-v5");
+    expect(result.rev).toBe("studio-hook-publish-v6");
     expect(result.sha256).toMatch(/^[a-f0-9]{64}$/);
       const copied = await readFile(result.dest, "utf8");
       expect(copied).toContain("inspection_unavailable");
@@ -288,10 +290,11 @@ describe("start helper sync + studio env", () => {
       expect(copied).toContain("held_for_successor_publish");
       expect(copied).toContain("successor_identity_pending");
       expect(copied).toContain("startup_wait_accept_published_stage");
-      expect(copied).toContain('OPENREAPER_START_HELPER_REV="studio-hook-publish-v5"');
+      expect(copied).toContain('OPENREAPER_START_HELPER_REV="studio-hook-publish-v6"');
       expect(copied).toContain("STARTUP_DIALOG_FIRST_TIMEOUT_SECONDS");
       expect(copied).toContain("STARTUP_HOOK_QUIET_TICKS");
       expect(copied).toContain("startup-hook-poke=trusted_launcher");
+      expect(copied).toContain("startup-hook-poke=studio_face");
       expect(copied).toContain("ensure_openreaper_startup_hook");
       expect(copied).toContain("startup_wait_poll_ticks");
       expect(copied).toContain("startup-last-chance=published_stage");
@@ -330,8 +333,8 @@ describe("start helper sync + studio env", () => {
       expect(result.dest).toBe(path.join(bin, "openreaper-start"));
       const dest = await readFile(result.dest, "utf8");
       const sh = await readFile(path.join(bin, "openreaper-start.sh"), "utf8");
-      expect(dest).toContain('OPENREAPER_START_HELPER_REV="studio-hook-publish-v5"');
-      expect(sh).toContain('OPENREAPER_START_HELPER_REV="studio-hook-publish-v5"');
+      expect(dest).toContain('OPENREAPER_START_HELPER_REV="studio-hook-publish-v6"');
+      expect(sh).toContain('OPENREAPER_START_HELPER_REV="studio-hook-publish-v6"');
       expect(sh).not.toContain("old-sh");
     } finally {
       await rm(tmp, { recursive: true, force: true });
@@ -362,9 +365,9 @@ describe("start helper sync + studio env", () => {
       const facePrepare = START_STEPS.find((step) => step.id === "face.prepare");
       await expect(facePrepare.run(ctx)).resolves.toBeUndefined();
       expect(ctx.startCmd?.command).toBe(path.join(installRoot, "bin", "openreaper-start"));
-      expect(ctx.startHelperSync?.rev).toBe("studio-hook-publish-v5");
+      expect(ctx.startHelperSync?.rev).toBe("studio-hook-publish-v6");
       const synced = await readFile(ctx.startCmd.command, "utf8");
-      expect(synced).toContain('OPENREAPER_START_HELPER_REV="studio-hook-publish-v5"');
+      expect(synced).toContain('OPENREAPER_START_HELPER_REV="studio-hook-publish-v6"');
       expect(synced).not.toContain("old-only-sh");
     } finally {
       await rm(tmp, { recursive: true, force: true });
@@ -378,6 +381,7 @@ describe("start helper sync + studio env", () => {
     );
     expect(source).toMatch(/OPENREAPER_STUDIO:\s*"1"/);
     expect(source).toMatch(/OPENREAPER_STUDIO_FACE_HOOK_INSTALLED/);
+    expect(source).toMatch(/OPENREAPER_STUDIO_FACE_SCRIPT/);
     expect(source).toMatch(/helperSync\.dest/);
     expect(source).toMatch(/START_HELPER_REV/);
     expect(source).toMatch(/probeOpenReaperEngine/);
@@ -403,7 +407,7 @@ describe("start helper sync + studio env", () => {
         startHelperSync: {
           synced: true,
           dest,
-          rev: "studio-hook-publish-v5",
+          rev: "studio-hook-publish-v6",
         },
         options: {},
         env: { OPENREAPER_STUDIO: "1" },
@@ -420,6 +424,51 @@ describe("start helper sync + studio env", () => {
     } finally {
       await rm(tmp, { recursive: true, force: true });
     }
+  });
+
+  it("passes the face script to the helper and only relaunch-flags a just-written hook", async () => {
+    const captured = [];
+    const engine = START_STEPS.find((step) => step.id === "engine.openreaper_start");
+    const faceScript = "/tmp/Scripts/OpenReaper/openreaper_studio_dialog.lua";
+    await engine.run({
+      env: { OPENREAPER_STUDIO: "1" },
+      options: {},
+      startCmd: { command: "true", args: [], cwd: "/tmp" },
+      faceInstall: {
+        hookInstalled: true,
+        alreadyPresent: true,
+        entryScriptPath: faceScript,
+      },
+      state: { openreaperStartExitCode: null },
+      log() {},
+      runProcess: async (_cmd, _args, opts) => {
+        captured.push(opts.env);
+        return { code: 0 };
+      },
+    });
+    expect(captured[0].OPENREAPER_STUDIO).toBe("1");
+    expect(captured[0].OPENREAPER_STUDIO_FACE_SCRIPT).toBe(faceScript);
+    expect(captured[0].OPENREAPER_STUDIO_FACE_HOOK_INSTALLED).toBeUndefined();
+
+    captured.length = 0;
+    await engine.run({
+      env: { OPENREAPER_STUDIO: "1" },
+      options: {},
+      startCmd: { command: "true", args: [], cwd: "/tmp" },
+      faceInstall: {
+        hookInstalled: true,
+        alreadyPresent: false,
+        entryScriptPath: faceScript,
+      },
+      state: { openreaperStartExitCode: null },
+      log() {},
+      runProcess: async (_cmd, _args, opts) => {
+        captured.push(opts.env);
+        return { code: 0 };
+      },
+    });
+    expect(captured[0].OPENREAPER_STUDIO_FACE_HOOK_INSTALLED).toBe("1");
+    expect(captured[0].OPENREAPER_STUDIO_FACE_SCRIPT).toBe(faceScript);
   });
 
   it("soft-continues when openreaper-start is non-zero but Bridge is live", async () => {
@@ -670,6 +719,20 @@ describe("face hook", () => {
     expect(block).toContain("BEGIN openreaper-studio-face");
     expect(block).toContain("/tmp/OpenReaper/stub.lua");
     expect(startupLuaHasFaceHook(block)).toBe(true);
+  });
+
+  it("reports hookInstalled when the Studio face block is already present", async () => {
+    const tmp = await mkdtemp(path.join(os.tmpdir(), "or-face-hook-"));
+    try {
+      const startupLuaPath = path.join(tmp, "__startup.lua");
+      const faceScriptPath = path.join(tmp, "openreaper_studio_dialog.lua");
+      const first = await ensureFaceStartupHook({ startupLuaPath, faceScriptPath });
+      expect(first).toEqual({ hookInstalled: true, alreadyPresent: false });
+      const second = await ensureFaceStartupHook({ startupLuaPath, faceScriptPath });
+      expect(second).toEqual({ hookInstalled: true, alreadyPresent: true });
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
   });
 });
 

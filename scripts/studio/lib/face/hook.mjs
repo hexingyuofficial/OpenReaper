@@ -40,7 +40,7 @@ export function startupLuaHasFaceHook(content) {
 export async function ensureFaceStartupHook({ startupLuaPath, faceScriptPath }) {
   const existing = await readStartupLua(startupLuaPath);
   if (startupLuaHasFaceHook(existing)) {
-    return { hookInstalled: false, alreadyPresent: true };
+    return { hookInstalled: true, alreadyPresent: true };
   }
   const block = buildFaceStartupHookBlock(faceScriptPath);
   const separator = existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
