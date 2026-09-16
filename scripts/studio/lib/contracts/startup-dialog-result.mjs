@@ -27,8 +27,10 @@ export const STARTUP_DIALOG_SOFT_SAFE_RESULTS = Object.freeze([
 export const STUDIO_FACE_SAFE_WINDOW_TITLES = Object.freeze(["OpenReaper Studio"]);
 
 /**
- * A lone Project Settings window on cold Studio start. Soft policy ignores it
- * without clicking Cancel. Strict policy still reports user action required.
+ * A lone Project Settings window on cold Studio start. Soft policy treats it
+ * as recoverable. The helper may click unique Cancel on that exact title so
+ * __startup.lua can run; it never clicks OK/Apply or unknown/license/missing-media
+ * windows. Strict policy still reports user action required.
  */
 export const STUDIO_SOFT_BLOCKER_WINDOW_TITLES = Object.freeze([
   "Project Settings",
@@ -77,7 +79,9 @@ export function isStudioSoftBlockerWindowTitle(title) {
  * the observer still emits blocked_unknown_dialog:title=….
  * Soft/Studio policy: a lone Project Settings window is a recoverable soft
  * blocker (blocked_manual_dialog / project_settings_seen_but_not_notes).
- * Start still never clicks or closes REAPER windows.
+ * Soft Start may click unique Cancel on that exact title so the startup hook
+ * can publish. License, missing-media, and unknown windows stay fail-closed
+ * and are never clicked.
  */
 export function startupDialogResultIsSafe(result, policy = "strict") {
   const token = dialogResultToken(result);

@@ -241,7 +241,7 @@ describe("face.prepare", () => {
       expect(synced).toContain("STARTUP_DIALOG_SOFT_BLOCKER_INSPECT_EVERY_TICKS");
       expect(synced).toContain("STARTUP_DIALOG_FIRST_TIMEOUT_SECONDS");
       expect(synced).toContain("startup_wait_poll_ticks");
-      expect(synced).toContain('OPENREAPER_START_HELPER_REV="studio-hook-budget-v4"');
+      expect(synced).toContain('OPENREAPER_START_HELPER_REV="studio-hook-budget-v5"');
       expect(synced).toContain("start-helper-rev=");
       expect(synced).toContain('if windowTitle is "OpenReaper Studio" then');
       expect(synced).toContain("startup-last-chance=published_stage");
@@ -250,6 +250,9 @@ describe("face.prepare", () => {
       expect(synced).toContain("STARTUP_AX_SKIP_REMAINING_MS");
       expect(synced).toContain("budget_remaining_ms=");
       expect(synced).toContain("startup-ax=stopped_after_soft_blocker");
+      expect(synced).toContain("startup-dialog-dismiss=project_settings_cancel");
+      expect(synced).toContain("startup-dialog-project-settings-dismiss=title_only_unique_cancel_soft");
+      expect(synced).toContain("click theCancelButton");
       expect(synced).toContain("startup-reaper-preserve=soft_policy");
       expect(synced).not.toContain("next repeat");
       expect(synced).not.toContain("studioFaceSafeTitles");
@@ -273,7 +276,7 @@ describe("start helper sync + studio env", () => {
       });
     expect(result.synced).toBe(true);
     expect(result.dest).toBe(path.join(installRoot, "bin", "openreaper-start"));
-    expect(result.rev).toBe("studio-hook-budget-v4");
+    expect(result.rev).toBe("studio-hook-budget-v5");
     expect(result.sha256).toMatch(/^[a-f0-9]{64}$/);
       const copied = await readFile(result.dest, "utf8");
       expect(copied).toContain("inspection_unavailable");
@@ -282,13 +285,15 @@ describe("start helper sync + studio env", () => {
       expect(copied).toContain("held_for_successor_publish");
       expect(copied).toContain("successor_identity_pending");
       expect(copied).toContain("startup_wait_accept_published_stage");
-      expect(copied).toContain('OPENREAPER_START_HELPER_REV="studio-hook-budget-v4"');
+      expect(copied).toContain('OPENREAPER_START_HELPER_REV="studio-hook-budget-v5"');
       expect(copied).toContain("STARTUP_DIALOG_FIRST_TIMEOUT_SECONDS");
       expect(copied).toContain("startup_wait_poll_ticks");
       expect(copied).toContain("startup-last-chance=published_stage");
       expect(copied).toContain("startup-hook=leftover_budget_accept");
       expect(copied).toContain('if windowTitle is "OpenReaper Studio" then');
       expect(copied).toContain("startup-ax=stopped_after_soft_blocker");
+      expect(copied).toContain("startup-dialog-dismiss=project_settings_cancel");
+      expect(copied).toContain("click theCancelButton");
       expect(copied).toContain("startup-last-chance=bridge_liveness");
       expect(copied).toContain("startup-reaper-preserve=soft_policy");
       expect(copied).not.toContain("next repeat");
@@ -319,8 +324,8 @@ describe("start helper sync + studio env", () => {
       expect(result.dest).toBe(path.join(bin, "openreaper-start"));
       const dest = await readFile(result.dest, "utf8");
       const sh = await readFile(path.join(bin, "openreaper-start.sh"), "utf8");
-      expect(dest).toContain('OPENREAPER_START_HELPER_REV="studio-hook-budget-v4"');
-      expect(sh).toContain('OPENREAPER_START_HELPER_REV="studio-hook-budget-v4"');
+      expect(dest).toContain('OPENREAPER_START_HELPER_REV="studio-hook-budget-v5"');
+      expect(sh).toContain('OPENREAPER_START_HELPER_REV="studio-hook-budget-v5"');
       expect(sh).not.toContain("old-sh");
     } finally {
       await rm(tmp, { recursive: true, force: true });
@@ -351,9 +356,9 @@ describe("start helper sync + studio env", () => {
       const facePrepare = START_STEPS.find((step) => step.id === "face.prepare");
       await expect(facePrepare.run(ctx)).resolves.toBeUndefined();
       expect(ctx.startCmd?.command).toBe(path.join(installRoot, "bin", "openreaper-start"));
-      expect(ctx.startHelperSync?.rev).toBe("studio-hook-budget-v4");
+      expect(ctx.startHelperSync?.rev).toBe("studio-hook-budget-v5");
       const synced = await readFile(ctx.startCmd.command, "utf8");
-      expect(synced).toContain('OPENREAPER_START_HELPER_REV="studio-hook-budget-v4"');
+      expect(synced).toContain('OPENREAPER_START_HELPER_REV="studio-hook-budget-v5"');
       expect(synced).not.toContain("old-only-sh");
     } finally {
       await rm(tmp, { recursive: true, force: true });
@@ -392,7 +397,7 @@ describe("start helper sync + studio env", () => {
         startHelperSync: {
           synced: true,
           dest,
-          rev: "studio-hook-budget-v4",
+          rev: "studio-hook-budget-v5",
         },
         options: {},
         env: { OPENREAPER_STUDIO: "1" },

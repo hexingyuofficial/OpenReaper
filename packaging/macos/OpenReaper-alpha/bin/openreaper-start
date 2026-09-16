@@ -137,7 +137,7 @@ STARTUP_DOCTOR_OVERHEAD_MS=1000
 STARTUP_DIALOG_TIMEOUT_SECONDS="${OPENREAPER_STARTUP_DIALOG_TIMEOUT_SECONDS:-15}"
 # Identity of this wait-loop contract. Studio Start refuses a synced helper
 # that does not contain this exact rev (older ~/.openreaper/current copies).
-OPENREAPER_START_HELPER_REV="studio-hook-budget-v4"
+OPENREAPER_START_HELPER_REV="studio-hook-budget-v5"
 # Repeat AX passes after a stable safe classification (empty, Studio face).
 # Hammering System Events every 0.25s with a 15s osascript budget can stall
 # REAPER's main thread so __startup.lua never publishes a stage.
@@ -151,6 +151,13 @@ STARTUP_DIALOG_INSPECT_EVERY_TICKS=8
 # status file never appeared (Lua never ran). License/missing-media on that
 # first pass still fail-closed; later AX would only restall the main thread.
 STARTUP_DIALOG_SOFT_BLOCKER_INSPECT_EVERY_TICKS=0
+# Zhuanz1 5ac8c63: AX stopped at remaining_ms=56912 with Project Settings
+# still open, and openreaper-startup-status-v1.json never appeared. A lone
+# Project Settings modal blocks REAPER's main thread, so __startup.lua and
+# the command-line bridge dofile cannot run until it is dismissed. Soft
+# policy therefore clicks unique Cancel on that exact title only (never
+# OK/Apply/license/missing-media/unknown). One attempt per helper run.
+STARTUP_PROJECT_SETTINGS_DISMISS_ATTEMPTED=false
 # Supervisor kills at budget-6000ms. Stop AX and finish last-chance while
 # leftover is still above that, or last-chance races the process-group kill.
 STARTUP_AX_SKIP_REMAINING_MS=10000
@@ -386,19 +393,24 @@ combined with a new project path or arbitrary REAPER arguments. If the running
 instance has no OpenReaper Bridge, the helper reports a recovery instruction
 for that same instance instead of changing user configuration.
 
-OpenReaper never clicks or closes REAPER windows. It observes startup windows
-read-only. When a visible window blocks startup, the helper reports
-STARTUP_USER_ACTION_REQUIRED and preserves the exact REAPER PID and generation
-so the user can resolve it and the agent can reconnect without starting a
-duplicate instance.
+OpenReaper never clicks license, missing-media, or unknown REAPER windows.
+It observes startup windows read-only except for one Studio/soft action:
+unique Cancel on a lone title-only Project Settings window. That modal
+blocks __startup.lua and the command-line bridge dofile until dismissed;
+leaving it open cannot reach Bridge ready. When any other visible window
+blocks startup, the helper reports STARTUP_USER_ACTION_REQUIRED and
+preserves the exact REAPER PID and generation so the user can resolve it
+and the agent can reconnect without starting a duplicate instance.
 
 OPENREAPER_STARTUP_DIALOG_POLICY=soft|strict controls inspection failures.
 Default is soft when OPENREAPER_STUDIO=1, otherwise strict. Soft treats
 Accessibility/osascript failures as inspection_unavailable (not exit 75).
 A lone Project Settings window is a recoverable soft blocker (not exit 75);
-Start still does not click Cancel. The OpenReaper Studio face title stays
-allowlisted. Real blocked_* decision windows (missing media, license, etc.)
-still fail closed. Studio attaches to an existing REAPER when possible. It
+soft Start clicks unique Cancel on that exact title so the startup hook
+can run. Strict policy still reports STARTUP_USER_ACTION_REQUIRED and does
+not click. The OpenReaper Studio face title stays allowlisted. Real
+blocked_* decision windows (missing media, license, etc.) still fail closed.
+Studio attaches to an existing REAPER when possible. It
 may relaunch once when Studio just installed the __startup.lua face hook
 (OPENREAPER_STUDIO_FACE_HOOK_INSTALLED=1) or when OPENREAPER_STUDIO_RELAUNCH_STALE=1.
 Orphan LaunchServices env locks from a dead openreaper-start owner are
@@ -408,12 +420,12 @@ restored/replaced REAPER PID can still publish the startup hook. After a
 soft-safe window (lone Project Settings), a PID gap is an adopt-window until
 the successor publishes — including before the first AX pass under soft policy.
 Adopt a unique live successor even while the handoff PID is still alive.
-Soft/Studio caps the first AX pass at 4s and slows Project Settings re-inspect
-so __startup.lua can publish inside the 60s budget. Wait loops poll until the
+Soft/Studio unique-Cancels a lone Project Settings window so __startup.lua can
+run, caps the first AX pass at 4s, then stops AX. Wait loops poll until the
 cleanup reserve rather than giving up at START_WAIT_SECONDS while supervisor
 time remains. A published stage is accepted under soft even before AX returns,
-without requiring cleanup_reserve+250ms leftover. Still never clicks or closes
-REAPER windows. License / missing-media still fail closed.
+without requiring cleanup_reserve+250ms leftover. License / missing-media /
+unknown windows still fail closed and are never clicked.
 HELP
       exit 0
       ;;
@@ -974,6 +986,7 @@ fi
 echo "[OpenReaper] bridge-action-fallback=OpenReaper: Start MCP bridge"
 echo "[OpenReaper] bridge-status=starting_automatically"
 echo "[OpenReaper] startup-dialog-policy=user_mediated_read_only"
+echo "[OpenReaper] startup-dialog-project-settings-dismiss=title_only_unique_cancel_soft"
 echo "[OpenReaper] startup-dialog-inspection-policy=${STARTUP_DIALOG_POLICY}"
 echo "[OpenReaper] startup-dialog-timeout-seconds=${STARTUP_DIALOG_TIMEOUT_SECONDS}"
 echo "[OpenReaper] startup-budget-ms=${STARTUP_BUDGET_MS}"
@@ -2437,6 +2450,9 @@ wait_for_startup_hook() {
           return 75
         fi
         pending_dialog_blocker=""
+        # Lone Project Settings blocks __startup.lua until dismissed. Soft
+        # policy unique-Cancels that exact title once, then AX stays stopped.
+        startup_maybe_dismiss_project_settings "${dialog_result}" || true
       elif (( logged_inspect_skip == 0 )); then
         echo "[OpenReaper] startup-hook-poll=skip_dialog_inspect;reason=budget_reserve remaining_ms=${remaining_ms}" >&2
         logged_inspect_skip=1
@@ -2940,6 +2956,131 @@ APPLESCRIPT
   printf '%s\n' "${assist_result}"
 }
 
+# Soft/Studio only: unique Cancel on the exact Project Settings title so
+# __startup.lua can run. Zhuanz1 5ac8c63 left the window open after AX stop;
+# the status file never appeared. License/missing-media/unknown stay unread
+# and unclicked. One attempt per helper run.
+startup_project_settings_dismiss_is_allowed() {
+  local classified="$1"
+  if [[ "${STARTUP_DIALOG_POLICY}" != "soft" ]]; then
+    return 1
+  fi
+  if [[ "${STARTUP_PROJECT_SETTINGS_DISMISS_ATTEMPTED}" == "true" ]]; then
+    return 1
+  fi
+  case "${classified}" in
+    blocked_manual_dialog:title=Project\ Settings|blocked_manual_dialog:title=Project\ Settings\ /\ Notes|project_settings_seen_but_not_notes)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+run_project_settings_cancel() {
+  if [[ "$(uname -s)" != "Darwin" || ! -x "/usr/bin/osascript" ]]; then
+    printf '%s\n' "project_settings_cancel_unavailable"
+    return 0
+  fi
+  local reaper_pid assist_result="" assist_status=0
+  local -i remaining_ms dialog_timeout_seconds timeout_cap
+  reaper_pid="$(cat "${PID_FILE}")"
+  remaining_ms="$(startup_remaining_budget_ms)"
+  timeout_cap=${STARTUP_DIALOG_REPEAT_TIMEOUT_SECONDS}
+  if (( timeout_cap < 1 )); then
+    timeout_cap=2
+  fi
+  dialog_timeout_seconds=$(( (remaining_ms - STARTUP_CLEANUP_RESERVE_MS) / 1000 ))
+  if (( dialog_timeout_seconds > timeout_cap )); then
+    dialog_timeout_seconds=${timeout_cap}
+  fi
+  if (( dialog_timeout_seconds < 1 )); then
+    printf '%s\n' "project_settings_cancel_budget"
+    return 0
+  fi
+  if assist_result="$(/usr/bin/perl -e 'my $seconds = shift @ARGV; alarm $seconds; exec @ARGV or die "exec failed: $!"' \
+      "${dialog_timeout_seconds}" \
+      /usr/bin/osascript - "${reaper_pid}" <<'PROJECT_SETTINGS_CANCEL' 2>> "${START_LOG}"
+on run argv
+set launchedPid to item 1 of argv as integer
+tell application "System Events"
+  set matchingProcesses to every process whose unix id is launchedPid
+  if (count of matchingProcesses) is not 1 then return "project_settings_cancel_identity"
+  set launchedProcess to item 1 of matchingProcesses
+  if name of launchedProcess is not "REAPER" then return "project_settings_cancel_identity"
+  tell launchedProcess
+    set settingsWindowCount to 0
+    set settingsTitle to ""
+    repeat with reaperWindow in windows
+      set windowTitle to ""
+      try
+        set windowTitle to name of reaperWindow as text
+      end try
+      if windowTitle is "Project Settings" or windowTitle is "Project Settings / Notes" then
+        set settingsWindowCount to settingsWindowCount + 1
+        set settingsTitle to windowTitle
+      else
+        set windowSubrole to ""
+        try
+          set windowSubrole to subrole of reaperWindow as text
+        end try
+        if windowSubrole is "AXDialog" or windowSubrole is "AXSheet" then
+          return "project_settings_cancel_blocked_other_dialog:title=" & windowTitle
+        end if
+      end if
+    end repeat
+    if settingsWindowCount is not 1 then return "project_settings_cancel_not_unique_window"
+    set settingsWindows to every window whose name is settingsTitle
+    if (count of settingsWindows) is not 1 then return "project_settings_cancel_not_unique_window"
+    set settingsWindow to item 1 of settingsWindows
+    set cancelButtons to every button of settingsWindow whose name is "Cancel"
+    if (count of cancelButtons) is not 1 then return "project_settings_cancel_not_unique_cancel"
+    set theCancelButton to item 1 of cancelButtons
+    set buttonRole to ""
+    try
+      set buttonRole to role of theCancelButton as text
+    end try
+    if buttonRole is not "AXButton" then return "project_settings_cancel_not_unique_cancel"
+    click theCancelButton
+    return "project_settings_cancel_clicked"
+  end tell
+end tell
+end run
+PROJECT_SETTINGS_CANCEL
+  )"; then
+    assist_status=0
+  else
+    assist_status=$?
+  fi
+  if startup_dialog_observer_output_is_ax_failure "${assist_status}" "${assist_result}"; then
+    printf '%s\n' "project_settings_cancel_ax_failure"
+    return 0
+  fi
+  printf '%s\n' "${assist_result}"
+}
+
+startup_maybe_dismiss_project_settings() {
+  local classified="$1"
+  local dismiss_result remaining_ms
+  if ! startup_project_settings_dismiss_is_allowed "${classified}"; then
+    return 1
+  fi
+  STARTUP_PROJECT_SETTINGS_DISMISS_ATTEMPTED=true
+  remaining_ms="$(startup_remaining_budget_ms)"
+  echo "[OpenReaper] startup-dialog-dismiss=project_settings_cancel_attempt remaining_ms=${remaining_ms}" >&2
+  dismiss_result="$(run_project_settings_cancel)"
+  remaining_ms="$(startup_remaining_budget_ms)"
+  if [[ -n "${START_LOG:-}" ]]; then
+    echo "[OpenReaper] dialog-event timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ") result=project_settings_dismiss detail=${dismiss_result}" >> "${START_LOG}"
+  fi
+  if [[ "${dismiss_result}" == "project_settings_cancel_clicked" ]]; then
+    echo "[OpenReaper] startup-dialog-dismiss=project_settings_cancel remaining_ms=${remaining_ms}" >&2
+    echo "[OpenReaper] startup-ax=stopped_after_project_settings_dismiss remaining_ms=${remaining_ms}" >&2
+    return 0
+  fi
+  echo "[OpenReaper] startup-dialog-dismiss=project_settings_cancel_failed reason=${dismiss_result} remaining_ms=${remaining_ms}" >&2
+  return 1
+}
+
 startup_dialog_result_is_safe() {
   local token="${1%%:*}"
   local dialog_title=""
@@ -2967,8 +3108,9 @@ startup_dialog_result_is_safe() {
       return 1
       ;;
     blocked_manual_dialog)
-      # Soft/Studio: a lone Project Settings window is recoverable. Never click
-      # Cancel here; strict policy still reports STARTUP_USER_ACTION_REQUIRED.
+      # Soft/Studio: a lone Project Settings window is recoverable. Soft Start
+      # unique-Cancels that exact title after this classification; strict
+      # policy still reports STARTUP_USER_ACTION_REQUIRED and does not click.
       if [[ "${STARTUP_DIALOG_POLICY}" == "soft" && "${1}" == *:title=* ]]; then
         dialog_title="${1#*:title=}"
         case "${dialog_title}" in
@@ -3221,6 +3363,7 @@ wait_for_startup_readiness() {
           return 75
         fi
         pending_dialog_blocker=""
+        startup_maybe_dismiss_project_settings "${dialog_result}" || true
       elif (( logged_inspect_skip == 0 )); then
         echo "[OpenReaper] bridge-readiness-poll=skip_dialog_inspect;reason=budget_reserve remaining_ms=${remaining_ms}" >&2
         logged_inspect_skip=1

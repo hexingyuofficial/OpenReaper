@@ -75,6 +75,19 @@ function extractAppleScriptObserverBody(source) {
   return observer.slice(newline + 1);
 }
 
+function extractProjectSettingsCancel(source) {
+  const startMarker = "<<'PROJECT_SETTINGS_CANCEL'";
+  const start = source.indexOf(startMarker);
+  if (start < 0) {
+    throw new Error("missing PROJECT_SETTINGS_CANCEL");
+  }
+  const end = source.indexOf("\nPROJECT_SETTINGS_CANCEL\n", start);
+  if (end < 0) {
+    throw new Error("unclosed PROJECT_SETTINGS_CANCEL");
+  }
+  return source.slice(start, end);
+}
+
 function runZshHeredoc(body, { quoted } = { quoted: true }) {
   const delimiter = quoted ? "<<'APPLESCRIPT'" : "<<APPLESCRIPT";
   return spawnSync(
@@ -257,9 +270,12 @@ describe("packaged openreaper-start dialog observer", () => {
   const classifier = extractShellFunction(source, "startup_dialog_result_is_safe");
   const axFailure = extractShellFunction(source, "startup_dialog_observer_output_is_ax_failure");
 
-  it("does not re-add dialog click automation", () => {
+  it("does not re-add generic dialog click automation", () => {
     expect(source).not.toMatch(/clickUniqueExactButton|click matchingElement|perform action "click"/);
-    expect(source).toMatch(/never clicks or closes REAPER windows/);
+    expect(source).not.toMatch(/whose name is "OK"/);
+    expect(source).not.toMatch(/whose name is "Apply"/);
+    expect(source).not.toMatch(/Ignore all missing files" then click/);
+    expect(source).toMatch(/never clicks license, missing-media, or unknown REAPER windows/);
   });
 
   it("allowlists the OpenReaper Studio ReaImGui face before unknown-dialog classification", () => {
@@ -430,6 +446,7 @@ describe("packaged openreaper-start dialog observer", () => {
     expect(hookWait).toMatch(/STARTUP_HOOK_FAIL_REMAINING_MS/);
     expect(hookWait).toMatch(/startup_last_chance_accept_published_stage/);
     expect(hookWait).toMatch(/startup-hook=leftover_budget_accept/);
+    expect(hookWait).toMatch(/startup_maybe_dismiss_project_settings/);
     expect(hookWait).not.toMatch(
       /startup_budget_require_window "startup_hook" \$\(\( STARTUP_CLEANUP_RESERVE_MS \+ 250 \)\)/,
     );
@@ -445,13 +462,15 @@ describe("packaged openreaper-start dialog observer", () => {
     expect(source).toMatch(/STARTUP_DIALOG_INSPECT_EVERY_TICKS=8/);
     expect(source).toMatch(/STARTUP_DIALOG_SOFT_BLOCKER_INSPECT_EVERY_TICKS=0/);
     expect(source).toMatch(/STARTUP_DIALOG_FIRST_TIMEOUT_SECONDS=4/);
-    expect(source).toMatch(/OPENREAPER_START_HELPER_REV="studio-hook-budget-v4"/);
+    expect(source).toMatch(/OPENREAPER_START_HELPER_REV="studio-hook-budget-v5"/);
     expect(source).toMatch(/start-helper-rev=/);
     expect(source).toMatch(/STARTUP_AX_SKIP_REMAINING_MS=10000/);
     expect(source).toMatch(/STARTUP_HOOK_FAIL_REMAINING_MS=7500/);
     expect(source).toMatch(/startup-last-chance=published_stage/);
     expect(source).toMatch(/startup-hook=leftover_budget_accept/);
     expect(source).toMatch(/startup-ax=stopped_after_soft_blocker/);
+    expect(source).toMatch(/startup-dialog-dismiss=project_settings_cancel/);
+    expect(source).toMatch(/startup-dialog-project-settings-dismiss=title_only_unique_cancel_soft/);
     expect(source).toMatch(/START_WAIT_SECONDS="\$\{OPENREAPER_START_WAIT_SECONDS:-52\}"/);
     expect(source).toMatch(/STARTUP_DIALOG_REPEAT_INSPECT/);
     const inspectDue = extractShellFunction(source, "startup_dialog_inspect_due");
@@ -463,6 +482,7 @@ describe("packaged openreaper-start dialog observer", () => {
     const readiness = extractShellFunction(source, "wait_for_startup_readiness");
     expect(readiness).toMatch(/startup_dialog_inspect_due/);
     expect(readiness).toMatch(/startup_wait_accept_ready_bridge/);
+    expect(readiness).toMatch(/startup_maybe_dismiss_project_settings/);
     expect(readiness).toMatch(/startup_hook_pid_gap_keep_adopting/);
     expect(readiness).toMatch(/adopt_window_after_soft_safe/);
     expect(readiness).toMatch(/startup_wait_poll_ticks/);
@@ -692,6 +712,124 @@ describe("packaged openreaper-start dialog observer", () => {
       expect(runAxFailureCheck(axFailure, 1, "", "zsh")).toBe(0);
       expect(runAxFailureCheck(axFailure, 0, "no_safe_dialog", "zsh")).toBe(1);
     }
+  });
+});
+
+describe("packaged openreaper-start Project Settings unique Cancel", () => {
+  const source = readFileSync(START_HELPER, "utf8");
+  const cancelScript = extractProjectSettingsCancel(source);
+  const allowed = extractShellFunction(source, "startup_project_settings_dismiss_is_allowed");
+  const maybeDismiss = extractShellFunction(source, "startup_maybe_dismiss_project_settings");
+
+  function runAllowed(policy, attempted, classified) {
+    return spawnSync(
+      "zsh",
+      [
+        "-c",
+        [
+          `STARTUP_DIALOG_POLICY=${JSON.stringify(policy)}`,
+          `STARTUP_PROJECT_SETTINGS_DISMISS_ATTEMPTED=${JSON.stringify(attempted)}`,
+          allowed,
+          'startup_project_settings_dismiss_is_allowed "$1"',
+        ].join("\n"),
+        "dismiss-allowed",
+        classified,
+      ],
+      { encoding: "utf8" },
+    );
+  }
+
+  it("keeps the observer read-only and confines click to unique Cancel", () => {
+    const observer = extractAppleScriptObserver(source);
+    const cancelBody = cancelScript.slice(cancelScript.indexOf("\n") + 1);
+    expect(observer).not.toMatch(/click theCancelButton/);
+    expect(cancelScript.startsWith("<<'PROJECT_SETTINGS_CANCEL'")).toBe(true);
+    expect(cancelBody).toMatch(/whose unix id is launchedPid/);
+    expect(cancelBody).toMatch(/windowTitle is "Project Settings" or windowTitle is "Project Settings \/ Notes"/);
+    expect(cancelBody).toMatch(/every button of settingsWindow whose name is "Cancel"/);
+    expect(cancelBody).toMatch(/click theCancelButton/);
+    expect(cancelBody).toMatch(/return "project_settings_cancel_clicked"/);
+    expect(cancelBody).toMatch(/project_settings_cancel_blocked_other_dialog/);
+    expect(cancelBody).not.toMatch(/whose name is "OK"/);
+    expect(cancelBody).not.toMatch(/whose name is "Apply"/);
+    expect(cancelBody).not.toMatch(/\bnext repeat\b/);
+    expect(cancelBody).not.toMatch(/entire contents/);
+    expect(cancelBody).not.toMatch(/\{[^{}\n]*\}/);
+    expect(source).toMatch(/startup_maybe_dismiss_project_settings/);
+    expect(source).toMatch(/startup-dialog-dismiss=project_settings_cancel_failed/);
+    expect(source).toMatch(/startup-ax=stopped_after_project_settings_dismiss/);
+  });
+
+  it("allows one soft unique-Cancel of known Project Settings titles only", () => {
+    if (!zshAvailable()) {
+      return;
+    }
+    expect(runAllowed("soft", "false", "blocked_manual_dialog:title=Project Settings").status).toBe(0);
+    expect(runAllowed("soft", "false", "blocked_manual_dialog:title=Project Settings / Notes").status).toBe(0);
+    expect(runAllowed("soft", "false", "project_settings_seen_but_not_notes").status).toBe(0);
+    expect(runAllowed("strict", "false", "blocked_manual_dialog:title=Project Settings").status).toBe(1);
+    expect(runAllowed("soft", "true", "blocked_manual_dialog:title=Project Settings").status).toBe(1);
+    expect(runAllowed("soft", "false", "blocked_unknown_dialog:title=License").status).toBe(1);
+    expect(runAllowed("soft", "false", "blocked_missing_media:choice=Ignore all missing files").status).toBe(1);
+    expect(runAllowed("soft", "false", "blocked_manual_dialog:title=Unexpected").status).toBe(1);
+    expect(runAllowed("soft", "false", "no_safe_dialog").status).toBe(1);
+  });
+
+  it("logs success and failure without a second attempt", () => {
+    if (!zshAvailable()) {
+      return;
+    }
+    const success = spawnSync(
+      "zsh",
+      [
+        "-c",
+        [
+          "STARTUP_DIALOG_POLICY=soft",
+          "STARTUP_PROJECT_SETTINGS_DISMISS_ATTEMPTED=false",
+          "START_LOG=",
+          "startup_remaining_budget_ms() { print -r -- 50000; }",
+          'run_project_settings_cancel() { print -r -- project_settings_cancel_clicked; }',
+          allowed,
+          maybeDismiss,
+          'startup_maybe_dismiss_project_settings "$1"',
+          "first=$?",
+          'startup_maybe_dismiss_project_settings "$1"',
+          "second=$?",
+          'print -r -- "first=$first second=$second attempted=$STARTUP_PROJECT_SETTINGS_DISMISS_ATTEMPTED"',
+          "exit $first",
+        ].join("\n"),
+        "maybe-dismiss",
+        "blocked_manual_dialog:title=Project Settings",
+      ],
+      { encoding: "utf8" },
+    );
+    expect(success.status, success.stderr).toBe(0);
+    expect(success.stderr).toMatch(/startup-dialog-dismiss=project_settings_cancel remaining_ms=50000/);
+    expect(success.stderr).toMatch(/startup-ax=stopped_after_project_settings_dismiss/);
+    expect(success.stdout).toMatch(/first=0 second=1 attempted=true/);
+
+    const failed = spawnSync(
+      "zsh",
+      [
+        "-c",
+        [
+          "STARTUP_DIALOG_POLICY=soft",
+          "STARTUP_PROJECT_SETTINGS_DISMISS_ATTEMPTED=false",
+          "START_LOG=",
+          "startup_remaining_budget_ms() { print -r -- 50000; }",
+          'run_project_settings_cancel() { print -r -- project_settings_cancel_blocked_other_dialog:title=License; }',
+          allowed,
+          maybeDismiss,
+          'startup_maybe_dismiss_project_settings "$1"',
+        ].join("\n"),
+        "maybe-dismiss-fail",
+        "blocked_manual_dialog:title=Project Settings",
+      ],
+      { encoding: "utf8" },
+    );
+    expect(failed.status).toBe(1);
+    expect(failed.stderr).toMatch(/startup-dialog-dismiss=project_settings_cancel_failed reason=project_settings_cancel_blocked_other_dialog:title=License/);
+    expect(failed.stderr).not.toMatch(/startup-dialog-dismiss=project_settings_cancel remaining_ms=/);
   });
 });
 
