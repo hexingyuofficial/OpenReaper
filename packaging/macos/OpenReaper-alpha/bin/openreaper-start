@@ -132,6 +132,13 @@ STARTUP_DOCTOR_SMOKE_MAX_MS=22000
 STARTUP_DOCTOR_READ_MAX_MS=15000
 STARTUP_DOCTOR_OVERHEAD_MS=1000
 STARTUP_DIALOG_TIMEOUT_SECONDS="${OPENREAPER_STARTUP_DIALOG_TIMEOUT_SECONDS:-15}"
+# Repeat AX passes after a stable safe classification (Project Settings
+# soft-ignore, empty, Studio face). Hammering System Events every 0.25s with a
+# 15s osascript budget can stall REAPER's main thread so __startup.lua never
+# publishes a stage before the 60s supervisor deadline.
+STARTUP_DIALOG_REPEAT_TIMEOUT_SECONDS=2
+STARTUP_DIALOG_INSPECT_EVERY_TICKS=8
+STARTUP_DIALOG_REPEAT_INSPECT=0
 STARTUP_DIALOG_POLICY="${OPENREAPER_STARTUP_DIALOG_POLICY:-}"
 STARTUP_DIALOG_INSPECTION_UNAVAILABLE=false
 STARTUP_DIALOG_INSPECTION_UNAVAILABLE_LOGGED=false
@@ -379,6 +386,10 @@ Orphan LaunchServices env locks from a dead openreaper-start owner are
 reclaimed automatically; see README recovery one-liner.
 After a LaunchServices launch, session env stays set until helper exit so a
 restored/replaced REAPER PID can still publish the startup hook.
+After a stable safe window classification, AX inspection is throttled so the
+startup hook and Bridge heartbeat can publish inside the 60s budget. The helper
+accepts a published stage without requiring cleanup_reserve+250ms leftover, and
+still never clicks or closes REAPER windows.
 HELP
       exit 0
       ;;
@@ -2138,6 +2149,9 @@ NODE
 
 startup_status_stage_ready() {
   local status_path="${TRANSPORT_DIR}/openreaper-startup-status-v1.json"
+  if [[ ! -f "${status_path}" || -L "${status_path}" ]]; then
+    return 1
+  fi
   node --input-type=module - "${status_path}" <<'NODE'
 import { readFile } from "node:fs/promises";
 const [statusPath] = process.argv.slice(2);
@@ -2166,14 +2180,54 @@ prepare_startup_status_for_new_launch() {
   fi
 }
 
+# AX inspection is due on the first tick, whenever no classification exists,
+# when a blocker is still stabilizing, and every N ticks after a safe result.
+startup_dialog_inspect_due() {
+  local -i tick="$1"
+  local -i last_inspect_tick="$2"
+  local pending="$3"
+  local last_result="$4"
+  if [[ -n "${pending}" || -z "${last_result}" ]]; then
+    return 0
+  fi
+  if (( last_inspect_tick <= 0 || tick - last_inspect_tick >= STARTUP_DIALOG_INSPECT_EVERY_TICKS )); then
+    return 0
+  fi
+  return 1
+}
+
+startup_wait_accept_published_stage() {
+  local last_result="$1"
+  if [[ -z "${last_result}" ]]; then
+    return 1
+  fi
+  if ! startup_dialog_result_is_safe "${last_result}"; then
+    return 1
+  fi
+  startup_status_stage_ready
+}
+
 wait_for_startup_hook() {
   local reaper_pid="$1"
   local max_ticks=$(( START_WAIT_SECONDS * 4 ))
   local tick dialog_result pending_dialog_blocker="" last_dialog_result=""
   local -i missed_alive_ticks=0
   local adopted_pid=""
+  local -i last_inspect_tick=0
+  local -i remaining_ms
+  local -i logged_inspect_skip=0
   for (( tick = 1; tick <= max_ticks; tick++ )); do
-    if ! startup_budget_require_window "startup_hook" $(( STARTUP_CLEANUP_RESERVE_MS + 250 )); then
+    # Cheap published-stage check first. Zhuanz1 lost a 60s cold start because
+    # remaining_ms=6069 missed required_ms=6250 (cleanup+250) after Project
+    # Settings was already soft-ignored, without looking at the status file.
+    if startup_wait_accept_published_stage "${last_dialog_result}"; then
+      return 0
+    fi
+    remaining_ms="$(startup_remaining_budget_ms)"
+    if (( remaining_ms < STARTUP_CLEANUP_RESERVE_MS )); then
+      if startup_wait_accept_published_stage "${last_dialog_result}"; then
+        return 0
+      fi
       if startup_pending_dialog_is_hard_blocker "${pending_dialog_blocker}"; then
         report_startup_user_action_required "${pending_dialog_blocker}"
         return 75
@@ -2181,6 +2235,7 @@ wait_for_startup_hook() {
       if startup_last_chance_accept_live_bridge "startup_hook"; then
         return 0
       fi
+      startup_budget_require_window "startup_hook" "${STARTUP_CLEANUP_RESERVE_MS}" || true
       return 1
     fi
     if ! kill -0 "${reaper_pid}" 2>/dev/null; then
@@ -2202,50 +2257,57 @@ wait_for_startup_hook() {
       continue
     fi
     missed_alive_ticks=0
-    if ! startup_budget_require_window "startup_hook_dialog_inspection" $(( STARTUP_CLEANUP_RESERVE_MS + 1000 )); then
-      if startup_pending_dialog_is_hard_blocker "${pending_dialog_blocker}"; then
-        report_startup_user_action_required "${pending_dialog_blocker}"
-        return 75
-      fi
-      if startup_last_chance_accept_live_bridge "startup_hook_dialog_inspection"; then
-        return 0
-      fi
-      return 1
-    fi
     # A project-load dialog can prevent REAPER from reaching the package launcher.
     # Reuse the exact safe classifier while LaunchServices still carries the
     # session environment; unknown and decision-bearing dialogs stay blocked.
-    dialog_result="$(run_startup_dialog_observer)"
-    if [[ "${dialog_result}" != "${last_dialog_result}" ]]; then
-      record_dialog_result "${dialog_result}"
-      last_dialog_result="${dialog_result}"
-    fi
-    # A published hook stage does not override a visible decision window. The
-    # read-only observer runs first so startup cannot report ready while a user
-    # choice is still blocking REAPER.
-    if ! startup_dialog_result_is_safe "${dialog_result}"; then
-      # Require one stable repeat so a transient window replacement or a user
-      # dismissal cannot race the hook by a few milliseconds. Once stable,
-      # return the typed user-action result promptly, before the outer deadline
-      # can terminate the preserved REAPER process group.
-      if [[ "${pending_dialog_blocker}" != "${dialog_result}" ]]; then
-        pending_dialog_blocker="${dialog_result}"
-        sleep 0.25
-        continue
+    # After a stable safe result, skip AX on most ticks so System Events does
+    # not starve __startup.lua. Tight remaining budget also skips inspection
+    # instead of aborting the wait.
+    if startup_dialog_inspect_due "${tick}" "${last_inspect_tick}" "${pending_dialog_blocker}" "${last_dialog_result}"; then
+      if (( remaining_ms >= STARTUP_CLEANUP_RESERVE_MS + 1000 )); then
+        if [[ -n "${last_dialog_result}" ]]; then
+          STARTUP_DIALOG_REPEAT_INSPECT=1
+        else
+          STARTUP_DIALOG_REPEAT_INSPECT=0
+        fi
+        dialog_result="$(run_startup_dialog_observer)"
+        STARTUP_DIALOG_REPEAT_INSPECT=0
+        last_inspect_tick=${tick}
+        if [[ "${dialog_result}" != "${last_dialog_result}" ]]; then
+          record_dialog_result "${dialog_result}"
+          last_dialog_result="${dialog_result}"
+        fi
+        # A published hook stage does not override a visible decision window.
+        if ! startup_dialog_result_is_safe "${dialog_result}"; then
+          if [[ "${pending_dialog_blocker}" != "${dialog_result}" ]]; then
+            pending_dialog_blocker="${dialog_result}"
+            sleep 0.25
+            continue
+          fi
+          report_startup_user_action_required "${dialog_result}"
+          return 75
+        fi
+        pending_dialog_blocker=""
+      elif (( logged_inspect_skip == 0 )); then
+        echo "[OpenReaper] startup-hook-poll=skip_dialog_inspect;reason=budget_reserve remaining_ms=${remaining_ms}" >&2
+        logged_inspect_skip=1
       fi
-      report_startup_user_action_required "${dialog_result}"
-      return 75
     fi
-    pending_dialog_blocker=""
-    if startup_status_stage_ready; then
+    if startup_wait_accept_published_stage "${last_dialog_result}"; then
       return 0
     fi
     sleep 0.25
   done
   startup_status_summary
-  if [[ -n "${pending_dialog_blocker}" ]]; then
+  if startup_wait_accept_published_stage "${last_dialog_result}"; then
+    return 0
+  fi
+  if startup_pending_dialog_is_hard_blocker "${pending_dialog_blocker}"; then
     report_startup_user_action_required "${pending_dialog_blocker}"
     return 75
+  fi
+  if startup_last_chance_accept_live_bridge "startup_hook_loop_exhausted"; then
+    return 0
   fi
   return 1
 }
@@ -2526,8 +2588,14 @@ run_startup_dialog_observer() {
   reaper_pid="$(cat "${PID_FILE}")"
   remaining_ms="$(startup_remaining_budget_ms)"
   dialog_timeout_seconds=$(( (remaining_ms - STARTUP_CLEANUP_RESERVE_MS) / 1000 ))
-  if (( dialog_timeout_seconds > STARTUP_DIALOG_TIMEOUT_SECONDS )); then
-    dialog_timeout_seconds=${STARTUP_DIALOG_TIMEOUT_SECONDS}
+  local -i timeout_cap
+  timeout_cap=${STARTUP_DIALOG_TIMEOUT_SECONDS}
+  if [[ "${STARTUP_DIALOG_REPEAT_INSPECT:-}" == "1" ]] \
+      && (( STARTUP_DIALOG_REPEAT_TIMEOUT_SECONDS > 0 && timeout_cap > STARTUP_DIALOG_REPEAT_TIMEOUT_SECONDS )); then
+    timeout_cap=${STARTUP_DIALOG_REPEAT_TIMEOUT_SECONDS}
+  fi
+  if (( dialog_timeout_seconds > timeout_cap )); then
+    dialog_timeout_seconds=${timeout_cap}
   fi
   if (( dialog_timeout_seconds < 1 )); then
     # Soft/Studio: running out of inspection budget is not a decision dialog.
@@ -2789,6 +2857,9 @@ startup_pending_dialog_is_hard_blocker() {
 
 startup_status_bridge_loaded() {
   local status_path="${TRANSPORT_DIR}/openreaper-startup-status-v1.json"
+  if [[ ! -f "${status_path}" || -L "${status_path}" ]]; then
+    return 1
+  fi
   node --input-type=module - "${status_path}" <<'NODE'
 import { readFile } from "node:fs/promises";
 const [statusPath] = process.argv.slice(2);
@@ -2827,6 +2898,17 @@ accept_ready_bridge() {
   return 1
 }
 
+startup_wait_accept_ready_bridge() {
+  local last_result="$1"
+  if [[ -z "${last_result}" ]]; then
+    return 1
+  fi
+  if ! startup_dialog_result_is_safe "${last_result}"; then
+    return 1
+  fi
+  accept_ready_bridge
+}
+
 startup_last_chance_accept_live_bridge() {
   local reason="$1"
   local extra_tick
@@ -2861,45 +2943,62 @@ startup_fail_or_last_chance_live_bridge() {
 wait_for_startup_readiness() {
   local max_ticks=$(( START_WAIT_SECONDS * 4 ))
   local tick dialog_result pending_dialog_blocker="" last_dialog_result=""
+  local -i last_inspect_tick=0
+  local -i remaining_ms
+  local -i logged_inspect_skip=0
   if (( max_ticks < 1 )); then
     echo "[OpenReaper] OPENREAPER_START_WAIT_SECONDS must be at least 1 for verified startup." >&2
     return 1
   fi
   for (( tick = 1; tick <= max_ticks; tick++ )); do
-    if ! startup_budget_require_window "bridge_readiness" $(( STARTUP_CLEANUP_RESERVE_MS + 250 )); then
+    remaining_ms="$(startup_remaining_budget_ms)"
+    if (( remaining_ms < STARTUP_CLEANUP_RESERVE_MS )); then
+      if startup_wait_accept_ready_bridge "${last_dialog_result}"; then
+        return 0
+      fi
       startup_fail_or_last_chance_live_bridge "bridge_readiness" "${pending_dialog_blocker}" || return $?
       return 0
     fi
     assert_reaper_process_alive || return 1
-    if ! startup_budget_require_window "bridge_readiness_dialog_inspection" $(( STARTUP_CLEANUP_RESERVE_MS + 1000 )); then
-      startup_fail_or_last_chance_live_bridge "bridge_readiness_dialog_inspection" "${pending_dialog_blocker}" || return $?
-      return 0
-    fi
-    dialog_result="$(run_startup_dialog_observer)"
-    if [[ "${dialog_result}" != "${last_dialog_result}" ]]; then
-      record_dialog_result "${dialog_result}"
-      last_dialog_result="${dialog_result}"
-    fi
-    # A live Bridge cannot override a decision dialog.  Inspect first on every
-    # tick, then accept the heartbeat only after this process has no blocker.
-    # Soft/Studio: budget-exhausted inspection and the allowlisted face are
-    # not blockers; last-chance still accepts a live Bridge.
-    if ! startup_dialog_result_is_safe "${dialog_result}"; then
-      if [[ "${pending_dialog_blocker}" != "${dialog_result}" ]]; then
-        pending_dialog_blocker="${dialog_result}"
-        sleep 0.25
-        continue
+    if startup_dialog_inspect_due "${tick}" "${last_inspect_tick}" "${pending_dialog_blocker}" "${last_dialog_result}"; then
+      if (( remaining_ms >= STARTUP_CLEANUP_RESERVE_MS + 1000 )); then
+        if [[ -n "${last_dialog_result}" ]]; then
+          STARTUP_DIALOG_REPEAT_INSPECT=1
+        else
+          STARTUP_DIALOG_REPEAT_INSPECT=0
+        fi
+        dialog_result="$(run_startup_dialog_observer)"
+        STARTUP_DIALOG_REPEAT_INSPECT=0
+        last_inspect_tick=${tick}
+        if [[ "${dialog_result}" != "${last_dialog_result}" ]]; then
+          record_dialog_result "${dialog_result}"
+          last_dialog_result="${dialog_result}"
+        fi
+        # A live Bridge cannot override a decision dialog.
+        if ! startup_dialog_result_is_safe "${dialog_result}"; then
+          if [[ "${pending_dialog_blocker}" != "${dialog_result}" ]]; then
+            pending_dialog_blocker="${dialog_result}"
+            sleep 0.25
+            continue
+          fi
+          report_startup_user_action_required "${dialog_result}"
+          return 75
+        fi
+        pending_dialog_blocker=""
+      elif (( logged_inspect_skip == 0 )); then
+        echo "[OpenReaper] bridge-readiness-poll=skip_dialog_inspect;reason=budget_reserve remaining_ms=${remaining_ms}" >&2
+        logged_inspect_skip=1
       fi
-      report_startup_user_action_required "${dialog_result}"
-      return 75
     fi
-    pending_dialog_blocker=""
-    if accept_ready_bridge; then
+    if startup_wait_accept_ready_bridge "${last_dialog_result}"; then
       return 0
     fi
     sleep 0.25
   done
   startup_status_summary
+  if startup_wait_accept_ready_bridge "${last_dialog_result}"; then
+    return 0
+  fi
   if startup_pending_dialog_is_hard_blocker "${pending_dialog_blocker}"; then
     report_startup_user_action_required "${pending_dialog_blocker}"
     return 75

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -33,7 +33,8 @@ import {
   resolvePiExecutable,
 } from "../lib/pi.mjs";
 import * as studioState from "../lib/state.mjs";
-import { parseCli } from "../studio-orchestrate.mjs";
+import { parseCli, studioFailureExitCode } from "../studio-orchestrate.mjs";
+import { exitCodeFromChild, runProcess } from "../lib/orchestration/process.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 
@@ -230,6 +231,8 @@ describe("face.prepare", () => {
       expect(synced).toContain("startup-dialog-soft-ignore=");
       expect(synced).toContain("held_until_helper_exit");
       expect(synced).toContain("adopted_after_launchservices_restore");
+      expect(synced).toContain("startup_wait_accept_published_stage");
+      expect(synced).toContain("STARTUP_DIALOG_INSPECT_EVERY_TICKS");
       expect(synced).toContain('if windowTitle is "OpenReaper Studio" then');
       expect(synced).toContain("startup-last-chance=bridge_liveness");
       expect(synced).toContain("budget_remaining_ms=");
@@ -258,6 +261,7 @@ describe("start helper sync + studio env", () => {
       const copied = await readFile(result.dest, "utf8");
       expect(copied).toContain("inspection_unavailable");
       expect(copied).toContain("held_until_helper_exit");
+      expect(copied).toContain("startup_wait_accept_published_stage");
       expect(copied).toContain('if windowTitle is "OpenReaper Studio" then');
       expect(copied).toContain("startup-last-chance=bridge_liveness");
       expect(copied).not.toContain("next repeat");
@@ -277,6 +281,8 @@ describe("start helper sync + studio env", () => {
     expect(source).toMatch(/OPENREAPER_STUDIO_FACE_HOOK_INSTALLED/);
     expect(source).toMatch(/probeOpenReaperEngine/);
     expect(source).toMatch(/openreaperStartSoftContinued/);
+    expect(source).toMatch(/error\.exitCode = 124/);
+    expect(source).toMatch(/process\.exitCode = 124/);
     const engine = START_STEPS.find((step) => step.id === "engine.openreaper_start");
     expect(engine?.label).toMatch(/openreaper-start/);
   });
@@ -296,7 +302,7 @@ describe("start helper sync + studio env", () => {
         state: { openreaperStartExitCode: null },
         engineProbeGraceMs: 0,
         log() {},
-        runProcess: async () => ({ code: 124 }),
+        runProcess: async () => ({ code: 1 }),
         probeOpenReaperEngine: async () => ({
           usable: true,
           stage: "bridge_dofile_succeeded",
@@ -306,7 +312,7 @@ describe("start helper sync + studio env", () => {
       };
       const engine = START_STEPS.find((step) => step.id === "engine.openreaper_start");
       await expect(engine.run(ctx)).resolves.toBeUndefined();
-      expect(ctx.state.openreaperStartExitCode).toBe(124);
+      expect(ctx.state.openreaperStartExitCode).toBe(1);
       expect(ctx.state.openreaperStartSoftContinued).toBe(true);
       expect(ctx.state.engineProbe.stage).toBe("bridge_dofile_succeeded");
     } finally {
@@ -340,6 +346,65 @@ describe("start helper sync + studio env", () => {
       expect(ctx.state.openreaperStartExitCode).toBe(1);
       expect(ctx.state.openreaperStartSoftContinued).toBe(false);
     } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("openreaper-start exit propagation", () => {
+  it("maps missing child codes to non-zero so 124 cannot become 0", () => {
+    expect(exitCodeFromChild(0, null)).toBe(0);
+    expect(exitCodeFromChild(124, null)).toBe(124);
+    expect(exitCodeFromChild(null, "SIGTERM")).toBe(1);
+    expect(exitCodeFromChild(null, null)).toBe(1);
+    expect(exitCodeFromChild(undefined, undefined)).toBe(1);
+    expect(studioFailureExitCode({ exitCode: 124 })).toBe(124);
+    expect(studioFailureExitCode(new Error("no code"))).toBe(1);
+    expect(parseCli(["start"]).command).toBe("start");
+  });
+
+  it("propagates helper exit 124 through runProcess and engine.openreaper_start", async () => {
+    const tmp = await mkdtemp(path.join(os.tmpdir(), "or-start-exit-"));
+    const helper = path.join(tmp, "openreaper-start");
+    const previousExitCode = process.exitCode;
+    try {
+      await writeFile(helper, "#!/bin/sh\nexit 124\n", { encoding: "utf8", mode: 0o755 });
+      await chmod(helper, 0o755);
+      const spawned = await runProcess(helper, [], { cwd: tmp, inherit: false });
+      expect(spawned.code).toBe(124);
+
+      const engine = START_STEPS.find((step) => step.id === "engine.openreaper_start");
+      const ctx = {
+        startCmd: { command: helper, args: [], cwd: tmp },
+        options: {},
+        env: { OPENREAPER_STUDIO: "1" },
+        faceInstall: {},
+        homeDir: tmp,
+        installRoot: tmp,
+        state: { ...studioState.emptyStudioState(), openreaperStartExitCode: null },
+        engineProbeGraceMs: 0,
+        log() {},
+        probeOpenReaperEngine: async () => ({
+          usable: true,
+          stage: "bridge_dofile_succeeded",
+          heartbeatReady: true,
+          reason: "heartbeat_live",
+        }),
+      };
+      let thrown;
+      try {
+        await engine.run(ctx);
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown?.exitCode).toBe(124);
+      expect(String(thrown?.message)).toMatch(/exited with code 124/);
+      expect(ctx.state.openreaperStartExitCode).toBe(124);
+      expect(process.exitCode).toBe(124);
+      const saved = await studioState.readStudioState(studioStatePath(tmp));
+      expect(saved?.openreaperStartExitCode).toBe(124);
+    } finally {
+      process.exitCode = previousExitCode;
       await rm(tmp, { recursive: true, force: true });
     }
   });

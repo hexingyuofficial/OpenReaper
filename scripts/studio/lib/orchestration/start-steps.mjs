@@ -23,7 +23,7 @@ import { emptyStudioState, writeStudioState } from "../state.mjs";
 import { probeOpenReaperEngine } from "../engine/bridge-liveness.mjs";
 import { coupledRollbackOnPiFailure } from "./coupled-rollback.mjs";
 import { launchPrivatePiRpcHost } from "./pi-rpc-lifecycle.mjs";
-import { runProcess } from "./process.mjs";
+import { runProcess, exitCodeFromChild } from "./process.mjs";
 
 /**
  * Start pipeline steps. Each step mutates `ctx.state` and may write Studio-owned files.
@@ -141,8 +141,9 @@ export const START_STEPS = [
         cwd: ctx.startCmd.cwd,
         env: openreaperEnv,
       });
-      ctx.state.openreaperStartExitCode = result.code;
-      if (result.code === 0) {
+      const exitCode = exitCodeFromChild(result.code, result.signal);
+      ctx.state.openreaperStartExitCode = exitCode;
+      if (exitCode === 0) {
         ctx.state.openreaperStartSoftContinued = false;
         return;
       }
@@ -159,20 +160,35 @@ export const START_STEPS = [
         heartbeatReady: Boolean(probe?.heartbeatReady),
         reason: probe?.reason ?? null,
       };
-      ctx.state.openreaperStartSoftContinued = Boolean(probe?.usable);
+      ctx.state.openreaperStartSoftContinued = false;
       await writeStudioState(studioStatePath(ctx.homeDir), ctx.state);
+      // Supervisor 124 / STARTUP_BUDGET_EXHAUSTED must not be masked as Studio success.
+      if (exitCode === 124) {
+        process.exitCode = 124;
+        const error = new Error(
+          `openreaper-start exited with code ${exitCode}` +
+            (probe?.reason ? ` (${probe.reason})` : ""),
+        );
+        error.exitCode = 124;
+        throw error;
+      }
       if (probe?.usable) {
+        ctx.state.openreaperStartSoftContinued = true;
+        await writeStudioState(studioStatePath(ctx.homeDir), ctx.state);
         ctx.log(
-          `openreaper-start exited ${result.code} but REAPER+Bridge are usable ` +
+          `openreaper-start exited ${exitCode} but REAPER+Bridge are usable ` +
             `(stage=${probe.stage ?? "unknown"} heartbeat=${probe.heartbeatReady ? "live" : "no"}). ` +
             "Soft-continuing to private Pi RPC so face-config is not left pending.",
         );
         return;
       }
-      throw new Error(
-        `openreaper-start exited with code ${result.code}` +
+      process.exitCode = exitCode;
+      const error = new Error(
+        `openreaper-start exited with code ${exitCode}` +
           (probe?.reason ? ` (${probe.reason})` : ""),
       );
+      error.exitCode = exitCode;
+      throw error;
     },
   },
   {

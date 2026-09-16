@@ -29,14 +29,19 @@ macOS **Accessibility** for Terminal/osascript is optional. Studio Start uses
 soft dialog *inspection* (`OPENREAPER_STUDIO=1`): AX/osascript failures
 (`-609`, `-2741` syntax, timeout, empty) become `inspection_unavailable` and do
 not exit 75. Running out of attach/startup budget during dialog inspection is
-also treated as `inspection_unavailable` under soft policy. If Bridge heartbeat
-or `bridge_dofile_succeeded` is already live, Start last-chance accepts that
-instead of failing `STARTUP_BUDGET_EXHAUSTED`. A lone **Project Settings**
-window is a recoverable soft blocker (not exit 75); Start still does not click
-or close it. The **OpenReaper Studio** face title is allowlisted. Real decision
-windows (missing media, license, etc.) still fail closed. After LaunchServices
-launch, session env stays set until helper exit so a restored/replaced REAPER
-PID can still publish the startup hook.
+also treated as `inspection_unavailable` under soft policy. After a stable
+Project Settings soft-ignore, AX inspection is throttled so REAPER can publish
+the startup hook and Bridge heartbeat inside the 60s budget (a published stage
+is accepted even when leftover time is below `cleanup_reserve+250ms`). If Bridge
+heartbeat or `bridge_dofile_succeeded` is already live, the helper last-chance
+accepts that instead of failing `STARTUP_BUDGET_EXHAUSTED`. A lone **Project
+Settings** window is a recoverable soft blocker (not exit 75); Start still does
+not click or close it. The **OpenReaper Studio** face title is allowlisted. Real
+decision windows (missing media, license, etc.) still fail closed. After
+LaunchServices launch, session env stays set until helper exit so a
+restored/replaced REAPER PID can still publish the startup hook.
+If `openreaper-start` exits **124** / `STARTUP_BUDGET_EXHAUSTED`, `studio-start.sh`
+propagates that non-zero code and does not write READY.
 
 Studio **does not** use the user's personal Pi (`~/.pi`, global `pi` login in Terminal). All agent
 state is under OpenReaper Studio roots.

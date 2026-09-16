@@ -96,6 +96,14 @@ async function statusStudio() {
   process.stdout.write(`${JSON.stringify(state, null, 2)}\n`);
 }
 
+export function studioFailureExitCode(error) {
+  const code = Number(error?.exitCode);
+  if (Number.isInteger(code) && code > 0) {
+    return code;
+  }
+  return 1;
+}
+
 async function main() {
   let parsed;
   try {
@@ -127,13 +135,20 @@ async function main() {
     }
     throw new Error(`Unknown command: ${command}`);
   } catch (error) {
+    const code = studioFailureExitCode(error);
+    process.exitCode = code;
     process.stderr.write(`[OpenReaper Studio] ${error?.message ?? error}\n`);
-    process.exit(1);
+    process.exit(code);
   }
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  main();
+  main().catch((error) => {
+    const code = studioFailureExitCode(error);
+    process.exitCode = code;
+    process.stderr.write(`[OpenReaper Studio] ${error?.message ?? error}\n`);
+    process.exit(code);
+  });
 }
 
 export { parseCli, startStudio, stopStudio, statusStudio };

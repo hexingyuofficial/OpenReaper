@@ -413,6 +413,150 @@ describe("packaged openreaper-start dialog observer", () => {
     expect(hookWait).toMatch(/STARTUP_REAPER_PID_REPLACE_GRACE_TICKS/);
     expect(source).toMatch(/startup-reaper-pid=adopted_after_launchservices_restore/);
     expect(source).toMatch(/select_startup_reaper_successor_pid\(\)/);
+    expect(hookWait).toMatch(/startup_wait_accept_published_stage/);
+    expect(hookWait).toMatch(/startup_dialog_inspect_due/);
+    expect(hookWait).toMatch(/startup_last_chance_accept_live_bridge/);
+    expect(hookWait).not.toMatch(
+      /startup_budget_require_window "startup_hook" \$\(\( STARTUP_CLEANUP_RESERVE_MS \+ 250 \)\)/,
+    );
+    expect(hookWait).toMatch(/remaining_ms < STARTUP_CLEANUP_RESERVE_MS/);
+    const firstAccept = hookWait.indexOf("startup_wait_accept_published_stage");
+    const firstObserver = hookWait.indexOf("run_startup_dialog_observer");
+    expect(firstAccept).toBeGreaterThanOrEqual(0);
+    expect(firstObserver).toBeGreaterThan(firstAccept);
+  });
+
+  it("throttles AX inspection after a stable safe result and caps repeat timeouts", () => {
+    expect(source).toMatch(/STARTUP_DIALOG_REPEAT_TIMEOUT_SECONDS=2/);
+    expect(source).toMatch(/STARTUP_DIALOG_INSPECT_EVERY_TICKS=8/);
+    expect(source).toMatch(/STARTUP_DIALOG_REPEAT_INSPECT/);
+    const inspectDue = extractShellFunction(source, "startup_dialog_inspect_due");
+    expect(inspectDue).toMatch(/STARTUP_DIALOG_INSPECT_EVERY_TICKS/);
+    const observer = extractShellFunction(source, "run_startup_dialog_observer");
+    expect(observer).toMatch(/STARTUP_DIALOG_REPEAT_INSPECT/);
+    expect(observer).toMatch(/STARTUP_DIALOG_REPEAT_TIMEOUT_SECONDS/);
+    const readiness = extractShellFunction(source, "wait_for_startup_readiness");
+    expect(readiness).toMatch(/startup_dialog_inspect_due/);
+    expect(readiness).toMatch(/startup_wait_accept_ready_bridge/);
+    expect(readiness).not.toMatch(
+      /startup_budget_require_window "bridge_readiness" \$\(\( STARTUP_CLEANUP_RESERVE_MS \+ 250 \)\)/,
+    );
+  });
+
+  it("accepts a published hook after Project Settings soft-ignore when leftover is 6069ms", () => {
+    const zshCheck = spawnSync("zsh", ["-c", "exit 0"], { encoding: "utf8" });
+    if (zshCheck.error?.code === "ENOENT") {
+      return;
+    }
+    const accept = extractShellFunction(source, "startup_wait_accept_published_stage");
+    const inspectDue = extractShellFunction(source, "startup_dialog_inspect_due");
+    const published = spawnSync(
+      "zsh",
+      [
+        "-c",
+        `${accept}\nstartup_status_stage_ready() { return 0; }\nstartup_dialog_result_is_safe() { return 0; }\nstartup_wait_accept_published_stage "$1"`,
+        "accept-stage",
+        "blocked_manual_dialog:title=Project Settings",
+      ],
+      { encoding: "utf8" },
+    );
+    expect(published.status, published.stderr).toBe(0);
+
+    const empty = spawnSync(
+      "zsh",
+      [
+        "-c",
+        `${accept}\nstartup_status_stage_ready() { return 0; }\nstartup_dialog_result_is_safe() { return 0; }\nstartup_wait_accept_published_stage "$1"`,
+        "accept-stage",
+        "",
+      ],
+      { encoding: "utf8" },
+    );
+    expect(empty.status).toBe(1);
+
+    const unsafe = spawnSync(
+      "zsh",
+      [
+        "-c",
+        `${accept}\nstartup_status_stage_ready() { return 0; }\nstartup_dialog_result_is_safe() { return 1; }\nstartup_wait_accept_published_stage "$1"`,
+        "accept-stage",
+        "blocked_unknown_dialog:title=License",
+      ],
+      { encoding: "utf8" },
+    );
+    expect(unsafe.status).toBe(1);
+
+    const unpublished = spawnSync(
+      "zsh",
+      [
+        "-c",
+        `${accept}\nstartup_status_stage_ready() { return 1; }\nstartup_dialog_result_is_safe() { return 0; }\nstartup_wait_accept_published_stage "$1"`,
+        "accept-stage",
+        "blocked_manual_dialog:title=Project Settings",
+      ],
+      { encoding: "utf8" },
+    );
+    expect(unpublished.status).toBe(1);
+
+    const dueFirst = spawnSync(
+      "zsh",
+      [
+        "-c",
+        `STARTUP_DIALOG_INSPECT_EVERY_TICKS=8\n${inspectDue}\nstartup_dialog_inspect_due "$1" "$2" "$3" "$4"`,
+        "inspect-due",
+        "1",
+        "0",
+        "",
+        "",
+      ],
+      { encoding: "utf8" },
+    );
+    expect(dueFirst.status).toBe(0);
+
+    const dueThrottled = spawnSync(
+      "zsh",
+      [
+        "-c",
+        `STARTUP_DIALOG_INSPECT_EVERY_TICKS=8\n${inspectDue}\nstartup_dialog_inspect_due "$1" "$2" "$3" "$4"`,
+        "inspect-due",
+        "5",
+        "1",
+        "",
+        "blocked_manual_dialog:title=Project Settings",
+      ],
+      { encoding: "utf8" },
+    );
+    expect(dueThrottled.status).toBe(1);
+
+    const dueEvery = spawnSync(
+      "zsh",
+      [
+        "-c",
+        `STARTUP_DIALOG_INSPECT_EVERY_TICKS=8\n${inspectDue}\nstartup_dialog_inspect_due "$1" "$2" "$3" "$4"`,
+        "inspect-due",
+        "9",
+        "1",
+        "",
+        "blocked_manual_dialog:title=Project Settings",
+      ],
+      { encoding: "utf8" },
+    );
+    expect(dueEvery.status).toBe(0);
+
+    const duePending = spawnSync(
+      "zsh",
+      [
+        "-c",
+        `STARTUP_DIALOG_INSPECT_EVERY_TICKS=8\n${inspectDue}\nstartup_dialog_inspect_due "$1" "$2" "$3" "$4"`,
+        "inspect-due",
+        "5",
+        "1",
+        "blocked_unknown_dialog:title=License",
+        "blocked_unknown_dialog:title=License",
+      ],
+      { encoding: "utf8" },
+    );
+    expect(duePending.status).toBe(0);
   });
 
   it("shell classifier matches the JS contract", () => {
