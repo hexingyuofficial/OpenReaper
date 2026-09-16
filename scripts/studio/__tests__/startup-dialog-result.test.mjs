@@ -13,7 +13,11 @@ import { packagedMacosStartHelperPath } from "../lib/paths.mjs";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const START_HELPER = packagedMacosStartHelperPath(repoRoot);
 
-const ALWAYS_SAFE = ["no_safe_dialog", "ignored_reascript_run_status_window"];
+const ALWAYS_SAFE = [
+  "no_safe_dialog",
+  "ignored_reascript_run_status_window",
+  "ignored_openreaper_studio_dialog",
+];
 const INSPECTION_SAFE = ["unavailable", "inspection_unavailable", "inspection_unavailable:status=142"];
 const UNSAFE = [
   "blocked_dialog_inspection_timeout:seconds=5",
@@ -22,12 +26,26 @@ const UNSAFE = [
   "blocked_missing_media_offline_warning:choice=OK",
   "blocked_user_decision:title=Project Load Warning",
   "blocked_unknown_dialog:title=Unexpected",
+  "blocked_unknown_dialog:title=License",
   "blocked_manual_dialog:title=Project Settings",
   "blocked_reaper_identity:pid=123",
   "blocked_dialog_classification:title=Untitled:error=permission denied",
   "blocked_startup_budget_exhausted:stage=dialog_inspection",
   "project_settings_seen_but_not_notes",
 ];
+
+function extractAppleScriptObserver(source) {
+  const startMarker = "<<'APPLESCRIPT'";
+  const start = source.indexOf(startMarker);
+  if (start < 0) {
+    throw new Error("missing AppleScript observer");
+  }
+  const end = source.indexOf("\nAPPLESCRIPT\n", start);
+  if (end < 0) {
+    throw new Error("unclosed AppleScript observer");
+  }
+  return source.slice(start, end);
+}
 
 function extractShellFunction(source, name) {
   const start = source.indexOf(`${name}() {`);
@@ -147,6 +165,27 @@ describe("packaged openreaper-start dialog observer", () => {
   it("does not re-add dialog click automation", () => {
     expect(source).not.toMatch(/clickUniqueExactButton|click matchingElement|perform action "click"/);
     expect(source).toMatch(/never clicks or closes REAPER windows/);
+  });
+
+  it("allowlists the OpenReaper Studio ReaImGui face before unknown-dialog classification", () => {
+    const observer = extractAppleScriptObserver(source);
+    const ignoreAt = observer.indexOf('if windowTitle is "OpenReaper Studio" then');
+    const unknownAt = observer.indexOf('return "blocked_unknown_dialog:title="');
+    expect(ignoreAt).toBeGreaterThanOrEqual(0);
+    expect(unknownAt).toBeGreaterThan(ignoreAt);
+    expect(observer.slice(ignoreAt, ignoreAt + 400)).toMatch(/set sawOpenReaperStudioDialog to true/);
+    expect(observer.slice(ignoreAt, ignoreAt + 400)).toMatch(/next repeat/);
+    expect(observer).toMatch(/if sawOpenReaperStudioDialog then return "ignored_openreaper_studio_dialog"/);
+    expect(classifier).toMatch(/ignored_openreaper_studio_dialog/);
+    expect(source).not.toMatch(/blocked_unknown_dialog:title=OpenReaper Studio/);
+    const face = readFileSync(
+      path.join(repoRoot, "scripts/studio/reaper/dialog/ui_face.lua"),
+      "utf8",
+    );
+    expect(face).toContain('ImGui_Begin(ctx, "OpenReaper Studio"');
+    expect(startupDialogResultIsSafe("ignored_openreaper_studio_dialog", "soft")).toBe(true);
+    expect(startupDialogResultIsSafe("ignored_openreaper_studio_dialog", "strict")).toBe(true);
+    expect(startupDialogResultIsSafe("blocked_unknown_dialog:title=OpenReaper Studio", "soft")).toBe(false);
   });
 
   it("maps AX failures to inspection_unavailable and logs once", () => {

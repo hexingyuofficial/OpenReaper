@@ -2,6 +2,7 @@
 export const STARTUP_DIALOG_SAFE_RESULTS = Object.freeze([
   "no_safe_dialog",
   "ignored_reascript_run_status_window",
+  "ignored_openreaper_studio_dialog",
 ]);
 
 /** AX/osascript inspection could not run. Safe only under soft policy. */

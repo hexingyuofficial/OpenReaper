@@ -2328,6 +2328,7 @@ tell application "System Events"
   tell launchedProcess
     set hasRunningReaScriptMainWindow to false
     set sawReaScriptRunStatusWindow to false
+    set sawOpenReaperStudioDialog to false
     repeat with candidateWindow in windows
       try
         if (subrole of candidateWindow as text) is "AXStandardWindow" and (name of candidateWindow as text) contains "[ReaScript: Run]" then
@@ -2341,6 +2342,12 @@ tell application "System Events"
       try
         set windowTitle to name of reaperWindow as text
       end try
+      if windowTitle is "OpenReaper Studio" then
+        -- ReaImGui Studio AI dialog face from face.prepare (open-face-on-load).
+        -- Exact title only: skip unknown-dialog classification and keep scanning.
+        set sawOpenReaperStudioDialog to true
+        next repeat
+      end if
       if windowTitle is "Project Settings" or windowTitle is "Project Settings / Notes" then
         -- REAPER's macOS AX tree does not consistently expose the selected
         -- Notes tab name. Inspect the exact safe markers in one tree pass.
@@ -2394,6 +2401,7 @@ tell application "System Events"
       end if
     end repeat
     if sawReaScriptRunStatusWindow then return "ignored_reascript_run_status_window"
+    if sawOpenReaperStudioDialog then return "ignored_openreaper_studio_dialog"
   end tell
 end tell
 return "no_safe_dialog"
@@ -2422,7 +2430,7 @@ APPLESCRIPT
 startup_dialog_result_is_safe() {
   local token="${1%%:*}"
   case "${token}" in
-    no_safe_dialog|ignored_reascript_run_status_window)
+    no_safe_dialog|ignored_reascript_run_status_window|ignored_openreaper_studio_dialog)
       return 0
       ;;
     unavailable|inspection_unavailable)
