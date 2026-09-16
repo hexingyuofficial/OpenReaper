@@ -14,6 +14,11 @@ rewiring Start/Stop.
 - Node.js 20+
 - **ReaImGui** (ReaPack) for the dialog MVP
 
+macOS **Accessibility** for Terminal/osascript is optional. Studio Start uses
+soft dialog *inspection* (`OPENREAPER_STUDIO=1`): AX/osascript failures
+(`-609`, timeout, empty) become `inspection_unavailable` and do not exit 75.
+Real `blocked_*` REAPER windows still fail closed. Start never clicks dialogs.
+
 Optional: [Pi](https://pi.dev) on `PATH` with existing `~/.pi/agent/mcp.json`.
 
 ## Run
@@ -53,8 +58,8 @@ reaper.ExecProcess → studio-pi-send.mjs → agent-seam/send-prompt.mjs
 
 | Step id | What it does |
 |---------|----------------|
-| `face.prepare` | Copy dialog entry + `studio/dialog/` modules; write `face-config-v1.json`; set `open-face-on-load` |
-| `engine.openreaper_start` | Run packaged `openreaper-start` (REAPER + MCP bridge) |
+| `face.prepare` | Copy dialog entry + `studio/dialog/` modules; sync tracked `openreaper-start` into `INSTALL_ROOT/bin`; write `face-config-v1.json`; set `open-face-on-load` |
+| `engine.openreaper_start` | Run `INSTALL_ROOT/bin/openreaper-start` with `OPENREAPER_STUDIO=1` (REAPER + MCP bridge; soft dialog inspection) |
 | `agent.pi_rpc` | Optional background `pi --mode rpc` (read-only `mcp.json` check) |
 | `face.finalize` | Update face config + `session-v1.json` |
 
@@ -76,9 +81,11 @@ reaper.ExecProcess → studio-pi-send.mjs → agent-seam/send-prompt.mjs
 | `lib/orchestration/*` | Pipelines and `runProcess` helper |
 | `lib/face/hook.mjs` | Marked `__startup.lua` block |
 | `lib/face/install.mjs` | Copy face bundle into REAPER resource path. Sources are always `reaper/` in this package, whether Start passes the git repo root, this directory, or omits the root. |
+| `lib/face/start-helper.mjs` | Sync tracked `packaging/macos/.../openreaper-start` into `INSTALL_ROOT/bin` |
 | `lib/face/runtime-config.mjs` | `~/.openreaper/studio/*` paths + face JSON |
 | `lib/contracts/context-chip.mjs` | Chip kinds + normalization |
 | `lib/contracts/prompt.mjs` | Prompt request/response contracts |
+| `lib/contracts/startup-dialog-result.mjs` | Soft/strict dialog inspection classification |
 | `lib/agent-seam/send-prompt.mjs` | Transport router |
 | `lib/agent-seam/transports/http-rpc.mjs` | `OPENREAPER_STUDIO_PI_RPC_URL` |
 | `lib/agent-seam/transports/mock.mjs` | Default mock replies |
@@ -144,7 +151,8 @@ add the kind to `CONTEXT_CHIP_KINDS` in Node contracts.
 
 | Variable | Purpose |
 |----------|---------|
-| `OPENREAPER_INSTALL_ROOT` | Packaged install root |
+| `OPENREAPER_INSTALL_ROOT` | Packaged install root (`~/.openreaper/current`; session/vendor stay there) |
+| `OPENREAPER_STARTUP_DIALOG_POLICY` | `soft` or `strict` dialog inspection; default `soft` when `OPENREAPER_STUDIO=1` |
 | `OPENREAPER_STUDIO_SKIP_PI` | Skip Pi RPC step |
 | `OPENREAPER_STUDIO_STOP_REAPER` | Request REAPER quit on Stop |
 | `OPENREAPER_STUDIO_PI_ARGS` | Extra args after `pi --mode rpc` |

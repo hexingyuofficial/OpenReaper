@@ -1,0 +1,2597 @@
+#!/bin/zsh
+set -euo pipefail
+
+# Supervise the whole helper, including pre-smoke Doctor work and external
+# commands. The inner helper keeps a cleanup reserve; this outer process-group
+# deadline is the final guard against any command that stops making progress.
+if [[ "${OPENREAPER_STARTUP_SUPERVISOR_ID:-}" != "${PPID}:$$" ]]; then
+  unset OPENREAPER_STARTUP_SUPERVISOR_ID 2>/dev/null || true
+  supervisor_budget_ms="${OPENREAPER_STARTUP_BUDGET_MS:-60000}"
+  if [[ ! "${supervisor_budget_ms}" =~ '^[1-9][0-9]*$' ]] \
+      || (( supervisor_budget_ms < 4000 || supervisor_budget_ms > 60000 )); then
+    supervisor_budget_ms=60000
+  fi
+  supervisor_status=0
+  /usr/bin/perl -MPOSIX=:sys_wait_h -MTime::HiRes=time,sleep -e '
+    use strict;
+    use warnings;
+    my ($budget_ms, $cleanup_ms, $script, @args) = @ARGV;
+    my $execution_deadline = time() + (($budget_ms - $cleanup_ms) / 1000);
+    my $supervisor_pid = $$;
+    my $child = fork();
+    die "fork failed: $!" unless defined $child;
+    if ($child == 0) {
+      POSIX::setpgid(0, 0) == 0 or die "setpgid failed: $!";
+      $ENV{OPENREAPER_STARTUP_SUPERVISOR_ID} = "$supervisor_pid:$$";
+      exec {$script} $script, @args or die "exec failed: $!";
+    }
+
+    my $forward_signal = "";
+    $SIG{HUP} = sub { $forward_signal = "HUP" };
+    $SIG{INT} = sub { $forward_signal = "INT" };
+    $SIG{TERM} = sub { $forward_signal = "TERM" };
+
+    sub exit_from_wait_status {
+      my ($status) = @_;
+      return POSIX::WEXITSTATUS($status) if POSIX::WIFEXITED($status);
+      return 128 + POSIX::WTERMSIG($status) if POSIX::WIFSIGNALED($status);
+      return 1;
+    }
+
+    sub terminate_process_group {
+      my ($pgid, $cleanup_ms) = @_;
+      return if kill(0, -$pgid) == 0;
+      kill "TERM", -$pgid;
+      my $deadline = time() + ($cleanup_ms / 1000);
+      while (time() < $deadline) {
+        return if kill(0, -$pgid) == 0;
+        sleep(0.02);
+      }
+      kill "KILL", -$pgid if kill(0, -$pgid) != 0;
+    }
+
+    while (1) {
+      my $waited = waitpid($child, WNOHANG);
+      if ($waited == $child) {
+        my $exit_code = exit_from_wait_status($?);
+        terminate_process_group($child, $cleanup_ms) if $exit_code != 0 && $exit_code != 75;
+        exit $exit_code;
+      }
+      if ($forward_signal ne "") {
+        kill $forward_signal, -$child;
+        my $signal_deadline = time() + ($cleanup_ms / 1000);
+        while (time() < $signal_deadline) {
+          my $signal_waited = waitpid($child, WNOHANG);
+          last if $signal_waited == $child;
+          sleep(0.02);
+        }
+        kill "KILL", -$child if kill(0, -$child) != 0;
+        waitpid($child, WNOHANG);
+        my %codes = (HUP => 129, INT => 130, TERM => 143);
+        exit $codes{$forward_signal};
+      }
+      last if time() >= $execution_deadline;
+      sleep(0.02);
+    }
+
+    print STDERR "[OpenReaper] startup-status=blocked_startup_budget_exhausted\n";
+    print STDERR "[OpenReaper] blocker-code=STARTUP_BUDGET_EXHAUSTED\n";
+    print STDERR "[OpenReaper] startup-budget-stage=supervisor_deadline;budget_ms=$budget_ms;cleanup_reserve_ms=$cleanup_ms\n";
+    kill "TERM", -$child;
+    my $hard_deadline = time() + ($cleanup_ms / 1000);
+    my $child_reaped = 0;
+    while (time() < $hard_deadline) {
+      if (!$child_reaped) {
+        my $waited = waitpid($child, WNOHANG);
+        $child_reaped = 1 if $waited == $child;
+      }
+      last if kill(0, -$child) == 0;
+      sleep(0.02);
+    }
+    if (kill(0, -$child) != 0) {
+      kill "KILL", -$child;
+    }
+    waitpid($child, WNOHANG) unless $child_reaped;
+    exit 124;
+  ' "${supervisor_budget_ms}" 6000 "$0" "$@" || supervisor_status=$?
+  exit "${supervisor_status}"
+fi
+unset OPENREAPER_STARTUP_SUPERVISOR_ID
+typeset -F 3 SECONDS=0
+
+SCRIPT_DIR="${0:A:h}"
+INSTALL_ROOT="${SCRIPT_DIR:h}"
+BRIDGE_SCRIPT="${INSTALL_ROOT}/vendor/openreaper-kernel/reaper/bridge/openreaper-live-bridge.lua"
+BRIDGE_LAUNCHER_SCRIPT="${INSTALL_ROOT}/bin/openreaper-start-mcp-bridge.lua"
+REAPER_BIN="/Applications/REAPER.app/Contents/MacOS/REAPER"
+REAPER_APP=""
+DIRECT_BINARY=false
+REAPER_RESOURCE_ROOT=""
+REAPER_RESOURCE_ROOT_EXPLICIT=false
+SESSION_ROOT="${INSTALL_ROOT}/session"
+SESSION_ROOT_EXPLICIT=false
+RENDER_ROOT=""
+RENDER_ROOT_EXPLICIT=false
+MANAGED_RENDER_ROOT_RECORD="${INSTALL_ROOT}/session/managed-render-root.path"
+TRANSPORT_DIR=""
+ARTIFACT_ROOT=""
+PROJECT_INDEX_STATE_ROOT=""
+BRIDGE_OWNER=""
+BRIDGE_GENERATION=""
+BRIDGE_GENERATION_REQUESTED=""
+BRIDGE_GENERATION_EXPLICIT=false
+# REAPER may spend more than the operation-performance gate loading the user's
+# project, media peaks, and plugin state before __startup.lua can run. Keep
+# startup independently bounded while leaving the <30000ms complete-operation
+# gate unchanged.
+START_WAIT_SECONDS="${OPENREAPER_START_WAIT_SECONDS:-45}"
+STARTUP_BUDGET_MS="${OPENREAPER_STARTUP_BUDGET_MS:-60000}"
+STARTUP_BUDGET_MAX_MS=60000
+STARTUP_CLEANUP_RESERVE_MS=6000
+STARTUP_DOCTOR_SMOKE_MAX_MS=22000
+STARTUP_DOCTOR_READ_MAX_MS=15000
+STARTUP_DOCTOR_OVERHEAD_MS=1000
+STARTUP_DIALOG_TIMEOUT_SECONDS="${OPENREAPER_STARTUP_DIALOG_TIMEOUT_SECONDS:-15}"
+STARTUP_DIALOG_POLICY="${OPENREAPER_STARTUP_DIALOG_POLICY:-}"
+STARTUP_DIALOG_INSPECTION_UNAVAILABLE=false
+STARTUP_DIALOG_INSPECTION_UNAVAILABLE_LOGGED=false
+STUDIO_STALE_RELAUNCH_ATTEMPTED=false
+RECOVER_EXISTING=false
+STARTUP_PRESERVE_REAPER=false
+LAUNCHCTL_BIN="/bin/launchctl"
+LAUNCHSERVICES_BIN="/usr/bin/osascript"
+STARTUP_PROCESS_QUERY_TIMEOUT_MS=750
+STARTUP_LAUNCHCTL_TIMEOUT_MS=2000
+STARTUP_LAUNCHCTL_CLEANUP_TIMEOUT_MS=300
+STARTUP_LAUNCHSERVICES_TIMEOUT_MS=3000
+LAUNCHSERVICES_LOCK_PATH="${INSTALL_ROOT}/session/.openreaper-launchservices-env.lock"
+LAUNCHSERVICES_LOCK_OWNED=false
+LAUNCHSERVICES_LOCK_TOKEN=""
+LAUNCHSERVICES_SNAPSHOT_DIR=""
+LAUNCHSERVICES_CLEANUP_REQUIRED=false
+LAUNCHSERVICES_RECOVERY_RETAINED=false
+LAUNCHSERVICES_LOCK_TOKEN_WRITTEN=false
+LAUNCHSERVICES_LOCK_METADATA_WRITTEN=false
+LAUNCHSERVICES_SNAPSHOT_CREATED=false
+LAUNCHSERVICES_PID_HANDOFF=""
+LAUNCHSERVICES_MUTATED_KEYS=()
+STARTUP_LAUNCH_ATTEMPTED=false
+STARTUP_LAUNCH_ACCEPTED=false
+STARTUP_LAUNCHED_REAPER_PID=""
+STARTUP_LAUNCHED_REAPER_IDENTITY=""
+STARTUP_REAPER_BEFORE_PIDS=""
+LAUNCHSERVICES_ENV_KEYS=(
+  OPENREAPER_SESSION_ROOT
+  OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR
+  OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH
+  OPENREAPER_ARTIFACT_ROOT
+  OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT
+  OPENREAPER_LIVE_SMOKE_RENDER_ROOT
+  OPENREAPER_LIVE_BRIDGE_OWNER
+  OPENREAPER_LIVE_BRIDGE_GENERATION
+  OPENREAPER_LIVE_BRIDGE_SESSION_ID
+  OPENREAPER_PROJECT_INDEX_STATE_ROOT
+  OPENREAPER_PROJECT_INDEX_LOGICAL_SESSION_KEY
+  OPENREAPER_CURRENT_PROJECT_PATH
+  OPENREAPER_CURRENT_PROJECT_REF
+  OPENREAPER_MCP_PACKAGE_ROOT
+)
+
+PROJECT_PATH=""
+ARGS=()
+# An installed launch must never carry another OpenReaper session into REAPER.
+# Explicit supported CLI options below are the only way to select a non-default
+# session, transport, artifact, render, or bridge identity for this launch.
+for stale_openreaper_env in \
+  OPENREAPER_SESSION_ROOT \
+  OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR \
+  OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH \
+  OPENREAPER_ARTIFACT_ROOT \
+  OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT \
+  OPENREAPER_LIVE_SMOKE_RENDER_ROOT \
+  OPENREAPER_LIVE_BRIDGE_OWNER \
+  OPENREAPER_LIVE_BRIDGE_GENERATION \
+  OPENREAPER_LIVE_BRIDGE_SESSION_ID \
+  OPENREAPER_PROJECT_INDEX_STATE_ROOT \
+  OPENREAPER_PROJECT_INDEX_LOGICAL_SESSION_KEY \
+  OPENREAPER_CURRENT_PROJECT_PATH \
+  OPENREAPER_CURRENT_PROJECT_REF \
+  OPENREAPER_MCP_PACKAGE_ROOT; do
+  unset "${stale_openreaper_env}" 2>/dev/null || true
+done
+require_option_value() {
+  local option_name="$1"
+  local remaining_count="$2"
+  local option_value="${3-}"
+  if (( remaining_count < 2 )) || [[ -z "${option_value}" || "${option_value}" == --* ]]; then
+    echo "[OpenReaper] ${option_name} requires a non-empty value" >&2
+    exit 2
+  fi
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --project-path|--project|--rpp-path)
+      require_option_value "$1" "$#" "${2-}"
+      PROJECT_PATH="$2"
+      shift 2
+      ;;
+    --reaper-binary)
+      require_option_value "$1" "$#" "${2-}"
+      REAPER_BIN="$2"
+      shift 2
+      ;;
+    --direct-binary|--no-launchservices)
+      DIRECT_BINARY=true
+      shift
+      ;;
+    --reaper-app)
+      require_option_value "$1" "$#" "${2-}"
+      REAPER_APP="$2"
+      REAPER_BIN="${REAPER_APP}/Contents/MacOS/REAPER"
+      shift 2
+      ;;
+    --reaper-resource-root=*)
+      REAPER_RESOURCE_ROOT="${1#*=}"
+      if [[ -z "${REAPER_RESOURCE_ROOT}" ]]; then
+        echo "[OpenReaper] --reaper-resource-root requires a non-empty value" >&2
+        exit 2
+      fi
+      REAPER_RESOURCE_ROOT_EXPLICIT=true
+      shift
+      ;;
+    --reaper-resource-root)
+      require_option_value "$1" "$#" "${2-}"
+      REAPER_RESOURCE_ROOT="$2"
+      REAPER_RESOURCE_ROOT_EXPLICIT=true
+      shift 2
+      ;;
+    --session-root=*)
+      SESSION_ROOT="${1#*=}"
+      if [[ -z "${SESSION_ROOT}" ]]; then
+        echo "[OpenReaper] --session-root requires a non-empty value" >&2
+        exit 2
+      fi
+      SESSION_ROOT_EXPLICIT=true
+      shift
+      ;;
+    --session-root)
+      require_option_value "$1" "$#" "${2-}"
+      SESSION_ROOT="$2"
+      SESSION_ROOT_EXPLICIT=true
+      shift 2
+      ;;
+    --render-root=*)
+      RENDER_ROOT="${1#*=}"
+      if [[ -z "${RENDER_ROOT}" ]]; then
+        echo "[OpenReaper] --render-root requires a non-empty value" >&2
+        exit 2
+      fi
+      RENDER_ROOT_EXPLICIT=true
+      shift
+      ;;
+    --render-root)
+      require_option_value "$1" "$#" "${2-}"
+      RENDER_ROOT="$2"
+      RENDER_ROOT_EXPLICIT=true
+      shift 2
+      ;;
+    --transport-dir)
+      require_option_value "$1" "$#" "${2-}"
+      TRANSPORT_DIR="$2"
+      shift 2
+      ;;
+    --artifact-root)
+      require_option_value "$1" "$#" "${2-}"
+      ARTIFACT_ROOT="$2"
+      shift 2
+      ;;
+    --bridge-owner|--owner)
+      require_option_value "$1" "$#" "${2-}"
+      BRIDGE_OWNER="$2"
+      shift 2
+      ;;
+    --bridge-generation|--generation)
+      require_option_value "$1" "$#" "${2-}"
+      BRIDGE_GENERATION_REQUESTED="$2"
+      BRIDGE_GENERATION_EXPLICIT=true
+      shift 2
+      ;;
+    --startup-dialog-consent|--startup-dialog-consent=*|--no-startup-dialog-assist|--no-dialog-assist|--ignore-missing-media)
+      echo "[OpenReaper] startup-window automation was removed from the customer product; resolve visible REAPER windows manually." >&2
+      exit 2
+      ;;
+    --recover-existing|--reuse-existing-session)
+      RECOVER_EXISTING=true
+      shift
+      ;;
+    --help|-h)
+      cat <<'HELP'
+OpenReaper start helper
+
+Usage:
+  openreaper-start [--project-path /path/to/project.RPP]
+  openreaper-start --reaper-binary /path/to/REAPER [--project-path /path/to/project.RPP]
+  openreaper-start --direct-binary --reaper-binary /path/to/REAPER [--project-path /path/to/project.RPP]
+  openreaper-start --reaper-app /path/to/REAPER.app [--project-path /path/to/project.RPP]
+  openreaper-start --reaper-resource-root /absolute/path/to/contained/REAPER [--project-path /path/to/project.RPP]
+  openreaper-start --session-root /path/to/session [--project-path /path/to/project.RPP]
+  openreaper-start --render-root /absolute/path/to/renders [--project-path /path/to/project.RPP]
+  openreaper-start --recover-existing [--session-root /path/to/session]
+
+The helper can start a new REAPER or attach to one already running from the
+normal REAPER icon. In either case it returns only after a matching Bridge
+heartbeat and real bounded public read probe succeed.
+On macOS it uses LaunchServices by default so REAPER is not a child of the
+agent command session. Use --direct-binary for a headless/direct binary launch;
+the same startup hook, heartbeat, and public read probe gates still apply.
+The helper defaults to its installed session directory and ignores stale
+OPENREAPER_SESSION_ROOT / OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR /
+OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT / OPENREAPER_LIVE_SMOKE_RENDER_ROOT /
+OPENREAPER_LIVE_BRIDGE_OWNER / OPENREAPER_LIVE_BRIDGE_GENERATION values from
+the parent shell. Use explicit --session-root/--render-root/--transport-dir/
+--artifact-root/--bridge-owner/--bridge-generation only for a bounded evidence
+window. With --session-root and no --render-root, the render root is the
+explicit session's renders child.
+
+By default REAPER uses its normal user resource/configuration root. The helper
+does not select or write a theme. For contained development or release
+verification, pass --reaper-resource-root; that option adds only the explicit
+root's REAPER.ini through REAPER's -cfgfile option and never copies the user's
+license, theme, plugins, or preferences into it.
+
+If REAPER is installed somewhere other than /Applications, the agent can pass
+--reaper-app or --reaper-binary. On macOS the helper also tries Spotlight app
+discovery before asking for a path.
+
+The helper passes its fixed trusted package-local launcher to REAPER after the
+project and every extra argument. The REAPER action named "OpenReaper: Start MCP
+bridge" remains a manual recovery fallback if autonomous startup is blocked.
+
+If one REAPER is already running, the helper attaches to that PID and never
+starts a duplicate instance. --recover-existing remains accepted as an
+explicit spelling of the same attach path. Existing sessions must not be
+combined with a new project path or arbitrary REAPER arguments. If the running
+instance has no OpenReaper Bridge, the helper reports a recovery instruction
+for that same instance instead of changing user configuration.
+
+OpenReaper never clicks or closes REAPER windows. It observes startup windows
+read-only. When a visible window blocks startup, the helper reports
+STARTUP_USER_ACTION_REQUIRED and preserves the exact REAPER PID and generation
+so the user can resolve it and the agent can reconnect without starting a
+duplicate instance.
+
+OPENREAPER_STARTUP_DIALOG_POLICY=soft|strict controls inspection failures.
+Default is soft when OPENREAPER_STUDIO=1, otherwise strict. Soft treats
+Accessibility/osascript failures as inspection_unavailable (not exit 75).
+Real blocked_* window classifications still fail closed. Studio also prefers
+one clean relaunch when attach would wait on a stale or mismatched Bridge
+heartbeat, so __startup.lua can start Bridge.
+HELP
+      exit 0
+      ;;
+    *)
+      ARGS+=("$1")
+      shift
+      ;;
+  esac
+done
+
+if [[ ! -f "${BRIDGE_LAUNCHER_SCRIPT}" || -L "${BRIDGE_LAUNCHER_SCRIPT}" ]]; then
+  echo "[OpenReaper] trusted Bridge launcher must be a regular non-symlink package file: ${BRIDGE_LAUNCHER_SCRIPT}" >&2
+  exit 2
+fi
+if [[ ! -r "${BRIDGE_LAUNCHER_SCRIPT}" ]]; then
+  echo "[OpenReaper] trusted Bridge launcher is not readable: ${BRIDGE_LAUNCHER_SCRIPT}" >&2
+  exit 2
+fi
+for reaper_arg in "${ARGS[@]}"; do
+  case "${reaper_arg:l}" in
+    *.lua|*.eel|*.py)
+      echo "[OpenReaper] refusing an untrusted command-line ReaScript argument: ${reaper_arg}" >&2
+      exit 2
+      ;;
+  esac
+done
+
+if [[ ! "${STARTUP_DIALOG_TIMEOUT_SECONDS}" =~ '^[1-9][0-9]*$' ]] || (( STARTUP_DIALOG_TIMEOUT_SECONDS > 120 )); then
+  echo "[OpenReaper] OPENREAPER_STARTUP_DIALOG_TIMEOUT_SECONDS must be an integer from 1 to 120" >&2
+  exit 2
+fi
+if [[ -z "${STARTUP_DIALOG_POLICY}" ]]; then
+  if [[ "${OPENREAPER_STUDIO:-}" == "1" ]]; then
+    STARTUP_DIALOG_POLICY="soft"
+  else
+    STARTUP_DIALOG_POLICY="strict"
+  fi
+fi
+if [[ "${STARTUP_DIALOG_POLICY}" != "soft" && "${STARTUP_DIALOG_POLICY}" != "strict" ]]; then
+  echo "[OpenReaper] OPENREAPER_STARTUP_DIALOG_POLICY must be soft or strict" >&2
+  exit 2
+fi
+if [[ ! "${START_WAIT_SECONDS}" =~ '^[1-9][0-9]*$' ]] || (( START_WAIT_SECONDS > 120 )); then
+  echo "[OpenReaper] OPENREAPER_START_WAIT_SECONDS must be an integer from 1 to 120" >&2
+  exit 2
+fi
+if [[ ! "${STARTUP_BUDGET_MS}" =~ '^[1-9][0-9]*$' ]] \
+    || (( STARTUP_BUDGET_MS < 4000 || STARTUP_BUDGET_MS > STARTUP_BUDGET_MAX_MS )); then
+  echo "[OpenReaper] OPENREAPER_STARTUP_BUDGET_MS must be an integer from 4000 to ${STARTUP_BUDGET_MAX_MS}" >&2
+  exit 2
+fi
+
+if [[ "${RECOVER_EXISTING}" == "true" && ( -n "${PROJECT_PATH}" || ${#ARGS[@]} -gt 0 ) ]]; then
+  echo "[OpenReaper] --recover-existing cannot be combined with a project path or REAPER arguments." >&2
+  exit 2
+fi
+
+if [[ "${REAPER_RESOURCE_ROOT_EXPLICIT}" == "true" ]]; then
+  for reaper_arg in "${ARGS[@]}"; do
+    if [[ "${reaper_arg:l}" == "-cfgfile" ]]; then
+      echo "[OpenReaper] --reaper-resource-root cannot be combined with a REAPER -cfgfile argument" >&2
+      exit 2
+    fi
+  done
+fi
+
+if [[ -z "${TRANSPORT_DIR}" ]]; then
+  TRANSPORT_DIR="${SESSION_ROOT}/transport"
+fi
+
+if [[ -z "${ARTIFACT_ROOT}" ]]; then
+  ARTIFACT_ROOT="${SESSION_ROOT}/artifacts"
+fi
+
+prepare_reaper_resource_root() {
+  [[ "${REAPER_RESOURCE_ROOT_EXPLICIT}" == "true" ]] || return 0
+  node --input-type=module - "${REAPER_RESOURCE_ROOT}" <<'NODE'
+import { lstat, mkdir, realpath } from "node:fs/promises";
+import path from "node:path";
+
+const requested = process.argv[2];
+if (!requested || !path.isAbsolute(requested)) throw new Error("resource root must be an absolute path");
+if (/[\u0000-\u001f\u007f]/u.test(requested)) throw new Error("resource root contains a control character");
+if (Buffer.byteLength(requested, "utf8") > 3072) throw new Error("resource root exceeds 3072 UTF-8 bytes");
+const normalized = path.normalize(requested);
+if (normalized === path.parse(normalized).root) throw new Error("resource root must not be the filesystem root");
+
+async function safeLstat(candidate) {
+  try { return await lstat(candidate); } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+let entry = await safeLstat(normalized);
+if (entry?.isSymbolicLink()) throw new Error("resource root final component must not be a symlink");
+if (entry && !entry.isDirectory()) throw new Error("resource root must be a directory");
+if (!entry) {
+  await mkdir(normalized, { recursive: true, mode: 0o700 });
+  entry = await safeLstat(normalized);
+}
+if (!entry || entry.isSymbolicLink() || !entry.isDirectory()) throw new Error("resource root is not a real directory");
+await realpath(normalized);
+process.stdout.write(path.resolve(normalized));
+NODE
+}
+
+if [[ "${REAPER_RESOURCE_ROOT_EXPLICIT}" == "true" ]]; then
+  if ! REAPER_RESOURCE_ROOT="$(prepare_reaper_resource_root)"; then
+    echo "[OpenReaper] resource-root validation failed: ${REAPER_RESOURCE_ROOT}" >&2
+    exit 2
+  fi
+fi
+
+PROJECT_INDEX_STATE_ROOT="${SESSION_ROOT}/project-index"
+BRIDGE_GENERATION_RECORD="${SESSION_ROOT}/bridge-generation-v1.json"
+
+select_and_prepare_render_root() {
+  local selection_mode="installed"
+  local selection_value=""
+  if [[ "${RENDER_ROOT_EXPLICIT}" == "true" ]]; then
+    selection_mode="explicit"
+    selection_value="${RENDER_ROOT}"
+  elif [[ "${SESSION_ROOT_EXPLICIT}" == "true" ]]; then
+    selection_mode="session"
+    selection_value="${SESSION_ROOT}/renders"
+  fi
+
+  node --input-type=module - \
+    "${INSTALL_ROOT}" \
+    "${HOME}" \
+    "${MANAGED_RENDER_ROOT_RECORD}" \
+    "${selection_mode}" \
+    "${selection_value}" \
+    "${SESSION_ROOT}" \
+    "${TRANSPORT_DIR}" \
+    "${ARTIFACT_ROOT}" <<'NODE'
+import { constants as fsConstants } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { lstat, mkdir, open, realpath, rmdir, unlink } from "node:fs/promises";
+import path from "node:path";
+
+const RECORD_MAX = 4096;
+const PATH_MAX = 3072;
+const PROBE_ATTEMPTS = 4;
+const [
+  installRoot,
+  home,
+  recordPath,
+  selectionMode,
+  selectionValue,
+  effectiveSessionRoot,
+  effectiveTransportRoot,
+  effectiveArtifactRoot,
+] = process.argv.slice(2);
+const installedSessionRoot = path.join(installRoot, "session");
+const defaultRoot = path.join(installedSessionRoot, "renders");
+const effectiveSessionRenderRoot = path.join(effectiveSessionRoot, "renders");
+let candidate = null;
+let createdFinalDirectory = false;
+
+try {
+  if (selectionMode === "explicit" || selectionMode === "session") {
+    candidate = selectionValue;
+  } else {
+    const record = await readRecord(recordPath);
+    candidate = record.status === "missing" ? defaultRoot : record.path;
+  }
+  validatePathText(candidate);
+  candidate = path.normalize(candidate);
+  const before = await safeLstat(candidate);
+  if (before?.isSymbolicLink()) throw new Error("final component is a symlink");
+  if (before && !before.isDirectory()) throw new Error("path is not a directory");
+  await assertNoReservedOverlap(candidate);
+  if (!before) {
+    await mkdir(candidate, { recursive: true, mode: 0o700 });
+    createdFinalDirectory = true;
+  }
+  const after = await safeLstat(candidate);
+  if (!after || after.isSymbolicLink() || !after.isDirectory()) {
+    throw new Error("prepared path is not a real directory");
+  }
+  await assertNoReservedOverlap(candidate);
+  await writeProbe(candidate);
+  process.stdout.write(candidate);
+} catch (error) {
+  if (createdFinalDirectory && candidate) await rmdir(candidate).catch(() => {});
+  process.stderr.write(`[OpenReaper] render-root validation failed: ${bounded(error?.message ?? "invalid path")}\n`);
+  process.exitCode = 2;
+}
+
+async function readRecord(filePath) {
+  const entry = await safeLstat(filePath);
+  if (!entry) return { status: "missing" };
+  if (entry.isSymbolicLink() || !entry.isFile()) throw new Error("persisted record is a symlink or non-regular file");
+  if (entry.size > RECORD_MAX) throw new Error(`persisted record exceeds ${RECORD_MAX} bytes`);
+  const handle = await open(filePath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+  try {
+    const opened = await handle.stat();
+    if (!opened.isFile() || opened.size > RECORD_MAX) throw new Error("persisted record changed or is oversized");
+    const buffer = Buffer.alloc(RECORD_MAX + 1);
+    const bytesRead = await readBoundedBytes(handle, buffer);
+    if (bytesRead > RECORD_MAX) throw new Error(`persisted record exceeds ${RECORD_MAX} bytes`);
+    let text;
+    try {
+      text = new TextDecoder("utf-8", { fatal: true }).decode(buffer.subarray(0, bytesRead));
+    } catch {
+      throw new Error("persisted record is not valid UTF-8");
+    }
+    const value = text.endsWith("\n") ? text.slice(0, -1) : text;
+    if (value === "" || value.includes("\n")) throw new Error("persisted record must contain exactly one non-empty path line");
+    validatePathText(value);
+    return { status: "valid", path: value };
+  } finally {
+    await handle.close();
+  }
+}
+
+async function readBoundedBytes(handle, buffer) {
+  let offset = 0;
+  while (offset < buffer.length) {
+    const { bytesRead } = await handle.read(buffer, offset, buffer.length - offset, offset);
+    if (bytesRead === 0) break;
+    offset += bytesRead;
+  }
+  return offset;
+}
+
+function validatePathText(value) {
+  if (typeof value !== "string" || value === "") throw new Error("path is empty");
+  if (Buffer.byteLength(value, "utf8") > PATH_MAX) throw new Error(`path exceeds ${PATH_MAX} UTF-8 bytes`);
+  if (/^file:/i.test(value)) throw new Error("file URI is not allowed");
+  if (/[\u0000-\u001f\u007f]/u.test(value)) throw new Error("C0/DEL control characters are not allowed");
+  if (!path.isAbsolute(value)) throw new Error("path must be absolute");
+  const normalized = path.normalize(value);
+  if (normalized === path.parse(normalized).root) throw new Error("filesystem root is not allowed");
+}
+
+async function assertNoReservedOverlap(value) {
+  const canonical = await canonicalPath(value);
+  if (canonical === await canonicalPath(home)) throw new Error("user home is not allowed");
+
+  for (const [label, effectiveRoot] of [
+    ["effective transport", effectiveTransportRoot],
+    ["effective artifact", effectiveArtifactRoot],
+  ]) {
+    if (overlaps(canonical, await canonicalPath(effectiveRoot))) {
+      throw new Error(`path overlaps ${label} root`);
+    }
+  }
+
+  const canonicalInstalledDefaultRoot = await canonicalPath(defaultRoot);
+  if (canonical === canonicalInstalledDefaultRoot) return;
+
+  const canonicalInstallRoot = await canonicalPath(installRoot);
+  if (overlaps(canonical, canonicalInstallRoot)) {
+    throw new Error("path overlaps reserved install root");
+  }
+
+  const canonicalEffectiveSessionRenderRoot = await canonicalPath(effectiveSessionRenderRoot);
+  if (canonical === canonicalEffectiveSessionRenderRoot) return;
+
+  const canonicalEffectiveSessionRoot = await canonicalPath(effectiveSessionRoot);
+  if (overlaps(canonical, canonicalEffectiveSessionRoot)) {
+    throw new Error("path overlaps reserved effective session root");
+  }
+}
+async function writeProbe(directory) {
+  for (let attempt = 0; attempt < PROBE_ATTEMPTS; attempt += 1) {
+    const probe = path.join(directory, `.openreaper-write-probe-${process.pid}-${randomBytes(8).toString("hex")}`);
+    let handle = null;
+    try {
+      handle = await open(probe, "wx", 0o600);
+      await handle.writeFile("openreaper-managed-render-root-probe\n", "utf8");
+      await handle.sync();
+      await handle.close();
+      handle = null;
+      await unlink(probe);
+      return;
+    } catch (error) {
+      if (handle) await handle.close().catch(() => {});
+      await unlink(probe).catch(() => {});
+      if (error?.code === "EEXIST") continue;
+      throw new Error(`write probe failed: ${error?.code ?? "ERROR"}`);
+    }
+  }
+  throw new Error("write probe exhausted exclusive attempts");
+}
+
+async function canonicalPath(value) {
+  let cursor = path.resolve(value);
+  const suffix = [];
+  while (true) {
+    try {
+      return path.join(await realpath(cursor), ...suffix.reverse());
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+      const parent = path.dirname(cursor);
+      if (parent === cursor) return path.join(cursor, ...suffix.reverse());
+      suffix.push(path.basename(cursor));
+      cursor = parent;
+    }
+  }
+}
+
+function overlaps(left, right) {
+  return left === right || left.startsWith(`${right}${path.sep}`) || right.startsWith(`${left}${path.sep}`);
+}
+
+async function safeLstat(value) {
+  try {
+    return await lstat(value);
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+function bounded(value) {
+  return String(value).replace(/[\u0000-\u001f\u007f]/gu, " ").slice(0, 320);
+}
+NODE
+}
+
+if ! RENDER_ROOT="$(select_and_prepare_render_root)"; then
+  exit 2
+fi
+
+prepare_project_index_state_root() {
+  node --input-type=module - \
+    "${INSTALL_ROOT}" \
+    "${SESSION_ROOT}" \
+    "${TRANSPORT_DIR}" \
+    "${ARTIFACT_ROOT}" \
+    "${RENDER_ROOT}" \
+    "${PROJECT_INDEX_STATE_ROOT}" <<'NODE'
+import { randomBytes } from "node:crypto";
+import { lstat, mkdir, open, realpath, rmdir, unlink } from "node:fs/promises";
+import path from "node:path";
+
+const PATH_MAX = 3072;
+const PROBE_ATTEMPTS = 4;
+const [installRoot, sessionRoot, transportRoot, artifactRoot, renderRoot, requestedRoot] = process.argv.slice(2);
+const installedDefaultRoot = path.join(installRoot, "session", "project-index");
+let candidate = null;
+let createdFinalDirectory = false;
+
+try {
+  validatePathText(requestedRoot);
+  candidate = path.normalize(requestedRoot);
+  if (candidate !== path.normalize(path.join(sessionRoot, "project-index"))) {
+    throw new Error("path is not the session-derived project-index root");
+  }
+  const before = await safeLstat(candidate);
+  if (before?.isSymbolicLink()) throw new Error("final component is a symlink");
+  if (before && !before.isDirectory()) throw new Error("path is not a directory");
+  await assertNoReservedOverlap(candidate);
+  if (!before) {
+    await mkdir(candidate, { recursive: true, mode: 0o700 });
+    createdFinalDirectory = true;
+  }
+  const after = await safeLstat(candidate);
+  if (!after || after.isSymbolicLink() || !after.isDirectory()) {
+    throw new Error("prepared path is not a real directory");
+  }
+  const canonical = await realpath(candidate);
+  await assertNoReservedOverlap(canonical);
+  await writeProbe(canonical);
+  process.stdout.write(canonical);
+} catch (error) {
+  if (createdFinalDirectory && candidate) await rmdir(candidate).catch(() => {});
+  process.stderr.write(`[OpenReaper] project-index state-root validation failed: ${bounded(error?.message ?? "invalid path")}\n`);
+  process.exitCode = 2;
+}
+
+function validatePathText(value) {
+  if (typeof value !== "string" || value === "") throw new Error("path is empty");
+  if (Buffer.byteLength(value, "utf8") > PATH_MAX) throw new Error(`path exceeds ${PATH_MAX} UTF-8 bytes`);
+  if (/^file:/i.test(value)) throw new Error("file URI is not allowed");
+  if (/[\u0000-\u001f\u007f]/u.test(value)) throw new Error("C0/DEL control characters are not allowed");
+  if (!path.isAbsolute(value)) throw new Error("path must be absolute");
+  const normalized = path.normalize(value);
+  if (normalized === path.parse(normalized).root) throw new Error("filesystem root is not allowed");
+}
+
+async function assertNoReservedOverlap(value) {
+  const canonical = await canonicalPath(value);
+  for (const [label, reserved] of [
+    ["effective transport", transportRoot],
+    ["effective artifact", artifactRoot],
+    ["effective render", renderRoot],
+  ]) {
+    if (overlaps(canonical, await canonicalPath(reserved))) {
+      throw new Error(`path overlaps ${label} root`);
+    }
+  }
+
+  if (canonical === await canonicalPath(installedDefaultRoot)) return;
+  if (overlaps(canonical, await canonicalPath(installRoot))) {
+    throw new Error("path overlaps reserved install root");
+  }
+}
+
+async function writeProbe(directory) {
+  for (let attempt = 0; attempt < PROBE_ATTEMPTS; attempt += 1) {
+    const probe = path.join(directory, `.openreaper-project-index-write-probe-${process.pid}-${randomBytes(8).toString("hex")}`);
+    let handle = null;
+    try {
+      handle = await open(probe, "wx", 0o600);
+      await handle.writeFile("openreaper-project-index-state-root-probe\n", "utf8");
+      await handle.sync();
+      await handle.close();
+      handle = null;
+      await unlink(probe);
+      return;
+    } catch (error) {
+      if (handle) await handle.close().catch(() => {});
+      await unlink(probe).catch(() => {});
+      if (error?.code === "EEXIST") continue;
+      throw new Error(`write probe failed: ${error?.code ?? "ERROR"}`);
+    }
+  }
+  throw new Error("write probe exhausted exclusive attempts");
+}
+
+async function canonicalPath(value) {
+  let cursor = path.resolve(value);
+  const suffix = [];
+  while (true) {
+    try {
+      return path.join(await realpath(cursor), ...suffix.reverse());
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+      const parent = path.dirname(cursor);
+      if (parent === cursor) return path.join(cursor, ...suffix.reverse());
+      suffix.push(path.basename(cursor));
+      cursor = parent;
+    }
+  }
+}
+
+function overlaps(left, right) {
+  return left === right || left.startsWith(`${right}${path.sep}`) || right.startsWith(`${left}${path.sep}`);
+}
+
+async function safeLstat(value) {
+  try {
+    return await lstat(value);
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+function bounded(value) {
+  return String(value).replace(/[\u0000-\u001f\u007f]/gu, " ").slice(0, 320);
+}
+NODE
+}
+
+if ! PROJECT_INDEX_STATE_ROOT="$(prepare_project_index_state_root)"; then
+  exit 2
+fi
+if [[ -z "${BRIDGE_OWNER}" ]]; then
+  BRIDGE_OWNER="openreaper-alpha"
+fi
+
+LOG_DIR="${SESSION_ROOT}/logs"
+START_LOG="${LOG_DIR}/openreaper-start-$(date -u +"%Y%m%dT%H%M%SZ").log"
+PID_FILE="${SESSION_ROOT}/reaper.pid"
+
+resolve_reaper_locations() {
+  if [[ -n "${REAPER_APP}" ]]; then
+    REAPER_BIN="${REAPER_APP}/Contents/MacOS/REAPER"
+    return
+  fi
+
+  if [[ "${DIRECT_BINARY}" == "true" ]]; then
+    return
+  fi
+
+  if [[ "${REAPER_BIN}" == *.app/Contents/MacOS/* ]]; then
+    local inferred_app="${REAPER_BIN%%.app/Contents/MacOS/*}.app"
+    if [[ -d "${inferred_app}" ]]; then
+      REAPER_APP="${inferred_app}"
+    fi
+  fi
+
+  if [[ ! -x "${REAPER_BIN}" && -d "/Applications/REAPER.app" ]]; then
+    REAPER_APP="/Applications/REAPER.app"
+    REAPER_BIN="${REAPER_APP}/Contents/MacOS/REAPER"
+  fi
+
+  if [[ "$(uname -s)" == "Darwin" && ! -x "${REAPER_BIN}" && -x "/usr/bin/mdfind" ]]; then
+    local discovered_app
+    discovered_app="$(/usr/bin/mdfind 'kMDItemCFBundleIdentifier == "com.cockos.reaper"' | head -1 || true)"
+    if [[ -n "${discovered_app}" && -d "${discovered_app}" ]]; then
+      REAPER_APP="${discovered_app}"
+      REAPER_BIN="${REAPER_APP}/Contents/MacOS/REAPER"
+    fi
+  fi
+}
+
+resolve_reaper_locations
+
+if [[ ! -x "${REAPER_BIN}" ]]; then
+  echo "[OpenReaper] REAPER binary is not executable: ${REAPER_BIN}" >&2
+  echo "[OpenReaper] The agent can pass --reaper-app /path/to/REAPER.app or --reaper-binary /path/to/REAPER." >&2
+  exit 2
+fi
+
+mkdir -p "${TRANSPORT_DIR}/requests" "${TRANSPORT_DIR}/results" "${ARTIFACT_ROOT}"
+mkdir -p "${SESSION_ROOT}" "${LOG_DIR}"
+
+USE_LAUNCHSERVICES=false
+if [[ "${DIRECT_BINARY}" != "true" && "$(uname -s)" == "Darwin" && -n "${REAPER_APP}" && -d "${REAPER_APP}" && -x "${LAUNCHSERVICES_BIN}" && -x "${LAUNCHCTL_BIN}" ]]; then
+  USE_LAUNCHSERVICES=true
+fi
+
+export OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR="${TRANSPORT_DIR}"
+export OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH="${BRIDGE_SCRIPT}"
+export OPENREAPER_ARTIFACT_ROOT="${ARTIFACT_ROOT}"
+export OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT="${ARTIFACT_ROOT}"
+export OPENREAPER_LIVE_SMOKE_RENDER_ROOT="${RENDER_ROOT}"
+export OPENREAPER_LIVE_BRIDGE_OWNER="${BRIDGE_OWNER}"
+export OPENREAPER_LIVE_BRIDGE_GENERATION="${BRIDGE_GENERATION}"
+export OPENREAPER_PROJECT_INDEX_STATE_ROOT="${PROJECT_INDEX_STATE_ROOT}"
+
+echo "[OpenReaper] Starting or attaching to REAPER through OpenReaper."
+echo "[OpenReaper] MCP requires a matching OpenReaper Bridge heartbeat; an existing normal-icon session is eligible when its installed startup hook is active."
+echo "[OpenReaper] transport=${TRANSPORT_DIR}"
+echo "[OpenReaper] render-root=${RENDER_ROOT}"
+echo "[OpenReaper] project-index-state-root=${PROJECT_INDEX_STATE_ROOT}"
+echo "[OpenReaper] bridge=${BRIDGE_SCRIPT}"
+echo "[OpenReaper] reaper-log=${START_LOG}"
+if [[ "${REAPER_RESOURCE_ROOT_EXPLICIT}" == "true" ]]; then
+  echo "[OpenReaper] reaper-config-mode=explicit_cfgfile"
+  echo "[OpenReaper] reaper-resource-root=${REAPER_RESOURCE_ROOT}"
+  echo "[OpenReaper] reaper-config-file=${REAPER_RESOURCE_ROOT}/REAPER.ini"
+else
+  echo "[OpenReaper] reaper-config-mode=user_default"
+fi
+if [[ "${USE_LAUNCHSERVICES}" == "true" ]]; then
+  echo "[OpenReaper] launch-method=macos_launchservices"
+  echo "[OpenReaper] reaper-app=${REAPER_APP}"
+else
+  echo "[OpenReaper] launch-method=direct_binary_fallback"
+  if [[ "${DIRECT_BINARY}" == "true" ]]; then
+    echo "[OpenReaper] launchservices=disabled_by_direct_binary"
+  fi
+fi
+echo "[OpenReaper] bridge-action-fallback=OpenReaper: Start MCP bridge"
+echo "[OpenReaper] bridge-status=starting_automatically"
+echo "[OpenReaper] startup-dialog-policy=user_mediated_read_only"
+echo "[OpenReaper] startup-dialog-inspection-policy=${STARTUP_DIALOG_POLICY}"
+echo "[OpenReaper] startup-dialog-timeout-seconds=${STARTUP_DIALOG_TIMEOUT_SECONDS}"
+echo "[OpenReaper] startup-budget-ms=${STARTUP_BUDGET_MS}"
+
+startup_remaining_budget_ms() {
+  local -i remaining_ms
+  remaining_ms=$(( STARTUP_BUDGET_MS - SECONDS * 1000 ))
+  if (( remaining_ms < 0 )); then
+    remaining_ms=0
+  fi
+  print -r -- "${remaining_ms}"
+}
+
+startup_budget_require_window() {
+  local stage="$1"
+  local -i required_ms="$2"
+  local -i remaining_ms
+  remaining_ms="$(startup_remaining_budget_ms)"
+  if (( remaining_ms >= required_ms )); then
+    return 0
+  fi
+  echo "[OpenReaper] startup-status=blocked_startup_budget_exhausted" >&2
+  echo "[OpenReaper] blocker-code=STARTUP_BUDGET_EXHAUSTED" >&2
+  echo "[OpenReaper] startup-budget-stage=${stage};budget_ms=${STARTUP_BUDGET_MS};remaining_ms=${remaining_ms};required_ms=${required_ms}" >&2
+  return 1
+}
+
+startup_run_bounded_external() {
+  local -i timeout_ms="$1"
+  shift
+  /usr/bin/perl -MPOSIX=:sys_wait_h -MTime::HiRes=time,sleep -e '
+    use strict;
+    use warnings;
+    my ($timeout_ms, @command) = @ARGV;
+    exit 126 unless @command;
+    my $child = fork();
+    die "fork failed: $!" unless defined $child;
+    if ($child == 0) {
+      exec {$command[0]} @command or exit 126;
+    }
+    my $deadline = time() + ($timeout_ms / 1000);
+    while (time() < $deadline) {
+      my $waited = waitpid($child, WNOHANG);
+      if ($waited == $child) {
+        exit POSIX::WEXITSTATUS($?) if POSIX::WIFEXITED($?);
+        exit 128 + POSIX::WTERMSIG($?) if POSIX::WIFSIGNALED($?);
+        exit 1;
+      }
+      exit 1 if $waited == -1;
+      sleep(0.01);
+    }
+    kill "TERM", $child;
+    my $term_deadline = time() + 0.05;
+    while (time() < $term_deadline) {
+      my $waited = waitpid($child, WNOHANG);
+      exit 124 if $waited == $child || $waited == -1;
+      sleep(0.01);
+    }
+    kill "KILL", $child;
+    waitpid($child, 0);
+    exit 124;
+  ' "${timeout_ms}" "$@"
+}
+
+launch_reaper() {
+  local -a reaper_args
+  reaper_args=("-newinst" "-nosplash")
+  if [[ "${REAPER_RESOURCE_ROOT_EXPLICIT}" == "true" ]]; then
+    reaper_args+=("-cfgfile" "${REAPER_RESOURCE_ROOT}/REAPER.ini")
+  fi
+  if [[ -n "${PROJECT_PATH}" ]]; then
+    reaper_args+=("${PROJECT_PATH}")
+  fi
+  reaper_args+=("${ARGS[@]}")
+
+  local reaper_pid
+  local before_pids="${SESSION_ROOT}/reaper-before.pids"
+  reaper_pids > "${before_pids}"
+  STARTUP_REAPER_BEFORE_PIDS="${before_pids}"
+  if [[ "${USE_LAUNCHSERVICES}" == "true" ]]; then
+    if ! set_launchservices_env; then
+      echo "[OpenReaper] LaunchServices environment setup failed; restoration will be attempted." >&2
+      exit 1
+    fi
+    if ! prepare_startup_status_for_new_launch; then
+      echo "[OpenReaper] startup status preparation failed; restoration will be attempted." >&2
+      exit 1
+    fi
+    if ! (umask 077; : > "${LAUNCHSERVICES_PID_HANDOFF}") \
+        || ! chmod 600 "${LAUNCHSERVICES_PID_HANDOFF}"; then
+      echo "[OpenReaper] LaunchServices pid handoff setup failed before launch." >&2
+      exit 1
+    fi
+    STARTUP_LAUNCH_ATTEMPTED=true
+    local launch_status=0
+    if startup_run_bounded_external "${STARTUP_LAUNCHSERVICES_TIMEOUT_MS}" \
+        "${LAUNCHSERVICES_BIN}" -l JavaScript - "${REAPER_APP}" \
+        "${LAUNCHSERVICES_PID_HANDOFF}" "${reaper_args[@]}" <<'JXA' > "${LAUNCHSERVICES_PID_HANDOFF}" 2>> "${START_LOG}"
+function run(argv) {
+  ObjC.import('AppKit');
+  ObjC.import('Foundation');
+  const workspace = $.NSWorkspace.sharedWorkspace;
+  const appUrl = $.NSURL.fileURLWithPath($(argv[0]));
+  const configuration = $.NSMutableDictionary.alloc.init;
+  configuration.setObjectForKey($(argv.slice(2)), $.NSWorkspaceLaunchConfigurationArguments);
+  const launchError = Ref();
+  const launched = workspace.launchApplicationAtURLOptionsConfigurationError(
+    appUrl,
+    $.NSWorkspaceLaunchNewInstance,
+    configuration,
+    launchError,
+  );
+  if (!launched) {
+    const detail = launchError[0] ? ObjC.unwrap(launchError[0].localizedDescription) : 'unknown LaunchServices error';
+    throw new Error(detail);
+  }
+  const pid = String(launched.processIdentifier);
+  const pidData = $(pid + '\n').dataUsingEncoding($.NSUTF8StringEncoding);
+  $.NSFileHandle.fileHandleWithStandardOutput.writeData(pidData);
+  if (!pidData || !pidData.writeToFileAtomically($(argv[1]), true)) {
+    throw new Error('could not publish the launched REAPER pid handoff');
+  }
+  return pid;
+}
+JXA
+    then
+      launch_status=0
+    else
+      launch_status=$?
+    fi
+    if reaper_pid="$(read_launchservices_pid_handoff)"; then
+      STARTUP_LAUNCHED_REAPER_PID="${reaper_pid}"
+      STARTUP_LAUNCHED_REAPER_IDENTITY="$(capture_startup_reaper_identity "${reaper_pid}")" || true
+    fi
+    if (( launch_status != 0 )); then
+      if (( launch_status == 124 )); then
+        echo "[OpenReaper] LaunchServices timed out after ${STARTUP_LAUNCHSERVICES_TIMEOUT_MS} ms. See log: ${START_LOG}" >&2
+        echo "[OpenReaper] blocker-code=STARTUP_LAUNCHSERVICES_TIMEOUT" >&2
+      else
+        echo "[OpenReaper] LaunchServices failed to start REAPER. See log: ${START_LOG}" >&2
+      fi
+      exit "${launch_status}"
+    fi
+    if [[ -z "${reaper_pid}" ]]; then
+      echo "[OpenReaper] LaunchServices did not publish a valid REAPER pid handoff; refusing unsafe ownership assumptions." >&2
+      echo "[OpenReaper] blocker-code=STARTUP_REAPER_IDENTITY_UNVERIFIED" >&2
+      exit 1
+    fi
+    if [[ -z "${STARTUP_LAUNCHED_REAPER_IDENTITY}" ]]; then
+      echo "[OpenReaper] LaunchServices REAPER identity could not be verified; refusing unsafe ownership assumptions." >&2
+      echo "[OpenReaper] blocker-code=STARTUP_REAPER_IDENTITY_UNVERIFIED" >&2
+      exit 1
+    fi
+    echo "${reaper_pid}" > "${PID_FILE}"
+    startup_hook_status=0
+    wait_for_startup_hook "${reaper_pid}" || startup_hook_status=$?
+    if (( startup_hook_status != 0 )); then
+      echo "[OpenReaper] REAPER startup hook did not publish a valid startup stage before LaunchServices restoration." >&2
+      exit "${startup_hook_status}"
+    fi
+    if ! restore_launchservices_env; then
+      echo "[OpenReaper] LaunchServices environment restoration failed; startup is not successful." >&2
+      exit 1
+    fi
+  else
+    if ! prepare_startup_status_for_new_launch; then
+      echo "[OpenReaper] startup status preparation failed for direct launch." >&2
+      exit 1
+    fi
+    STARTUP_LAUNCH_ATTEMPTED=true
+    nohup "${REAPER_BIN}" "${reaper_args[@]}" >> "${START_LOG}" 2>&1 &
+    reaper_pid="$!"
+    STARTUP_LAUNCHED_REAPER_PID="${reaper_pid}"
+    if ! STARTUP_LAUNCHED_REAPER_IDENTITY="$(capture_startup_reaper_identity "${reaper_pid}")"; then
+      echo "[OpenReaper] direct REAPER identity could not be verified; refusing unsafe ownership assumptions." >&2
+      echo "[OpenReaper] blocker-code=STARTUP_REAPER_IDENTITY_UNVERIFIED" >&2
+      exit 1
+    fi
+    disown "${reaper_pid}" 2>/dev/null || true
+    echo "${reaper_pid}" > "${PID_FILE}"
+    startup_hook_status=0
+    wait_for_startup_hook "${reaper_pid}" || startup_hook_status=$?
+    if (( startup_hook_status != 0 )); then
+      echo "[OpenReaper] direct REAPER startup hook did not publish a valid startup stage." >&2
+      exit "${startup_hook_status}"
+    fi
+  fi
+  echo "${reaper_pid}" > "${PID_FILE}"
+  echo "[OpenReaper] reaper-pid=${reaper_pid}"
+  echo "[OpenReaper] reaper-pid-file=${PID_FILE}"
+}
+
+reaper_pids() {
+  local escaped_reaper_bin
+  escaped_reaper_bin="$(print -rn -- "${REAPER_BIN}" | command sed 's/[][(){}.^$*+?|\\]/\\&/g')"
+  startup_run_bounded_external "${STARTUP_PROCESS_QUERY_TIMEOUT_MS}" \
+    /usr/bin/pgrep -f "(^|[[:space:]])${escaped_reaper_bin}([[:space:]]|$)" 2>/dev/null | sort -n || true
+}
+
+discover_single_running_reaper_pid() {
+  local -a candidates
+  candidates=("${(@f)$(reaper_pids)}")
+  if (( ${#candidates[@]} == 1 )) && [[ "${candidates[1]}" =~ ^[1-9][0-9]*$ ]]; then
+    print -r -- "${candidates[1]}"
+    return 0
+  fi
+  if (( ${#candidates[@]} > 1 )); then
+    echo "[OpenReaper] multiple REAPER processes are running; refusing to guess which project to attach." >&2
+    return 2
+  fi
+  return 1
+}
+
+startup_launcher_argument_pids() {
+  # The conditional Scripts/__startup.lua hook is the trusted startup path.
+  # The LaunchServices/direct handoff already gives us the exact child PID;
+  # do not require a command-line ReaScript argument that REAPER may defer.
+  reaper_pids
+}
+
+startup_launch_candidate_pids() {
+  local candidate_pid
+  while IFS= read -r candidate_pid; do
+    if [[ -n "${candidate_pid}" ]]; then
+      print -r -- "${candidate_pid}"
+    fi
+  done < <(comm -12 \
+    <(reaper_pids) \
+    <(startup_launcher_argument_pids))
+}
+
+startup_expected_executable_paths() {
+  local reaper_real_path="${REAPER_BIN:A}"
+  print -r -- "${reaper_real_path}"
+  local shebang interpreter interpreter_name interpreter_path
+  IFS= read -r shebang < "${REAPER_BIN}" || return 0
+  if [[ "${shebang}" != '#!'* ]]; then
+    return 0
+  fi
+  interpreter="${shebang#\#!}"
+  interpreter="${interpreter#${interpreter%%[![:space:]]*}}"
+  interpreter="${interpreter%%[[:space:]]*}"
+  if [[ "${interpreter}" == "/usr/bin/env" ]]; then
+    interpreter_name="${shebang#*env}"
+    interpreter_name="${interpreter_name#${interpreter_name%%[![:space:]]*}}"
+    interpreter_name="${interpreter_name%%[[:space:]]*}"
+    interpreter_path="$(command -v -- "${interpreter_name}" 2>/dev/null || true)"
+  else
+    interpreter_path="${interpreter}"
+  fi
+  if [[ -n "${interpreter_path}" && -x "${interpreter_path}" ]]; then
+    print -r -- "${interpreter_path:A}"
+  fi
+}
+
+startup_process_executable_path() {
+  local candidate_pid="$1"
+  local lsof_identity line executable_path
+  lsof_identity="$(startup_run_bounded_external "${STARTUP_PROCESS_QUERY_TIMEOUT_MS}" \
+    /usr/sbin/lsof -a -p "${candidate_pid}" -d txt -Fn 2>/dev/null)" || return 1
+  for line in "${(@f)lsof_identity}"; do
+    if [[ "${line}" == n* ]]; then
+      executable_path="${line#n}"
+      [[ -n "${executable_path}" && -e "${executable_path}" ]] || return 1
+      print -r -- "${executable_path:A}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+startup_process_identity_fingerprint() {
+  local candidate_pid="$1"
+  local process_identity executable_path identity_digest
+  if ! process_identity="$(LC_ALL=C startup_run_bounded_external "${STARTUP_PROCESS_QUERY_TIMEOUT_MS}" \
+      /bin/ps -ww -p "${candidate_pid}" -o lstart= -o command= 2>/dev/null)" \
+      || [[ -z "${process_identity//[[:space:]]/}" ]]; then
+    return 1
+  fi
+  executable_path="$(startup_process_executable_path "${candidate_pid}")" || return 1
+  startup_expected_executable_paths | command grep -Fxq -- "${executable_path}" || return 1
+  identity_digest="$(print -rn -- "${candidate_pid}"$'\n'"${process_identity}"$'\n'"${executable_path}" \
+    | /usr/bin/shasum -a 256)"
+  identity_digest="${identity_digest%%[[:space:]]*}"
+  [[ "${identity_digest}" =~ '^[0-9a-f]{64}$' ]] || return 1
+  print -r -- "${identity_digest}"
+}
+
+capture_startup_reaper_identity() {
+  local candidate_pid="$1"
+  local -i max_attempts="${2:-20}"
+  local attempt identity
+  for (( attempt = 1; attempt <= max_attempts; attempt++ )); do
+    if startup_launch_candidate_pids | command grep -Fxq -- "${candidate_pid}" \
+        && identity="$(startup_process_identity_fingerprint "${candidate_pid}")"; then
+      print -r -- "${identity}"
+      return 0
+    fi
+    sleep 0.05
+  done
+  if ! reaper_pids | command grep -Fxq -- "${candidate_pid}"; then
+    echo "[OpenReaper] startup-identity-stage=reaper_command_not_matched" >&2
+  elif ! startup_launcher_argument_pids | command grep -Fxq -- "${candidate_pid}"; then
+    echo "[OpenReaper] startup-identity-stage=reaper_process_not_matched" >&2
+  else
+    echo "[OpenReaper] startup-identity-stage=executable_or_fingerprint_not_matched" >&2
+  fi
+  return 1
+}
+
+launchservices_env_value() {
+  case "$1" in
+    OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR) print -rn -- "${TRANSPORT_DIR}" ;;
+    OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH) print -rn -- "${BRIDGE_SCRIPT}" ;;
+    OPENREAPER_ARTIFACT_ROOT) print -rn -- "${ARTIFACT_ROOT}" ;;
+    OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT) print -rn -- "${ARTIFACT_ROOT}" ;;
+    OPENREAPER_LIVE_SMOKE_RENDER_ROOT) print -rn -- "${RENDER_ROOT}" ;;
+    OPENREAPER_LIVE_BRIDGE_OWNER) print -rn -- "${BRIDGE_OWNER}" ;;
+    OPENREAPER_LIVE_BRIDGE_GENERATION) print -rn -- "${BRIDGE_GENERATION}" ;;
+    OPENREAPER_PROJECT_INDEX_STATE_ROOT) print -rn -- "${PROJECT_INDEX_STATE_ROOT}" ;;
+    *) return 1 ;;
+  esac
+}
+
+launchservices_lock_owner_matches() {
+  if [[ "${LAUNCHSERVICES_LOCK_OWNED}" != "true" || "${LAUNCHSERVICES_LOCK_TOKEN_WRITTEN}" != "true" || -z "${LAUNCHSERVICES_LOCK_TOKEN}" ]]; then
+    return 1
+  fi
+  if [[ ! -d "${LAUNCHSERVICES_LOCK_PATH}" || -L "${LAUNCHSERVICES_LOCK_PATH}" ]]; then
+    return 1
+  fi
+  local token_path="${LAUNCHSERVICES_LOCK_PATH}/.owner-token"
+  if [[ ! -f "${token_path}" || -L "${token_path}" ]]; then
+    return 1
+  fi
+  local token_size
+  if ! token_size="$(wc -c < "${token_path}" 2>/dev/null)"; then
+    return 1
+  fi
+  token_size="${token_size//[[:space:]]/}"
+  if [[ "${token_size}" != <-> ]] || (( token_size < 1 || token_size > 256 )); then
+    return 1
+  fi
+  local stored_token
+  stored_token="$(<"${token_path}")"
+  [[ "${stored_token}" == "${LAUNCHSERVICES_LOCK_TOKEN}" ]]
+}
+
+launchservices_snapshot_has_only_known_entries() {
+  local snapshot_dir="$1"
+  local entry
+  local basename_value
+  local key
+  local allowed
+  local -a entries
+  entries=("${snapshot_dir}"/*(DN))
+  for entry in "${entries[@]}"; do
+    basename_value="${entry:t}"
+    allowed=false
+    for key in "${LAUNCHSERVICES_ENV_KEYS[@]}"; do
+      if [[ "${basename_value}" == "${key}.presence" || "${basename_value}" == "${key}.value" ]]; then
+        allowed=true
+        break
+      fi
+    done
+    if [[ "${allowed}" != "true" ]]; then
+      return 1
+    fi
+  done
+}
+
+cleanup_known_launchservices_snapshot() {
+  local snapshot_dir="$1"
+  local key
+  local entry
+  if [[ -z "${snapshot_dir}" ]]; then
+    return 0
+  fi
+  if [[ ! -e "${snapshot_dir}" && ! -L "${snapshot_dir}" ]]; then
+    return 0
+  fi
+  if [[ ! -d "${snapshot_dir}" || -L "${snapshot_dir}" ]]; then
+    return 1
+  fi
+  if ! launchservices_snapshot_has_only_known_entries "${snapshot_dir}"; then
+    return 1
+  fi
+  for key in "${LAUNCHSERVICES_ENV_KEYS[@]}"; do
+    for entry in "${snapshot_dir}/${key}.presence" "${snapshot_dir}/${key}.value"; do
+      if [[ -e "${entry}" || -L "${entry}" ]]; then
+        if [[ ! -f "${entry}" || -L "${entry}" ]]; then
+          return 1
+        fi
+        if ! rm -f -- "${entry}"; then
+          return 1
+        fi
+      fi
+    done
+  done
+  rmdir "${snapshot_dir}" 2>/dev/null
+}
+
+launchservices_lock_has_only_known_entries() {
+  local entry
+  local basename_value
+  local -a entries
+  entries=("${LAUNCHSERVICES_LOCK_PATH}"/*(DN))
+  for entry in "${entries[@]}"; do
+    basename_value="${entry:t}"
+    case "${basename_value}" in
+      .owner-token|owner.meta|snapshot) ;;
+      *) return 1 ;;
+    esac
+  done
+}
+
+reset_launchservices_lock_state() {
+  LAUNCHSERVICES_LOCK_OWNED=false
+  LAUNCHSERVICES_LOCK_TOKEN=""
+  LAUNCHSERVICES_SNAPSHOT_DIR=""
+  LAUNCHSERVICES_LOCK_TOKEN_WRITTEN=false
+  LAUNCHSERVICES_LOCK_METADATA_WRITTEN=false
+  LAUNCHSERVICES_SNAPSHOT_CREATED=false
+  LAUNCHSERVICES_PID_HANDOFF=""
+  LAUNCHSERVICES_MUTATED_KEYS=()
+}
+
+cleanup_launchservices_pid_handoff() {
+  if [[ -z "${LAUNCHSERVICES_PID_HANDOFF}" \
+      || ( ! -e "${LAUNCHSERVICES_PID_HANDOFF}" && ! -L "${LAUNCHSERVICES_PID_HANDOFF}" ) ]]; then
+    return 0
+  fi
+  if [[ ! -f "${LAUNCHSERVICES_PID_HANDOFF}" || -L "${LAUNCHSERVICES_PID_HANDOFF}" ]]; then
+    echo "[OpenReaper] LaunchServices pid handoff is unsafe; lock retained: ${LAUNCHSERVICES_LOCK_PATH}" >&2
+    return 1
+  fi
+  rm -f -- "${LAUNCHSERVICES_PID_HANDOFF}"
+}
+
+read_launchservices_pid_handoff() {
+  if ! launchservices_lock_owner_matches \
+      || [[ -z "${LAUNCHSERVICES_PID_HANDOFF}" \
+      || ! -f "${LAUNCHSERVICES_PID_HANDOFF}" || -L "${LAUNCHSERVICES_PID_HANDOFF}" ]]; then
+    return 1
+  fi
+  local handoff_size
+  handoff_size="$(wc -c < "${LAUNCHSERVICES_PID_HANDOFF}" 2>/dev/null)" || return 1
+  handoff_size="${handoff_size//[[:space:]]/}"
+  if [[ "${handoff_size}" != <-> ]] || (( handoff_size < 2 || handoff_size > 32 )); then
+    return 1
+  fi
+  chmod 600 "${LAUNCHSERVICES_PID_HANDOFF}" || return 1
+  local launched_pid
+  launched_pid="$(<"${LAUNCHSERVICES_PID_HANDOFF}")"
+  launched_pid="${launched_pid//[[:space:]]/}"
+  if [[ "${launched_pid}" != <-> || "${launched_pid}" == "0" ]]; then
+    return 1
+  fi
+  print -r -- "${launched_pid}"
+}
+
+release_owned_launchservices_lock() {
+  if ! launchservices_lock_owner_matches; then
+    echo "[OpenReaper] refusing to release LaunchServices lock not owned by this process: ${LAUNCHSERVICES_LOCK_PATH}" >&2
+    return 1
+  fi
+  if ! cleanup_known_launchservices_snapshot "${LAUNCHSERVICES_SNAPSHOT_DIR}"; then
+    echo "[OpenReaper] LaunchServices snapshot contains unexpected entries; lock retained: ${LAUNCHSERVICES_LOCK_PATH}" >&2
+    return 1
+  fi
+  LAUNCHSERVICES_SNAPSHOT_CREATED=false
+  if ! cleanup_launchservices_pid_handoff; then
+    return 1
+  fi
+  if ! launchservices_lock_owner_matches; then
+    echo "[OpenReaper] LaunchServices lock ownership changed during cleanup; lock retained: ${LAUNCHSERVICES_LOCK_PATH}" >&2
+    return 1
+  fi
+  if ! launchservices_lock_has_only_known_entries; then
+    echo "[OpenReaper] LaunchServices lock contains unexpected entries and was retained: ${LAUNCHSERVICES_LOCK_PATH}" >&2
+    return 1
+  fi
+  local metadata_path="${LAUNCHSERVICES_LOCK_PATH}/owner.meta"
+  if [[ -e "${metadata_path}" || -L "${metadata_path}" ]]; then
+    if [[ ! -f "${metadata_path}" || -L "${metadata_path}" ]]; then
+      echo "[OpenReaper] LaunchServices owner metadata is unsafe; lock retained: ${LAUNCHSERVICES_LOCK_PATH}" >&2
+      return 1
+    fi
+    if ! rm -f -- "${metadata_path}"; then
+      echo "[OpenReaper] LaunchServices owner metadata could not be removed; lock retained: ${LAUNCHSERVICES_LOCK_PATH}" >&2
+      return 1
+    fi
+  fi
+  LAUNCHSERVICES_LOCK_METADATA_WRITTEN=false
+  if ! launchservices_lock_owner_matches; then
+    echo "[OpenReaper] LaunchServices lock ownership changed before release; lock retained: ${LAUNCHSERVICES_LOCK_PATH}" >&2
+    return 1
+  fi
+  local token_path="${LAUNCHSERVICES_LOCK_PATH}/.owner-token"
+  if ! rm -f -- "${token_path}"; then
+    echo "[OpenReaper] LaunchServices owner token could not be removed; lock retained: ${LAUNCHSERVICES_LOCK_PATH}" >&2
+    return 1
+  fi
+  LAUNCHSERVICES_LOCK_TOKEN_WRITTEN=false
+  if ! rmdir "${LAUNCHSERVICES_LOCK_PATH}" 2>/dev/null; then
+    local marker_restored=false
+    if [[ -d "${LAUNCHSERVICES_LOCK_PATH}" && ! -L "${LAUNCHSERVICES_LOCK_PATH}" ]]; then
+      setopt localoptions noclobber
+      if print -rn -- "${LAUNCHSERVICES_LOCK_TOKEN}" > "${token_path}" 2>/dev/null; then
+        if chmod 600 "${token_path}" 2>/dev/null; then
+          LAUNCHSERVICES_LOCK_TOKEN_WRITTEN=true
+          marker_restored=true
+        fi
+      fi
+    fi
+    if [[ "${marker_restored}" == "true" ]]; then
+      echo "[OpenReaper] LaunchServices lock could not be removed; its owner token was restored for recovery: ${LAUNCHSERVICES_LOCK_PATH}" >&2
+    else
+      echo "[OpenReaper] LaunchServices lock could not be removed and its owner token could not be restored: ${LAUNCHSERVICES_LOCK_PATH}" >&2
+    fi
+    return 1
+  fi
+  reset_launchservices_lock_state
+  return 0
+}
+
+cleanup_launchservices_lock_setup_failure() {
+  if [[ "${LAUNCHSERVICES_LOCK_OWNED}" != "true" ]]; then
+    return 0
+  fi
+  if [[ "${LAUNCHSERVICES_LOCK_TOKEN_WRITTEN}" == "true" ]]; then
+    release_owned_launchservices_lock
+    return $?
+  fi
+  if [[ ! -d "${LAUNCHSERVICES_LOCK_PATH}" || -L "${LAUNCHSERVICES_LOCK_PATH}" ]]; then
+    return 1
+  fi
+  local -a entries
+  entries=("${LAUNCHSERVICES_LOCK_PATH}"/*(DN))
+  if (( ${#entries[@]} != 0 )); then
+    echo "[OpenReaper] refusing to clean a pre-mutation LaunchServices lock with unverified entries: ${LAUNCHSERVICES_LOCK_PATH}" >&2
+    return 1
+  fi
+  if ! rmdir "${LAUNCHSERVICES_LOCK_PATH}" 2>/dev/null; then
+    return 1
+  fi
+  reset_launchservices_lock_state
+  return 0
+}
+
+fail_launchservices_lock_setup() {
+  local reason="$1"
+  echo "[OpenReaper] ${reason}" >&2
+  if ! cleanup_launchservices_lock_setup_failure; then
+    LAUNCHSERVICES_RECOVERY_RETAINED=true
+    echo "[OpenReaper] LaunchServices lock setup recovery is retained at ${LAUNCHSERVICES_LOCK_PATH}" >&2
+  fi
+  return 1
+}
+
+acquire_launchservices_lock() {
+  local lock_parent="${INSTALL_ROOT}/session"
+  if ! mkdir -p "${lock_parent}"; then
+    echo "[OpenReaper] Could not prepare the stable LaunchServices lock parent: ${lock_parent}" >&2
+    return 1
+  fi
+  if ! mkdir -m 700 "${LAUNCHSERVICES_LOCK_PATH}" 2>/dev/null; then
+    if [[ -e "${LAUNCHSERVICES_LOCK_PATH}" || -L "${LAUNCHSERVICES_LOCK_PATH}" ]]; then
+      echo "[OpenReaper] LaunchServices environment lock is already held: ${LAUNCHSERVICES_LOCK_PATH}" >&2
+      echo "[OpenReaper] Resolve or recover the existing lock before retrying; it will not be auto-broken." >&2
+    else
+      echo "[OpenReaper] Could not acquire the stable LaunchServices environment lock: ${LAUNCHSERVICES_LOCK_PATH}" >&2
+    fi
+    return 1
+  fi
+  LAUNCHSERVICES_LOCK_OWNED=true
+  LAUNCHSERVICES_SNAPSHOT_DIR="${LAUNCHSERVICES_LOCK_PATH}/snapshot"
+  LAUNCHSERVICES_PID_HANDOFF="${LAUNCHSERVICES_LOCK_PATH}/launched-reaper.pid"
+  LAUNCHSERVICES_LOCK_TOKEN="$$-$(date -u +%Y%m%dT%H%M%SZ)-${RANDOM}${RANDOM}"
+  if (( ${#LAUNCHSERVICES_LOCK_TOKEN} > 192 )); then
+    fail_launchservices_lock_setup "LaunchServices owner token exceeded its bounded size before environment mutation."
+    return 1
+  fi
+  if ! print -rn -- "${LAUNCHSERVICES_LOCK_TOKEN}" > "${LAUNCHSERVICES_LOCK_PATH}/.owner-token"; then
+    fail_launchservices_lock_setup "LaunchServices owner-token setup failed before environment mutation."
+    return 1
+  fi
+  LAUNCHSERVICES_LOCK_TOKEN_WRITTEN=true
+  if ! chmod 600 "${LAUNCHSERVICES_LOCK_PATH}/.owner-token"; then
+    fail_launchservices_lock_setup "LaunchServices owner-token permission setup failed before environment mutation."
+    return 1
+  fi
+  if ! {
+    print -r -- "pid=$$"
+    print -r -- "started_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    print -r -- "token=${LAUNCHSERVICES_LOCK_TOKEN}"
+  } > "${LAUNCHSERVICES_LOCK_PATH}/owner.meta"; then
+    fail_launchservices_lock_setup "LaunchServices bounded owner metadata setup failed before environment mutation."
+    return 1
+  fi
+  LAUNCHSERVICES_LOCK_METADATA_WRITTEN=true
+  local metadata_size
+  if ! metadata_size="$(wc -c < "${LAUNCHSERVICES_LOCK_PATH}/owner.meta" 2>/dev/null)"; then
+    fail_launchservices_lock_setup "LaunchServices owner metadata could not be measured before environment mutation."
+    return 1
+  fi
+  metadata_size="${metadata_size//[[:space:]]/}"
+  if [[ "${metadata_size}" != <-> ]] || (( metadata_size < 1 || metadata_size > 1024 )); then
+    fail_launchservices_lock_setup "LaunchServices owner metadata was invalid or exceeded 1024 bytes before environment mutation."
+    return 1
+  fi
+  if ! chmod 600 "${LAUNCHSERVICES_LOCK_PATH}/owner.meta"; then
+    fail_launchservices_lock_setup "LaunchServices owner metadata permission setup failed before environment mutation."
+    return 1
+  fi
+  if ! mkdir -m 700 "${LAUNCHSERVICES_SNAPSHOT_DIR}"; then
+    fail_launchservices_lock_setup "LaunchServices snapshot directory setup failed before environment mutation."
+    return 1
+  fi
+  LAUNCHSERVICES_SNAPSHOT_CREATED=true
+  return 0
+}
+
+snapshot_launchservices_env() {
+  local key
+  local previous
+  local -i getenv_status
+  for key in "${LAUNCHSERVICES_ENV_KEYS[@]}"; do
+    if previous="$(startup_run_bounded_external "${STARTUP_LAUNCHCTL_TIMEOUT_MS}" \
+        "${LAUNCHCTL_BIN}" getenv "${key}" 2>/dev/null)"; then
+      print -rn -- "set" > "${LAUNCHSERVICES_SNAPSHOT_DIR}/${key}.presence" || return 1
+      print -rn -- "${previous}" > "${LAUNCHSERVICES_SNAPSHOT_DIR}/${key}.value" || return 1
+    else
+      getenv_status=$?
+      if (( getenv_status != 1 )); then
+        echo "[OpenReaper] failed to read LaunchServices env ${key}; launchctl status=${getenv_status}" >&2
+        return 1
+      fi
+      print -rn -- "unset" > "${LAUNCHSERVICES_SNAPSHOT_DIR}/${key}.presence" || return 1
+      : > "${LAUNCHSERVICES_SNAPSHOT_DIR}/${key}.value" || return 1
+    fi
+    chmod 600 "${LAUNCHSERVICES_SNAPSHOT_DIR}/${key}.presence" "${LAUNCHSERVICES_SNAPSHOT_DIR}/${key}.value" || return 1
+  done
+}
+
+set_launchservices_env() {
+  if ! acquire_launchservices_lock; then
+    return 1
+  fi
+  if ! snapshot_launchservices_env; then
+    echo "[OpenReaper] LaunchServices snapshot setup failed before environment mutation." >&2
+    if ! cleanup_launchservices_lock_setup_failure; then
+      LAUNCHSERVICES_RECOVERY_RETAINED=true
+      echo "[OpenReaper] LaunchServices lock setup recovery is retained at ${LAUNCHSERVICES_LOCK_PATH}" >&2
+    fi
+    return 1
+  fi
+  LAUNCHSERVICES_CLEANUP_REQUIRED=true
+  local key
+  local desired
+  for key in "${LAUNCHSERVICES_ENV_KEYS[@]}"; do
+    startup_budget_require_window "launchservices_env_mutation" \
+      $(( STARTUP_CLEANUP_RESERVE_MS + STARTUP_LAUNCHCTL_TIMEOUT_MS + 250 )) || return 1
+    LAUNCHSERVICES_MUTATED_KEYS+=("${key}")
+    if desired="$(launchservices_env_value "${key}")"; then
+      if ! startup_run_bounded_external "${STARTUP_LAUNCHCTL_TIMEOUT_MS}" \
+          "${LAUNCHCTL_BIN}" setenv "${key}" "${desired}"; then
+        echo "[OpenReaper] failed to set LaunchServices env ${key}" >&2
+        return 1
+      fi
+    else
+      if ! startup_run_bounded_external "${STARTUP_LAUNCHCTL_TIMEOUT_MS}" \
+          "${LAUNCHCTL_BIN}" unsetenv "${key}"; then
+        echo "[OpenReaper] failed to clear stale LaunchServices env ${key}" >&2
+        return 1
+      fi
+    fi
+  done
+}
+
+restore_launchservices_env() {
+  if [[ "${LAUNCHSERVICES_CLEANUP_REQUIRED}" != "true" ]]; then
+    return 0
+  fi
+  local failed=0
+  local key
+  local presence
+  local previous
+  # Restore only keys this launch attempted to mutate. The cleanup-only bound
+  # keeps all 15 possible restores inside the 6 s reserve.
+  for key in "${LAUNCHSERVICES_MUTATED_KEYS[@]}"; do
+    local presence_path="${LAUNCHSERVICES_SNAPSHOT_DIR}/${key}.presence"
+    local value_path="${LAUNCHSERVICES_SNAPSHOT_DIR}/${key}.value"
+    if [[ ! -f "${presence_path}" || -L "${presence_path}" || ! -f "${value_path}" || -L "${value_path}" ]]; then
+      echo "[OpenReaper] missing or unsafe LaunchServices recovery snapshot for ${key}" >&2
+      failed=1
+      continue
+    fi
+    presence="$(<"${presence_path}")"
+    previous="$(<"${value_path}")"
+    if [[ "${presence}" == "set" ]]; then
+      if ! startup_run_bounded_external "${STARTUP_LAUNCHCTL_CLEANUP_TIMEOUT_MS}" \
+          "${LAUNCHCTL_BIN}" setenv "${key}" "${previous}"; then
+        echo "[OpenReaper] failed to restore LaunchServices env ${key}" >&2
+        failed=1
+      fi
+    elif [[ "${presence}" == "unset" ]]; then
+      if ! startup_run_bounded_external "${STARTUP_LAUNCHCTL_CLEANUP_TIMEOUT_MS}" \
+          "${LAUNCHCTL_BIN}" unsetenv "${key}"; then
+        echo "[OpenReaper] failed to unset LaunchServices env ${key}" >&2
+        failed=1
+      fi
+    else
+      echo "[OpenReaper] invalid LaunchServices recovery presence for ${key}" >&2
+      failed=1
+    fi
+  done
+  if (( failed != 0 )); then
+    LAUNCHSERVICES_RECOVERY_RETAINED=true
+    echo "[OpenReaper] LaunchServices lock retained at ${LAUNCHSERVICES_LOCK_PATH}" >&2
+    echo "[OpenReaper] LaunchServices recovery snapshot retained at ${LAUNCHSERVICES_SNAPSHOT_DIR}" >&2
+    return 1
+  fi
+  if ! release_owned_launchservices_lock; then
+    LAUNCHSERVICES_RECOVERY_RETAINED=true
+    echo "[OpenReaper] LaunchServices environment was restored but its lock could not be safely released: ${LAUNCHSERVICES_LOCK_PATH}" >&2
+    if [[ -e "${LAUNCHSERVICES_SNAPSHOT_DIR}" || -L "${LAUNCHSERVICES_SNAPSHOT_DIR}" ]]; then
+      echo "[OpenReaper] LaunchServices recovery snapshot retained at ${LAUNCHSERVICES_SNAPSHOT_DIR}" >&2
+    fi
+    return 1
+  fi
+  LAUNCHSERVICES_CLEANUP_REQUIRED=false
+  LAUNCHSERVICES_RECOVERY_RETAINED=false
+  return 0
+}
+
+startup_reaper_pid_matches_owned_launch() {
+  local candidate_pid="$1"
+  if [[ "${candidate_pid}" != <-> || "${candidate_pid}" == "0" ]]; then
+    return 1
+  fi
+  if [[ -z "${STARTUP_LAUNCHED_REAPER_PID}" || "${candidate_pid}" != "${STARTUP_LAUNCHED_REAPER_PID}" \
+      || -z "${STARTUP_LAUNCHED_REAPER_IDENTITY}" ]]; then
+    return 1
+  fi
+  if [[ -n "${STARTUP_REAPER_BEFORE_PIDS}" && -f "${STARTUP_REAPER_BEFORE_PIDS}" ]] \
+      && command grep -Fxq -- "${candidate_pid}" "${STARTUP_REAPER_BEFORE_PIDS}"; then
+    return 1
+  fi
+  startup_launch_candidate_pids | command grep -Fxq -- "${candidate_pid}" || return 1
+  local current_identity
+  current_identity="$(startup_process_identity_fingerprint "${candidate_pid}")" || return 1
+  [[ "${current_identity}" == "${STARTUP_LAUNCHED_REAPER_IDENTITY}" ]]
+}
+
+discover_owned_startup_reaper_pid() {
+  if [[ -n "${STARTUP_LAUNCHED_REAPER_PID}" ]] \
+      && startup_reaper_pid_matches_owned_launch "${STARTUP_LAUNCHED_REAPER_PID}"; then
+    print -r -- "${STARTUP_LAUNCHED_REAPER_PID}"
+    return 0
+  fi
+  return 1
+}
+
+cleanup_failed_startup_reaper() {
+  if [[ "${STARTUP_LAUNCH_ATTEMPTED}" != "true" || "${STARTUP_LAUNCH_ACCEPTED}" == "true" \
+      || "${STARTUP_PRESERVE_REAPER}" == "true" ]]; then
+    return 0
+  fi
+  if [[ -n "${STARTUP_LAUNCHED_REAPER_PID}" && -z "${STARTUP_LAUNCHED_REAPER_IDENTITY}" ]] \
+      && kill -0 "${STARTUP_LAUNCHED_REAPER_PID}" 2>/dev/null; then
+    if ! STARTUP_LAUNCHED_REAPER_IDENTITY="$(capture_startup_reaper_identity \
+        "${STARTUP_LAUNCHED_REAPER_PID}" 1)"; then
+      echo "[OpenReaper] startup-cleanup=skipped_unverified;reaper_pid=${STARTUP_LAUNCHED_REAPER_PID}" >&2
+      echo "[OpenReaper] blocker-code=STARTUP_REAPER_IDENTITY_UNVERIFIED" >&2
+      return 1
+    fi
+  fi
+  local reaper_pid
+  if ! reaper_pid="$(discover_owned_startup_reaper_pid)"; then
+    return 0
+  fi
+  if [[ "${reaper_pid}" != <-> || "${reaper_pid}" == "0" ]]; then
+    return 0
+  fi
+  kill -TERM "${reaper_pid}" 2>/dev/null || true
+  local attempt
+  for attempt in {1..10}; do
+    if ! kill -0 "${reaper_pid}" 2>/dev/null; then
+      break
+    fi
+    sleep 0.05
+  done
+  if kill -0 "${reaper_pid}" 2>/dev/null; then
+    if startup_reaper_pid_matches_owned_launch "${reaper_pid}"; then
+      kill -KILL "${reaper_pid}" 2>/dev/null || true
+    fi
+  fi
+  for attempt in {1..10}; do
+    if ! kill -0 "${reaper_pid}" 2>/dev/null; then
+      break
+    fi
+    sleep 0.05
+  done
+  if kill -0 "${reaper_pid}" 2>/dev/null; then
+    echo "[OpenReaper] startup-cleanup=failed;reaper_pid=${reaper_pid}" >&2
+    echo "[OpenReaper] blocker-code=STARTUP_REAPER_CLEANUP_FAILED" >&2
+    return 1
+  fi
+  if [[ -f "${PID_FILE}" && ! -L "${PID_FILE}" && "$(<"${PID_FILE}")" == "${reaper_pid}" ]]; then
+    rm -f -- "${PID_FILE}" || true
+  fi
+  echo "[OpenReaper] startup-cleanup=reaper_terminated;reaper_pid=${reaper_pid}" >&2
+  return 0
+}
+
+terminate_existing_reaper_for_studio_relaunch() {
+  local reaper_pid=""
+  if [[ -f "${PID_FILE}" && ! -L "${PID_FILE}" ]]; then
+    reaper_pid="$(<"${PID_FILE}")"
+  fi
+  if [[ "${reaper_pid}" != <-> || "${reaper_pid}" == "0" ]]; then
+    echo "[OpenReaper] studio-relaunch=aborted_unverified_pid" >&2
+    return 1
+  fi
+  echo "[OpenReaper] studio-relaunch=terminating_stale_session;reaper_pid=${reaper_pid}"
+  kill -TERM "${reaper_pid}" 2>/dev/null || true
+  local attempt
+  for attempt in {1..40}; do
+    if ! kill -0 "${reaper_pid}" 2>/dev/null; then
+      break
+    fi
+    sleep 0.1
+  done
+  if kill -0 "${reaper_pid}" 2>/dev/null; then
+    kill -KILL "${reaper_pid}" 2>/dev/null || true
+    sleep 0.2
+  fi
+  if kill -0 "${reaper_pid}" 2>/dev/null; then
+    echo "[OpenReaper] studio-relaunch=failed_to_terminate;reaper_pid=${reaper_pid}" >&2
+    return 1
+  fi
+  rm -f -- "${PID_FILE}" || true
+  echo "[OpenReaper] studio-relaunch=stale_session_stopped;reaper_pid=${reaper_pid}"
+  return 0
+}
+
+launchservices_cleanup_on_exit() {
+  local original_status=$?
+  trap - EXIT
+  if (( original_status == 75 )); then
+    STARTUP_PRESERVE_REAPER=true
+  fi
+  if (( original_status != 0 )); then
+    cleanup_failed_startup_reaper || true
+  fi
+  if [[ "${LAUNCHSERVICES_RECOVERY_RETAINED}" == "true" ]]; then
+    if (( original_status == 0 )); then
+      original_status=1
+    fi
+    exit "${original_status}"
+  fi
+  if [[ "${LAUNCHSERVICES_CLEANUP_REQUIRED}" == "true" ]]; then
+    if ! restore_launchservices_env; then
+      echo "[OpenReaper] LaunchServices cleanup failed during exit." >&2
+      exit 1
+    fi
+  elif [[ "${LAUNCHSERVICES_LOCK_OWNED}" == "true" ]]; then
+    if ! cleanup_launchservices_lock_setup_failure; then
+      echo "[OpenReaper] LaunchServices pre-mutation lock cleanup failed: ${LAUNCHSERVICES_LOCK_PATH}" >&2
+      exit 1
+    fi
+  fi
+  exit "${original_status}"
+}
+
+assert_reaper_process_alive() {
+  local reaper_pid
+  reaper_pid="$(cat "${PID_FILE}")"
+  if ! kill -0 "${reaper_pid}" 2>/dev/null; then
+    echo "[OpenReaper] REAPER exited before Bridge readiness. pid=${reaper_pid}" >&2
+    echo "[OpenReaper] REAPER log: ${START_LOG}" >&2
+    tail -80 "${START_LOG}" >&2 || true
+    return 1
+  fi
+  return 0
+}
+
+bridge_heartbeat_ready() {
+  node --input-type=module - "${TRANSPORT_DIR}/openreaper-bridge-liveness-v1.json" "${BRIDGE_OWNER}" "${BRIDGE_GENERATION}" <<'NODE'
+import { readFile, stat } from "node:fs/promises";
+const [heartbeatPath, owner, generationText] = process.argv.slice(2);
+// Match the runtime liveness grace: synchronous native work may defer the
+// heartbeat, but a stale or mismatched identity must still fail closed.
+const maxAgeMs = 35_000;
+try {
+  const [raw, metadata] = await Promise.all([readFile(heartbeatPath, "utf8"), stat(heartbeatPath)]);
+  const heartbeat = JSON.parse(raw);
+  const now = Date.now();
+  const generation = Number(generationText);
+  const ready = heartbeat?.contract === "openreaper.bridge_liveness.v1"
+    && heartbeat.active_owner === owner
+    && Number.isSafeInteger(generation)
+    && heartbeat.active_generation === generation
+    && Number.isSafeInteger(heartbeat.sequence)
+    && heartbeat.sequence >= 1
+    && Number.isSafeInteger(heartbeat.refreshed_at_unix_s)
+    && now - metadata.mtimeMs >= -1_000
+    && now - metadata.mtimeMs <= maxAgeMs
+    && now - heartbeat.refreshed_at_unix_s * 1_000 >= -1_000
+    && now - heartbeat.refreshed_at_unix_s * 1_000 <= maxAgeMs;
+  process.exit(ready ? 0 : 1);
+} catch {
+  process.exit(1);
+}
+NODE
+}
+
+startup_status_summary() {
+  local status_path="${TRANSPORT_DIR}/openreaper-startup-status-v1.json"
+  if [[ ! -f "${status_path}" || -L "${status_path}" ]]; then
+    return 0
+  fi
+  node --input-type=module - "${status_path}" <<'NODE'
+import { readFile } from "node:fs/promises";
+const [statusPath] = process.argv.slice(2);
+try {
+  const status = JSON.parse(await readFile(statusPath, "utf8"));
+  const stage = typeof status?.stage === "string" ? status.stage : "invalid";
+  const detail = typeof status?.detail === "string" ? status.detail.replace(/[\r\n]+/gu, " ").slice(0, 240) : "";
+  console.error(`[OpenReaper] startup-hook-stage=${stage}${detail ? ` detail=${detail}` : ""}`);
+} catch {
+  console.error(`[OpenReaper] startup-hook-stage=invalid status_file=${statusPath}`);
+}
+NODE
+}
+
+startup_status_stage_ready() {
+  local status_path="${TRANSPORT_DIR}/openreaper-startup-status-v1.json"
+  node --input-type=module - "${status_path}" <<'NODE'
+import { readFile } from "node:fs/promises";
+const [statusPath] = process.argv.slice(2);
+try {
+  const status = JSON.parse(await readFile(statusPath, "utf8"));
+  const stages = new Set(["hook_seen", "environment_missing", "bridge_dofile_succeeded", "bridge_dofile_failed"]);
+  process.exit(status?.contract === "openreaper.startup_status.v1" && stages.has(status?.stage) ? 0 : 1);
+} catch {
+  process.exit(1);
+}
+NODE
+}
+
+prepare_startup_status_for_new_launch() {
+  local status_path="${TRANSPORT_DIR}/openreaper-startup-status-v1.json"
+  if [[ ! -e "${status_path}" && ! -L "${status_path}" ]]; then
+    return 0
+  fi
+  if [[ ! -f "${status_path}" || -L "${status_path}" ]]; then
+    echo "[OpenReaper] startup status path is not a regular file: ${status_path}" >&2
+    return 1
+  fi
+  if ! rm -f -- "${status_path}"; then
+    echo "[OpenReaper] could not clear the previous startup status: ${status_path}" >&2
+    return 1
+  fi
+}
+
+wait_for_startup_hook() {
+  local reaper_pid="$1"
+  local max_ticks=$(( START_WAIT_SECONDS * 4 ))
+  local tick dialog_result pending_dialog_blocker="" last_dialog_result=""
+  for (( tick = 1; tick <= max_ticks; tick++ )); do
+    if ! startup_budget_require_window "startup_hook" $(( STARTUP_CLEANUP_RESERVE_MS + 250 )); then
+      if [[ -n "${pending_dialog_blocker}" ]]; then
+        report_startup_user_action_required "${pending_dialog_blocker}"
+        return 75
+      fi
+      return 1
+    fi
+    if ! kill -0 "${reaper_pid}" 2>/dev/null; then
+      echo "[OpenReaper] REAPER exited before its startup hook published a stage. pid=${reaper_pid}" >&2
+      return 1
+    fi
+    if ! startup_budget_require_window "startup_hook_dialog_inspection" $(( STARTUP_CLEANUP_RESERVE_MS + 1000 )); then
+      if [[ -n "${pending_dialog_blocker}" ]]; then
+        report_startup_user_action_required "${pending_dialog_blocker}"
+        return 75
+      fi
+      return 1
+    fi
+    # A project-load dialog can prevent REAPER from reaching the package launcher.
+    # Reuse the exact safe classifier while LaunchServices still carries the
+    # session environment; unknown and decision-bearing dialogs stay blocked.
+    dialog_result="$(run_startup_dialog_observer)"
+    if [[ "${dialog_result}" != "${last_dialog_result}" ]]; then
+      record_dialog_result "${dialog_result}"
+      last_dialog_result="${dialog_result}"
+    fi
+    # A published hook stage does not override a visible decision window. The
+    # read-only observer runs first so startup cannot report ready while a user
+    # choice is still blocking REAPER.
+    if ! startup_dialog_result_is_safe "${dialog_result}"; then
+      # Require one stable repeat so a transient window replacement or a user
+      # dismissal cannot race the hook by a few milliseconds. Once stable,
+      # return the typed user-action result promptly, before the outer deadline
+      # can terminate the preserved REAPER process group.
+      if [[ "${pending_dialog_blocker}" != "${dialog_result}" ]]; then
+        pending_dialog_blocker="${dialog_result}"
+        sleep 0.25
+        continue
+      fi
+      report_startup_user_action_required "${dialog_result}"
+      return 75
+    fi
+    pending_dialog_blocker=""
+    if startup_status_stage_ready; then
+      return 0
+    fi
+    sleep 0.25
+  done
+  startup_status_summary
+  if [[ -n "${pending_dialog_blocker}" ]]; then
+    report_startup_user_action_required "${pending_dialog_blocker}"
+    return 75
+  fi
+  return 1
+}
+
+verify_public_bridge_read() {
+  local doctor="${INSTALL_ROOT}/bin/openreaper-doctor"
+  local doctor_log="${START_LOG%.log}-doctor.log"
+  local -i remaining_ms doctor_smoke_timeout_ms doctor_read_timeout_ms
+  if [[ ! -x "${doctor}" ]]; then
+    echo "[OpenReaper] installed Doctor is missing or not executable: ${doctor}" >&2
+    return 1
+  fi
+  remaining_ms="$(startup_remaining_budget_ms)"
+  doctor_smoke_timeout_ms=$(( remaining_ms - STARTUP_CLEANUP_RESERVE_MS ))
+  if (( doctor_smoke_timeout_ms > STARTUP_DOCTOR_SMOKE_MAX_MS )); then
+    doctor_smoke_timeout_ms=${STARTUP_DOCTOR_SMOKE_MAX_MS}
+  fi
+  doctor_read_timeout_ms=$(( doctor_smoke_timeout_ms - STARTUP_DOCTOR_OVERHEAD_MS ))
+  if (( doctor_read_timeout_ms > STARTUP_DOCTOR_READ_MAX_MS )); then
+    doctor_read_timeout_ms=${STARTUP_DOCTOR_READ_MAX_MS}
+  fi
+  if (( doctor_smoke_timeout_ms < 1000 || doctor_read_timeout_ms < 250 )); then
+    startup_budget_require_window "public_bridge_read" \
+      $(( STARTUP_CLEANUP_RESERVE_MS + STARTUP_DOCTOR_OVERHEAD_MS + 250 )) || true
+    return 1
+  fi
+  (
+    cd "${INSTALL_ROOT}" || exit 1
+    OPENREAPER_SESSION_ROOT="${SESSION_ROOT}" \
+        OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR="${TRANSPORT_DIR}" \
+        OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH="${BRIDGE_SCRIPT}" \
+        OPENREAPER_ARTIFACT_ROOT="${ARTIFACT_ROOT}" \
+        OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT="${ARTIFACT_ROOT}" \
+        OPENREAPER_LIVE_SMOKE_RENDER_ROOT="${RENDER_ROOT}" \
+        OPENREAPER_LIVE_BRIDGE_OWNER="${BRIDGE_OWNER}" \
+        OPENREAPER_LIVE_BRIDGE_GENERATION="${BRIDGE_GENERATION}" \
+        OPENREAPER_DOCTOR_SMOKE_TIMEOUT_MS="${doctor_smoke_timeout_ms}" \
+        OPENREAPER_DOCTOR_READ_PROBE_TIMEOUT_MS="${doctor_read_timeout_ms}" \
+        "${doctor}" --wait-bridge=2
+  ) > "${doctor_log}" 2>&1 &
+  local doctor_pid="$!"
+  local doctor_status=0
+  while kill -0 "${doctor_pid}" 2>/dev/null; do
+    sleep 0.05
+  done
+  wait "${doctor_pid}" || doctor_status=$?
+  if (( doctor_status == 0 )); then
+    echo "[OpenReaper] bridge-read-probe=passed"
+    echo "[OpenReaper] doctor-log=${doctor_log}"
+    return 0
+  fi
+  echo "[OpenReaper] bridge heartbeat was ready but the public read probe failed. doctor-log=${doctor_log}" >&2
+  return 1
+}
+
+verified_existing_reaper_pid() {
+  local readiness_module="${INSTALL_ROOT}/vendor/openreaper-kernel/packages/mcp-server/src/alpha3-2b3-runtime-doctor-readiness-v1.mjs"
+  if [[ ! -f "${PID_FILE}" && ! -L "${PID_FILE}" ]]; then
+    return 1
+  fi
+  if [[ ! -f "${readiness_module}" || -L "${readiness_module}" ]]; then
+    echo "[OpenReaper] cannot verify the existing session PID because the readiness module is unavailable." >&2
+    return 2
+  fi
+  node --input-type=module - "${readiness_module}" "${SESSION_ROOT}" <<'NODE'
+import { pathToFileURL } from "node:url";
+
+const [readinessModulePath, sessionRoot] = process.argv.slice(2);
+try {
+  const readiness = await import(pathToFileURL(readinessModulePath));
+  const inspected = await readiness.inspectAlpha3_2B3ReaperProcess({ sessionRoot });
+  if (inspected?.running === true && inspected?.identity_verified === true && Number.isSafeInteger(inspected.pid)) {
+    process.stdout.write(String(inspected.pid));
+    process.exit(0);
+  }
+  if (inspected?.status === "pid_missing" || inspected?.status === "pid_dead") process.exit(1);
+  process.exit(2);
+} catch {
+  process.exit(2);
+}
+NODE
+}
+
+resolve_bridge_generation() {
+  local mode="$1"
+  local requested="${2-}"
+  local resolved
+  if ! resolved="$(node --input-type=module - \
+      "${BRIDGE_GENERATION_RECORD}" \
+      "${TRANSPORT_DIR}/openreaper-bridge-liveness-v1.json" \
+      "${BRIDGE_OWNER}" \
+      "${mode}" \
+      "${requested}" <<'NODE'
+import { constants as fsConstants } from "node:fs";
+import { lstat, open, readFile, rename, unlink } from "node:fs/promises";
+import path from "node:path";
+import { randomBytes } from "node:crypto";
+
+const [recordPath, heartbeatPath, owner, mode, requestedText] = process.argv.slice(2);
+const CONTRACT = "openreaper.bridge_generation.v1";
+const MAX_BYTES = 2048;
+
+function fail(message) {
+  process.stderr.write(`[OpenReaper] ${message}\n`);
+  process.exit(2);
+}
+
+function validGeneration(value) {
+  return Number.isSafeInteger(value) && value >= 1;
+}
+
+async function safeLstat(filePath) {
+  try {
+    return await lstat(filePath);
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+async function readJson(filePath, label) {
+  const entry = await safeLstat(filePath);
+  if (!entry) return null;
+  if (entry.isSymbolicLink() || !entry.isFile() || entry.size > MAX_BYTES) {
+    throw new Error(`${label} must be a bounded regular non-symlink file`);
+  }
+  const handle = await open(filePath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+  try {
+    const opened = await handle.stat();
+    if (!opened.isFile() || opened.isSymbolicLink?.() || opened.size > MAX_BYTES) {
+      throw new Error(`${label} changed while opening`);
+    }
+    const raw = await handle.readFile("utf8");
+    if (raw.length > MAX_BYTES) throw new Error(`${label} exceeds ${MAX_BYTES} bytes`);
+    return JSON.parse(raw);
+  } finally {
+    await handle.close();
+  }
+}
+
+async function readRecord() {
+  const value = await readJson(recordPath, "generation record");
+  if (value === null) return null;
+  if (value.contract !== CONTRACT || !validGeneration(value.generation)) {
+    throw new Error("generation record has an invalid contract or generation");
+  }
+  return value.generation;
+}
+
+async function readHeartbeat() {
+  const value = await readJson(heartbeatPath, "bridge heartbeat");
+  if (value === null) return null;
+  if (
+    value.contract !== "openreaper.bridge_liveness.v1" ||
+    value.active_owner !== owner ||
+    !validGeneration(value.active_generation)
+  ) return null;
+  return value.active_generation;
+}
+
+async function persist(generation) {
+  const parent = path.dirname(recordPath);
+  const parentEntry = await safeLstat(parent);
+  if (!parentEntry || parentEntry.isSymbolicLink() || !parentEntry.isDirectory()) {
+    throw new Error("generation record parent must be a real directory");
+  }
+  const existing = await safeLstat(recordPath);
+  if (existing && (existing.isSymbolicLink() || !existing.isFile())) {
+    throw new Error("generation record destination is not a regular file");
+  }
+  const temporary = `${recordPath}.tmp.${process.pid}.${randomBytes(8).toString("hex")}`;
+  let handle = null;
+  try {
+    handle = await open(
+      temporary,
+      fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | (fsConstants.O_NOFOLLOW ?? 0),
+      0o600,
+    );
+    await handle.writeFile(JSON.stringify({ contract: CONTRACT, generation }) + "\n", "utf8");
+    await handle.sync();
+    await handle.close();
+    handle = null;
+    await rename(temporary, recordPath);
+  } finally {
+    if (handle) await handle.close().catch(() => {});
+    await unlink(temporary).catch(() => {});
+  }
+}
+
+try {
+  if (mode === "current" && requestedText !== "") {
+    if (!/^[1-9][0-9]*$/u.test(requestedText)) throw new Error("--bridge-generation must be a positive safe integer");
+  }
+  if (mode === "adopt" && !/^[1-9][0-9]*$/u.test(requestedText)) {
+    throw new Error("--bridge-generation must be a positive safe integer");
+  }
+  const requested = requestedText === "" ? null : Number(requestedText);
+  if (requested !== null && !validGeneration(requested)) throw new Error("--bridge-generation exceeds the safe integer limit");
+  const recorded = await readRecord();
+  const heartbeat = await readHeartbeat();
+  const current = recorded ?? heartbeat ?? null;
+  let resolved;
+  if (mode === "current") {
+    if (current === null) throw new Error("running session has no recoverable bridge generation");
+    if (requested !== null && current !== requested) {
+      throw new Error(`requested generation ${requested} does not match the running session generation ${current}`);
+    }
+    resolved = current;
+    if (recorded === null) await persist(resolved);
+  } else if (mode === "adopt") {
+    if (current !== null && requested < current) {
+      throw new Error(`requested generation ${requested} would move backwards from persisted generation ${current}`);
+    }
+    resolved = requested;
+    await persist(resolved);
+  } else if (mode === "rotate") {
+    const base = current ?? 0;
+    if (!validGeneration(base + 1)) throw new Error("bridge generation exhausted safe integer range");
+    resolved = base + 1;
+    await persist(resolved);
+  } else {
+    throw new Error(`unknown bridge generation mode: ${mode}`);
+  }
+  process.stdout.write(String(resolved));
+} catch (error) {
+  fail(error?.message ?? String(error));
+}
+NODE
+    )"; then
+    return 1
+  fi
+  if [[ ! "${resolved}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "[OpenReaper] generation resolver returned an invalid value." >&2
+    return 1
+  fi
+  BRIDGE_GENERATION="${resolved}"
+  export OPENREAPER_LIVE_BRIDGE_GENERATION="${BRIDGE_GENERATION}"
+}
+
+startup_dialog_inspection_unavailable() {
+  local detail="$1"
+  STARTUP_DIALOG_INSPECTION_UNAVAILABLE=true
+  if [[ "${STARTUP_DIALOG_INSPECTION_UNAVAILABLE_LOGGED}" != "true" ]]; then
+    STARTUP_DIALOG_INSPECTION_UNAVAILABLE_LOGGED=true
+    echo "[OpenReaper] startup-dialog-inspection=unavailable detail=${detail}" >&2
+    if [[ -n "${START_LOG:-}" ]]; then
+      echo "[OpenReaper] dialog-event timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ") result=inspection_unavailable detail=${detail}" >> "${START_LOG}"
+    fi
+  fi
+  printf '%s\n' "inspection_unavailable"
+}
+
+startup_dialog_observer_output_is_ax_failure() {
+  local status="$1"
+  local result="$2"
+  if (( status == 142 )) || (( status != 0 )) || [[ -z "${result}" ]]; then
+    return 0
+  fi
+  case "${result}" in
+    *"-609"*|*"invalid connection"*|*"not allowed assistive access"*|*"System Events got an error"*)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+run_startup_dialog_observer() {
+  if [[ "$(uname -s)" != "Darwin" || ! -x "/usr/bin/osascript" ]]; then
+    echo "unavailable"
+    return 0
+  fi
+  if [[ "${STARTUP_DIALOG_INSPECTION_UNAVAILABLE}" == "true" ]]; then
+    echo "inspection_unavailable"
+    return 0
+  fi
+  local reaper_pid assist_result="" assist_status=0
+  local -i remaining_ms dialog_timeout_seconds
+  reaper_pid="$(cat "${PID_FILE}")"
+  remaining_ms="$(startup_remaining_budget_ms)"
+  dialog_timeout_seconds=$(( (remaining_ms - STARTUP_CLEANUP_RESERVE_MS) / 1000 ))
+  if (( dialog_timeout_seconds > STARTUP_DIALOG_TIMEOUT_SECONDS )); then
+    dialog_timeout_seconds=${STARTUP_DIALOG_TIMEOUT_SECONDS}
+  fi
+  if (( dialog_timeout_seconds < 1 )); then
+    printf '%s\n' "blocked_startup_budget_exhausted:stage=dialog_inspection"
+    return 0
+  fi
+  if assist_result="$(/usr/bin/perl -e 'my $seconds = shift @ARGV; alarm $seconds; exec @ARGV or die "exec failed: $!"' \
+      "${dialog_timeout_seconds}" \
+      /usr/bin/osascript - "${reaper_pid}" <<'APPLESCRIPT' 2>> "${START_LOG}"
+on exactUiElementCount(theWindow, targetName, targetRole)
+  tell application "System Events"
+    set matchCount to 0
+    try
+      -- The allowlisted media-warning buttons are direct children of the
+      -- modal window. A recursive AX expansion can block for the full
+      -- inspection budget while REAPER is already progressing startup.
+      set uiElements to every button of theWindow whose name is targetName
+      repeat with uiElement in uiElements
+        try
+          set uiName to name of uiElement
+          set uiRole to role of uiElement
+          if uiName is not missing value and uiRole is not missing value and (uiName as text) is targetName and (uiRole as text) is targetRole then set matchCount to matchCount + 1
+        end try
+      end repeat
+    end try
+  end tell
+  return matchCount
+end exactUiElementCount
+
+on isExactProjectNotesWindow(theWindow)
+  tell application "System Events"
+    set notesCheckboxCount to 0
+    set okButtonCount to 0
+    try
+      -- Query the two exact direct children instead of expanding any AX
+      -- subtree. REAPER's Project Settings window can make both `entire
+      -- contents` and `UI elements` block even after the bridge hook has
+      -- completed. Unknown/decision-bearing dialogs still go through the
+      -- fail-closed classifier below.
+      set matchingNotesCheckboxes to every checkbox of theWindow whose name is "Show notes on project load"
+      set matchingOkButtons to every button of theWindow whose name is "OK"
+      set notesCheckboxCount to count of matchingNotesCheckboxes
+      set okButtonCount to count of matchingOkButtons
+      return notesCheckboxCount is 1 and okButtonCount is 1
+    end try
+  end tell
+  return false
+end isExactProjectNotesWindow
+
+on uiTextAreaContains(theWindow, firstNeedle, secondNeedle)
+  tell application "System Events"
+    try
+      set warningText to value of text area 1 of scroll area 1 of theWindow as text
+      return warningText contains firstNeedle and warningText contains secondNeedle
+    end try
+  end tell
+  return false
+end uiTextAreaContains
+
+on isExactReaScriptRunStatusWindow(theWindow, hasRunningReaScriptMainWindow)
+  if not hasRunningReaScriptMainWindow then return false
+  tell application "System Events"
+    try
+      set windowTitle to name of theWindow as text
+      set windowRole to role of theWindow as text
+      set windowSubrole to subrole of theWindow as text
+      set windowSize to size of theWindow
+      set windowWidth to item 1 of windowSize as integer
+      set windowHeight to item 2 of windowSize as integer
+      set windowButtonCount to count of buttons of theWindow
+      return windowTitle is "Window" and windowRole is "AXWindow" and windowSubrole is "AXDialog" and windowWidth > 0 and windowWidth is less than or equal to 96 and windowHeight > 0 and windowHeight is less than or equal to 48 and windowButtonCount is 1
+    end try
+  end tell
+  return false
+end isExactReaScriptRunStatusWindow
+
+on isNamedReaScriptStatusWindow(theWindow, windowTitle)
+  -- Some REAPER builds expose the running-script status surface as a named
+  -- `Scripts on` window instead of the tiny title `Window`. Keep this exact
+  -- title allowlisted, but require a normal REAPER accessibility role so a
+  -- user-created modal with a similar title remains fail-closed.
+  if windowTitle is not "Scripts on" and windowTitle is not "Scripts On" then return false
+  tell application "System Events"
+    try
+      set windowRole to role of theWindow as text
+      set windowSubrole to subrole of theWindow as text
+      return (windowRole is "AXWindow" or windowRole is "AXDialog") and (windowSubrole is "AXWindow" or windowSubrole is "AXStandardWindow" or windowSubrole is "AXDialog" or windowSubrole is "AXSheet")
+    end try
+  end tell
+  return false
+end isNamedReaScriptStatusWindow
+
+on run argv
+set launchedPid to item 1 of argv as integer
+tell application "System Events"
+  set matchingProcesses to every process whose unix id is launchedPid
+  if (count of matchingProcesses) is not 1 then return "blocked_reaper_identity:pid=" & launchedPid
+  set launchedProcess to item 1 of matchingProcesses
+  if name of launchedProcess is not "REAPER" then return "blocked_reaper_identity:pid=" & launchedPid
+  tell launchedProcess
+    set hasRunningReaScriptMainWindow to false
+    set sawReaScriptRunStatusWindow to false
+    repeat with candidateWindow in windows
+      try
+        if (subrole of candidateWindow as text) is "AXStandardWindow" and (name of candidateWindow as text) contains "[ReaScript: Run]" then
+          set hasRunningReaScriptMainWindow to true
+          exit repeat
+        end if
+      end try
+    end repeat
+    repeat with reaperWindow in windows
+      set windowTitle to ""
+      try
+        set windowTitle to name of reaperWindow as text
+      end try
+      if windowTitle is "Project Settings" or windowTitle is "Project Settings / Notes" then
+        -- REAPER's macOS AX tree does not consistently expose the selected
+        -- Notes tab name. Inspect the exact safe markers in one tree pass.
+        set isProjectNotesWindow to my isExactProjectNotesWindow(reaperWindow)
+        if isProjectNotesWindow then
+          return "blocked_manual_dialog:title=Project Settings"
+        end if
+        return "project_settings_seen_but_not_notes"
+      end if
+      set windowSubrole to ""
+      try
+        set windowSubrole to subrole of reaperWindow as text
+      on error errorMessage
+        return "blocked_dialog_classification:title=" & windowTitle & ":error=" & errorMessage
+      end try
+      set isPotentialDialog to windowSubrole is "AXDialog" or windowSubrole is "AXSheet" or windowTitle is "Project Load Warning"
+      set isReaScriptRunStatusWindow to isPotentialDialog and my isExactReaScriptRunStatusWindow(reaperWindow, hasRunningReaScriptMainWindow)
+      if not isReaScriptRunStatusWindow then set isReaScriptRunStatusWindow to my isNamedReaScriptStatusWindow(reaperWindow, windowTitle)
+      if isReaScriptRunStatusWindow then
+        -- REAPER exposes its running ReaScript as a tiny AXDialog. It is a
+        -- status surface, not a user decision, and remains open and untouched.
+        set sawReaScriptRunStatusWindow to true
+        set isPotentialDialog to false
+      end if
+      if not isPotentialDialog and not isReaScriptRunStatusWindow then
+        if windowSubrole is not "AXWindow" and windowSubrole is not "AXStandardWindow" and windowSubrole is not "" then
+          return "blocked_unknown_dialog:title=" & windowTitle
+        end if
+      end if
+      if isPotentialDialog then
+        -- Normal REAPER windows are not startup dialogs. Avoid traversing the
+        -- full accessibility tree on every readiness tick.
+        set hasIgnoreMissingFiles to false
+        try
+          if my exactUiElementCount(reaperWindow, "Ignore all missing files", "AXButton") is 1 then set hasIgnoreMissingFiles to true
+        end try
+        if hasIgnoreMissingFiles then
+          return "blocked_missing_media:choice=Ignore all missing files"
+        end if
+        if windowTitle is "Project Load Warning" then
+          set isOfflineMediaWarning to my uiTextAreaContains(reaperWindow, "in an off-line state", "filenames should be preserved")
+          if isOfflineMediaWarning and my exactUiElementCount(reaperWindow, "OK", "AXButton") is 1 then return "blocked_missing_media_offline_warning:choice=OK"
+          return "blocked_user_decision:title=Project Load Warning"
+        end if
+        if windowSubrole is "AXDialog" or windowSubrole is "AXSheet" then
+          if windowTitle contains "Evaluation" or windowTitle contains "License" or windowTitle contains "Recovery" or windowTitle contains "missing effect" or windowTitle contains "New version" then
+            return "blocked_user_decision:title=" & windowTitle
+          end if
+          return "blocked_unknown_dialog:title=" & windowTitle
+        end if
+      end if
+    end repeat
+    if sawReaScriptRunStatusWindow then return "ignored_reascript_run_status_window"
+  end tell
+end tell
+return "no_safe_dialog"
+end run
+APPLESCRIPT
+  )"; then
+    assist_status=0
+  else
+    assist_status=$?
+  fi
+  if startup_dialog_observer_output_is_ax_failure "${assist_status}" "${assist_result}"; then
+    local detail="status=${assist_status}"
+    if (( assist_status == 142 )); then
+      detail="alarm_timeout:seconds=${dialog_timeout_seconds}"
+    elif [[ -z "${assist_result}" ]]; then
+      detail="empty"
+    elif [[ "${assist_result}" == *"-609"* ]]; then
+      detail="ax_-609"
+    fi
+    startup_dialog_inspection_unavailable "${detail}"
+    return 0
+  fi
+  printf '%s\n' "${assist_result}"
+}
+
+startup_dialog_result_is_safe() {
+  local token="${1%%:*}"
+  case "${token}" in
+    no_safe_dialog|ignored_reascript_run_status_window)
+      return 0
+      ;;
+    unavailable|inspection_unavailable)
+      if [[ "${STARTUP_DIALOG_POLICY}" == "soft" ]]; then
+        return 0
+      fi
+      return 1
+      ;;
+  esac
+  return 1
+}
+
+record_dialog_result() {
+  local result="$1"
+  echo "[OpenReaper] dialog-event timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ") project=${PROJECT_PATH:-none} result=${result}" >> "${START_LOG}"
+}
+
+report_startup_user_action_required() {
+  local dialog_result="$1"
+  STARTUP_PRESERVE_REAPER=true
+  echo "[OpenReaper] startup-status=user_action_required" >&2
+  echo "[OpenReaper] blocker-code=STARTUP_USER_ACTION_REQUIRED" >&2
+  echo "[OpenReaper] startup-dialog-blocker=${dialog_result}" >&2
+  echo "[OpenReaper] recovery=Resolve the visible REAPER window, then rerun openreaper-start --recover-existing. The current REAPER PID and Bridge generation were preserved." >&2
+}
+
+wait_for_startup_readiness() {
+  local max_ticks=$(( START_WAIT_SECONDS * 4 ))
+  local tick dialog_result pending_dialog_blocker="" last_dialog_result=""
+  if (( max_ticks < 1 )); then
+    echo "[OpenReaper] OPENREAPER_START_WAIT_SECONDS must be at least 1 for verified startup." >&2
+    return 1
+  fi
+  for (( tick = 1; tick <= max_ticks; tick++ )); do
+    if ! startup_budget_require_window "bridge_readiness" $(( STARTUP_CLEANUP_RESERVE_MS + 250 )); then
+      if [[ -n "${pending_dialog_blocker}" ]]; then
+        report_startup_user_action_required "${pending_dialog_blocker}"
+        return 75
+      fi
+      return 1
+    fi
+    assert_reaper_process_alive || return 1
+    if ! startup_budget_require_window "bridge_readiness_dialog_inspection" $(( STARTUP_CLEANUP_RESERVE_MS + 1000 )); then
+      if [[ -n "${pending_dialog_blocker}" ]]; then
+        report_startup_user_action_required "${pending_dialog_blocker}"
+        return 75
+      fi
+      return 1
+    fi
+    dialog_result="$(run_startup_dialog_observer)"
+    if [[ "${dialog_result}" != "${last_dialog_result}" ]]; then
+      record_dialog_result "${dialog_result}"
+      last_dialog_result="${dialog_result}"
+    fi
+    # A live Bridge cannot override a decision dialog.  Inspect first on every
+    # tick, then accept the heartbeat only after this process has no blocker.
+    if ! startup_dialog_result_is_safe "${dialog_result}"; then
+      if [[ "${pending_dialog_blocker}" != "${dialog_result}" ]]; then
+        pending_dialog_blocker="${dialog_result}"
+        sleep 0.25
+        continue
+      fi
+      report_startup_user_action_required "${dialog_result}"
+      return 75
+    fi
+    pending_dialog_blocker=""
+    if bridge_heartbeat_ready; then
+      verify_public_bridge_read || return 1
+      echo "[OpenReaper] bridge-heartbeat=ready owner=${BRIDGE_OWNER} generation=${BRIDGE_GENERATION}"
+      return 0
+    fi
+    sleep 0.25
+  done
+  startup_status_summary
+  if [[ -n "${pending_dialog_blocker}" ]]; then
+    report_startup_user_action_required "${pending_dialog_blocker}"
+    return 75
+  fi
+  if [[ "${RECOVER_EXISTING}" == "true" ]]; then
+    echo "[OpenReaper] startup-status=blocked_same_instance_bridge_not_ready" >&2
+    echo "[OpenReaper] blocker-code=SAME_INSTANCE_BRIDGE_ACTION_REQUIRED" >&2
+    echo "[OpenReaper] recovery=The verified REAPER PID is alive, but this command cannot restart its stopped Bridge externally. In that same REAPER, run fallback Action 'OpenReaper: Start MCP bridge', then rerun openreaper-doctor --wait-bridge. Do not start another REAPER." >&2
+    return 4
+  fi
+  echo "[OpenReaper] Bridge did not become ready within ${START_WAIT_SECONDS}s." >&2
+  echo "[OpenReaper] recovery=Resolve the reported REAPER dialog, or run fallback Action 'OpenReaper: Start MCP bridge'; then rerun openreaper-doctor --wait-bridge." >&2
+  return 1
+}
+
+trap 'launchservices_cleanup_on_exit' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+existing_session_mode=""
+if existing_reaper_pid="$(verified_existing_reaper_pid)"; then
+  existing_session_mode="managed"
+  echo "[OpenReaper] existing-session=reaper_pid=${existing_reaper_pid};identity=verified;source=session-record"
+else
+  existing_reaper_status=$?
+  if (( existing_reaper_status == 2 )); then
+    echo "[OpenReaper] existing session could not be safely verified; refusing to launch another REAPER." >&2
+    exit 1
+  fi
+  if existing_reaper_pid="$(discover_single_running_reaper_pid)"; then
+    existing_session_mode="discovered"
+    printf '%s\n' "${existing_reaper_pid}" > "${PID_FILE}"
+    echo "[OpenReaper] existing-session=reaper_pid=${existing_reaper_pid};identity=process-discovered"
+  else
+    discovered_status=$?
+    if (( discovered_status == 2 )); then
+      exit 1
+    fi
+  fi
+fi
+
+if [[ -n "${existing_session_mode}" ]]; then
+  if [[ -n "${PROJECT_PATH}" || ${#ARGS[@]} -gt 0 ]]; then
+    echo "[OpenReaper] an existing REAPER is already running; do not combine attach with a new project or REAPER arguments." >&2
+    exit 2
+  fi
+  if [[ "${BRIDGE_GENERATION_EXPLICIT}" == "true" ]]; then
+    if ! resolve_bridge_generation current "${BRIDGE_GENERATION_REQUESTED}"; then
+      echo "[OpenReaper] existing session generation could not be safely matched; refusing recovery." >&2
+      exit 1
+    fi
+  elif ! resolve_bridge_generation current; then
+    echo "[OpenReaper] existing session generation could not be recovered; refusing recovery." >&2
+    exit 1
+  fi
+  if [[ "${OPENREAPER_STUDIO:-}" == "1" && "${STUDIO_STALE_RELAUNCH_ATTEMPTED}" != "true" ]] \
+      && ! bridge_heartbeat_ready; then
+    echo "[OpenReaper] studio-relaunch=stale_or_mismatched_bridge_heartbeat;mode=${existing_session_mode}"
+    STUDIO_STALE_RELAUNCH_ATTEMPTED=true
+    if terminate_existing_reaper_for_studio_relaunch; then
+      existing_session_mode=""
+    else
+      echo "[OpenReaper] studio-relaunch=aborted_could_not_stop_existing_reaper;falling_back_to_attach" >&2
+    fi
+  fi
+fi
+
+if [[ -n "${existing_session_mode}" ]]; then
+  if [[ "${RECOVER_EXISTING}" == "true" ]]; then
+    echo "[OpenReaper] startup-mode=attach_existing_explicit"
+  else
+    echo "[OpenReaper] startup-mode=attach_existing"
+  fi
+  # Preserve the launch-time metadata used to bind this record to the exact
+  # REAPER process. Rewriting the same PID would make an old process look like
+  # it was just launched and invalidate the next identity check.
+else
+  if [[ "${BRIDGE_GENERATION_EXPLICIT}" == "true" ]]; then
+    if ! resolve_bridge_generation adopt "${BRIDGE_GENERATION_REQUESTED}"; then
+      echo "[OpenReaper] explicit generation could not be persisted safely; refusing launch." >&2
+      exit 1
+    fi
+  elif ! resolve_bridge_generation rotate; then
+    echo "[OpenReaper] launch generation could not be rotated safely; refusing launch." >&2
+    exit 1
+  fi
+  launch_reaper
+fi
+startup_readiness_status=0
+wait_for_startup_readiness || startup_readiness_status=$?
+if (( startup_readiness_status != 0 )); then
+  exit "${startup_readiness_status}"
+fi
+STARTUP_LAUNCH_ACCEPTED=true
+
+echo "[OpenReaper] startup-status=ready"
+echo "[OpenReaper] bridge-status=ready"

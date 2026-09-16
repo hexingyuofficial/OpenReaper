@@ -9,6 +9,7 @@ import {
   writeFaceConfig,
 } from "../face/runtime-config.mjs";
 import { installFaceBundle } from "../face/install.mjs";
+import { syncPackagedStartHelper } from "../face/start-helper.mjs";
 import {
   defaultReaperResourceRoot,
   repoRootFromStudio,
@@ -48,6 +49,16 @@ export const START_STEPS = [
 
       const reaperResourceRoot = defaultReaperResourceRoot(platform, homeDir, env);
       const repoRoot = repoRootFromStudio();
+      const helperSync = await syncPackagedStartHelper({
+        installRoot,
+        repoRoot,
+        platform,
+      });
+      ctx.startHelperSync = helperSync;
+      if (helperSync.synced && helperSync.dest) {
+        ctx.log(`Synced start helper → ${helperSync.dest}`);
+        ctx.startCmd = resolveOpenReaperStartCommand(installRoot, platform) ?? startCmd;
+      }
       const piBridgeScript = resolvePiBridgeScript(repoRoot);
       if (!existsSync(piBridgeScript)) {
         throw new Error(`Studio agent seam CLI missing: ${piBridgeScript}`);
@@ -102,7 +113,7 @@ export const START_STEPS = [
       }
       const result = await runProcess(ctx.startCmd.command, startArgs, {
         cwd: ctx.startCmd.cwd,
-        env: ctx.env,
+        env: { ...ctx.env, OPENREAPER_STUDIO: "1" },
       });
       ctx.state.openreaperStartExitCode = result.code;
       if (result.code !== 0) {

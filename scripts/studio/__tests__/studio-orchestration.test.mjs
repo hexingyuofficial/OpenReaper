@@ -10,14 +10,17 @@ import {
 } from "../lib/face.mjs";
 import { existsSync } from "node:fs";
 import { installFaceBundle } from "../lib/face/install.mjs";
+import { syncPackagedStartHelper } from "../lib/face/start-helper.mjs";
 import { START_STEPS } from "../lib/orchestration/start-steps.mjs";
 import {
   defaultInstallRoot,
   repoRootFromStudio,
   resolveInstallRoot,
   resolveOpenReaperStartCommand,
+  resolvePackagedStartHelper,
   resolveStudioDialogSources,
   resolveStudioPackageRoot,
+  packagedMacosStartHelperPath,
   studioDialogEntryFileName,
   studioDialogEntrySourcePath,
   studioDialogModuleSourceDir,
@@ -119,6 +122,16 @@ describe("paths", () => {
     expect(studioDialogModuleSourceDir(fakeRepoRoot)).toBe(expectedModules);
     expect(existsSync(studioDialogEntrySourcePath(fakeRepoRoot))).toBe(true);
   });
+
+  it("resolves the tracked macOS start helper from packaging/", () => {
+    const helper = packagedMacosStartHelperPath(repoRootFromStudio());
+    expect(helper.endsWith(path.join("packaging", "macos", "OpenReaper-alpha", "bin", "openreaper-start"))).toBe(
+      true,
+    );
+    expect(existsSync(helper)).toBe(true);
+    expect(resolvePackagedStartHelper()).toBe(helper);
+    expect(resolvePackagedStartHelper(path.join("/tmp", "fake-openreaper-repo-root"))).toBe(helper);
+  });
 });
 
 describe("face install", () => {
@@ -206,9 +219,48 @@ describe("face.prepare", () => {
       expect(existsSync(installed)).toBe(true);
       expect(ctx.faceInstall.entryScriptPath).toBe(installed);
       expect(existsSync(path.join(ctx.faceInstall.moduleDir, "ui_face.lua"))).toBe(true);
+      expect(ctx.startHelperSync?.synced).toBe(true);
+      expect(ctx.startCmd?.command).toBe(path.join(installRoot, "bin", "openreaper-start"));
+      const synced = await readFile(path.join(installRoot, "bin", "openreaper-start"), "utf8");
+      expect(synced).toContain("startup_dialog_result_is_safe()");
+      expect(synced).toContain("inspection_unavailable");
+      expect(synced).toContain('OPENREAPER_STUDIO:-}" == "1"');
     } finally {
       await rm(tmp, { recursive: true, force: true });
     }
+  });
+});
+
+describe("start helper sync + studio env", () => {
+  it("copies the tracked helper into INSTALL_ROOT/bin without changing install root", async () => {
+    const tmp = await mkdtemp(path.join(os.tmpdir(), "or-start-helper-"));
+    try {
+      const installRoot = path.join(tmp, "current");
+      await mkdir(path.join(installRoot, "bin"), { recursive: true });
+      await writeFile(path.join(installRoot, "bin", "openreaper-start"), "#!/bin/sh\nold\n", "utf8");
+      const result = await syncPackagedStartHelper({
+        installRoot,
+        repoRoot: repoRootFromStudio(),
+        platform: "darwin",
+      });
+      expect(result.synced).toBe(true);
+      expect(result.dest).toBe(path.join(installRoot, "bin", "openreaper-start"));
+      const copied = await readFile(result.dest, "utf8");
+      expect(copied).toContain("inspection_unavailable");
+      expect(copied).not.toContain("old\n");
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("passes OPENREAPER_STUDIO=1 from engine.openreaper_start", async () => {
+    const source = await readFile(
+      path.join(studioPackageRoot(), "lib", "orchestration", "start-steps.mjs"),
+      "utf8",
+    );
+    expect(source).toMatch(/env:\s*\{\s*\.\.\.ctx\.env,\s*OPENREAPER_STUDIO:\s*"1"\s*\}/);
+    const engine = START_STEPS.find((step) => step.id === "engine.openreaper_start");
+    expect(engine?.label).toMatch(/openreaper-start/);
   });
 });
 

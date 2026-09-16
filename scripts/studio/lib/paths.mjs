@@ -58,6 +58,35 @@ function installRootHasStartHelper(installRoot, platform) {
   return unixStartHelperPaths(installRoot).some((candidate) => existsSync(candidate));
 }
 
+/**
+ * Tracked macOS start helper that Studio syncs into INSTALL_ROOT/bin.
+ * Lives under packaging/ so dist/ (gitignored) is not the source of truth.
+ */
+export function packagedMacosStartHelperPath(root = repoRootFromStudio()) {
+  return path.join(
+    root,
+    "packaging",
+    "macos",
+    "OpenReaper-alpha",
+    "bin",
+    "openreaper-start",
+  );
+}
+
+export function resolvePackagedStartHelper(root = repoRootFromStudio()) {
+  const candidates = [packagedMacosStartHelperPath(root)];
+  const fallback = packagedMacosStartHelperPath(repoRootFromStudio());
+  if (fallback !== candidates[0]) {
+    candidates.push(fallback);
+  }
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
 export function resolveOpenReaperStartCommand(installRoot, platform = process.platform) {
   if (!installRoot) {
     return null;
