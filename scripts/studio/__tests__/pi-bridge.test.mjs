@@ -18,12 +18,28 @@ describe("sendStudioPrompt", () => {
     expect(result.text).toContain("Track 1");
   });
 
-  it("returns mock_pi_running when Studio started Pi", async () => {
+  it("returns mock when Studio started Pi but RPC URL is not configured", async () => {
     const result = await sendStudioPrompt(
       { message: "mix bus", chips: [] },
       { pi: { mode: "started", pid: 4242 } },
     );
-    expect(result.mode).toBe("mock_pi_running");
-    expect(result.text).toContain("pi-stdio-rpc");
+    expect(result.mode).toBe("mock");
+    expect(result.text).toContain("Personal ~/.pi is never used");
+  });
+
+  it("uses http_rpc when OPENREAPER_STUDIO_PI_RPC_URL responds", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => ({
+      ok: true,
+      json: async () => ({ text: "from private pi" }),
+    });
+    const result = await sendStudioPrompt(
+      { message: "hello", chips: [] },
+      { pi: { mode: "started", rpcPromptUrl: "http://127.0.0.1:9/prompt" } },
+      { OPENREAPER_STUDIO_PI_RPC_URL: "http://127.0.0.1:9/prompt" },
+    );
+    globalThis.fetch = originalFetch;
+    expect(result.mode).toBe("http_rpc");
+    expect(result.text).toBe("from private pi");
   });
 });

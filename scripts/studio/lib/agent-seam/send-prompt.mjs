@@ -7,9 +7,10 @@ import { mockTransport } from "./transports/mock.mjs";
  *
  * Transport order (extension point — add entries in `TRANSPORTS`):
  * 1. http_rpc (OPENREAPER_STUDIO_PI_RPC_URL)
- * 2. mock (always available)
+ * 2. mock (explicit fallback — session / face config set OPENREAPER_STUDIO_PI_RPC_URL)
  *
- * Future: pi_stdio_rpc between http and mock when Studio owns the Pi process.
+ * Studio Start runs studio-pi-rpc-host.mjs (pi --mode rpc on private agentDir) and writes piRpcUrl
+ * into face-config-v1.json for REAPER ExecProcess sends.
  */
 export const TRANSPORT_ORDER = Object.freeze(["http_rpc", "mock"]);
 
@@ -30,11 +31,18 @@ export async function sendStudioPrompt(rawPayload, studioState, env = process.en
     return httpResult;
   }
   if (httpResult && !httpResult.ok && env.OPENREAPER_STUDIO_PI_RPC_URL?.trim()) {
+    const mock = mockTransport({ message, chips }, studioState, { explicitFallback: true });
     return {
       ...httpResult,
-      text: `${httpResult.text}\n\n${mockTransport({ message, chips }, studioState).text}`,
+      mode: "pi_rpc_fallback_mock",
+      text: `${httpResult.text}\n\n${mock.text}`,
     };
   }
 
-  return mockTransport({ message, chips }, studioState);
+  const hasRpcConfigured =
+    Boolean(env.OPENREAPER_STUDIO_PI_RPC_URL?.trim()) ||
+    Boolean(studioState?.pi?.rpcPromptUrl?.trim());
+  return mockTransport({ message, chips }, studioState, {
+    explicitFallback: !hasRpcConfigured,
+  });
 }

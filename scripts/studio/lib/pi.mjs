@@ -2,14 +2,26 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
-const DEFAULT_PI_AGENT_DIR = path.join(os.homedir(), ".pi", "agent");
-const DEFAULT_PI_MCP_JSON = path.join(DEFAULT_PI_AGENT_DIR, "mcp.json");
+import {
+  resolveStudioPiLayout,
+  studioPiMcpJsonPath,
+  userPersonalPiAgentDir,
+} from "./pi/private-layout.mjs";
 
 /**
  * Locate the `pi` executable without mutating PATH permanently.
+ * Prefer OPENREAPER_STUDIO_PI_BIN, then bundled vendor layout, then PATH.
  */
-export function resolvePiExecutable(env = process.env) {
+export function resolvePiExecutable(env = process.env, layout = null) {
+  if (env.OPENREAPER_STUDIO_PI_BIN?.trim()) {
+    const explicit = env.OPENREAPER_STUDIO_PI_BIN.trim();
+    if (existsSync(explicit)) {
+      return explicit;
+    }
+  }
+  if (layout?.bundledPiExecutable) {
+    return layout.bundledPiExecutable;
+  }
   const pathValue = env.PATH ?? "";
   const segments = pathValue.split(path.delimiter).filter(Boolean);
   const extra = [
@@ -29,18 +41,20 @@ export function resolvePiExecutable(env = process.env) {
   return null;
 }
 
+/** @deprecated Studio uses resolveStudioPiLayout; personal Pi is not the product path. */
 export function defaultPiAgentDir(homeDir = os.homedir()) {
-  return path.join(homeDir, ".pi", "agent");
+  return userPersonalPiAgentDir(homeDir);
 }
 
+/** @deprecated use studioPiMcpJsonPath via resolveStudioPiLayout */
 export function defaultPiMcpJsonPath(homeDir = os.homedir()) {
-  return path.join(defaultPiAgentDir(homeDir), "mcp.json");
+  return studioPiMcpJsonPath(userPersonalPiAgentDir(homeDir));
 }
 
 /**
  * Read Pi MCP config if present. Never writes or merges — Studio only inspects.
  */
-export async function readPiMcpConfig(mcpJsonPath = DEFAULT_PI_MCP_JSON) {
+export async function readPiMcpConfig(mcpJsonPath) {
   if (!existsSync(mcpJsonPath)) {
     return { exists: false, path: mcpJsonPath, openreaperConfigured: false, serverKeys: [] };
   }
@@ -71,22 +85,38 @@ export async function readPiMcpConfig(mcpJsonPath = DEFAULT_PI_MCP_JSON) {
   };
 }
 
-export function buildPiStartPlan({ piExecutable, env = process.env }) {
+export function buildPiProcessEnv({ env = process.env, layout }) {
+  if (!layout?.agentDir || !layout?.sessionsDir) {
+    throw new Error("buildPiProcessEnv requires resolveStudioPiLayout() output");
+  }
+  return {
+    ...env,
+    OPENREAPER_STUDIO: "1",
+    PI_CODING_AGENT_DIR: layout.agentDir,
+    PI_CODING_AGENT_SESSION_DIR: layout.sessionsDir,
+  };
+}
+
+export function buildPiStartPlan({ piExecutable, env = process.env, layout = null }) {
   if (!piExecutable) {
     return {
       mode: "absent",
       message:
-        "Pi was not found on PATH. Install Pi (https://pi.dev) or set PATH to include your pi binary. Studio did not create or modify ~/.pi.",
+        "Pi was not found (bundled vendor/pi or PATH). Studio uses a private agent dir under " +
+        "~/.openreaper/studio/pi — not ~/.pi. Install Pi for Studio packaging or set OPENREAPER_STUDIO_PI_BIN.",
     };
   }
   if (env.OPENREAPER_STUDIO_SKIP_PI === "1") {
     return {
       mode: "skipped",
-      message: "OPENREAPER_STUDIO_SKIP_PI=1 — Pi was not started by Studio.",
+      message: "OPENREAPER_STUDIO_SKIP_PI=1 — private Pi was not started by Studio.",
       piExecutable,
     };
   }
-  const args = ["--mode", "rpc"];
+  const args = ["--mode", "rpc", "--name", "OpenReaper Studio"];
+  if (env.OPENREAPER_STUDIO_PI_NO_SESSION === "1") {
+    args.push("--no-session");
+  }
   if (env.OPENREAPER_STUDIO_PI_ARGS?.trim()) {
     const extra = env.OPENREAPER_STUDIO_PI_ARGS.trim().split(/\s+/).filter(Boolean);
     args.push(...extra);
@@ -97,5 +127,14 @@ export function buildPiStartPlan({ piExecutable, env = process.env }) {
     command: piExecutable,
     args,
     logLabel: "pi-rpc",
+    layout,
+    processEnv: layout ? buildPiProcessEnv({ env, layout }) : null,
   };
+}
+
+export function resolveStudioPiForStart({ homeDir, installRoot, env = process.env }) {
+  const layout = resolveStudioPiLayout({ homeDir, installRoot, env });
+  const piExecutable = resolvePiExecutable(env, layout);
+  const plan = buildPiStartPlan({ piExecutable, env, layout });
+  return { layout, plan };
 }

@@ -10,15 +10,26 @@ export const STOP_STEPS = [
     label: "Stop Pi RPC started by Studio",
     async run(ctx) {
       const state = ctx.state;
-      if (state.pi?.mode === "started" && state.pi.pid) {
-        ctx.log(`Stopping Pi RPC pid=${state.pi.pid}…`);
-        try {
-          process.kill(state.pi.pid, "SIGTERM");
-        } catch (error) {
-          ctx.log(`Could not signal Pi (${error?.message ?? error}); may have exited.`);
+      const hostPid = state.pi?.hostPid;
+      const piPid = state.pi?.pid;
+      if (state.pi?.mode === "started" && (hostPid || piPid)) {
+        if (hostPid) {
+          ctx.log(`Stopping private Pi RPC host pid=${hostPid}…`);
+          try {
+            process.kill(hostPid, "SIGTERM");
+          } catch (error) {
+            ctx.log(`Could not signal RPC host (${error?.message ?? error}); may have exited.`);
+          }
+        } else if (piPid) {
+          ctx.log(`Stopping Pi RPC pid=${piPid}…`);
+          try {
+            process.kill(piPid, "SIGTERM");
+          } catch (error) {
+            ctx.log(`Could not signal Pi (${error?.message ?? error}); may have exited.`);
+          }
         }
       } else if (state.pi?.mode === "absent") {
-        ctx.log("Pi was not started by Studio.");
+        ctx.log("Private Pi was not started by Studio.");
       }
     },
   },

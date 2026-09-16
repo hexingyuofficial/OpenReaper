@@ -1,7 +1,6 @@
-import { existsSync, openSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { spawn } from "node:child_process";
 import {
   markOpenFaceOnLoad,
   resolveNodeCommand,
@@ -17,13 +16,9 @@ import {
   resolveOpenReaperStartCommand,
   studioStatePath,
 } from "../paths.mjs";
-import {
-  buildPiStartPlan,
-  defaultPiMcpJsonPath,
-  readPiMcpConfig,
-  resolvePiExecutable,
-} from "../pi.mjs";
+import { readPiMcpConfig, resolveStudioPiForStart } from "../pi.mjs";
 import { emptyStudioState, writeStudioState } from "../state.mjs";
+import { launchPrivatePiRpcHost } from "./pi-rpc-lifecycle.mjs";
 import { runProcess } from "./process.mjs";
 
 /**
@@ -70,12 +65,16 @@ export const START_STEPS = [
       const faceInstall = await installFaceBundle({ reaperResourceRoot, repoRoot });
       ctx.faceInstall = faceInstall;
 
-      const piPlan = buildPiStartPlan({
-        piExecutable: resolvePiExecutable(env),
+      const { layout: piLayout, plan: piPlan } = resolveStudioPiForStart({
+        homeDir,
+        installRoot,
         env,
       });
+      ctx.piLayout = piLayout;
       ctx.piPlan = piPlan;
-      ctx.piMcp = await readPiMcpConfig(defaultPiMcpJsonPath(homeDir));
+      ctx.piMcp = await readPiMcpConfig(piLayout.mcpJsonPath);
+      await mkdir(piLayout.agentDir, { recursive: true });
+      await mkdir(piLayout.sessionsDir, { recursive: true });
 
       const state = emptyStudioState();
       state.startedAt = new Date().toISOString();
@@ -90,6 +89,13 @@ export const START_STEPS = [
       };
       state.reaper.stopPolicy =
         env.OPENREAPER_STUDIO_STOP_REAPER === "1" ? "stop_on_studio_stop" : "preserve";
+      state.piPrivate = {
+        piRoot: piLayout.piRoot,
+        agentDir: piLayout.agentDir,
+        sessionsDir: piLayout.sessionsDir,
+        authJsonPath: piLayout.authJsonPath,
+        isolatedFromPersonalPi: piLayout.isolatedFromPersonalPi,
+      };
       ctx.state = state;
 
       await mkdir(path.join(installRoot, "session", "logs"), { recursive: true });
@@ -124,16 +130,21 @@ export const START_STEPS = [
   },
   {
     id: "agent.pi_rpc",
-    label: "Pi agent (optional background RPC)",
+    label: "Private Pi agent (RPC host + pi --mode rpc)",
     async run(ctx) {
-      const { piPlan, piMcp, env, installRoot, homeDir } = ctx;
+      const { piPlan, piMcp, piLayout, env, homeDir, repoRoot } = ctx;
       if (piPlan.mode === "absent") {
-        ctx.state.pi = { mode: "absent", mcp: piMcp };
+        ctx.state.pi = { mode: "absent", mcp: piMcp, privateRoot: piLayout.piRoot };
         ctx.log(piPlan.message);
         return;
       }
       if (piPlan.mode === "skipped") {
-        ctx.state.pi = { mode: "skipped", mcp: piMcp, message: piPlan.message };
+        ctx.state.pi = {
+          mode: "skipped",
+          mcp: piMcp,
+          message: piPlan.message,
+          privateRoot: piLayout.piRoot,
+        };
         ctx.log(piPlan.message);
         return;
       }
@@ -141,35 +152,43 @@ export const START_STEPS = [
         return;
       }
 
-      const logPath = path.join(installRoot, "session", "logs", "studio-pi-rpc.log");
+      ctx.log(
+        `Private Pi agentDir=${piLayout.agentDir} (isolated from personal Pi). ` +
+          `Auth will live at ${piLayout.authJsonPath} for in-app login.`,
+      );
+
+      if (!piMcp.exists) {
+        ctx.log(
+          "Private mcp.json not found yet; Studio did not create one. Wire OpenReaper MCP in a future installer step.",
+        );
+      } else if (!piMcp.openreaperConfigured) {
+        ctx.log("Private mcp.json exists but no openreaper server entry detected (read-only).");
+      }
+
+      const nodeCommand = resolveNodeCommand(env);
+      const rpc = await launchPrivatePiRpcHost({
+        nodeCommand,
+        repoRoot,
+        env: piPlan.processEnv ?? { ...env, OPENREAPER_STUDIO: "1" },
+        homeDir,
+        log: ctx.log,
+      });
+
       ctx.state.pi = {
         mode: "started",
         mcp: piMcp,
-        pid: null,
+        privateRoot: piLayout.piRoot,
+        agentDir: piLayout.agentDir,
+        hostPid: rpc.hostPid,
+        pid: rpc.piPid,
+        rpcPromptUrl: rpc.promptUrl,
+        rpcHealthUrl: rpc.healthUrl,
+        endpointFile: rpc.endpointFile,
         command: piPlan.command,
         args: piPlan.args,
-        logPath,
       };
-
-      if (!piMcp.openreaperConfigured && piMcp.exists) {
-        ctx.log(
-          "Pi mcp.json exists but no openreaper entry detected (read-only). Add openreaper manually.",
-        );
-      } else if (!piMcp.exists) {
-        ctx.log("~/.pi/agent/mcp.json not found; Studio did not create ~/.pi.");
-      } else {
-        ctx.log("Reusing existing Pi install and mcp.json (read-only check).");
-      }
-
-      const logFd = openSync(logPath, "a");
-      const piChild = spawn(piPlan.command, piPlan.args, {
-        detached: true,
-        stdio: ["ignore", logFd, logFd],
-        env: { ...env, OPENREAPER_STUDIO: "1" },
-      });
-      piChild.unref();
-      ctx.state.pi.pid = piChild.pid;
-      ctx.log(`Pi RPC background pid=${piChild.pid} log=${logPath}`);
+      ctx.piRpc = rpc;
+      ctx.log(`Private Pi RPC ready promptUrl=${rpc.promptUrl} hostPid=${rpc.hostPid}`);
     },
   },
   {
@@ -186,6 +205,8 @@ export const START_STEPS = [
         piMode,
         repoRoot: ctx.repoRoot,
         piPid: ctx.state.pi?.pid ?? null,
+        piRpcUrl: ctx.state.pi?.rpcPromptUrl ?? null,
+        piPrivateAgentDir: ctx.state.piPrivate?.agentDir ?? null,
       });
       await writeStudioState(studioStatePath(ctx.homeDir), ctx.state);
       ctx.log(

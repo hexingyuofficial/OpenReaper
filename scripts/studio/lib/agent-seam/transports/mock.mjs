@@ -9,25 +9,32 @@ function chipSummary(chips) {
 
 function piHint(studioState) {
   const mode = studioState?.pi?.mode;
+  const agentDir = studioState?.pi?.agentDir ?? studioState?.piPrivate?.agentDir;
   if (mode === "absent") {
-    return "Pi was not on PATH when Studio started.";
+    return "Private Pi was not available when Studio started (install/vendor Pi for packaging).";
   }
   if (mode === "skipped") {
-    return "Pi start was skipped (OPENREAPER_STUDIO_SKIP_PI=1).";
+    return "Private Pi start was skipped (OPENREAPER_STUDIO_SKIP_PI=1).";
+  }
+  if (mode === "started" && studioState?.pi?.rpcPromptUrl) {
+    return `Private Pi RPC was started but HTTP transport failed; agentDir=${agentDir ?? "?"}.`;
   }
   if (mode === "started") {
-    return "Pi RPC process is running; stdio/socket client not attached yet.";
+    return "Private Pi RPC host is running but no prompt URL is recorded in session state.";
   }
-  return "Pi RPC is not connected yet.";
+  return "Private Pi is not connected. Run Studio Start.";
 }
 
-function buildMockText(message, chips, studioState) {
+function buildMockText(message, chips, studioState, options = {}) {
+  const header = options.explicitFallback
+    ? "[OpenReaper Studio — mock fallback]"
+    : "[OpenReaper Studio mock]";
   return (
-    `[OpenReaper Studio mock]\n` +
+    `${header}\n` +
     `${piHint(studioState)}\n` +
     `Context: ${chipSummary(chips)}\n\n` +
     `You said:\n${message}\n\n` +
-    `(MCP tools still route through your configured Pi / MCP client.)`
+    `(Personal ~/.pi is never used by Studio.)`
   );
 }
 
@@ -35,16 +42,11 @@ function buildMockText(message, chips, studioState) {
  * Fallback transport when no live Pi RPC client is wired.
  * Extension point: replace by registering a `pi_stdio_rpc` transport later.
  */
-export function mockTransport({ message, chips }, studioState) {
+export function mockTransport({ message, chips }, studioState, options = {}) {
   const mode =
-    studioState?.pi?.mode === "started" && studioState?.pi?.pid
-      ? "mock_pi_running"
+    studioState?.pi?.mode === "started" && studioState?.pi?.rpcPromptUrl
+      ? "mock_pi_rpc_unreachable"
       : "mock";
-  let text = buildMockText(message, chips, studioState);
-  if (mode === "mock_pi_running") {
-    text +=
-      "\n\nSeam: implement `lib/agent-seam/transports/pi-stdio-rpc.mjs` " +
-      "or set OPENREAPER_STUDIO_PI_RPC_URL.";
-  }
+  const text = buildMockText(message, chips, studioState, options);
   return buildPromptResponse({ ok: true, mode, text });
 }

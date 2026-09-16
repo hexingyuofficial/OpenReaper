@@ -10,6 +10,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readPromptPayload } from "./lib/agent-seam/read-payload.mjs";
 import { sendStudioPrompt } from "./lib/agent-seam/send-prompt.mjs";
+import { readFaceConfig } from "./lib/face/runtime-config.mjs";
 import { studioStatePath } from "./lib/paths.mjs";
 import { readStudioState } from "./lib/state.mjs";
 
@@ -20,8 +21,19 @@ async function main() {
     process.exit(2);
   }
   const payload = await readPromptPayload(requestPath);
-  const state = await readStudioState(studioStatePath(os.homedir()));
-  const result = await sendStudioPrompt(payload, state);
+  const homeDir = os.homedir();
+  const state = await readStudioState(studioStatePath(homeDir));
+  const faceConfig = await readFaceConfig(homeDir);
+  const env = { ...process.env };
+  const rpcUrl =
+    env.OPENREAPER_STUDIO_PI_RPC_URL?.trim() ||
+    faceConfig?.piRpcUrl?.trim() ||
+    state?.pi?.rpcPromptUrl?.trim() ||
+    "";
+  if (rpcUrl) {
+    env.OPENREAPER_STUDIO_PI_RPC_URL = rpcUrl;
+  }
+  const result = await sendStudioPrompt(payload, state, env);
   const responsePath = requestPath.replace(/\.request\.json$/, ".response.json");
   const outPath =
     responsePath === requestPath ? `${requestPath}.response.json` : responsePath;
