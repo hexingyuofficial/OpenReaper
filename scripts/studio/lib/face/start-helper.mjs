@@ -21,10 +21,6 @@ export const START_HELPER_REQUIRED_MARKERS = Object.freeze([
   "startup-hook-poke=trusted_launcher",
   "startup-hook-poke=studio_face",
   "ensure_openreaper_startup_hook",
-  // Leftover opt-in unique-Cancel (OPENREAPER_STARTUP_DISMISS_PROJECT_SETTINGS=1).
-  // Not required for acceptance; user may close REAPER windows themselves.
-  "startup_maybe_dismiss_project_settings",
-  "startup-dialog-dismiss=project_settings_cancel",
 ]);
 
 export function startHelperMissingMarkers(sourceText) {

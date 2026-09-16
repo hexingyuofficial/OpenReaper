@@ -255,6 +255,7 @@ export const START_STEPS = [
   {
     id: "agent.pi_rpc",
     label: "Private Pi agent (steward RPC host + native extension)",
+    alwaysRun: true,
     async run(ctx) {
       const { piPlan, piMcp, piLayout, env, homeDir, repoRoot } = ctx;
       if (piPlan.mode === "absent") {
