@@ -23,12 +23,15 @@ import {
   studioStatePath,
 } from "../paths.mjs";
 import { readPiMcpConfig, resolveStudioPiForStart } from "../pi.mjs";
+import { installStudioPiExtension } from "../pi/extension.mjs";
+import { installStudioWorkspaceContract } from "../pi/studio-contract.mjs";
 import { emptyStudioState, writeStudioState } from "../state.mjs";
 import { fetchPiCommands } from "../agent-seam/fetch-pi-commands.mjs";
 import { probeOpenReaperEngine } from "../engine/bridge-liveness.mjs";
 import { coupledRollbackOnPiFailure } from "./coupled-rollback.mjs";
 import { launchPrivatePiRpcHost, probePiRpcHealth } from "./pi-rpc-lifecycle.mjs";
 import { runProcess, exitCodeFromChild } from "./process.mjs";
+import { readPidFile, reaperPidFilePath } from "./steward.mjs";
 
 /**
  * Start pipeline steps. Each step mutates `ctx.state` and may write Studio-owned files.
@@ -114,6 +117,30 @@ export const START_STEPS = [
       ctx.piMcp = await readPiMcpConfig(piLayout.mcpJsonPath);
       await mkdir(piLayout.agentDir, { recursive: true });
       await mkdir(piLayout.sessionsDir, { recursive: true });
+      await mkdir(piLayout.workspaceDir, { recursive: true });
+      ctx.workspaceContract = await installStudioWorkspaceContract({
+        workspaceDir: piLayout.workspaceDir,
+        repoRoot,
+      });
+      if (ctx.workspaceContract.installed && ctx.workspaceContract.copied.length) {
+        ctx.log(
+          `Installed Studio contract → ${piLayout.workspaceDir} (${ctx.workspaceContract.copied.join(", ")}).`,
+        );
+      }
+      ctx.piExtension = await installStudioPiExtension({
+        agentDir: piLayout.agentDir,
+        repoRoot,
+      });
+      if (ctx.piExtension.installed) {
+        ctx.log(
+          `Installed native Pi extension → ${ctx.piExtension.destDir} (not mcp.json).`,
+        );
+      } else {
+        ctx.log(
+          `Native Pi extension source missing (${ctx.piExtension.entry}); ` +
+            "Pi will start without --no-builtin-tools until the package is present.",
+        );
+      }
 
       const state = emptyStudioState();
       state.startedAt = new Date().toISOString();
@@ -185,6 +212,10 @@ export const START_STEPS = [
       });
       const exitCode = exitCodeFromChild(result.code, result.signal);
       ctx.state.openreaperStartExitCode = exitCode;
+      ctx.state.reaper = ctx.state.reaper ?? {};
+      const pidFile = reaperPidFilePath(ctx.installRoot);
+      ctx.state.reaper.pidFile = pidFile;
+      ctx.state.reaper.pid = await readPidFile(pidFile);
       if (exitCode === 0) {
         ctx.state.openreaperStartSoftContinued = false;
         ctx.state.engineDegraded = false;
@@ -223,7 +254,8 @@ export const START_STEPS = [
   },
   {
     id: "agent.pi_rpc",
-    label: "Private Pi agent (RPC host + pi --mode rpc)",
+    label: "Private Pi agent (steward RPC host + native extension)",
+    alwaysRun: true,
     async run(ctx) {
       const { piPlan, piMcp, piLayout, env, homeDir, repoRoot } = ctx;
       if (piPlan.mode === "absent") {
@@ -246,25 +278,43 @@ export const START_STEPS = [
       }
 
       ctx.log(
-        `Private Pi agentDir=${piLayout.agentDir} (isolated from personal Pi). ` +
-          `Auth will live at ${piLayout.authJsonPath} for in-app login.`,
+        `Private Pi agentDir=${piLayout.agentDir} cwd=${piLayout.workspaceDir} ` +
+          `(isolated from personal Pi). Auth will live at ${piLayout.authJsonPath} for in-app login.`,
       );
 
       if (!piMcp.exists) {
         ctx.log(
-          "Private mcp.json not found yet; Studio did not create one. Wire OpenReaper MCP in a future installer step.",
+          "mcp.json is not the Studio product path. OpenReaper tools load as a native Pi extension " +
+            "(--no-builtin-tools --extension). Start does not spawn MCP stdio.",
         );
-      } else if (!piMcp.openreaperConfigured) {
-        ctx.log("Private mcp.json exists but no openreaper server entry detected (read-only).");
+      } else if (piMcp.openreaperConfigured) {
+        ctx.log(
+          "Private mcp.json has a leftover OpenReaper server entry (legacy). " +
+            "Studio Start does not spawn MCP stdio; the native Pi extension is the product path.",
+        );
+      } else {
+        ctx.log(
+          "Private mcp.json exists but is unused by Studio Start (native Pi extension is the product path).",
+        );
       }
 
       const nodeCommand = resolveNodeCommand(env);
+      const hostEnv = {
+        ...(piPlan.processEnv ?? { ...env, OPENREAPER_STUDIO: "1" }),
+        OPENREAPER_STUDIO_PI_CWD: piPlan.cwd ?? piLayout.workspaceDir,
+      };
+      if (ctx.state.reaper?.pid) {
+        hostEnv.OPENREAPER_STUDIO_REAPER_PID = String(ctx.state.reaper.pid);
+      }
+      if (ctx.state.reaper?.pidFile) {
+        hostEnv.OPENREAPER_STUDIO_REAPER_PID_FILE = ctx.state.reaper.pidFile;
+      }
       let rpc;
       try {
         rpc = await launchPrivatePiRpcHost({
           nodeCommand,
           repoRoot,
-          env: piPlan.processEnv ?? { ...env, OPENREAPER_STUDIO: "1" },
+          env: hostEnv,
           homeDir,
           log: ctx.log,
         });
@@ -296,6 +346,9 @@ export const START_STEPS = [
         mcp: piMcp,
         privateRoot: piLayout.piRoot,
         agentDir: piLayout.agentDir,
+        cwd: piPlan.cwd ?? piLayout.workspaceDir,
+        extensionEntry: piPlan.extension?.entry ?? null,
+        noBuiltinTools: Boolean(piPlan.extension?.noBuiltinTools),
         hostPid: rpc.hostPid,
         pid: rpc.piPid,
         rpcPromptUrl: rpc.promptUrl,

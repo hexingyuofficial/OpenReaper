@@ -242,7 +242,7 @@ describe("face.prepare", () => {
       expect(synced).toContain("STARTUP_DIALOG_SOFT_BLOCKER_INSPECT_EVERY_TICKS");
       expect(synced).toContain("STARTUP_DIALOG_FIRST_TIMEOUT_SECONDS");
       expect(synced).toContain("startup_wait_poll_ticks");
-      expect(synced).toContain('OPENREAPER_START_HELPER_REV="studio-hook-publish-v7"');
+      expect(synced).toContain('OPENREAPER_START_HELPER_REV="studio-hook-publish-v8"');
       expect(synced).toContain("start-helper-rev=");
       expect(synced).toContain("STARTUP_HOOK_QUIET_TICKS");
       expect(synced).toContain("startup-hook-poke=trusted_launcher");
@@ -256,8 +256,11 @@ describe("face.prepare", () => {
       expect(synced).toContain("STARTUP_AX_SKIP_REMAINING_MS");
       expect(synced).toContain("budget_remaining_ms=");
       expect(synced).toContain("startup-ax=stopped_after_soft_blocker");
+      expect(synced).toContain("startup-dialog-project-settings-dismiss=user_mediated");
       expect(synced).not.toContain("startup-dialog-dismiss=project_settings_cancel");
+      expect(synced).not.toContain("OPENREAPER_STARTUP_DISMISS_PROJECT_SETTINGS");
       expect(synced).not.toContain("click theCancelButton");
+      expect(synced).not.toContain("startup_maybe_dismiss_project_settings");
       expect(synced).toContain("startup-reaper-preserve=soft_policy");
       expect(synced).not.toContain("next repeat");
       expect(synced).not.toContain("studioFaceSafeTitles");
@@ -281,7 +284,7 @@ describe("start helper sync + studio env", () => {
       });
     expect(result.synced).toBe(true);
     expect(result.dest).toBe(path.join(installRoot, "bin", "openreaper-start"));
-    expect(result.rev).toBe("studio-hook-publish-v7");
+    expect(result.rev).toBe("studio-hook-publish-v8");
     expect(result.sha256).toMatch(/^[a-f0-9]{64}$/);
       const copied = await readFile(result.dest, "utf8");
       expect(copied).toContain("inspection_unavailable");
@@ -290,7 +293,7 @@ describe("start helper sync + studio env", () => {
       expect(copied).toContain("held_for_successor_publish");
       expect(copied).toContain("successor_identity_pending");
       expect(copied).toContain("startup_wait_accept_published_stage");
-      expect(copied).toContain('OPENREAPER_START_HELPER_REV="studio-hook-publish-v7"');
+      expect(copied).toContain('OPENREAPER_START_HELPER_REV="studio-hook-publish-v8"');
       expect(copied).toContain("STARTUP_DIALOG_FIRST_TIMEOUT_SECONDS");
       expect(copied).toContain("STARTUP_HOOK_QUIET_TICKS");
       expect(copied).toContain("startup-hook-poke=trusted_launcher");
@@ -302,7 +305,10 @@ describe("start helper sync + studio env", () => {
       expect(copied).toContain('if windowTitle is "OpenReaper Studio" then');
       expect(copied).toContain("startup-ax=stopped_after_soft_blocker");
       expect(copied).not.toContain("startup-dialog-dismiss=project_settings_cancel");
+      expect(copied).toContain("startup-dialog-project-settings-dismiss=user_mediated");
+      expect(copied).not.toContain("OPENREAPER_STARTUP_DISMISS_PROJECT_SETTINGS");
       expect(copied).not.toContain("click theCancelButton");
+      expect(copied).not.toContain("startup_maybe_dismiss_project_settings");
       expect(copied).toContain("startup-last-chance=bridge_liveness");
       expect(copied).toContain("startup-reaper-preserve=soft_policy");
       expect(copied).not.toContain("next repeat");
@@ -333,8 +339,8 @@ describe("start helper sync + studio env", () => {
       expect(result.dest).toBe(path.join(bin, "openreaper-start"));
       const dest = await readFile(result.dest, "utf8");
       const sh = await readFile(path.join(bin, "openreaper-start.sh"), "utf8");
-      expect(dest).toContain('OPENREAPER_START_HELPER_REV="studio-hook-publish-v7"');
-      expect(sh).toContain('OPENREAPER_START_HELPER_REV="studio-hook-publish-v7"');
+      expect(dest).toContain('OPENREAPER_START_HELPER_REV="studio-hook-publish-v8"');
+      expect(sh).toContain('OPENREAPER_START_HELPER_REV="studio-hook-publish-v8"');
       expect(sh).not.toContain("old-sh");
     } finally {
       await rm(tmp, { recursive: true, force: true });
@@ -365,9 +371,9 @@ describe("start helper sync + studio env", () => {
       const facePrepare = START_STEPS.find((step) => step.id === "face.prepare");
       await expect(facePrepare.run(ctx)).resolves.toBeUndefined();
       expect(ctx.startCmd?.command).toBe(path.join(installRoot, "bin", "openreaper-start"));
-      expect(ctx.startHelperSync?.rev).toBe("studio-hook-publish-v7");
+      expect(ctx.startHelperSync?.rev).toBe("studio-hook-publish-v8");
       const synced = await readFile(ctx.startCmd.command, "utf8");
-      expect(synced).toContain('OPENREAPER_START_HELPER_REV="studio-hook-publish-v7"');
+      expect(synced).toContain('OPENREAPER_START_HELPER_REV="studio-hook-publish-v8"');
       expect(synced).not.toContain("old-only-sh");
     } finally {
       await rm(tmp, { recursive: true, force: true });
@@ -392,6 +398,8 @@ describe("start helper sync + studio env", () => {
     expect(source).toMatch(/is not the synced helper/);
     const engine = START_STEPS.find((step) => step.id === "engine.openreaper_start");
     expect(engine?.label).toMatch(/openreaper-start/);
+    const piRpc = START_STEPS.find((step) => step.id === "agent.pi_rpc");
+    expect(piRpc?.alwaysRun).toBe(true);
     const finalize = START_STEPS.find((step) => step.id === "face.finalize");
     expect(finalize?.alwaysRun).toBe(true);
   });
@@ -407,7 +415,7 @@ describe("start helper sync + studio env", () => {
         startHelperSync: {
           synced: true,
           dest,
-          rev: "studio-hook-publish-v7",
+          rev: "studio-hook-publish-v8",
         },
         options: {},
         env: { OPENREAPER_STUDIO: "1" },
@@ -618,6 +626,13 @@ describe("openreaper-start exit propagation", () => {
     expect(
       studioStartProcessExitCode({
         gateOk: true,
+        openreaperStartExitCode: 75,
+        engineDegraded: true,
+      }),
+    ).toBe(0);
+    expect(
+      studioStartProcessExitCode({
+        gateOk: true,
         openreaperStartExitCode: 1,
         engineDegraded: true,
       }),
@@ -711,6 +726,44 @@ describe("openreaper-start exit propagation", () => {
       await rm(tmp, { recursive: true, force: true });
     }
   });
+
+  it("engine helper 75 (modal / user action) still continues so Pi is not skipped", async () => {
+    const tmp = await mkdtemp(path.join(os.tmpdir(), "or-start-exit75-"));
+    const helper = path.join(tmp, "openreaper-start");
+    try {
+      await writeFile(helper, "#!/bin/sh\nexit 75\n", { encoding: "utf8", mode: 0o755 });
+      await chmod(helper, 0o755);
+      const engine = START_STEPS.find((step) => step.id === "engine.openreaper_start");
+      const logs = [];
+      const ctx = {
+        startCmd: { command: helper, args: [], cwd: tmp },
+        options: {},
+        env: { OPENREAPER_STUDIO: "1" },
+        faceInstall: {},
+        homeDir: tmp,
+        installRoot: tmp,
+        state: { ...studioState.emptyStudioState(), openreaperStartExitCode: null },
+        engineProbeGraceMs: 0,
+        log(message) {
+          logs.push(message);
+        },
+        probeOpenReaperEngine: async () => ({
+          usable: false,
+          stage: null,
+          heartbeatReady: false,
+          reason: "bridge_not_live",
+        }),
+      };
+      await expect(engine.run(ctx)).resolves.toBeUndefined();
+      expect(ctx.state.openreaperStartExitCode).toBe(75);
+      expect(ctx.state.openreaperStartSoftContinued).toBe(true);
+      expect(ctx.state.engineDegraded).toBe(true);
+      expect(logs.join("\n")).toMatch(/engineDegraded=true/);
+      expect(logs.join("\n")).toMatch(/continuing to private Pi RPC/);
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("face hook", () => {
@@ -769,15 +822,23 @@ describe("pi", () => {
 });
 
 describe("runPipeline alwaysRun", () => {
-  it("still runs face.finalize after an earlier step fails", async () => {
+  it("still runs agent.pi_rpc and face.finalize after engine.openreaper_start throws", async () => {
     const ran = [];
     const steps = [
       {
+        id: "engine.openreaper_start",
+        label: "engine",
+        async run() {
+          ran.push("engine");
+          throw new Error("helper 75");
+        },
+      },
+      {
         id: "agent.pi_rpc",
-        label: "fail",
+        label: "pi",
+        alwaysRun: true,
         async run() {
           ran.push("pi");
-          throw new Error("pi down");
         },
       },
       {
@@ -789,8 +850,8 @@ describe("runPipeline alwaysRun", () => {
         },
       },
     ];
-    await expect(runPipeline({ steps, ctx: { log() {} } })).rejects.toThrow(/pi down/);
-    expect(ran).toEqual(["pi", "finalize"]);
+    await expect(runPipeline({ steps, ctx: { log() {} } })).rejects.toThrow(/helper 75/);
+    expect(ran).toEqual(["engine", "pi", "finalize"]);
   });
 });
 

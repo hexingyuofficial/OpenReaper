@@ -1,15 +1,17 @@
 #!/usr/bin/env node
 /**
- * Long-lived host: spawns private `pi --mode rpc` and exposes loopback HTTP for the agent seam.
- * Started detached by Studio Start; stopped by Studio Stop (SIGTERM this process).
+ * Studio steward: spawns private `pi --mode rpc` (native extension tools) and
+ * exposes loopback HTTP for the dialog seam. Started detached by Studio Start.
+ * Stops on Studio Stop (SIGTERM) or when the watched REAPER pid exits.
  */
 
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { mkdir } from "node:fs/promises";
 import { startPiRpcHost } from "./lib/agent-seam/pi-rpc-host.mjs";
 import { buildPiProcessEnv, buildPiStartPlan, resolvePiExecutable } from "./lib/pi.mjs";
-import { resolveInstallRoot } from "./lib/paths.mjs";
+import { repoRootFromStudio, resolveInstallRoot } from "./lib/paths.mjs";
 import { resolveStudioPiLayout } from "./lib/pi/private-layout.mjs";
 
 function parseArgs(argv) {
@@ -29,6 +31,11 @@ function parseArgs(argv) {
   return options;
 }
 
+function parseOptionalPid(value) {
+  const pid = Number(value);
+  return Number.isInteger(pid) && pid > 0 ? pid : null;
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   const env = process.env;
@@ -39,7 +46,12 @@ async function main() {
     env.OPENREAPER_STUDIO_PI_BIN?.trim() ||
     layout.bundledPiExecutable ||
     resolvePiExecutable(env);
-  const plan = buildPiStartPlan({ piExecutable, env, layout });
+  const plan = buildPiStartPlan({
+    piExecutable,
+    env,
+    layout,
+    repoRoot: repoRootFromStudio(),
+  });
   if (plan.mode !== "start") {
     process.stderr.write(`${plan.message ?? "Pi start plan is not runnable."}\n`);
     process.exit(1);
@@ -47,18 +59,23 @@ async function main() {
 
   const piEnv = buildPiProcessEnv({ env, layout });
   const log = (message) => process.stderr.write(`${message}\n`);
+  const piCwd = env.OPENREAPER_STUDIO_PI_CWD?.trim() || plan.cwd;
+  if (piCwd) {
+    await mkdir(piCwd, { recursive: true });
+  }
 
   if (options.endpointFile) {
-    await import("node:fs/promises").then(({ mkdir }) =>
-      mkdir(path.dirname(options.endpointFile), { recursive: true }),
-    );
+    await mkdir(path.dirname(options.endpointFile), { recursive: true });
   }
 
   await startPiRpcHost({
     piExecutable: plan.piExecutable,
     piArgs: plan.args,
     piEnv,
+    piCwd,
     endpointFile: options.endpointFile,
+    reaperPid: parseOptionalPid(env.OPENREAPER_STUDIO_REAPER_PID),
+    reaperPidFile: env.OPENREAPER_STUDIO_REAPER_PID_FILE?.trim() || null,
     log,
   });
 }

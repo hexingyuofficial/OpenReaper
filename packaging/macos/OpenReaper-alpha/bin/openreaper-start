@@ -137,7 +137,7 @@ STARTUP_DOCTOR_OVERHEAD_MS=1000
 STARTUP_DIALOG_TIMEOUT_SECONDS="${OPENREAPER_STARTUP_DIALOG_TIMEOUT_SECONDS:-15}"
 # Identity of this wait-loop contract. Studio Start refuses a synced helper
 # that does not contain this exact rev (older ~/.openreaper/current copies).
-OPENREAPER_START_HELPER_REV="studio-hook-publish-v7"
+OPENREAPER_START_HELPER_REV="studio-hook-publish-v8"
 # Repeat AX passes after a stable safe classification (empty, Studio face).
 # Hammering System Events every 0.25s with a 15s osascript budget can stall
 # REAPER's main thread so __startup.lua never publishes a stage.
@@ -393,19 +393,22 @@ combined with a new project path or arbitrary REAPER arguments. If the running
 instance has no OpenReaper Bridge, the helper reports a recovery instruction
 for that same instance instead of changing user configuration.
 
-OpenReaper never clicks or closes REAPER windows. It observes startup windows
-read-only. When a visible window blocks startup, the helper reports
-STARTUP_USER_ACTION_REQUIRED and preserves the exact REAPER PID and generation
-so the user can resolve it and the agent can reconnect without starting a
-duplicate instance.
+OpenReaper does not click REAPER dialogs (OK/Apply/Cancel/license/missing
+media). Blocking windows are OK: the user closes them; Studio continues
+(face/Pi/steward) and should work after the modal is gone. Soft/Studio
+soft-ignores a lone Project Settings window (not exit 75). Other visible
+blockers report STARTUP_USER_ACTION_REQUIRED and preserve the exact REAPER
+PID and generation so the user can resolve it and the agent can reconnect
+without starting a duplicate instance.
 
 OPENREAPER_STARTUP_DIALOG_POLICY=soft|strict controls inspection failures.
 Default is soft when OPENREAPER_STUDIO=1, otherwise strict. Soft treats
 Accessibility/osascript failures as inspection_unavailable (not exit 75).
 A lone Project Settings window is a recoverable soft blocker (not exit 75);
-Start still does not click Cancel. The OpenReaper Studio face title stays
-allowlisted. Real blocked_* decision windows (missing media, license, etc.)
-still fail closed. Studio attaches to an existing REAPER when possible. It
+the user dismisses it. There is no unique-Cancel / AX dismiss path. The
+OpenReaper Studio face title stays allowlisted. Real blocked_* decision windows (missing
+media, license, etc.) still fail closed. Studio attaches to an existing
+REAPER when possible. It
 may relaunch once when Studio just installed the __startup.lua face hook
 (OPENREAPER_STUDIO_FACE_HOOK_INSTALLED=1) or when OPENREAPER_STUDIO_RELAUNCH_STALE=1.
 Orphan LaunchServices env locks from a dead openreaper-start owner are
@@ -417,13 +420,14 @@ the successor publishes — including before the first AX pass under soft policy
 Adopt a unique live successor even while the handoff PID is still alive.
 Soft/Studio keeps a quiet window (no AX) so __startup.lua can publish, then
 caps the first inspect at 4s. After a lone Project Settings window, AX stops
-and the helper pokes the trusted Bridge launcher into the live instance
-without clicking. The kernel startup hook is installed on the cold path with
-this run's status-file path so Lua does not depend on getenv. Wait loops poll
-until the cleanup reserve. A published stage is accepted under soft even
-before AX returns, without requiring cleanup_reserve+250ms leftover. Still
-never clicks or closes REAPER windows. License / missing-media still fail
-closed.
+(user may close that title). Then the helper pokes the trusted Bridge
+launcher into the live instance. The kernel startup
+hook is installed on the cold path with this run's status-file path so Lua
+does not depend on getenv. Wait loops poll until the cleanup reserve. A
+published stage is accepted under soft even before AX returns, without
+requiring cleanup_reserve+250ms leftover. License / missing-media still fail
+closed. Generic dialog click automation is not used. Do not expand AX click
+paths.
 HELP
       exit 0
       ;;
@@ -984,6 +988,7 @@ fi
 echo "[OpenReaper] bridge-action-fallback=OpenReaper: Start MCP bridge"
 echo "[OpenReaper] bridge-status=starting_automatically"
 echo "[OpenReaper] startup-dialog-policy=user_mediated_read_only"
+echo "[OpenReaper] startup-dialog-project-settings-dismiss=user_mediated"
 echo "[OpenReaper] startup-dialog-inspection-policy=${STARTUP_DIALOG_POLICY}"
 echo "[OpenReaper] startup-dialog-timeout-seconds=${STARTUP_DIALOG_TIMEOUT_SECONDS}"
 echo "[OpenReaper] startup-budget-ms=${STARTUP_BUDGET_MS}"
@@ -2661,6 +2666,8 @@ wait_for_startup_hook() {
           return 75
         fi
         pending_dialog_blocker=""
+        # User-mediated: do not auto-dismiss. Soft-ignore and keep waiting for
+        # hook/Bridge; Studio Start still continues face/Pi/steward if we 124.
       elif (( logged_inspect_skip == 0 )); then
         echo "[OpenReaper] startup-hook-poll=skip_dialog_inspect;reason=budget_reserve remaining_ms=${remaining_ms}" >&2
         logged_inspect_skip=1
@@ -3195,8 +3202,9 @@ startup_dialog_result_is_safe() {
       return 1
       ;;
     blocked_manual_dialog)
-      # Soft/Studio: a lone Project Settings window is recoverable. Never click
-      # Cancel here; strict policy still reports STARTUP_USER_ACTION_REQUIRED.
+      # Soft/Studio: a lone Project Settings window is recoverable. The user
+      # closes it. There is no unique-Cancel / AX dismiss. Strict
+      # policy still reports STARTUP_USER_ACTION_REQUIRED.
       if [[ "${STARTUP_DIALOG_POLICY}" == "soft" && "${1}" == *:title=* ]]; then
         dialog_title="${1#*:title=}"
         case "${dialog_title}" in
@@ -3458,6 +3466,8 @@ wait_for_startup_readiness() {
           return 75
         fi
         pending_dialog_blocker=""
+        # User-mediated: do not auto-dismiss. Soft-ignore and keep waiting for
+        # hook/Bridge; Studio Start still continues face/Pi/steward if we 124.
       elif (( logged_inspect_skip == 0 )); then
         echo "[OpenReaper] bridge-readiness-poll=skip_dialog_inspect;reason=budget_reserve remaining_ms=${remaining_ms}" >&2
         logged_inspect_skip=1

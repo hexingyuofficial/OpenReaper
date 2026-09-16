@@ -28,9 +28,10 @@ export const STUDIO_FACE_SAFE_WINDOW_TITLES = Object.freeze(["OpenReaper Studio"
 
 /**
  * A lone Project Settings window on cold Studio start. Soft policy treats it
- * as recoverable. The helper may click unique Cancel on that exact title so
- * __startup.lua can run; it never clicks OK/Apply or unknown/license/missing-media
- * windows. Strict policy still reports user action required.
+ * as recoverable. The user closes it. There is no unique-Cancel / AX
+ * dismiss path. The helper never clicks OK/Apply/Cancel or
+ * unknown/license/missing-media windows. Strict policy still reports user
+ * action required.
  */
 export const STUDIO_SOFT_BLOCKER_WINDOW_TITLES = Object.freeze([
   "Project Settings",
@@ -79,7 +80,7 @@ export function isStudioSoftBlockerWindowTitle(title) {
  * the observer still emits blocked_unknown_dialog:title=….
  * Soft/Studio policy: a lone Project Settings window is a recoverable soft
  * blocker (blocked_manual_dialog / project_settings_seen_but_not_notes).
- * Start still never clicks or closes REAPER windows.
+ * The user closes it. There is no unique-Cancel / AX dismiss path.
  * License, missing-media, and unknown windows stay fail-closed.
  */
 export function startupDialogResultIsSafe(result, policy = "strict") {

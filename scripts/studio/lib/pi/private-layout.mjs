@@ -9,6 +9,18 @@ export function defaultStudioPiHomeRoot(homeDir = os.homedir()) {
   return path.join(homeDir, ".openreaper", "studio", STUDIO_PI_DIRNAME);
 }
 
+/** Fixed Studio workspace — Pi cwd. Not the user's random project folder. */
+export function defaultStudioWorkspaceDir(homeDir = os.homedir()) {
+  return path.join(homeDir, ".openreaper", "studio", "workspace");
+}
+
+export function resolveStudioWorkspaceDir({ homeDir, env = process.env }) {
+  if (env.OPENREAPER_STUDIO_WORKSPACE?.trim()) {
+    return path.resolve(env.OPENREAPER_STUDIO_WORKSPACE.trim());
+  }
+  return defaultStudioWorkspaceDir(homeDir);
+}
+
 /** Future one-click installer layout: INSTALL_ROOT/vendor/pi */
 export function bundledPiRoot(installRoot) {
   return path.join(installRoot, "vendor", STUDIO_PI_DIRNAME);
@@ -83,10 +95,12 @@ export function resolveStudioPiLayout({ homeDir, installRoot, env = process.env 
   const piRoot = resolveStudioPiRoot({ homeDir, installRoot, env });
   const agentDir = studioPiAgentDir(piRoot);
   const sessionsDir = studioPiSessionsDir(piRoot);
+  const workspaceDir = resolveStudioWorkspaceDir({ homeDir, env });
   return {
     piRoot,
     agentDir,
     sessionsDir,
+    workspaceDir,
     mcpJsonPath: studioPiMcpJsonPath(agentDir),
     authJsonPath: studioPiAuthJsonPath(agentDir),
     bundledPiExecutable: resolveBundledPiExecutable(piRoot),
