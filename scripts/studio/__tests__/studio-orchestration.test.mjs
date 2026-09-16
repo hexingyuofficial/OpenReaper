@@ -8,10 +8,13 @@ import {
   buildFaceStartupHookBlock,
   startupLuaHasFaceHook,
 } from "../lib/face.mjs";
+import { existsSync } from "node:fs";
 import {
   defaultInstallRoot,
   resolveInstallRoot,
   resolveOpenReaperStartCommand,
+  resolveStudioDialogSources,
+  studioPackageRoot,
   studioStatePath,
 } from "../lib/paths.mjs";
 import {
@@ -71,6 +74,18 @@ describe("paths", () => {
 
   it("default install root matches alpha layout", () => {
     expect(defaultInstallRoot("/Users/test")).toBe("/Users/test/.openreaper/current");
+  });
+
+  it("resolves dialog install sources under scripts/studio/reaper", () => {
+    const pkg = studioPackageRoot();
+    expect(pkg.endsWith(path.join("scripts", "studio"))).toBe(true);
+    const sources = resolveStudioDialogSources();
+    expect(sources.entrySource).toBe(
+      path.join(pkg, "reaper", "openreaper_studio_dialog.lua"),
+    );
+    expect(sources.moduleSource).toBe(path.join(pkg, "reaper", "dialog"));
+    expect(existsSync(sources.entrySource)).toBe(true);
+    expect(existsSync(sources.moduleSource)).toBe(true);
   });
 });
 

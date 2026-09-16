@@ -97,12 +97,21 @@ export function studioDialogEntryFileName() {
   return "openreaper_studio_dialog.lua";
 }
 
-export function studioDialogEntrySourcePath(repoRoot = STUDIO_DIR) {
-  return path.join(repoRoot, "reaper", studioDialogEntryFileName());
+/** REAPER dialog sources always live under the Studio package (`scripts/studio/reaper/`). */
+export function studioDialogEntrySourcePath(studioRoot = studioPackageRoot()) {
+  return path.join(studioRoot, "reaper", studioDialogEntryFileName());
 }
 
-export function studioDialogModuleSourceDir(repoRoot = STUDIO_DIR) {
-  return path.join(repoRoot, "reaper", "dialog");
+export function studioDialogModuleSourceDir(studioRoot = studioPackageRoot()) {
+  return path.join(studioRoot, "reaper", "dialog");
+}
+
+export function resolveStudioDialogSources(studioRoot = studioPackageRoot()) {
+  return {
+    studioRoot,
+    entrySource: studioDialogEntrySourcePath(studioRoot),
+    moduleSource: studioDialogModuleSourceDir(studioRoot),
+  };
 }
 
 /** @deprecated use studioDialogEntrySourcePath */

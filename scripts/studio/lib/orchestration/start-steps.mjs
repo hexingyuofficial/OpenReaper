@@ -56,7 +56,7 @@ export const START_STEPS = [
       ctx.piBridgeScript = piBridgeScript;
       ctx.reaperResourceRoot = reaperResourceRoot;
 
-      const faceInstall = await installFaceBundle({ reaperResourceRoot, repoRoot });
+      const faceInstall = await installFaceBundle({ reaperResourceRoot });
       ctx.faceInstall = faceInstall;
 
       const piPlan = buildPiStartPlan({
