@@ -5,7 +5,7 @@ import path from "node:path";
 import { resolvePackagedStartHelper } from "../paths.mjs";
 
 /** Bumped when the wait-loop / AX-throttle / startup-hook publish contract changes. Synced dest must match. */
-export const START_HELPER_REV = "studio-hook-publish-v7";
+export const START_HELPER_REV = "studio-hook-publish-v8";
 
 export const START_HELPER_REQUIRED_MARKERS = Object.freeze([
   `OPENREAPER_START_HELPER_REV="${START_HELPER_REV}"`,
@@ -21,6 +21,8 @@ export const START_HELPER_REQUIRED_MARKERS = Object.freeze([
   "startup-hook-poke=trusted_launcher",
   "startup-hook-poke=studio_face",
   "ensure_openreaper_startup_hook",
+  "startup_maybe_dismiss_project_settings",
+  "startup-dialog-dismiss=project_settings_cancel",
 ]);
 
 export function startHelperMissingMarkers(sourceText) {

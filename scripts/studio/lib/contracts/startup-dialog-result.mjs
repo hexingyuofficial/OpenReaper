@@ -79,7 +79,7 @@ export function isStudioSoftBlockerWindowTitle(title) {
  * the observer still emits blocked_unknown_dialog:title=….
  * Soft/Studio policy: a lone Project Settings window is a recoverable soft
  * blocker (blocked_manual_dialog / project_settings_seen_but_not_notes).
- * Start still never clicks or closes REAPER windows.
+ * Soft Start may unique-Cancel a lone Project Settings window; other dialogs stay unclicked.
  * License, missing-media, and unknown windows stay fail-closed.
  */
 export function startupDialogResultIsSafe(result, policy = "strict") {

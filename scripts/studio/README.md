@@ -11,9 +11,9 @@ rewiring Start/Stop.
 
 | Capability | What you get |
 |------------|----------------|
-| **Private Pi** | Stock `pi --mode rpc` on `~/.openreaper/studio/pi/*` (or `vendor/pi` when bundled). Personal `~/.pi` is unused. Spawned with cwd=`~/.openreaper/studio/workspace`, `--no-builtin-tools`, and `--extension` pointing at `packages/pi-extension-openreaper` (`openreaper_ping` stub). |
+| **Private Pi** | Stock `pi --mode rpc` on `~/.openreaper/studio/pi/*` (or `vendor/pi` when bundled). Personal `~/.pi` is unused. Spawned with cwd=`~/.openreaper/studio/workspace`, `--no-builtin-tools` (never `--no-tools`), and `--extension` pointing at `packages/pi-extension-openreaper` (`openreaper_ping`, `openreaper_get_state`, `openreaper_list_*`, `openreaper_call_template`). |
 | **Coupled lifecycle** | Start: face → bundled `openreaper-start` (REAPER + bridge) → steward (`studio-pi-rpc-host`) → session. Stop: SIGTERM steward + wait + drop endpoint file. The steward watches `session/reaper.pid` and stops Pi when REAPER exits (LaunchServices successor grace). If Pi fails after REAPER is up, Start fails with logs; REAPER stays running unless `OPENREAPER_STUDIO_STRICT_COUPLING=1`. |
-| **Native tools (not MCP)** | OpenReaper capabilities are Pi `registerTool`s. Start does **not** write `mcp.json` and does **not** spawn `streetlight-mcp` stdio. The file-queue Bridge inside REAPER stays; P2 will call it from the extension. |
+| **Native tools (not MCP)** | OpenReaper capabilities are Pi `registerTool`s that reuse the kernel file-queue client. Start does **not** write `mcp.json` and does **not** spawn `streetlight-mcp` stdio. If Bridge is down, tools return `BRIDGE_NOT_RUNNING`. |
 | **Bundled OpenReaper** | Start always uses `INSTALL_ROOT/bin/openreaper-start` (`~/.openreaper/current` by default). `engine-bundle-v1.json` records the packaged engine slot. |
 | **Terminal-like dialog** | Send routes prompts/`/commands` through private Pi RPC (not a gutted mock). Typing `/` shows a slash palette with Pi `get_commands` names + descriptions. Empty or failed `get_commands` falls back to Studio builtin slash hints. |
 | **Rough skin** | Floating ReaImGui bar (`studio_skin.lua`): neutral dark minimal AI-DAW look. Theme embed is a follow-up. |
@@ -35,8 +35,8 @@ Project Settings soft-ignore, AX inspection **stops**. Soft/Studio also keeps a
 **quiet window** (`STARTUP_HOOK_QUIET_TICKS`) before the first inspect so
 `__startup.lua` can publish before System Events touches the PID. The helper
 installs a kernel startup hook on the cold path with this run's absolute
-status-file path, then **pokes** the trusted Bridge launcher into the live
-instance after a lone Project Settings window (never clicks it). A published
+status-file path, then unique-Cancels a lone Project Settings window (once)
+and **pokes** the trusted Bridge launcher into the live instance. A published
 stage is accepted even when leftover time is below `cleanup_reserve+250ms`.
 After a soft-safe classification, a LaunchServices PID gap is an **adopt-window**
 (`adopt_window_after_soft_safe`) until the successor publishes — including
@@ -48,14 +48,15 @@ Bridge heartbeat or `bridge_dofile_succeeded` is already live, the helper
 last-chance accepts that instead of failing `STARTUP_BUDGET_EXHAUSTED`. Soft
 policy **does not kill REAPER** on helper failure
 (`startup-reaper-preserve=soft_policy`). A lone **Project Settings** window is
-a recoverable soft blocker (not exit 75); Start still does not click or close
-it. The **OpenReaper Studio** face title is allowlisted. Real decision windows
+a recoverable soft blocker (not exit 75); soft Start unique-Cancels that
+exact title once (never OK/Apply/license/missing-media). The **OpenReaper Studio**
+face title is allowlisted. Real decision windows
 (missing media, license, etc.) still fail closed. After LaunchServices launch, session env stays set until
 helper exit so a restored/replaced REAPER PID can still publish the startup hook.
 `face.prepare` copies the tracked packaging helper into
 `INSTALL_ROOT/bin/openreaper-start`, overwrites a stale companion
 `openreaper-start.sh`, and pins Start to that dest. The helper logs
-`start-helper-rev=studio-hook-publish-v7`; Start refuses to spawn a dest
+`start-helper-rev=studio-hook-publish-v8`; Start refuses to spawn a dest
 missing that rev. If `openreaper-start` exits **124** /
 `STARTUP_BUDGET_EXHAUSTED`, Studio still finishes the Pi RPC + face-config
 gate (`engineDegraded=true`). Helper **124** is persisted in session state +
@@ -91,21 +92,22 @@ logs say the lock was retained.
 ### How to re-trial (macOS cold Start)
 
 After `face.prepare` syncs the helper, grep `INSTALL_ROOT/bin/openreaper-start` for
-`OPENREAPER_START_HELPER_REV="studio-hook-publish-v7"`, `adopt_window_after_soft_safe`,
+`OPENREAPER_START_HELPER_REV="studio-hook-publish-v8"`, `adopt_window_after_soft_safe`,
 `held_for_successor_publish`, `successor_identity_pending`, `held_until_helper_exit`,
 `startup-dialog-soft-ignore=`, `STARTUP_HOOK_QUIET_TICKS`,
 `startup-hook-poke=trusted_launcher`, `startup-hook-poke=studio_face`,
-`ensure_openreaper_startup_hook`,
+`ensure_openreaper_startup_hook`, `startup_maybe_dismiss_project_settings`,
 `STARTUP_DIALOG_FIRST_TIMEOUT_SECONDS`, and
 `startup_wait_poll_ticks`. Cold Start with a lone Project Settings window
-must soft-ignore (no exit 75), give `__startup.lua` a quiet window, poke the
+must soft-ignore (no exit 75), unique-Cancel the Project Settings title once,
+give `__startup.lua` a quiet window, poke the
 trusted launcher if the status file is still missing, poke the Studio face
 script when `OPENREAPER_STUDIO_FACE_SCRIPT` is set, publish a
 startup stage, and leave `openreaper-start` at **exit 0** with Bridge usable
 when the hook publishes in time. If the helper still exits **124**, Start
 records it in state/`engineDegraded` and **exits 0** after the Pi gate
-succeeds (READY). A failed Pi gate is still non-zero. Never click/close
-REAPER windows.
+succeeds (READY). A failed Pi gate is still non-zero. Unique-Cancel is only
+for a lone Project Settings title (never OK/Apply/license/missing-media).
 
 ## Private Pi (isolated from ~/.pi)
 
@@ -113,7 +115,7 @@ REAPER windows.
 |------|---------|
 | `~/.openreaper/studio/pi/agent/` | Private `PI_CODING_AGENT_DIR` (settings, extensions). `mcp.json` is **not** the product path. |
 | `~/.openreaper/studio/pi/agent/extensions/` | Copy of `packages/pi-extension-openreaper` for inspection `/reload`. Runtime load is `--extension`. |
-| `~/.openreaper/studio/workspace/` | Fixed Studio workspace — Pi **cwd**. Override with `OPENREAPER_STUDIO_WORKSPACE`. |
+| `~/.openreaper/studio/workspace/` | Fixed Studio workspace — Pi **cwd**. Start copies `AGENTS.md` + `.pi/SYSTEM.md` here if missing. |
 | `~/.openreaper/studio/pi/agent/auth.json` | Provider auth for **in-app login** (next slice; not Terminal `/login`) |
 | `~/.openreaper/studio/pi/sessions/` | Private `PI_CODING_AGENT_SESSION_DIR` |
 | `INSTALL_ROOT/vendor/pi/` | Future one-click bundle (binary + layout); preferred when present |
@@ -179,7 +181,7 @@ reaper.ExecProcess → studio-pi-send.mjs → agent-seam/send-prompt.mjs
 | Step id | What it does |
 |---------|----------------|
 | `face.prepare` | Copy dialog entry + `studio/dialog/` modules; sync tracked `openreaper-start` into `INSTALL_ROOT/bin` (fingerprint + dest pin; overwrite stale `.sh`); write `face-config-v1.json`; set `open-face-on-load` |
-| `engine.openreaper_start` | Run the synced `INSTALL_ROOT/bin/openreaper-start` with `OPENREAPER_STUDIO=1` (refuses a dest missing `studio-hook-publish-v7`). Non-zero exit probes Bridge; live heartbeat is ok-ish, otherwise `engineDegraded` WARN. **Never aborts the Pi/face wire.** After the Pi gate succeeds, Start **exits 0**; helper 124 stays in state + face-config. |
+| `engine.openreaper_start` | Run the synced `INSTALL_ROOT/bin/openreaper-start` with `OPENREAPER_STUDIO=1` (refuses a dest missing `studio-hook-publish-v8`). Non-zero exit probes Bridge; live heartbeat is ok-ish, otherwise `engineDegraded` WARN. **Never aborts the Pi/face wire.** After the Pi gate succeeds, Start **exits 0**; helper 124 stays in state + face-config. |
 | `agent.pi_rpc` | Detached steward `studio-pi-rpc-host.mjs` → `pi --mode rpc --no-builtin-tools --extension …` on private dirs + workspace cwd; reuses a healthy host; warms `/commands`. Watches REAPER pid. |
 | `face.finalize` | Always runs. Publishes `face-config-v1.json` (`rpc_background` + URLs when Pi started). |
 
@@ -257,10 +259,10 @@ A future one-click Studio installer should ship:
    `packages/pi-extension-openreaper` (native tools). **Do not** ship a default
    `mcp.json` that launches `streetlight-mcp` stdio — that is not the Studio path.
 
-## Remaining work (P1 / P2)
+## Remaining work
 
-- **P1:** Bundle a specialized Pi (not `~/.pi`); copy AGENTS.md / SYSTEM.md into the private agent dir; in-app login.
-- **P2:** `openreaper_ping` / `get_state` / `call_template` inside the Pi extension calling the existing file-queue Bridge; refuse rename/move of original audio assets. Drop leftover `mcp.json` if any trial machine still has one.
+- **P1 leftover:** Bundle a specialized Pi binary (not `~/.pi`); in-app login.
+- **P2 leftover:** More audio-specific tools; sweep leftover `mcp.json` on trial machines if present.
 
 Dev machines can use global `pi` on PATH; `PI_CODING_AGENT_DIR` still isolates config from `~/.pi`.
 
@@ -293,7 +295,7 @@ add the kind to `CONTEXT_CHIP_KINDS` in Node contracts.
 | Variable | Purpose |
 |----------|---------|
 | `OPENREAPER_INSTALL_ROOT` | Packaged install root (`~/.openreaper/current`; session/vendor stay there) |
-| `OPENREAPER_STARTUP_DIALOG_POLICY` | `soft` or `strict` dialog inspection; default `soft` when `OPENREAPER_STUDIO=1`. Soft ignores AX failures and a lone Project Settings window. License/missing-media/unknown stay fail-closed. Start never clicks REAPER dialogs. |
+| `OPENREAPER_STARTUP_DIALOG_POLICY` | `soft` or `strict` dialog inspection; default `soft` when `OPENREAPER_STUDIO=1`. Soft ignores AX failures and unique-Cancels a lone Project Settings window. License/missing-media/unknown stay fail-closed. |
 | `OPENREAPER_STUDIO_SKIP_PI` | Skip private Pi RPC step |
 | `OPENREAPER_STUDIO_STOP_REAPER` | Request REAPER quit on Stop |
 | `OPENREAPER_STUDIO_PI_ROOT` | Override private Pi tree root |

@@ -24,6 +24,7 @@ import {
 } from "../paths.mjs";
 import { readPiMcpConfig, resolveStudioPiForStart } from "../pi.mjs";
 import { installStudioPiExtension } from "../pi/extension.mjs";
+import { installStudioWorkspaceContract } from "../pi/studio-contract.mjs";
 import { emptyStudioState, writeStudioState } from "../state.mjs";
 import { fetchPiCommands } from "../agent-seam/fetch-pi-commands.mjs";
 import { probeOpenReaperEngine } from "../engine/bridge-liveness.mjs";
@@ -117,6 +118,15 @@ export const START_STEPS = [
       await mkdir(piLayout.agentDir, { recursive: true });
       await mkdir(piLayout.sessionsDir, { recursive: true });
       await mkdir(piLayout.workspaceDir, { recursive: true });
+      ctx.workspaceContract = await installStudioWorkspaceContract({
+        workspaceDir: piLayout.workspaceDir,
+        repoRoot,
+      });
+      if (ctx.workspaceContract.installed && ctx.workspaceContract.copied.length) {
+        ctx.log(
+          `Installed Studio contract → ${piLayout.workspaceDir} (${ctx.workspaceContract.copied.join(", ")}).`,
+        );
+      }
       ctx.piExtension = await installStudioPiExtension({
         agentDir: piLayout.agentDir,
         repoRoot,

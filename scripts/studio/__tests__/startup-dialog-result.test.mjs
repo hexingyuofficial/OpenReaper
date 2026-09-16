@@ -294,14 +294,15 @@ describe("packaged openreaper-start dialog observer", () => {
   const classifier = extractShellFunction(source, "startup_dialog_result_is_safe");
   const axFailure = extractShellFunction(source, "startup_dialog_observer_output_is_ax_failure");
 
-  it("does not re-add generic dialog click automation", () => {
+  it("unique-Cancels lone Project Settings without generic dialog clicks", () => {
     expect(source).not.toMatch(/clickUniqueExactButton|click matchingElement|perform action "click"/);
     expect(source).not.toMatch(/whose name is "OK"/);
     expect(source).not.toMatch(/whose name is "Apply"/);
     expect(source).not.toMatch(/Ignore all missing files" then click/);
-    expect(source).not.toMatch(/click theCancelButton/);
-    expect(source).toMatch(/never clicks or closes REAPER windows/);
-    expect(source).toMatch(/Start still does not click Cancel/);
+    expect(source).toMatch(/click theCancelButton/);
+    expect(source).toMatch(/startup_maybe_dismiss_project_settings/);
+    expect(source).toMatch(/title_only_unique_cancel_soft/);
+    expect(source).toMatch(/unique-Cancel/);
   });
 
   it("allowlists the OpenReaper Studio ReaImGui face before unknown-dialog classification", () => {
@@ -490,7 +491,7 @@ describe("packaged openreaper-start dialog observer", () => {
     expect(source).toMatch(/STARTUP_DIALOG_INSPECT_EVERY_TICKS=8/);
     expect(source).toMatch(/STARTUP_DIALOG_SOFT_BLOCKER_INSPECT_EVERY_TICKS=0/);
     expect(source).toMatch(/STARTUP_DIALOG_FIRST_TIMEOUT_SECONDS=4/);
-    expect(source).toMatch(/OPENREAPER_START_HELPER_REV="studio-hook-publish-v7"/);
+    expect(source).toMatch(/OPENREAPER_START_HELPER_REV="studio-hook-publish-v8"/);
     expect(source).toMatch(/start-helper-rev=/);
     expect(source).toMatch(/STARTUP_AX_SKIP_REMAINING_MS=10000/);
     expect(source).toMatch(/STARTUP_HOOK_FAIL_REMAINING_MS=7500/);
@@ -513,8 +514,7 @@ describe("packaged openreaper-start dialog observer", () => {
     const readiness = extractShellFunction(source, "wait_for_startup_readiness");
     expect(readiness).toMatch(/startup_dialog_inspect_due/);
     expect(readiness).toMatch(/startup_wait_accept_ready_bridge/);
-    expect(readiness).not.toMatch(/startup_maybe_dismiss_project_settings/);
-    expect(readiness).not.toMatch(/click theCancelButton/);
+    expect(readiness).toMatch(/startup_maybe_dismiss_project_settings/);
     expect(readiness).toMatch(/startup_hook_pid_gap_keep_adopting/);
     expect(readiness).toMatch(/adopt_window_after_soft_safe/);
     expect(readiness).toMatch(/startup_wait_poll_ticks/);

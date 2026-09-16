@@ -137,7 +137,10 @@ export function buildPiStartPlan({
     args.push("--no-session");
   }
   if (env.OPENREAPER_STUDIO_PI_ARGS?.trim()) {
-    const extra = env.OPENREAPER_STUDIO_PI_ARGS.trim().split(/\s+/).filter(Boolean);
+    const extra = env.OPENREAPER_STUDIO_PI_ARGS.trim()
+      .split(/\s+/)
+      .filter(Boolean)
+      .filter((token) => token !== "--no-tools" && token !== "-nt");
     args.push(...extra);
   }
   const cwd = layout?.workspaceDir ?? env.OPENREAPER_STUDIO_WORKSPACE?.trim() ?? null;

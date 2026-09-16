@@ -6,6 +6,12 @@ import { repoRootFromStudio } from "../paths.mjs";
 export const PI_EXTENSION_PACKAGE_DIRNAME = "pi-extension-openreaper";
 export const PI_EXTENSION_ENTRY = "openreaper-extension.mjs";
 export const PI_EXTENSION_DISCOVERY_NAME = "openreaper.ts";
+export const PI_EXTENSION_RUNTIME_FILES = Object.freeze([
+  "openreaper-extension.mjs",
+  "tools.mjs",
+  "kernel.mjs",
+  "index.ts",
+]);
 
 export function studioPiExtensionPackageDir(repoRoot = repoRootFromStudio()) {
   return path.join(repoRoot, "packages", PI_EXTENSION_PACKAGE_DIRNAME);
@@ -71,7 +77,13 @@ export async function installStudioPiExtension({
   await mkdir(destDir, { recursive: true });
   const destMjs = path.join(destDir, PI_EXTENSION_ENTRY);
   const destTs = path.join(destDir, PI_EXTENSION_DISCOVERY_NAME);
-  await copyFile(entry, destMjs);
+  const pkg = studioPiExtensionPackageDir(repoRoot);
+  for (const name of PI_EXTENSION_RUNTIME_FILES) {
+    const src = path.join(pkg, name);
+    if (existsSync(src)) {
+      await copyFile(src, path.join(destDir, name));
+    }
+  }
   if (existsSync(discovery)) {
     await copyFile(discovery, destTs);
   }

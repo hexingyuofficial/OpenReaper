@@ -6,11 +6,14 @@ Native OpenReaper tools for **private Studio Pi**. Loaded by the Studio steward 
 pi --mode rpc --no-builtin-tools --no-extensions --extension openreaper-extension.mjs
 ```
 
-This is **not** a user-visible MCP stdio server. Do not add it to `mcp.json`.
+Talks to the REAPER Bridge over the **file queue** (same kernel as `packages/mcp-server`). This is **not** a user-visible MCP stdio server. Do not add it to `mcp.json`.
 
-| Tool | Status |
-|------|--------|
-| `openreaper_ping` | Stub — proves the extension loaded. P2: file-queue ping to the REAPER Bridge. |
-| `get_state` / `call_template` / list_* | P2 |
+| Tool | Bridge? |
+|------|---------|
+| `openreaper_ping` | Yes |
+| `openreaper_get_state` | Yes |
+| `openreaper_list_templates` | No (in-process registry) |
+| `openreaper_list_recipes` | No (disk) |
+| `openreaper_call_template` | Yes (refuses rename/move of original audio asset files) |
 
-Permission rule for P2: never rename or move original audio asset files.
+If REAPER/Bridge is down, ping/get_state/call_template return `BRIDGE_NOT_RUNNING` (or kernel load errors) as JSON. Do not spawn `streetlight-mcp`.
