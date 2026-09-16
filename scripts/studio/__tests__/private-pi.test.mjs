@@ -28,6 +28,7 @@ describe("private Pi layout", () => {
     expect(layout.agentDir).not.toBe(userPersonalPiAgentDir(homeDir));
     expect(layout.isolatedFromPersonalPi).toBe(true);
     expect(isIsolatedFromPersonalPi(layout.agentDir, homeDir)).toBe(true);
+    expect(layout.workspaceDir).toBe(path.join(homeDir, ".openreaper", "studio", "workspace"));
   });
 
   it("places auth under private agent dir for future in-app login", () => {
@@ -79,7 +80,7 @@ describe("Pi orchestration env", () => {
     }
   });
 
-  it("buildPiStartPlan uses rpc mode and does not reference personal mcp path", () => {
+  it("buildPiStartPlan uses rpc mode, workspace cwd, and native extension flags", () => {
     const layout = resolveStudioPiLayout({
       homeDir: "/Users/test",
       installRoot: "/Users/test/.openreaper/current",
@@ -92,7 +93,28 @@ describe("Pi orchestration env", () => {
     });
     expect(plan.mode).toBe("start");
     expect(plan.args).toContain("rpc");
+    expect(plan.args).toContain("--no-builtin-tools");
+    expect(plan.args).toContain("--no-extensions");
+    expect(plan.args).toContain("--extension");
+    expect(plan.args.some((arg) => String(arg).endsWith("openreaper-extension.mjs"))).toBe(true);
+    expect(plan.args).not.toContain("--no-tools");
+    expect(plan.cwd).toBe(layout.workspaceDir);
     expect(plan.processEnv.PI_CODING_AGENT_DIR).toBe(layout.agentDir);
+  });
+
+  it("omits --no-builtin-tools when OPENREAPER_STUDIO_PI_KEEP_BUILTIN_TOOLS=1", () => {
+    const layout = resolveStudioPiLayout({
+      homeDir: "/Users/test",
+      installRoot: "/Users/test/.openreaper/current",
+      env: {},
+    });
+    const plan = buildPiStartPlan({
+      piExecutable: "/usr/local/bin/pi",
+      env: { OPENREAPER_STUDIO_PI_KEEP_BUILTIN_TOOLS: "1" },
+      layout,
+    });
+    expect(plan.args).not.toContain("--no-builtin-tools");
+    expect(plan.args).toContain("--extension");
   });
 });
 

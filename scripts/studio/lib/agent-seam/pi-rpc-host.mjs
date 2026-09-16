@@ -7,26 +7,43 @@ import {
   formatStudioPromptMessage,
 } from "./pi-jsonl.mjs";
 import { withBuiltinCommandFallback } from "./pi-command-hints.mjs";
+import { watchReaperPeer } from "../orchestration/steward.mjs";
 
 /**
  * Start a loopback HTTP shim in front of `pi --mode rpc` (stdio JSONL).
- * REAPER / studio-pi-send talk HTTP; this process owns the Pi subprocess pipes.
+ * This process is the Studio steward: it owns Pi, and stops when REAPER exits.
+ * REAPER / studio-pi-send talk HTTP; users never start MCP stdio.
  */
 export async function startPiRpcHost({
   piExecutable,
   piArgs,
   piEnv,
+  piCwd,
   endpointFile,
   log,
   listenHost = "127.0.0.1",
-}) {
-  const piChild = spawn(piExecutable, piArgs, {
+  reaperPid = null,
+  reaperPidFile = null,
+  watchPeer = watchReaperPeer,
+  reaperGoneGraceMs = 8000,
+  reaperWatchIntervalMs = 1000,
+  spawnFn = spawn,
+  exitProcess = (code) => process.exit(code),
+  bindSignals = true,
+} = {}) {
+  const spawnOpts = {
     env: piEnv,
     stdio: ["pipe", "pipe", "pipe"],
-  });
+  };
+  if (piCwd) {
+    spawnOpts.cwd = piCwd;
+  }
+  const piChild = spawnFn(piExecutable, piArgs, spawnOpts);
 
   const client = new PiJsonlRpcClient({ stdin: piChild.stdin });
-  attachJsonlReader(piChild.stdout, (line) => client.handleLine(line));
+  if (piChild.stdout) {
+    attachJsonlReader(piChild.stdout, (line) => client.handleLine(line));
+  }
 
   piChild.stderr?.on("data", (chunk) => {
     const text = chunk.toString();
@@ -186,23 +203,54 @@ export async function startPiRpcHost({
     );
   }
 
-  const shutdown = () => {
+  let peerWatch = null;
+  const shutdown = (reason) => {
+    if (peerWatch) {
+      peerWatch.stop();
+      peerWatch = null;
+    }
     try {
       piChild.kill("SIGTERM");
     } catch {
       /* ignore */
     }
     server.close();
+    log?.(reason ? `Steward shutdown (${reason})` : "Steward shutdown");
   };
 
-  process.on("SIGTERM", shutdown);
-  process.on("SIGINT", shutdown);
+  const parsedReaperPid = Number(reaperPid);
+  const watchPid = Number.isInteger(parsedReaperPid) && parsedReaperPid > 0 ? parsedReaperPid : null;
+  if (watchPid || reaperPidFile) {
+    peerWatch = watchPeer({
+      pid: watchPid,
+      pidFile: reaperPidFile,
+      intervalMs: reaperWatchIntervalMs,
+      graceMs: reaperGoneGraceMs,
+      onGone: ({ reason, pid }) => {
+        log?.(
+          `REAPER exited (pid=${pid ?? "unknown"} reason=${reason}); steward stopping private Pi.`,
+        );
+        shutdown("reaper_exited");
+        exitProcess(0);
+      },
+    });
+  }
+
+  if (bindSignals) {
+    process.on("SIGTERM", () => shutdown("SIGTERM"));
+    process.on("SIGINT", () => shutdown("SIGINT"));
+  }
   piChild.on("exit", (code, signal) => {
     log?.(`Pi RPC subprocess exited code=${code ?? "null"} signal=${signal ?? "null"}`);
-    shutdown();
-    process.exit(code === 0 || code === null ? 0 : 1);
+    shutdown("pi_exit");
+    exitProcess(code === 0 || code === null ? 0 : 1);
   });
 
-  log?.(`Private Pi RPC host listening ${promptUrl} (pi pid=${piChild.pid})`);
-  return { server, piChild, promptUrl, commandsUrl, shutdown };
+  log?.(
+    `Private Pi RPC host listening ${promptUrl} (pi pid=${piChild.pid}` +
+      (piCwd ? ` cwd=${piCwd}` : "") +
+      (watchPid ? ` reaperPid=${watchPid}` : "") +
+      `)`,
+  );
+  return { server, piChild, promptUrl, commandsUrl, shutdown, peerWatch };
 }

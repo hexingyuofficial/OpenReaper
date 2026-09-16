@@ -1,0 +1,15 @@
+{
+  "name": "@openreaper/pi-extension",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Native OpenReaper tools for private Studio Pi. Not a user-visible MCP stdio server.",
+  "type": "module",
+  "main": "./openreaper-extension.mjs",
+  "exports": {
+    ".": "./openreaper-extension.mjs"
+  },
+  "files": [
+    "openreaper-extension.mjs",
+    "index.ts"
+  ]
+}

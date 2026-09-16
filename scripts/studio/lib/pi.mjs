@@ -7,6 +7,8 @@ import {
   studioPiMcpJsonPath,
   userPersonalPiAgentDir,
 } from "./pi/private-layout.mjs";
+import { resolveStudioPiExtensionFlags } from "./pi/extension.mjs";
+import { repoRootFromStudio } from "./paths.mjs";
 
 /**
  * Locate the `pi` executable without mutating PATH permanently.
@@ -52,7 +54,9 @@ export function defaultPiMcpJsonPath(homeDir = os.homedir()) {
 }
 
 /**
- * Read Pi MCP config if present. Never writes or merges — Studio only inspects.
+ * Read Pi MCP config if present. Never writes or merges.
+ * mcp.json is not the Studio product path — native Pi extension is.
+ * This inspector exists only to warn if a leftover file is still around.
  */
 export async function readPiMcpConfig(mcpJsonPath) {
   if (!existsSync(mcpJsonPath)) {
@@ -97,7 +101,13 @@ export function buildPiProcessEnv({ env = process.env, layout }) {
   };
 }
 
-export function buildPiStartPlan({ piExecutable, env = process.env, layout = null }) {
+export function buildPiStartPlan({
+  piExecutable,
+  env = process.env,
+  layout = null,
+  repoRoot = repoRootFromStudio(),
+  extensionFlags = null,
+} = {}) {
   if (!piExecutable) {
     return {
       mode: "absent",
@@ -113,7 +123,16 @@ export function buildPiStartPlan({ piExecutable, env = process.env, layout = nul
       piExecutable,
     };
   }
+  const flags =
+    extensionFlags ??
+    resolveStudioPiExtensionFlags({
+      repoRoot,
+      env,
+    });
   const args = ["--mode", "rpc", "--name", "OpenReaper Studio"];
+  if (flags.exists) {
+    args.push(...flags.args);
+  }
   if (env.OPENREAPER_STUDIO_PI_NO_SESSION === "1") {
     args.push("--no-session");
   }
@@ -121,20 +140,28 @@ export function buildPiStartPlan({ piExecutable, env = process.env, layout = nul
     const extra = env.OPENREAPER_STUDIO_PI_ARGS.trim().split(/\s+/).filter(Boolean);
     args.push(...extra);
   }
+  const cwd = layout?.workspaceDir ?? env.OPENREAPER_STUDIO_WORKSPACE?.trim() ?? null;
   return {
     mode: "start",
     piExecutable,
     command: piExecutable,
     args,
+    cwd,
+    extension: flags,
     logLabel: "pi-rpc",
     layout,
     processEnv: layout ? buildPiProcessEnv({ env, layout }) : null,
   };
 }
 
-export function resolveStudioPiForStart({ homeDir, installRoot, env = process.env }) {
+export function resolveStudioPiForStart({ homeDir, installRoot, env = process.env, repoRoot } = {}) {
   const layout = resolveStudioPiLayout({ homeDir, installRoot, env });
   const piExecutable = resolvePiExecutable(env, layout);
-  const plan = buildPiStartPlan({ piExecutable, env, layout });
+  const plan = buildPiStartPlan({
+    piExecutable,
+    env,
+    layout,
+    repoRoot: repoRoot ?? repoRootFromStudio(),
+  });
   return { layout, plan };
 }
