@@ -65,9 +65,9 @@ function runShellClassifier(classifier, policy, result) {
   return spawned.status;
 }
 
-function runAxFailureCheck(fnSource, status, result) {
+function runAxFailureCheck(fnSource, status, result, shell = "bash") {
   const spawned = spawnSync(
-    "bash",
+    shell,
     [
       "-c",
       `${fnSource}\nstartup_dialog_observer_output_is_ax_failure "$1" "$2"`,
@@ -181,5 +181,14 @@ describe("packaged openreaper-start dialog observer", () => {
     expect(runAxFailureCheck(axFailure, 0, "System Events got an error: invalid connection (-609)")).toBe(0);
     expect(runAxFailureCheck(axFailure, 0, "no_safe_dialog")).toBe(1);
     expect(runAxFailureCheck(axFailure, 0, "blocked_unknown_dialog:title=License")).toBe(1);
+  });
+
+  it("does not assign to zsh read-only status in the AX failure classifier", () => {
+    expect(axFailure).not.toMatch(/\blocal status=/);
+    const zshCheck = spawnSync("zsh", ["-c", "exit 0"], { encoding: "utf8" });
+    if (zshCheck.error?.code !== "ENOENT") {
+      expect(runAxFailureCheck(axFailure, 1, "", "zsh")).toBe(0);
+      expect(runAxFailureCheck(axFailure, 0, "no_safe_dialog", "zsh")).toBe(1);
+    }
   });
 });

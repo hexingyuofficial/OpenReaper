@@ -2198,9 +2198,9 @@ startup_dialog_inspection_unavailable() {
 }
 
 startup_dialog_observer_output_is_ax_failure() {
-  local status="$1"
+  local observer_rc="$1"
   local result="$2"
-  if (( status == 142 )) || (( status != 0 )) || [[ -z "${result}" ]]; then
+  if (( observer_rc == 142 )) || (( observer_rc != 0 )) || [[ -z "${result}" ]]; then
     return 0
   fi
   case "${result}" in
